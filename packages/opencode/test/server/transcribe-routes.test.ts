@@ -17,7 +17,19 @@ import { disposeAllInstances } from "../fixture/fixture"
 
 // A stand-in for the IRIS platform: the reply is chosen per test.
 let platformReply: () => Response = () => Response.json({ success: true, data: { text: "hello", provider: "xai" } })
-const platform = Bun.serve({ port: 0, fetch: () => platformReply() })
+/** The last upload the stand-in platform received, as form fields — which board it was sent under. */
+let lastUpload: Record<string, string> = {}
+const platform = Bun.serve({
+  port: 0,
+  fetch: async (req) => {
+    const form = await req.formData().catch(() => null)
+    lastUpload = {}
+    form?.forEach((v, k) => {
+      if (typeof v === "string") lastUpload[k] = v
+    })
+    return platformReply()
+  },
+})
 
 const saved = { ...process.env }
 const savedFlag = { password: Flag.OPENCODE_SERVER_PASSWORD, username: Flag.OPENCODE_SERVER_USERNAME }
@@ -141,6 +153,88 @@ describe("GET /dictate/level and the sidecar recording", () => {
   })
 })
 
+describe("the sidecar take's cap, and Keep recording (#189519)", () => {
+  const linuxOnly = process.platform === "linux" ? test : test.skip
+  // A recorder that keeps streaming, 0.1 s of audio every 0.1 s, until it is stopped — so whether
+  // capture is still running shows up as `seconds` still growing.
+  const streaming = () => {
+    const path = join(dir, "ffmpeg-streaming")
+    writeFileSync(path, `#!/bin/sh\nwhile :; do head -c 3200 "${dir}/voice.pcm"; sleep 0.1; done\n`)
+    chmodSync(path, 0o755)
+    process.env["IRIS_FFMPEG"] = path
+  }
+  const capturing = async (base: string) => (await (await fetch(`${base}/dictate/level`)).json()).capturing as boolean
+
+  linuxOnly("a take ends at its cap, and the level route says the recorder has stopped", async () => {
+    configured() // the stop below transcribes: keep it on the stand-in platform, never the real one
+    streaming()
+    await withServer(async (base) => {
+      try {
+        expect((await fetch(`${base}/dictate/start?max_seconds=1`, { method: "POST" })).status).toBe(200)
+        await Bun.sleep(300)
+        expect(await capturing(base)).toBe(true)
+        await Bun.sleep(1400)
+        expect(await capturing(base)).toBe(false)
+        // What was captured is still there for the stop.
+        const stop = await fetch(`${base}/dictate/stop`, { method: "POST" })
+        expect(stop.status).not.toBe(409)
+      } finally {
+        await fetch(`${base}/dictate/cancel`, { method: "POST" })
+      }
+    })
+  })
+
+  linuxOnly("Keep recording moves the cap: capture runs on past the original one", async () => {
+    streaming()
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/start?max_seconds=1`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(300)
+      expect((await fetch(`${base}/dictate/extend?max_seconds=60`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(1700)
+      expect(await capturing(base)).toBe(true)
+      await fetch(`${base}/dictate/cancel`, { method: "POST" })
+    })
+  })
+
+  test("extend with nothing recording is a 409", async () => {
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/extend?max_seconds=60`, { method: "POST" })).status).toBe(409)
+    })
+  })
+})
+
+describe("keeping a take the composer was torn down in the middle of (#189520)", () => {
+  const linuxOnly = process.platform === "linux" ? test : test.skip
+
+  test("POST /transcribe?hold=1 saves the recording and calls no engine", async () => {
+    configured()
+    let platformCalls = 0
+    platformReply = () => (platformCalls++, Response.json({ success: true, data: { text: "x", provider: "xai" } }))
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?hold=1&filename=d.wav`, { method: "POST", body: wav() })
+      expect(res.status).toBe(202)
+      const id = (await res.json()).held.id
+      expect(platformCalls).toBe(0)
+      const held = (await (await fetch(`${base}/transcribe/held`)).json()).held
+      expect(held.map((h: { id: string }) => h.id)).toContain(id)
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+
+  linuxOnly("POST /dictate/hold stops the sidecar take and holds it", async () => {
+    configured()
+    await withServer(async (base) => {
+      expect((await fetch(`${base}/dictate/start`, { method: "POST" })).status).toBe(200)
+      await Bun.sleep(300)
+      const res = await fetch(`${base}/dictate/hold`, { method: "POST" })
+      expect(res.status).toBe(202)
+      const id = (await res.json()).held.id
+      expect(await (await fetch(`${base}/dictate/status`)).json()).toEqual({ recording: false })
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+})
+
 describe("POST /transcribe over the platform's size limit", () => {
   test("413, names the limit, and does NOT hold the recording", async () => {
     configured()
@@ -247,6 +341,8 @@ describe("loopback only", () => {
         ["POST", "/dictate/start"],
         ["POST", "/dictate/stop"],
         ["POST", "/dictate/cancel"],
+        ["POST", "/dictate/extend?max_seconds=60"],
+        ["POST", "/dictate/hold"],
         ["GET", "/dictate/status"],
         ["GET", "/dictate/level"],
       ] as const) {
@@ -352,6 +448,65 @@ describe("WS /voice/speak", () => {
       expect(result.closed).toBe(true)
       expect(result.messages).toHaveLength(1)
       expect(JSON.parse(result.messages[0]!).type).toBe("unavailable")
+    })
+  })
+})
+
+describe("a recording made for an Atlas card is transcribed under the CARD's board (#190041 ADR-01)", () => {
+  // configured() makes 42 the person's default board. A card on board 777 must not upload as 42:
+  // the platform applies the named board's cloud/PHI policy, so the wrong board skips the right policy.
+  test("?bloq_id= on /transcribe is the board the upload carries", async () => {
+    configured()
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav&bloq_id=777`, { method: "POST", body: wav() })
+      expect(res.status).toBe(200)
+      expect(lastUpload["bloq_id"]).toBe("777")
+    })
+  })
+
+  test("without it, the person's default board, exactly as before", async () => {
+    configured()
+    await withServer(async (base) => {
+      await fetch(`${base}/transcribe?filename=d.wav`, { method: "POST", body: wav() })
+      expect(lastUpload["bloq_id"]).toBe("42")
+    })
+  })
+
+  test("a held take keeps its board: the retry uploads under 777, not the default", async () => {
+    configured()
+    platformReply = () => Response.json({ success: false, message: "bad key" }, { status: 401 })
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav&bloq_id=777`, { method: "POST", body: wav() })
+      expect(res.status).toBe(503)
+      const id = (await res.json()).held.id
+      platformReply = () => Response.json({ success: true, data: { text: "hello", provider: "xai" } })
+      lastUpload = {}
+      const retry = await fetch(`${base}/transcribe/retry?id=${id}`, { method: "POST" })
+      expect(retry.status).toBe(200)
+      expect(lastUpload["bloq_id"]).toBe("777")
+    })
+  })
+
+  test("the held list says which board each take belongs to, so a card lists only its own", async () => {
+    configured()
+    platformReply = () => Response.json({ success: false, message: "bad key" }, { status: 401 })
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav&bloq_id=777`, { method: "POST", body: wav() })
+      const id = (await res.json()).held.id
+      const listed = (await (await fetch(`${base}/transcribe/held`)).json()).held
+      expect(listed.find((h: { id: string }) => h.id === id)?.bloqId).toBe("777")
+      await fetch(`${base}/transcribe/discard?id=${id}`, { method: "POST" })
+    })
+  })
+
+  test("a malformed board is refused, never quietly swapped for the default", async () => {
+    configured()
+    let calls = 0
+    platformReply = () => (calls++, Response.json({ success: true, data: { text: "x", provider: "xai" } }))
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/transcribe?filename=d.wav&bloq_id=7a`, { method: "POST", body: wav() })
+      expect(res.status).toBe(400)
+      expect(calls).toBe(0)
     })
   })
 })

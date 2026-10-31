@@ -8,12 +8,10 @@ import { readRemoteConfig, resolveBoard } from "./remote"
  * chain when it stops; that result is what gets inserted. So every failure here degrades to
  * "unavailable" and nothing else — it never fails a dictation.
  *
- * xAI's partials are cumulative within a segment: each one restates the segment so far, and an
- * is_final partial locks it. When the speaker pauses, a speech_final event restates the WHOLE turn —
- * every final since the last pause, joined (measured 2026-10-15, #189543). That event is passed on as
- * a final with `turn: true`; the composer replaces the turn's segments with it
- * (session-ui transcript-merge.ts). Nothing is dropped here by comparing text: a repeated sentence
- * can be real speech.
+ * xAI's partials are cumulative within an utterance: each one restates the utterance so far, and an
+ * is_final partial locks it before the next utterance starts. xAI has been seen sending the same
+ * final twice in a row, so a repeated final is dropped — compared ignoring case, punctuation and
+ * spacing. The window also merges finals (session-ui live-text.ts appendFinal).
  */
 
 /** fl-iris-api services/stt-relay, deployed as the iris-stt-relay Railway service (2026-10-05). */
@@ -21,8 +19,7 @@ const DEFAULT_RELAY_URL = "https://iris-stt-relay-production.up.railway.app"
 
 export type LiveEvent =
   | { type: "partial"; text: string }
-  /** turn: speech_final — restates every final since the last turn, and replaces them. */
-  | { type: "final"; text: string; turn?: boolean }
+  | { type: "final"; text: string }
   | { type: "unavailable"; reason: string }
 
 export interface LiveSession {
@@ -80,6 +77,7 @@ export function openLiveSession(
   const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${cfg.token}` } } as unknown as string[])
   ws.binaryType = "arraybuffer"
   const pending: (Uint8Array | string)[] = []
+  let lastFinal = ""
   let ended = false
 
   const emit = (event: LiveEvent) => {
@@ -96,6 +94,13 @@ export function openLiveSession(
     if (typeof message.data !== "string") return
     const event = parseRelayEvent(message.data)
     if (!event) return
+    if (event.type === "final") {
+      // Compared loosely: a resend with a different comma or a leading space is still a repeat,
+      // and an exact match let those through to be typed twice (#189546).
+      const key = event.text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim()
+      if (key === lastFinal) return
+      lastFinal = key
+    }
     emit(event)
   }
   // A refused upgrade (401/403/429/503) surfaces as an error then a close with no open.
@@ -127,13 +132,7 @@ export function openLiveSession(
 export function parseRelayEvent(text: string): LiveEvent | undefined {
   const value = (() => {
     try {
-      return JSON.parse(text) as {
-        type?: unknown
-        text?: unknown
-        is_final?: unknown
-        speech_final?: unknown
-        message?: unknown
-      }
+      return JSON.parse(text) as { type?: unknown; text?: unknown; is_final?: unknown; message?: unknown }
     } catch {
       return undefined
     }
@@ -142,6 +141,5 @@ export function parseRelayEvent(text: string): LiveEvent | undefined {
   if (value.type === "relay.error")
     return { type: "unavailable", reason: typeof value.message === "string" ? value.message : "Live transcription stopped." }
   if (value.type !== "transcript.partial" || typeof value.text !== "string") return undefined
-  if (value.is_final !== true) return { type: "partial", text: value.text }
-  return value.speech_final === true ? { type: "final", text: value.text, turn: true } : { type: "final", text: value.text }
+  return value.is_final === true ? { type: "final", text: value.text } : { type: "partial", text: value.text }
 }

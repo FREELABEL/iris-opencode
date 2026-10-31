@@ -1,6 +1,7 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { useParams, useSearchParams } from "@solidjs/router"
+import { useSearchParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { createMemo, createResource, createRoot, getOwner, onCleanup } from "solid-js"
 import { requireServerKey } from "@/utils/session-route"
 import { ServerConnection } from "./server"
@@ -74,7 +75,7 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
   name: "Prompt",
   gate: false,
   init: () => {
-    const params = useParams<{ serverKey?: string; id?: string }>()
+    const params = useSessionParams<{ serverKey?: string; id?: string }>()
     const sdk = useSDK()
     const [search] = useSearchParams<{ draftId?: string }>()
     const serverSDK = useServerSDK()

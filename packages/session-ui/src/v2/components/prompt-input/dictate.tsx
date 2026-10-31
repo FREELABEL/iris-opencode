@@ -5,7 +5,7 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { createDictation, MAX_SECONDS, type DictationControls } from "./dictation"
 import { capProgress, formatClock, waveformBars } from "./dictate-visual"
 import { initialVoice, voiceReducer, type VoiceEvent } from "./voice-mode"
-import { emptyTranscript, lockedText, mergeTranscript, transcriptText, type LiveTranscript } from "./transcript-merge"
+import { appendFinal, composeLive } from "./live-text"
 import "./dictate.css"
 
 const LANE = { width: 600, height: 10, gap: 1.6 }
@@ -58,14 +58,18 @@ export function PromptInputV2Dictate(props: {
   const [voice, setVoice] = createSignal(initialVoice)
   const send = (event: VoiceEvent) => setVoice((s) => voiceReducer(s, event))
   let settled = false
-  // Live words from the streaming engine, for this take only (transcript-merge.ts decides what
-  // replaces what). The batch transcript at the end replaces them.
-  const [heard, setHeard] = createSignal<LiveTranscript>(emptyTranscript)
+  // Live preview from the streaming engine, for this take only. The batch transcript at the end
+  // is still what gets inserted; these words are a preview it replaces.
+  const [finals, setFinals] = createSignal<string[]>([])
+  const [partial, setPartial] = createSignal("")
 
   const dictation = createDictation({
     url: props.url,
-    onPartial: (text) => setHeard((s) => mergeTranscript(s, { type: "partial", text })),
-    onFinal: (text, turn) => setHeard((s) => mergeTranscript(s, { type: "final", text, turn })),
+    onPartial: (text) => setPartial(text),
+    onFinal: (text) => {
+      setFinals((list) => appendFinal(list, text))
+      setPartial("")
+    },
     onError: (message) => {
       setError(message)
       props.onError?.(message)
@@ -88,7 +92,8 @@ export function PromptInputV2Dictate(props: {
     on(phase, (now, before) => {
       if (now === "recording" && before !== "recording") {
         settled = false
-        setHeard(emptyTranscript)
+        setFinals([])
+        setPartial("")
       }
       if (now === "idle" && before && before !== "idle" && !settled && (mode() === "quick" || mode() === "background"))
         send({ type: "failed" })
@@ -184,7 +189,7 @@ export function PromptInputV2Dictate(props: {
   // not vanish while the final transcript is fetched; the insert that follows replaces them.
   const liveText = () => {
     if (!quickLive()) return undefined
-    return transcriptText(heard()) || undefined
+    return composeLive(finals(), partial()) || undefined
   }
   createEffect(on(liveText, (text) => props.live?.(text)))
   onCleanup(() => props.live?.(undefined))
@@ -415,7 +420,7 @@ export function PromptInputV2Dictate(props: {
                   when={mode() === "review"}
                   fallback={
                     <Show
-                      when={transcriptText(heard())}
+                      when={finals().length > 0 || partial()}
                       fallback={
                         <p data-slot="dictate-panel-hint">
                           {phase() !== "recording"
@@ -427,9 +432,9 @@ export function PromptInputV2Dictate(props: {
                       }
                     >
                       <p data-slot="dictate-panel-text">
-                        {lockedText(heard())}
-                        <Show when={heard().interim}>
-                          <span data-slot="dictate-partial"> {heard().interim}</span>
+                        {finals().join(" ")}
+                        <Show when={partial()}>
+                          <span data-slot="dictate-partial"> {partial()}</span>
                         </Show>
                       </p>
                     </Show>

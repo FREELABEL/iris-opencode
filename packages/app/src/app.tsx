@@ -56,6 +56,8 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider, useSettings } from "@/context/settings"
 import { TabsProvider, useTabs, type DraftTab } from "@/context/tabs"
+import { SplitProvider } from "@/context/split"
+import { SessionSplitRoute } from "@/pages/session/split-view"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout"
@@ -108,11 +110,13 @@ const SessionRoute = () => {
   )
 }
 
-function TargetServerRoute(props: ParentProps) {
+// `serverKey` is for a split column on a server other than the route's (#191484).
+function TargetServerRoute(props: ParentProps<{ serverKey?: () => string }>) {
   const params = useParams<{ serverKey: string; id: string }>()
   const global = useGlobal()
+  const key = () => props.serverKey?.() ?? params.serverKey
   const conn = createMemo(() => {
-    const key = requireServerKey(params.serverKey)
+    const key = requireServerKey(props.serverKey?.() ?? params.serverKey)
     return global.servers.list().find((item) => ServerConnection.key(item) === key)
   })
 
@@ -120,7 +124,7 @@ function TargetServerRoute(props: ParentProps) {
     // Owns the server-identity remount. Session changes must NOT remount this
     // subtree (SessionRouteErrorBoundary resets and createSessionLineage
     // re-resolves reactively instead); both rely on this key for server changes.
-    <Show when={requireServerKey(params.serverKey)} keyed>
+    <Show when={requireServerKey(key())} keyed>
       <ServerSDKProvider server={conn}>
         <ServerSyncProvider server={conn}>{props.children}</ServerSyncProvider>
       </ServerSDKProvider>
@@ -128,11 +132,7 @@ function TargetServerRoute(props: ParentProps) {
   )
 }
 
-const TargetSessionRoute = () => (
-  <TargetServerRoute>
-    <TargetSessionRouteContent />
-  </TargetServerRoute>
-)
+const TargetSessionRoute = () => <SessionSplitRoute server={TargetServerRoute} content={TargetSessionRouteContent} />
 
 function LegacyTargetSessionRoute() {
   const params = useParams<{ serverKey: string; id: string }>()
@@ -410,7 +410,7 @@ export function AppBaseProviders(
             <ErrorBoundary
               fallback={(error) => {
                 Sentry.captureException(error)
-                return <ErrorPage error={error} />
+                return <ErrorPage error={error} reportCrash />
               }}
             >
               <QueryProvider>
@@ -599,6 +599,7 @@ export function AppInterface(props: {
                 component={props.router ?? Router}
                 root={(routerProps) => (
                   <TabsProvider>
+                    <SplitProvider>
                     <PermissionProvider>
                       <NotificationProvider>
                         <ServerShell>
@@ -608,6 +609,7 @@ export function AppInterface(props: {
                         </ServerShell>
                       </NotificationProvider>
                     </PermissionProvider>
+                    </SplitProvider>
                   </TabsProvider>
                 )}
               >

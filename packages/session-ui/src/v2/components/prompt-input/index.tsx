@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { settleLiveText, writeLiveText, type LiveRegion } from "./live-text"
+import { growFollowing, settleLiveText, writeLiveText, type LiveRegion } from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -215,6 +215,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
           />
+          {/* Live words are the prompt's value, so they hide this like typed text does (#189543, #189546). */}
           <Show when={!props.controller.value()}>
             <div
               class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
@@ -265,10 +266,12 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   live={(text) => {
                     // The take, typed into the chat box while it is spoken (live-text.ts) — as the
                     // prompt's real text, through the real input path, so it is what Send sends.
-                    if (!editor) return
-                    const write = writeLiveText(editor, liveRegion, text)
+                    const target = editor
+                    if (!target) return
+                    // A long take keeps its newest words in view (#189977).
+                    const write = growFollowing(target, () => writeLiveText(target, liveRegion, text))
                     liveRegion = write.region
-                    if (write.changed) editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                    if (write.changed) target.dispatchEvent(new InputEvent("input", { bubbles: true }))
                   }}
                   insert={(text) => {
                     // The final transcript takes the live words' place (or is appended when there
@@ -287,6 +290,8 @@ export function PromptInputV2(props: PromptInputV2Props) {
                     const sel = window.getSelection()
                     sel?.removeAllRanges()
                     sel?.addRange(range)
+                    // The caret is at the end of the transcript; so is the view (#189977).
+                    editor.scrollTop = editor.scrollHeight
                   }}
                 />
               )}

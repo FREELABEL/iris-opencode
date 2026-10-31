@@ -457,3 +457,34 @@ lifecycle.live("pending question rejects on instance reload", () =>
     if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Question.RejectedError)
   }),
 )
+
+it.instance(
+  "rejectSession - rejects only that session's pending questions and publishes rejected (#191779)",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const question = yield* Question.Service
+      const seen: unknown[] = []
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Rejected.type) seen.push(event.data)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+
+      const questions = [{ question: "Pick?", header: "Pick", options: [{ label: "A", description: "a" }] }]
+      const a = yield* askEffect({ sessionID: SessionID.make("ses_a"), questions }).pipe(Effect.forkScoped)
+      const b = yield* askEffect({ sessionID: SessionID.make("ses_b"), questions }).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(2)
+      const idA = pending.find((item) => item.sessionID === SessionID.make("ses_a"))!.id
+
+      yield* question.rejectSession(SessionID.make("ses_a"))
+      const exit = yield* Fiber.await(a)
+      expect(Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof Question.RejectedError).toBe(true)
+      expect((yield* listEffect).map((item) => item.sessionID)).toEqual([SessionID.make("ses_b")])
+      expect(seen).toEqual([{ sessionID: SessionID.make("ses_a"), requestID: idA }])
+
+      yield* rejectAll
+      yield* Fiber.await(b)
+    }),
+  { git: true },
+)

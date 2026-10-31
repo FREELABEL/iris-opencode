@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -13,6 +14,8 @@ import {
   Switch,
   untrack,
 } from "solid-js"
+import { useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
+import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
@@ -26,46 +29,103 @@ import { IrisForceGraph, type ForceEdge, type ForceNode } from "./iris-force-gra
 import { graphBoardIsIsolated, scopeGraphRows, type GraphScope } from "./iris-graph-scope"
 import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
+import { useNavigate } from "@solidjs/router"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { useSync } from "@/context/sync"
 import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { IrisCardEditor } from "./iris-card-editor"
+import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
+import { dictationAuthFor } from "@/utils/dictation-auth"
+import { settled } from "@/utils/settled"
 import { IrisArtifacts } from "./iris-artifacts"
 import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
 import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
   ACCOUNT_SURFACES,
-  FILES_PIN_KEY,
-  filesTabPinned,
+  openingSurface,
   panelScope,
-  readPinnedIds,
+  pinnedByChoice,
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
-import { irisNavRequest, clearIrisNav } from "./iris-nav"
+import {
+  DEFAULT_NAV_LAYOUT,
+  FILES_ITEM,
+  LEGACY_FILES_KEY,
+  LEGACY_PINS_KEY,
+  NAV_LAYOUT_KEY,
+  isNavItemVisible,
+  legacyNavLayout,
+  mergeNavLayout,
+  parseNavLayout,
+  setNavItemVisible,
+  visibleNavItems,
+  type NavLayout,
+} from "./iris-nav-layout"
+import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
+import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
+import { IrisHiveInbox } from "./iris-hive-inbox"
+import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
+import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
+  ATLAS_ASSIGNED,
+  ATLAS_DUE,
   ATLAS_EDITED,
+  ATLAS_LAYOUTS,
+  ATLAS_LAYOUT_DEFAULT,
   ATLAS_SORTS,
   ATLAS_STATUSES,
   ATLAS_VIEW_DEFAULT,
   applyAtlasView,
+  atlasCountLine,
+  atlasDropPosition,
+  boardLabels,
+  dropBeforeId,
+  sameDrop,
+  cardPreview,
+  changedItemIds,
+  editedSince,
   isDefaultView,
   isDone,
+  initials,
+  keepUnchanged,
+  moveAtlasItem,
+  readAtlasLayout,
   readAtlasView,
   relativeTime,
+  type AtlasDrop,
+  type AtlasLayout,
   type AtlasViewOptions,
+  applyFaceEdits,
+  quickFieldFor,
+  type QuickField,
+  type QuickPatch,
 } from "./iris-atlas-view"
+import { IrisQuickEdit } from "./iris-quick-edit"
+import type { CardSchema } from "./iris-card-editor"
+import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
+import { CardBadges, type CardFace } from "./iris-card-badges"
+import { IrisOutboxHeld, type HeldItem } from "./iris-outbox-held"
+import { IrisBoardMembers, readMembers } from "./iris-board-members"
+import { IrisNotifySettings } from "./iris-notify-settings"
+import { IrisLocalCopySettings } from "./iris-local-copy-settings"
+import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
+import { IrisDelegateRail } from "./iris-delegate-rail"
+import { slideCards } from "./iris-board-motion"
+import { useLanguage } from "@/context/language"
+import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
 // editor needed them too.
@@ -86,12 +146,17 @@ export { itemCommands, renderMarkdown }
  * server sends `measured` for this reason; throwing it away here would put the bug back.
  */
 
-interface AtlasItem {
+const QUEUED_NOTE = "Saved on this computer — it will be sent when IRIS can be reached."
+
+interface AtlasItem extends CardFace {
   id: number
   title: string
   type?: string
   status?: string
+  /** Only when the board was read WITH bodies (a search). Otherwise see `preview`. */
   content?: string
+  /** The start of the body, from fl-api's card summary (#190231 0d). */
+  preview?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -380,21 +445,6 @@ function describeFields(
       command: r.command,
     }
   }
-  if (surface === "inbox")
-    return {
-      title: r.label,
-      fields: fieldsOf([
-        ["from", r.from],
-        ["type", r.type],
-        ["read", r.read],
-        ["received", r.receivedAt ? relativeAge(r.receivedAt) : undefined],
-        ["manifest position", r.index],
-      ]),
-      // `index` is the MANIFEST position, not the position in the list above — the list is
-      // sorted unread-first, so the two differ the moment anything has been read. This command
-      // takes the manifest number, so printing the row's position would open a different message.
-      command: `iris hive inbox read ${r.index}`,
-    }
   if (surface === "mcp")
     return {
       title: r.name,
@@ -541,6 +591,8 @@ const ChevronDown = () => (
   </svg>
 )
 
+/** One page of dataset records — the request and the "N of M" count must use the same number. */
+const RECORDS_PER_PAGE = 25
 const LAST_BLOQ_KEY = "iris.panel.bloq"
 const LAST_SURFACE_KEY = "iris.panel.surface"
 /**
@@ -619,7 +671,8 @@ const SURFACES = [
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact"])
+// "inbox" draws itself since #189279 — the generic record list showed everything but the message.
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "inbox"])
 
 interface SubView {
   id: string
@@ -745,6 +798,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
+    // #189446: every AI session on every machine — read one, reply to it. Owns its pane.
+    { id: "sessions", label: "Sessions", pane: "hive-sessions", path: () => `/iris/hive/sessions` },
     // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
     { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
@@ -988,6 +1043,66 @@ export function surfaceView(input: {
  * What the panel's + menu offers (#186531). One list, derived from SURFACES, so a surface added
  * there appears in the menu without a second table to keep in step.
  */
+/**
+ * Every product and its views, for the agent (#190093): reported to the engine so `side_panel`
+ * can name what exists and refuse what does not, from the same lists the switcher draws.
+ */
+/**
+ * WHAT EACH PLACE IS FOR, in a user's words — so the agent can answer "where do I…?" by taking
+ * them there (#190093). Keyed `surface` and `surface/sub`. A place without a line is still
+ * reachable; it just cannot be recommended by purpose.
+ */
+const PANEL_HINTS: Record<string, string> = {
+  atlas: "Boards of lists and cards — tasks, plans, records",
+  "atlas/lists": "The board's lists and cards, as a board or a list",
+  "atlas/schemas": "The record types (fields) the board's cards use",
+  "atlas/graph": "How boards relate to each other, across the account",
+  "atlas/artifacts": "Atlas notes this conversation produced",
+  agents: "The account's AI agents",
+  "agents/all": "Every agent",
+  "agents/scheduled": "Agents that run on a schedule",
+  "agents/ondemand": "Agents that run when asked",
+  "agents/rooms": "Group chats with several agents (@mention them)",
+  "agents/live": "What an agent is doing right now — take over or hand back",
+  "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
+  leads: "Leads and contacts in the CRM",
+  pages: "Genesis — web pages, sites, drafts and brand kits",
+  "pages/pages": "Published and draft Genesis pages",
+  "pages/sites": "Sites: pages under shared navigation, with a form inbox",
+  "pages/artifacts": "Drafts the agent made in this conversation, before publishing",
+  "pages/brands": "Brand kits: colours, type and voice pages take their look from",
+  mcp: "MCP servers connected to this project and machine, and their tools",
+  hive: "The user's computers (Hive) and tasks that run on them",
+  "hive/machines": "Computers connected to the account; send one a task",
+  "hive/scripts": "Saved scripts to run on a machine",
+  "hive/inbox": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
+  "hive/peers": "Other machines on the mesh",
+  pulse: "What people are saying about a topic or a contact",
+  "pulse/topic": "Recent conversation about a topic",
+  "pulse/contact": "Recent activity of one contact",
+  playbooks: "Playbooks (skills): repeatable procedures the agent can run",
+  "playbooks/all": "Every playbook available here",
+  "playbooks/project": "Playbooks this project uses",
+  "playbooks/marketplace": "Public playbooks to install",
+  integrations: "Connected accounts — Gmail, Calendar, Slack, Stripe and others",
+  "integrations/project": "Accounts this board may use",
+  "integrations/organization": "Accounts shared across the organization",
+  "integrations/user": "The user's personal connected accounts",
+  "integrations/add": "Connect a new account (Gmail, Slack, …)",
+}
+
+export const IRIS_PANEL_CATALOG: readonly {
+  id: string
+  label: string
+  hint?: string
+  subs: { id: string; label: string; hint?: string }[]
+}[] = SURFACES.map((s) => ({
+  id: s.id,
+  label: s.label,
+  hint: PANEL_HINTS[s.id],
+  subs: (SUBVIEWS[s.id] ?? []).map((v) => ({ id: v.id, label: v.label, hint: PANEL_HINTS[`${s.id}/${v.id}`] })),
+}))
+
 export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SURFACES.map((s) => ({
   id: s.id,
   label: s.label,
@@ -997,16 +1112,15 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
  * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
  * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
  */
-const PINNED_KEY = "iris.panel.pinned"
-// Pulse is pinned for anyone who has not chosen their own tabs (#189286): behind the + menu it
-// was a product nobody would stumble on. People who already pinned their own keep their choice.
-const DEFAULT_PINNED: SurfaceId[] = ["pages", "atlas", "agents", "pulse"]
-const readPinned = (raw: string | null) =>
-  readPinnedIds<SurfaceId>(
-    raw,
-    SURFACES.map((x) => x.id),
-    DEFAULT_PINNED,
-  )
+// The layout — which products show, in what order, and the file tree — is DATA (#191509): the
+// shipped default merged with what the person saved. See iris-nav-layout.ts for the rules.
+const PRODUCT_IDS = SURFACES.map((x) => x.id as string)
+/** The shipped default, plus any product it does not list yet (hidden, at the end) so none is lost. */
+const NAV_DEFAULT: NavLayout = {
+  ...DEFAULT_NAV_LAYOUT,
+  order: [...DEFAULT_NAV_LAYOUT.order, ...PRODUCT_IDS.filter((id) => !DEFAULT_NAV_LAYOUT.order.includes(id))],
+  hidden: [...DEFAULT_NAV_LAYOUT.hidden, ...PRODUCT_IDS.filter((id) => !DEFAULT_NAV_LAYOUT.order.includes(id))],
+}
 const storage = (key: string) => {
   try {
     return localStorage.getItem(key)
@@ -1014,60 +1128,95 @@ const storage = (key: string) => {
     return null
   }
 }
+const persistLayout = (layout: NavLayout) => {
+  try {
+    localStorage.setItem(NAV_LAYOUT_KEY, JSON.stringify(layout))
+  } catch {}
+}
+/**
+ * What the person saved: their layout, or — once — the pins and file-tree choice they saved before
+ * #191509, carried over and written as a layout. Nothing saved stays nothing saved: a person who
+ * never chose follows the shipped default.
+ */
+function savedNavLayout(): NavLayout | null {
+  const saved = parseNavLayout(storage(NAV_LAYOUT_KEY))
+  if (saved) return saved
+  const legacy = legacyNavLayout(storage(LEGACY_PINS_KEY), storage(LEGACY_FILES_KEY), NAV_DEFAULT)
+  if (legacy) persistLayout(mergeNavLayout(NAV_DEFAULT, legacy))
+  return legacy
+}
+const initialSaved = savedNavLayout()
+const [navLayoutSig, setNavLayoutSig] = createSignal<NavLayout>(mergeNavLayout(NAV_DEFAULT, initialSaved))
+/** The products the person themselves chose to show — the default set is not a choice (#189766). */
+const chosenPins = (saved: NavLayout | null) =>
+  saved ? JSON.stringify(visibleNavItems(mergeNavLayout(NAV_DEFAULT, saved)).filter((id) => PRODUCT_IDS.includes(id))) : null
+const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(chosenPins(initialSaved))
+/** The layout the strip draws, for the strip and the agent-facing panel state alike. */
+export const irisNavLayout = navLayoutSig
+const irisPinnedSig = () =>
+  visibleNavItems(navLayoutSig()).filter((id): id is SurfaceId => PRODUCT_IDS.includes(id))
 
 /**
  * SHARED with the side panel's tab strip (#186509 nav): each pinned product is a top-level tab
  * there, and the separate "IRIS" tab is gone. Module-level so the strip can read them before (and
  * without) this component mounting; the component keeps them current.
  */
-const [irisPinnedSig, setIrisPinnedSig] = createSignal<SurfaceId[]>(readPinned(storage(PINNED_KEY)))
-const [irisSurfaceSig, setIrisSurfaceSig] = createSignal<SurfaceId>(normalizeSurface(storage(LAST_SURFACE_KEY)))
+// Nothing used yet → the layout's first shown product, so a new person opens where the layout starts.
+// The window's panel opens here; a split column's panel starts from it (context/iris-panel-scope).
+windowIrisPanelScope.setSurface(
+  normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY) ?? irisPinnedSig()[0]), pinsRawSig())),
+)
+/** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
+export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
-export const irisActiveSurface = irisSurfaceSig
-export function irisStripTabs(): { id: SurfaceId; label: string; pinned: boolean }[] {
-  return visibleTabs(irisPinnedSig(), irisSurfaceSig()).map((id) => ({
+/**
+ * When the product on screen last changed, written WITH the signal (#190093). The strip's
+ * fallback guard needs this moment; an effect watching the signal fires too late — product
+ * switches run in a transition, and effects downstream of it wait for the commit.
+ */
+/** The product tabs to draw for a panel showing `active`. */
+export function irisStripTabs(active: SurfaceId): { id: SurfaceId; label: string; pinned: boolean }[] {
+  return visibleTabs(irisPinnedSig(), active).map((id) => ({
     id,
     label: SURFACES.find((x) => x.id === id)?.label ?? id,
     pinned: irisPinnedSig().includes(id),
   }))
 }
+/** Show or hide one layout item and save the result — the person's choice from then on. */
+function setNavItem(id: string, visible: boolean) {
+  const next = setNavItemVisible(navLayoutSig(), id, visible)
+  setNavLayoutSig(next)
+  setPinsRawSig(chosenPins(next))
+  persistLayout(next)
+}
 /** Pin or unpin a product. Never leaves the strip empty. Returns whether it is now pinned. */
 export function toggleIrisPin(id: string): boolean {
   const sid = normalizeSurface(id)
   const cur = irisPinnedSig()
-  const next = cur.includes(sid) ? cur.filter((x) => x !== sid) : [...cur, sid]
-  if (!next.length) return true
-  setIrisPinnedSig(next)
-  try {
-    localStorage.setItem(PINNED_KEY, JSON.stringify(next))
-  } catch {}
-  return next.includes(sid)
+  const pin = !cur.includes(sid)
+  if (!pin && cur.length === 1) return true
+  setNavItem(sid, pin)
+  return pin
 }
 
-/** The file-tree tab's pin (#187129) — see filesTabPinned for who starts with it. */
-const [filesPinRaw, setFilesPinRaw] = createSignal<string | null>(storage(FILES_PIN_KEY))
-export const irisFilesPinned = (isGitProject: boolean) => filesTabPinned(filesPinRaw(), isGitProject)
+/** The file-tree tab is an item in the same layout (#187129, #191509). */
+export const irisFilesPinned = () => isNavItemVisible(navLayoutSig(), FILES_ITEM)
 /** Pin or unpin the file tree. Returns whether it is now pinned. */
-export function toggleIrisFilesPin(isGitProject: boolean): boolean {
-  const next = !irisFilesPinned(isGitProject)
-  setFilesPinRaw(next ? "1" : "0")
-  try {
-    localStorage.setItem(FILES_PIN_KEY, next ? "1" : "0")
-  } catch {}
+export function toggleIrisFilesPin(): boolean {
+  const next = !irisFilesPinned()
+  setNavItem(FILES_ITEM, next)
   return next
 }
 
 /**
  * THE SCOPE CHIP (#187130, option C). The panel's own "This session" / board row is gone; what it
  * said now rides the side panel's product row as a chip OUTSIDE the scrolling tab list, so it
- * never scrolls away. Module-level for the same reason as the pins: the strip draws it, this
- * component knows what it says. `pick` is present only where there is something to choose.
+ * never scrolls away. The strip draws it, this component knows what it says; they meet in
+ * context/iris-panel-scope.ts, one per panel. `pick` is present only where there is something
+ * to choose.
  */
-export type IrisScopeChip = { scope: "project" | "session" | "account"; label: string; pick?: () => void }
-const [scopeChipSig, setScopeChip] = createSignal<IrisScopeChip | undefined>()
-export const irisScopeChip = scopeChipSig
+export type { IrisScopeChip } from "@/context/iris-panel-scope"
 
-const [requestedSurface,setRequestedSurface] = createSignal<{ surface: SurfaceId; sub?: string } | undefined>()
 
 /**
  * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
@@ -1077,12 +1226,24 @@ const [requestedSurface,setRequestedSurface] = createSignal<{ surface: SurfaceId
  * for a person who asked to connect something. The catalogue lives under the `add` sub-view,
  * so the caller says which one it wants and this puts them there.
  */
-export function requestIrisSurface(surface: string, sub?: string) {
-  setRequestedSurface({ surface: normalizeSurface(surface), sub })
+export function useRequestIrisSurface() {
+  // Bound to the panel it is called under: the request goes to THIS column's IRIS tab (#191484).
+  const scope = useIrisPanelScope()
+  return (surface: string, sub?: string) => scope.request({ surface: normalizeSurface(surface), sub })
+}
+
+/** The product a panel shows, for the code around it (the strip, the agent's panel report). */
+export function useIrisActiveSurface() {
+  const scope = useIrisPanelScope()
+  return () => normalizeSurface(scope.surface() ?? windowIrisPanelScope.surface() ?? "atlas")
 }
 
 export function SessionIrisTab() {
+  const scope = useIrisPanelScope()
+  const navParams = useSessionParams()
+  const navFocused = usePaneFocused()
   const dialog = useDialog()
+  const language = useLanguage()
   const serverSDK = useServerSDK()
   const sessionLayout = useSessionLayout()
   const platform = usePlatform()
@@ -1101,6 +1262,18 @@ export function SessionIrisTab() {
       return undefined
     }
   })()
+  const navigate = useNavigate()
+  /**
+   * "Continue here" (#191492, epic #191485): a session from another machine becomes a NEW chat in
+   * this project, seeded with its conversation without a reply (the model reads it on the next
+   * turn), then opened. The original is untouched and keeps running where its files are (ADR-01).
+   */
+  const continueSessionHere = async (c: { text: string }) => {
+    const sdk = dirSdk!()
+    const created = await sdk.api.session.create({ location: { directory: sdk.directory } })
+    await sdk.client.session.promptAsync({ sessionID: created.id, noReply: true, parts: [{ type: "text", text: c.text }] })
+    navigate(`/${base64Encode(sdk.directory)}/session/${created.id}`)
+  }
   const projectDir = (): string | undefined => {
     try {
       return dirSdk?.().directory || undefined
@@ -1192,7 +1365,7 @@ export function SessionIrisTab() {
     })(),
   )
 
-  const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
+  const activeBloq = createMemo(() => selected() ?? settled(bloqs)?.bloqs?.[0]?.id)
 
   /**
    * WARM THE PLAYBOOK LIST before anyone asks for it. Its first load waits on fl-api's board call,
@@ -1215,10 +1388,10 @@ export function SessionIrisTab() {
 
   // A surface asked for from outside (the chat bar's Integrations entry). Consumed once.
   createEffect(() => {
-    const wanted = requestedSurface()
+    const wanted = scope.requested() as { surface: SurfaceId; sub?: string } | undefined
     if (!wanted) return
-    // In a transition — see chooseSurface. This is the path every product-tab click takes.
-    void startTransition(() => {
+    // NOT in a transition — see chooseSurface. This is the path every product-tab click takes.
+    batch(() => {
       setSurface(wanted.surface)
       // The sub-view is written through the SAME store the switcher uses, so the strip highlights
       // where you actually are rather than where it was last time.
@@ -1230,20 +1403,15 @@ export function SessionIrisTab() {
         } catch {}
       }
     })
-    setRequestedSurface(undefined)
+    scope.consumeRequest()
   })
 
-  const [surface, setSurface] = createSignal<SurfaceId>(
-    (() => {
-      try {
-        return normalizeSurface(localStorage.getItem(LAST_SURFACE_KEY))
-      } catch {
-        return "atlas" as SurfaceId
-      }
-    })(),
-  )
-  // The side panel's strip highlights the product on screen — keep the shared signal current.
-  createEffect(() => setIrisSurfaceSig(surface()))
+  // From the shared signal, not storage: it already holds this launch's opening product
+  // (#189766), and it survives the panel closing and reopening, so a product picked earlier in
+  // this launch is still the one on screen.
+  const [surface, setSurface] = createSignal<SurfaceId>(normalizeSurface(scope.surface() ?? "atlas"))
+  // The side panel's strip highlights the product on screen — keep this panel's scope current.
+  createEffect(() => scope.setSurface(surface()))
 
   // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
   // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
@@ -1320,8 +1488,18 @@ export function SessionIrisTab() {
       if (SELF_PANES.has(resolved().pane)) return undefined
       return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
     },
-    async ([, id, , , pageNo, q], info): Promise<SurfacePayload> => {
+    async ([b, id, surf, sub, pageNo, q], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
+      /*
+       * BACK TO A VIEW YOU HAD: draw what we held, at once (#190231 phase 2). The effect below
+       * (`__held`) refreshes it straight away; the chip says "Checking…" until it lands. Page 1
+       * only — "Load more" is a choice made on that visit, not something to replay.
+       */
+      const heldKey = `${b}|${id}|${surf}|${sub}|${q}`
+      if (!info.refetching && pageNo === 1) {
+        const h = heldPayload<SurfacePayload>(heldKey)
+        if (h) return { ...h, __held: true, __pane: which } as SurfacePayload
+      }
       const url = path(id)
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
@@ -1357,17 +1535,36 @@ export function SessionIrisTab() {
         } as unknown as SurfacePayload
       }
       const project = which === "playbooks" && projectParam() ? `&${projectParam()}` : ""
-      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}`)
+      /*
+       * A REFETCH RE-READS EVERY PAGE YOU HAVE, not just the last one asked for.
+       *
+       * Asking again for page 3 returned only page 3, so a refetch after "Load more" swapped
+       * three pages for one — which is why saving a card used to jump back to page 1. A live
+       * update (#189767) refetches every few seconds and would have done it constantly. One
+       * request for pages 1..n at once, inside the server's 200 cap (iris/pagination.ts).
+       */
+      const whole = info.refetching && pageNo > 1
+      // THE BOARD'S SAVED COPY IS FOR THE FIRST DRAW ONLY (#190231 phase 1). The first read of a
+      // board may come from this machine's copy; every REFETCH — the follow-up below, a live
+      // change, a save — goes to fl-api, so an edit never redraws from a copy older than itself.
+      const fresh = info.refetching && which === "atlas" ? "&fresh=1" : ""
+      const res = await doFetch(
+        whole
+          ? `${url}${sep}page=1&perPage=${Math.min(200, perPage * pageNo)}${search}${project}${fresh}`
+          : `${url}${sep}page=${pageNo}&perPage=${perPage}${search}${project}${fresh}`,
+      )
       // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
       // answer about what is currently on screen. See surfaceView.
-      const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
+      const next = { ...((await res.json()) as SurfacePayload), __pane: which, __at: Date.now() } as SurfacePayload
+      // Only an answer worth coming back to is held: data, not an error, not an offline copy.
+      if (pageNo === 1 && !whole && (next as any).measured !== false && !(next as any).offline) holdPayload(heldKey, next)
 
       // APPEND rather than replace when we asked for a later page of the same surface. The
       // previous value is the earlier pages; dropping it would make "Load more" a "Replace".
       // Annotated: the resource's own value type is still being inferred here, so info.value
       // lands as {} and every index below would be an implicit any.
       const prev = (info.refetching ? undefined : info.value) as SurfacePayload | undefined
-      if (pageNo > 1 && prev) {
+      if (pageNo > 1 && prev && !whole) {
         const key = arrayKeyFor(which)
         const a = Array.isArray(prev[key]) ? (prev[key] as unknown[]) : []
         const b = Array.isArray(next[key]) ? (next[key] as unknown[]) : []
@@ -1384,8 +1581,38 @@ export function SessionIrisTab() {
    * for the length of a network round trip — reported as "everything goes black and then it
    * shows again". `data.latest` keeps the previous value until the new one lands, which is the
    * whole point of it. The panel now swaps content instead of blinking through nothing.
+   *
+   * Read through `settled`, never `data.latest ?? data()`. Before the first value `.latest`
+   * suspends, which put the boundary round the whole panel into "Loading…" and held every effect
+   * under it — including the one that applies a product-tab click (#190230). Same for `bloqs`,
+   * `boardMembers` and `projectInterior`: anything read from a place that is always on screen.
    */
-  const current = createMemo(() => data.latest ?? data())
+  const current = createMemo(() => settled(data))
+
+  /**
+   * Drew from something we held — the board's saved copy (#190231 phase 1) or this panel's store
+   * (phase 2)? Bring it up to date at once. A refetch reads the server (and fl-api, see `fresh`
+   * above), and what we held stays on screen until the answer lands. Offline answers are not
+   * chased: the copy is all there is, and the chip says so.
+   */
+  createEffect(
+    on(current, (d) => {
+      const x = d as any
+      if (!x || x.offline) return
+      if (x.__held || (x.__pane === "atlas" && x.source === "copy")) void refetchSurface()
+    }),
+  )
+
+  /**
+   * THE SYNC STATE of what is on screen, published to the shared store so the chip below and the
+   * product tab strip read the same answer (#190231 phase 2). Panes that fetch for themselves
+   * (Hive, Rooms…) say nothing here rather than borrow another view's state.
+   */
+  createEffect(() => {
+    const d = current() as any
+    if (!d || d.__pane !== pane() || SELF_PANES.has(pane())) return
+    setSurfaceSync(surface(), syncOfPayload(d, data.loading))
+  })
 
   /** The rows of whichever pane is active — every response names its own array. */
   const rows = createMemo<any[]>(() => {
@@ -1422,13 +1649,644 @@ export function SessionIrisTab() {
       else localStorage.setItem(atlasViewKey(), JSON.stringify(next))
     } catch {}
   }
+  /*
+   * BOARD VIEW (#189723). List or Board, remembered per board and apart from the filters, so
+   * "reset" clears what you filter by, not how you look at the board.
+   */
+  const atlasLayoutKey = () => `iris.atlas.layout.${activeBloq() ?? "none"}`
+  const [atlasLayout, setAtlasLayoutSig] = createSignal<AtlasLayout>(ATLAS_LAYOUT_DEFAULT)
+  createEffect(
+    on(atlasLayoutKey, (key) => {
+      let raw: string | null = null
+      try {
+        raw = localStorage.getItem(key)
+      } catch {}
+      setAtlasLayoutSig(readAtlasLayout(raw))
+    }),
+  )
+  const setAtlasLayout = (layout: AtlasLayout) => {
+    setAtlasLayoutSig(layout)
+    try {
+      if (layout === ATLAS_LAYOUT_DEFAULT) localStorage.removeItem(atlasLayoutKey())
+      else localStorage.setItem(atlasLayoutKey(), layout)
+    } catch {}
+  }
+  /**
+   * A dragged card is shown in its new place before fl-api answers. That overlay is dropped by
+   * the next payload — which carries the saved order — or put back if the save fails. A card
+   * that LOOKS moved but is not is the most expensive thing a board can show: the next person
+   * trusts it.
+   */
+  const [atlasMoved, setAtlasMoved] = createSignal<AtlasList[] | null>(null)
+  createEffect(on(current, () => setAtlasMoved(null), { defer: true }))
+  /*
+   * FACE EDITS (#189806): a change made from the card face shows at once. Each entry stays until
+   * its save lands AND a payload has arrived after it (which carries the saved value), or is
+   * dropped at once if the save is refused, so the card goes back.
+   */
+  const [faceEdits, setFaceEdits] = createSignal<Map<number, QuickPatch>>(new Map())
+  const settledFaces = new Set<number>()
+  createEffect(
+    on(
+      current,
+      () => {
+        if (settledFaces.size === 0) return
+        const next = new Map(faceEdits())
+        for (const id of settledFaces) next.delete(id)
+        settledFaces.clear()
+        setFaceEdits(next)
+      },
+      { defer: true },
+    ),
+  )
+  const atlasBoard = () => applyFaceEdits(atlasMoved() ?? (rows() as AtlasList[]), faceEdits())
+  const [moveNote, setMoveNote] = createSignal<string | null>(null)
+  const [dragging, setDragging] = createSignal<number | null>(null)
+  const [dropAt, setDropAt] = createSignal<{ listId: number; beforeId: number | null } | null>(null)
+  /*
+   * THE DRAG PREVIEW (Elon's board, rebuilt on native drag — the Delegate rail reads its
+   * dataTransfer). While a card is held, its slot is a dashed placeholder of the same height at the
+   * spot it would land, and the other cards slide out of the way. `lifted` turns the card into the
+   * placeholder ONE FRAME after dragstart: collapse it inside dragstart and the browser snapshots
+   * an empty box as the drag image.
+   */
+  const [lifted, setLifted] = createSignal(false)
+  const [dragHeight, setDragHeight] = createSignal(0)
+  let boardEl: HTMLDivElement | undefined
+  const moveDropAt = (next: { listId: number; beforeId: number | null } | null) => {
+    const cur = dropAt()
+    const key = (d: typeof cur) => (d ? { toListId: d.listId, beforeId: d.beforeId } : null)
+    if (sameDrop(key(cur), key(next))) return
+    slideCards(boardEl, () => setDropAt(next))
+  }
+  /** Put everything back — the card where it lands (drop) or where it was (cancel) — sliding. */
+  const endDrag = (commit?: () => void) =>
+    slideCards(boardEl, () => {
+      setDragging(null)
+      setLifted(false)
+      setDropAt(null)
+      commit?.()
+    })
+  const ghostAt = (listId: number, beforeId: number | null) =>
+    lifted() && dropAt()?.listId === listId && dropAt()?.beforeId === beforeId
+  /** Drag follows board order. Under another sort, "in front of this card" means nothing that
+   *  survives a refresh, so the board says so instead of saving a position nobody chose. */
+  const canDrag = () => atlasView().sort === "board"
+  /*
+   * DELEGATE (#189933): the rail of agents and sessions beside the board. Open or closed is one
+   * choice for every board — it is how you work, not a property of a board. Delegating does not
+   * need board order, so cards drag whenever the rail is open; dropping BETWEEN lists still does.
+   */
+  const [delegateOpen, setDelegateOpenSig] = createSignal(
+    (() => {
+      try {
+        return localStorage.getItem("iris.atlas.delegate") === "1"
+      } catch {
+        return false
+      }
+    })(),
+  )
+  const setDelegateOpen = (open: boolean) => {
+    setDelegateOpenSig(open)
+    try {
+      if (open) localStorage.setItem("iris.atlas.delegate", "1")
+      else localStorage.removeItem("iris.atlas.delegate")
+    } catch {}
+  }
+  const delegateCard = (itemId: number) => {
+    for (const list of atlasBoard()) {
+      const item = list.items.find((i) => i.id === itemId)
+      if (item) return { id: item.id, title: item.title, listName: list.name, boardName: activeBloqName() }
+    }
+    return undefined
+  }
+  const delegateSessions = () => {
+    try {
+      return (dirSync?.().data.session ?? []) as { id: string; title?: string; parentID?: string; time?: any }[]
+    } catch {
+      return []
+    }
+  }
+  const sessionBusy = (id: string) => {
+    try {
+      const st = dirSync?.().data.session_status?.[id]
+      return !!st && st.type !== "idle"
+    } catch {
+      return false
+    }
+  }
+  const sendToSession = dirSdk
+    ? async (sessionID: string, text: string) => {
+        await dirSdk().api.session.prompt({ sessionID, text, delivery: "queue" })
+      }
+    : undefined
+  /*
+   * EDITS MADE OFFLINE (#190537 W3). The sidecar keeps a write it could not send and answers
+   * `queued`; the board draws it at once (marked "Waiting to send") and the chip counts it. One
+   * changed in a field someone else also changed is held here for a person to choose.
+   */
+  const heldItems = createMemo<HeldItem[]>(() => {
+    const d = current() as any
+    return d?.__pane === "atlas" ? (d.outbox?.heldItems ?? []) : []
+  })
+  createEffect(() => {
+    const d = current() as any
+    // Nothing left WAITING means it was sent. A card held for a choice has its own panel below —
+    // the note used to stay up until that was settled, saying "will be sent" about sent work (#191003).
+    if (d?.__pane === "atlas" && !(d.outbox?.waiting > 0) && moveNote() === QUEUED_NOTE) setMoveNote(null)
+  })
+  async function resolveHeld(opId: string, choice: "mine" | "theirs"): Promise<string | undefined> {
+    try {
+      const res = await doFetch(`/iris/atlas-outbox/${encodeURIComponent(opId)}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ choice }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string } | null
+      void refetchSurface()
+      return res.ok && r?.ok ? undefined : (r?.reason ?? `HTTP ${res.status}`)
+    } catch (e: any) {
+      return e?.message ?? String(e)
+    }
+  }
+  async function dropCard(drop: AtlasDrop) {
+    const full = atlasBoard()
+    const from = full.find((l) => l.items.some((i) => i.id === drop.itemId))
+    const position = atlasDropPosition(full, drop)
+    if (!from || position === null) return
+    if (from.id === drop.toListId && from.items.findIndex((i) => i.id === drop.itemId) === position) return
+    const previous = atlasMoved()
+    setAtlasMoved(moveAtlasItem(full, drop))
+    setMoveNote(null)
+    try {
+      const res = await doFetch(`/iris/item/${drop.itemId}/move`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ listId: drop.toListId, position }),
+      })
+      const r = (await res.json().catch(() => null)) as { ok?: boolean; reason?: string; queued?: boolean } | null
+      if (!res.ok || !r?.ok) throw new Error(r?.reason || `HTTP ${res.status}`)
+      if (r.queued) setMoveNote(QUEUED_NOTE)
+      void refetchSurface()
+    } catch (e: any) {
+      setAtlasMoved(previous)
+      setMoveNote(`Not moved — ${e?.message ?? String(e)}`)
+    }
+  }
+
   // A clock for the relative times, so "2m" does not sit there for an hour.
   const [now, setNow] = createSignal(Date.now())
   const clock = setInterval(() => setNow(Date.now()), 60_000)
   onCleanup(() => clearInterval(clock))
-  const atlasRows = createMemo(() =>
-    pane() === "atlas" ? applyAtlasView(rows() as AtlasList[], atlasView(), now()) : ([] as AtlasList[]),
+  /** "Checking…" · "Synced · 2m ago" · "Offline · copy from 12m ago" · "Couldn't update" (#190231 phase 2). Declared after `now`: a memo runs when created. */
+  const syncChip = createMemo(() => {
+    if (SELF_PANES.has(pane())) return null
+    const s = surfaceSync(surface())
+    const label = syncLabel(s, now())
+    return label && s ? { ...label, state: s.state, attention: !!s.held } : null
+  })
+  /*
+   * Who "Assigned: Me" means (#189798). A signal, not a resource: atlasRows reads it, and a
+   * resource read before its first value suspends the boundary around the whole side panel.
+   * /iris/me asks two services, so the panel must not wait on it; "Me" matches nothing until it
+   * lands.
+   */
+  const [meId, setMeId] = createSignal<number | null>(null)
+  let meAsked = false
+  createEffect(() => {
+    if (pane() !== "atlas" || meAsked) return
+    meAsked = true
+    void doFetch("/iris/me")
+      .then((r) => r.json())
+      .then((j: { id?: number | null }) => setMeId(j.id ?? null))
+      .catch(() => {})
+  })
+  const labelsInUse = createMemo(() => (pane() === "atlas" ? boardLabels(atlasBoard()) : []))
+  const atlasRows = createMemo<AtlasList[]>((prev) =>
+    pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now(), meId())) : [],
   )
+
+  /*
+   * COLLAPSED LISTS (#189764), per board. An empty list folds to its header by default — "In
+   * Progress 0" took as much room as a list of twelve — and any list can be folded by its
+   * header. Stored as the lists you OPENED or CLOSED against that default, so a list that
+   * fills up later opens without anyone touching it.
+   */
+  const foldKey = () => `iris.atlas.fold.${activeBloq() ?? "none"}`
+  const [folds, setFolds] = createSignal<Record<string, boolean>>({})
+  createEffect(
+    on(foldKey, (key) => {
+      try {
+        setFolds(JSON.parse(localStorage.getItem(key) ?? "{}") ?? {})
+      } catch {
+        setFolds({})
+      }
+    }),
+  )
+  const isFolded = (list: AtlasList) => folds()[list.id] ?? list.items.length === 0
+  const toggleFold = (list: AtlasList) => {
+    const next = { ...folds() }
+    const want = !isFolded(list)
+    // Back at the default: forget it, so the default can change with the list.
+    if (want === (list.items.length === 0)) delete next[list.id]
+    else next[list.id] = want
+    setFolds(next)
+    try {
+      if (Object.keys(next).length) localStorage.setItem(foldKey(), JSON.stringify(next))
+      else localStorage.removeItem(foldKey())
+    } catch {}
+  }
+  /*
+   * QUICK ADD (#189768). One composer open at a time — a list id, or "list" for a new list.
+   * Enter saves and keeps it open for the next card; Esc closes it. The card shows at the end
+   * of the list straight away, dimmed, until the board re-reads with it; a refusal takes it
+   * back and says why under the box.
+   */
+  const [composer, setComposer] = createSignal<number | "list" | undefined>()
+  const [composerText, setComposerText] = createSignal("")
+  const [composerError, setComposerError] = createSignal<string | undefined>()
+  const [pendingCards, setPendingCards] = createSignal<{ key: number; listId: number; title: string }[]>([])
+  let pendingSeq = 0
+  const openComposer = (target: number | "list") => {
+    setComposer(target)
+    setComposerText("")
+    setComposerError(undefined)
+  }
+  async function submitComposer() {
+    const target = composer()
+    const b = activeBloq()
+    const text = composerText().trim()
+    if (target === undefined || b == null || !text) return
+    setComposerError(undefined)
+    setComposerText("")
+    if (target === "list") {
+      const res = await doFetch(`/iris/atlas/${b}/lists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: text, position: rows().length }),
+      })
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string }
+      if (!res.ok || !j.ok) {
+        setComposerText(text)
+        setComposerError(j.reason ?? `HTTP ${res.status}`)
+        return
+      }
+      setComposer(undefined)
+      liveRefresh(false)
+      return
+    }
+    const list = (rows() as AtlasList[]).find((l) => l.id === target)
+    const key = ++pendingSeq
+    setPendingCards((p) => [...p, { key, listId: target, title: text }])
+    const drop = () => setPendingCards((p) => p.filter((x) => x.key !== key))
+    try {
+      const res = await doFetch(`/iris/atlas/${b}/lists/${target}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: text,
+          position: (list?.items.length ?? 0) + pendingCards().filter((x) => x.listId === target).length - 1,
+        }),
+      })
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; queued?: boolean }
+      if (!res.ok || !j.ok) {
+        drop()
+        if (composer() === target && !composerText()) setComposerText(text)
+        setComposerError(j.reason ?? `HTTP ${res.status}`)
+        return
+      }
+      if (j.queued) setMoveNote(QUEUED_NOTE)
+      await refetchSurface()
+    } catch (e) {
+      setComposerError(e instanceof Error ? e.message : String(e))
+    }
+    drop()
+  }
+  const composerKeys = (e: KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault()
+      void submitComposer()
+    } else if (e.key === "Escape") {
+      e.preventDefault()
+      e.stopPropagation()
+      setComposer(undefined)
+    }
+  }
+
+  /*
+   * KEYBOARD (#189771), on Atlas › Lists only, and only while focus is inside this panel — the
+   * handler sits on the panel, so it can never take a key from the chat box. j/k or the arrows
+   * move between cards, Enter opens one, / searches, n adds a card to the focused card's list,
+   * c copies its #id, x marks it done (or open again), [ and ] fold and unfold its list.
+   */
+  const atlasRowEls = () => Array.from(document.querySelectorAll<HTMLElement>(".iris-atlas-row[data-item-id]"))
+  async function toggleDone(itemId: number) {
+    const item = (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === itemId)
+    if (!item) return
+    const res = await doFetch(`/iris/item/${itemId}/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: isDone(item.status) ? "active" : "done" }),
+    }).catch(() => undefined)
+    const j = (await res?.json().catch(() => null)) as { ok?: boolean; reason?: string; queued?: boolean } | null
+    // Was swallowed entirely: a toggle that did not land looked exactly like one that did.
+    if (!res?.ok || j?.ok === false) setMoveNote(`Not saved — ${j?.reason ?? "IRIS could not be reached"}`)
+    else if (j?.queued) setMoveNote(QUEUED_NOTE)
+    liveRefresh(false)
+  }
+  /** The face editor (#189806): which card, where it is on screen, and the field a key named. */
+  const [quick, setQuick] = createSignal<{ itemId: number; anchor: { left: number; top: number; bottom: number }; field?: QuickField } | null>(null)
+  const [quickNote, setQuickNote] = createSignal<string | null>(null)
+  /*
+   * The board's status/priority vocabulary, fetched the first time the editor opens on a board.
+   * A plain signal, not a resource: a resource read under the panel's Suspense blanked the whole
+   * board behind the editor while it loaded.
+   */
+  const [quickSchema, setQuickSchema] = createSignal<{ bloq: number; schema?: CardSchema }>()
+  createEffect(
+    on(
+      () => (quick() && activeBloq() != null ? Number(activeBloq()) : undefined),
+      (b) => {
+        if (b === undefined || quickSchema()?.bloq === b) return
+        setQuickSchema({ bloq: b })
+        doFetch(`/iris/card-schema/${b}`)
+          .then((r) => r.json() as Promise<CardSchema>)
+          .then((schema) => quickSchema()?.bloq === b && setQuickSchema({ bloq: b, schema }))
+          .catch(() => {})
+      },
+    ),
+  )
+  const quickCard = () => {
+    const q = quick()
+    return q ? (atlasBoard() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === q.itemId) : undefined
+  }
+  function openQuick(itemId: number, el: HTMLElement, field?: QuickField, at?: { x: number; y: number }) {
+    const r = el.getBoundingClientRect()
+    setQuickNote(null)
+    setQuick({ itemId, field, anchor: at ? { left: at.x, top: at.y, bottom: at.y } : { left: r.left, top: r.top, bottom: r.bottom } })
+  }
+  function closeQuick() {
+    const q = quick()
+    setQuick(null)
+    // Back to the card it came from, so j/k and the keys carry on from there.
+    if (q) document.querySelector<HTMLElement>(`[data-item-id="${q.itemId}"], [data-board-card="${q.itemId}"]`)?.focus()
+  }
+  async function saveFace(itemId: number, patch: QuickPatch) {
+    setQuickNote(null)
+    settledFaces.delete(itemId)
+    setFaceEdits((m) => new Map(m).set(itemId, { ...m.get(itemId), ...patch }))
+    const { labels, ...fields } = patch
+    let reason: string | undefined
+    try {
+      const writes: Promise<Response>[] = []
+      if (Object.keys(fields).length)
+        writes.push(
+          doFetch(`/iris/item/${itemId}/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(fields),
+          }),
+        )
+      if (labels)
+        writes.push(
+          doFetch(`/iris/item/${itemId}/labels`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ labels }),
+          }),
+        )
+      for (const res of await Promise.all(writes)) {
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; message?: string; queued?: boolean }
+        if (!res.ok || j.ok === false) reason ??= j.reason ?? j.message ?? `request failed (${res.status})`
+        else if (j.queued) setMoveNote(QUEUED_NOTE)
+      }
+    } catch (e) {
+      reason = e instanceof Error ? e.message : String(e)
+    }
+    if (reason) {
+      setFaceEdits((m) => {
+        const next = new Map(m)
+        next.delete(itemId)
+        return next
+      })
+      setQuickNote(`Not saved — ${reason}`)
+      return
+    }
+    settledFaces.add(itemId)
+    liveRefresh(false)
+  }
+  /*
+   * FILES ONTO A CARD (#189797): drop them on its face in List or Board view. The card says
+   * "Uploading 2 of 3…" while they go, and the board note says why if any did not.
+   */
+  const [fileDrop, setFileDrop] = createSignal<{ itemId: number; text: string } | null>(null)
+  const [fileOver, setFileOver] = createSignal<number | null>(null)
+  async function dropFiles(itemId: number, files: File[]) {
+    if (!files.length || fileDrop()) return
+    setFileOver(null)
+    setMoveNote(null)
+    setFileDrop({ itemId, text: `Uploading ${files.length === 1 ? files[0].name : `${files.length} files`}…` })
+    const b = activeBloq()
+    const out = await uploadCardFiles(doFetch, itemId, b == null ? undefined : Number(b), files, (done, total) =>
+      setFileDrop({ itemId, text: total > 1 ? `Uploading ${Math.min(done + 1, total)} of ${total}…` : "Uploading…" }),
+    )
+    setFileDrop(null)
+    if (out.reason) setMoveNote(`${out.ok} of ${out.total} uploaded — ${out.reason}`)
+    if (out.ok) liveRefresh(false)
+  }
+  /** The drag handlers a card face needs for files; card-to-card drags pass straight through. */
+  const fileDropHandlers = (itemId: number) => ({
+    onDragEnter: (e: DragEvent) => {
+      if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      setFileOver(itemId)
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (fileOver() === itemId && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setFileOver(null)
+    },
+  })
+  function atlasKeys(e: KeyboardEvent) {
+    if (pane() !== "atlas" || view() !== "rows" || openRow()) return
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    const t = e.target as HTMLElement | null
+    if (t && (t.closest("input, textarea, select, [contenteditable='true']") || t.isContentEditable)) return
+    const key = e.key
+    if (key === "/") {
+      const box = document.querySelector<HTMLInputElement>(".iris-search__input")
+      if (box) {
+        e.preventDefault()
+        box.focus()
+      }
+      return
+    }
+    const els = atlasRowEls()
+    const at = t ? els.indexOf(t.closest<HTMLElement>(".iris-atlas-row[data-item-id]")!) : -1
+    const move = (d: number) => {
+      const next = els[Math.max(0, Math.min(els.length - 1, at < 0 ? 0 : at + d))]
+      if (next) {
+        e.preventDefault()
+        next.focus()
+        next.scrollIntoView({ block: "nearest" })
+      }
+    }
+    if (key === "j" || key === "ArrowDown") return move(1)
+    if (key === "k" || key === "ArrowUp") return move(-1)
+    const row = at >= 0 ? els[at] : undefined
+    if (!row) return
+    const itemId = Number(row.dataset.itemId)
+    const listId = Number(row.dataset.listId)
+    const list = (rows() as AtlasList[]).find((l) => l.id === listId)
+    if (key === "n" && list) {
+      e.preventDefault()
+      openComposer(listId)
+    } else if (key === "c") {
+      e.preventDefault()
+      copyItemId(itemId)
+    } else if (key === "x") {
+      e.preventDefault()
+      void toggleDone(itemId)
+    } else if (quickFieldFor(key)) {
+      e.preventDefault()
+      openQuick(itemId, row, quickFieldFor(key))
+    } else if ((key === "[" && list && !isFolded(list)) || (key === "]" && list && isFolded(list))) {
+      e.preventDefault()
+      toggleFold(list)
+    }
+  }
+
+  /** The board's people, for the toolbar's Members button (#189795). */
+  const [boardMembers, { refetch: refetchMembers }] = createResource(
+    () => (pane() === "atlas" && activeBloq() != null ? Number(activeBloq()) : undefined),
+    (b) => readMembers(doFetch, b),
+  )
+
+  const [copiedId, setCopiedId] = createSignal<number | undefined>()
+  const copyItemId = (id: number) => {
+    if (id < 0) return // made offline: no id IRIS knows yet
+    void navigator.clipboard?.writeText(`#${id}`).catch(() => {})
+    setCopiedId(id)
+    setTimeout(() => setCopiedId((c) => (c === id ? undefined : c)), 1200)
+  }
+
+  /*
+   * LIVE (#189767) — the board moves when anyone moves it: you in another window, a teammate,
+   * or the agent in this chat. The sidecar watches the board and says "changed"; this re-reads
+   * it in place (content stays on screen through the refetch, see `current`) and marks the
+   * cards that moved, the way Trello does.
+   *
+   * Watched only while Atlas is on screen AND the window is visible — a hidden panel costs
+   * nothing, and coming back re-reads once so it is current the moment you look.
+   */
+  const [liveState, setLiveState] = createSignal<LiveState>("off")
+  /** Cards that changed while you were looking — flashed, then kept as a dot. */
+  const [liveIds, setLiveIds] = createSignal<Set<number>>(new Set())
+  /** Cards edited since your last visit to this board — a dot until you leave it. */
+  const [awayIds, setAwayIds] = createSignal<Set<number>>(new Set())
+  const [docVisible, setDocVisible] = createSignal(
+    typeof document === "undefined" || document.visibilityState !== "hidden",
+  )
+  if (typeof document !== "undefined") {
+    const onVis = () => setDocVisible(document.visibilityState !== "hidden")
+    document.addEventListener("visibilitychange", onVis)
+    onCleanup(() => document.removeEventListener("visibilitychange", onVis))
+  }
+  const seenKey = (b: string | number) => `iris.atlas.seen.${b}`
+
+  let liveBaseline: { board: string; lists: AtlasList[] } | undefined
+  let livePending = false
+  let liveQueued = false
+  /** `mark` false for your own save: the card you just edited is not news to you. */
+  function liveRefresh(mark = true) {
+    // One refetch at a time; a change that lands mid-flight runs once more when it finishes.
+    if (data.loading) {
+      liveQueued = true
+      return
+    }
+    livePending = mark
+    void refetchSurface()
+  }
+  createEffect(
+    on(
+      () => data.loading,
+      (loading) => {
+        if (!loading && liveQueued) {
+          liveQueued = false
+          liveRefresh()
+        }
+      },
+    ),
+  )
+
+  createEffect(
+    on(
+      () => (pane() === "atlas" && activeBloq() != null ? ([String(activeBloq()), rows() as AtlasList[]] as const) : undefined),
+      (cur) => {
+        if (!cur) return
+        const [board, lists] = cur
+        if (!liveBaseline || liveBaseline.board !== board) {
+          // A board opened: what moved since you last had it open, then mark it seen.
+          setLiveIds(new Set<number>())
+          let seen: string | null = null
+          try {
+            seen = localStorage.getItem(seenKey(board))
+            localStorage.setItem(seenKey(board), new Date().toISOString())
+          } catch {}
+          setAwayIds(editedSince(lists, seen))
+        } else if (livePending) {
+          const moved = changedItemIds(liveBaseline.lists, lists)
+          if (moved.size) setLiveIds((prev) => new Set([...prev, ...moved]))
+          try {
+            localStorage.setItem(seenKey(board), new Date().toISOString())
+          } catch {}
+        }
+        livePending = false
+        liveBaseline = { board, lists }
+      },
+    ),
+  )
+
+  createEffect(
+    on(docVisible, (visible, was) => {
+      if (visible && was === false && pane() === "atlas") liveRefresh()
+    }),
+  )
+
+  createEffect(() => {
+    const b = activeBloq()
+    if (pane() !== "atlas" || b == null || !docVisible()) {
+      setLiveState("off")
+      return
+    }
+    const ctrl = new AbortController()
+    let stopped = false
+    void (async () => {
+      let backoff = 2_000
+      while (!stopped) {
+        try {
+          const res = await doFetch(`/iris/atlas/${b}/live`, {
+            headers: { Accept: "text/event-stream" },
+            signal: ctrl.signal,
+          })
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+          setLiveState("polling")
+          backoff = 2_000
+          await readSse(res.body, (event, body) => {
+            if (event === "change") liveRefresh()
+            else if (event === "status") setLiveState(body?.pusher === "connected" ? "instant" : "polling")
+          })
+        } catch {}
+        if (stopped) return
+        // The sidecar restarted or the stream dropped: say so, and come back.
+        setLiveState("off")
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = Math.min(backoff * 2, 30_000)
+      }
+    })()
+    onCleanup(() => {
+      stopped = true
+      ctrl.abort()
+    })
+  })
 
   /*
    * HOW HANDS-OFF (Playbooks · "03 Flow"). A lens over the rows already fetched, so it composes
@@ -1448,12 +2306,12 @@ export function SessionIrisTab() {
    *  refetch now that the content deliberately stays on screen through one. */
   const busy = createMemo(() => bloqs.loading || data.loading)
 
-  const firstLoad = createMemo(() => (data.loading && !data.latest) || (bloqs.loading && !bloqs.latest))
+  const firstLoad = createMemo(() => (data.loading && !settled(data)) || (bloqs.loading && !settled(bloqs)))
 
   const view = createMemo(() =>
     surfaceView({
       loading: firstLoad(),
-      bloqs: bloqs.latest ?? bloqs(),
+      bloqs: settled(bloqs),
       data: current(),
       rows: rows(),
       dataPane: current()?.["__pane"] as string | undefined,
@@ -1595,7 +2453,7 @@ export function SessionIrisTab() {
       return { measured: true, ...got }
     },
   )
-  const project = () => (projectScope() ? (projectInterior.latest ?? projectInterior()) : undefined)
+  const project = () => (projectScope() ? settled(projectInterior) : undefined)
 
   /** Lists as the card editor wants them, read off the graph's own `list-<id>` nodes. */
   const projectLists = () =>
@@ -1660,8 +2518,16 @@ export function SessionIrisTab() {
   })
 
   const activeBloqName = createMemo(
-    () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
+    () => settled(bloqs)?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
+
+  // Where the panel actually is, for the agent (#190093). The board's name only once it is known —
+  // "Select a board" is a placeholder, not a name.
+  createEffect(() => {
+    const id = activeBloq()
+    const name = bloqs.latest?.bloqs?.find((b) => b.id === id)?.name
+    setIrisPanelView({ surface: surface(), sub: resolved().sub?.id, bloq: id ? { id, name } : undefined })
+  })
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */
@@ -1795,6 +2661,14 @@ export function SessionIrisTab() {
   })
 
   const [detailTab, setDetailTab] = createSignal("info")
+  /**
+   * AGENTS › NEW / EDIT (#191840): ELON's SimpleAgentModal, in this panel. `{}` = a new agent on
+   * the open board; `{agentId}` = that agent. Clicking an agent opens it here; the read-only
+   * record (Info · Tasks · JSON) is one click away under "Details".
+   */
+  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any } | null>(null)
+  // A different product, sub-view or board is a different list: the editor belongs to the one it was opened from.
+  createEffect(on([pane, () => activeBloq()], () => setAgentEditor(null), { defer: true }))
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
 
   // A record always opens on Info. Carrying the previous record's tab over lands you on
@@ -1812,9 +2686,16 @@ export function SessionIrisTab() {
    * also ask for the next page of schemas.
    */
   const [recordPage, setRecordPage] = createSignal(1)
+  /* RECORDS: sort, filter, export (#189769). Sort and filter act on the page on screen and say
+     so; export reads every page. */
+  const [recordSort, setRecordSort] = createSignal<{ key: string; dir: SortDir } | undefined>()
+  const [recordQuery, setRecordQuery] = createSignal("")
+  const [exporting, setExporting] = createSignal<string | undefined>()
   createEffect(() => {
     openRow()
     setRecordPage(1)
+    setRecordSort(undefined)
+    setRecordQuery("")
   })
   /** What the open agent is holding. Fetched only when the tab is on, like the records table. */
   const [agentTasks] = createResource(
@@ -1955,7 +2836,9 @@ export function SessionIrisTab() {
     // The BOARD is in the path, not decoration: the server refuses a dataset that belongs
     // elsewhere, and it can only do that if we say which board we are asking as.
     async ([, bloqID, slug, pageNo]) => {
-      const res = await doFetch(`/iris/records/${bloqID}/${encodeURIComponent(slug)}?page=${pageNo}&perPage=25`)
+      const res = await doFetch(
+        `/iris/records/${bloqID}/${encodeURIComponent(slug)}?page=${pageNo}&perPage=${RECORDS_PER_PAGE}`,
+      )
       return (await res.json()) as Measured & {
         columns: { key: string; label: string; type: string; visibility?: string }[]
         rows: { id: number; data: Record<string, unknown>; updatedAt?: string }[]
@@ -1965,6 +2848,54 @@ export function SessionIrisTab() {
       }
     },
   )
+
+  const recordRows = createMemo(() => {
+    const r = records.latest
+    if (!r) return []
+    const sort = recordSort()
+    const filtered = filterRecords(r.rows, r.columns, recordQuery())
+    if (!sort) return filtered
+    const col = sort.key === "id" ? "id" : r.columns.find((c) => c.key === sort.key)
+    return col ? sortRecords(filtered, col, sort.dir) : filtered
+  })
+  const cycleSort = (key: string) =>
+    setRecordSort((cur) =>
+      cur?.key !== key ? { key, dir: "asc" } : cur.dir === "asc" ? { key, dir: "desc" } : undefined,
+    )
+  /** Every page, 200 at a time, up to 10,000 rows — then a file named after the dataset. */
+  async function exportRecords() {
+    const r = openRow()
+    const slug = r?.raw?.slug
+    const b = activeBloq()
+    if (!slug || b == null) return
+    setExporting("Reading…")
+    try {
+      const all: { id: number; data: Record<string, unknown> }[] = []
+      let columns: { key: string; label: string; type: string }[] = []
+      for (let page = 1; page <= 50; page++) {
+        const res = await doFetch(`/iris/records/${b}/${encodeURIComponent(String(slug))}?page=${page}&perPage=200`)
+        const j = (await res.json()) as { measured?: boolean; reason?: string; columns?: typeof columns; rows?: typeof all; hasMore?: boolean }
+        if (!res.ok || j.measured === false) throw new Error(j.reason ?? `HTTP ${res.status}`)
+        if (page === 1) columns = j.columns ?? []
+        all.push(...(j.rows ?? []))
+        setExporting(`Reading… ${all.length}`)
+        if (!j.hasMore) break
+      }
+      const blob = new Blob([toCsv(columns, all)], { type: "text/csv;charset=utf-8" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${String(slug).replace(/[^a-z0-9_-]+/gi, "-") || "records"}.csv`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setExporting(`Exported ${all.length} ${all.length === 1 ? "row" : "rows"}`)
+    } catch (e) {
+      setExporting(`Export failed — ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setTimeout(() => setExporting(undefined), 4000)
+  }
 
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
@@ -2013,23 +2944,33 @@ export function SessionIrisTab() {
   function openCard(itemId: number, fromGraph?: { id: number; name: string }[]) {
     const b = activeBloq()
     if (b == null) return
+    // A card made offline exists only on this computer until it is sent: IRIS has nothing to open yet (#190537 W3).
+    if (itemId < 0) {
+      setMoveNote("This card was made offline — it opens once it has been sent to IRIS.")
+      return
+    }
     // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
       fromGraph ??
-      (((data.latest ?? data())?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
-    dialog.show(() => (
-      <IrisCardEditor
-        itemId={itemId}
-        bloqId={Number(b)}
-        lists={lists}
-        doFetch={doFetch}
-        onChanged={() => {
-          if (page() !== 1) setPage(1)
-          else void refetchSurface()
-        }}
-      />
-    ))
+      ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
+    // The card's microphone records through this same server, with the SDK's credentials (#190041).
+    setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
+    dialog.show(() => {
+      // What the side panel reports as the open card (#191507), for as long as the editor is up.
+      setIrisOpenCard({ id: itemId, bloq: Number(b) })
+      onCleanup(() => setIrisOpenCard((c) => (c?.id === itemId ? undefined : c)))
+      return (
+        <IrisCardEditor
+          itemId={itemId}
+          bloqId={Number(b)}
+          lists={lists}
+          doFetch={doFetch}
+          onChanged={() => liveRefresh(false)}
+          recorderUrl={base()}
+        />
+      )
+    })
   }
 
   // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
@@ -2045,26 +2986,26 @@ export function SessionIrisTab() {
   const rowScope = createMemo(() => panelScope(surface(), pane()))
 
   /**
-   * SWITCHING IS A TRANSITION, OR THE PANEL GOES BLACK.
+   * SWITCHING IS IMMEDIATE; THE PANE WAITS IN ITS OWN BOX (#190230).
    *
-   * The pane a switch lands on reads resources that have not loaded yet — Rooms, Artifacts, a
-   * playbook or page doc. Read outside a transition, that suspends the nearest <Suspense>, which
-   * holds the whole side panel and has no fallback: every product-tab click blanked the panel to
-   * its dark ground until the fetch returned. Inside one, the pane you were on stays up until the
-   * next one is ready.
+   * The pane a switch lands on reads resources that have not loaded yet — Rooms, Artifacts, Hive.
+   * That used to suspend the boundary round the whole side panel, so the switch ran in a
+   * transition to keep the old pane up until the new one was ready. Measured on a preview build:
+   * that transition made every click wait for the new pane's own first request (0.4–0.9 s for
+   * Hive), with nothing on screen saying the click had registered. Now the tab and header change
+   * at once and only the pane body shows "Loading…", in its own <Suspense> round the pane <Switch>.
    */
   function chooseSurface(id: SurfaceId) {
-    void startTransition(() => setSurface(id))
+    setSurface(id)
     try {
       localStorage.setItem(LAST_SURFACE_KEY, id)
     } catch {}
   }
 
-  // `target` is explicit for a caller that has just chosen a surface: inside the transition above,
-  // surface() still reads the one being left until the switch commits.
+  // `target` is explicit for a caller that has just chosen a surface.
   function chooseSub(id: string, target: SurfaceId = surface()) {
     const next = { ...subviews(), [target]: id }
-    void startTransition(() => setSubviews(next))
+    setSubviews(next)
     try {
       localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
     } catch {}
@@ -2075,11 +3016,19 @@ export function SessionIrisTab() {
   createEffect(() => {
     const req = irisNavRequest()
     if (!req) return
+    // Only this chat's panel takes it: the one it names, or — unnamed — the chat you are in.
+    // Left for its own panel otherwise, not cleared.
+    if (req.session ? req.session !== navParams.id : !navFocused()) return
     untrack(() => {
       if (req.bloqId && req.bloqId > 0) choose(req.bloqId)
       const known = SURFACES.some((x) => x.id === req.surface)
       if (known) chooseSurface(req.surface as SurfaceId)
       if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
+      // A notification about a card, clicked: the board first, then the card itself (#189799).
+      if (req.itemId && req.itemId > 0) {
+        const id = req.itemId
+        queueMicrotask(() => openCard(id))
+      }
     })
     clearIrisNav()
   })
@@ -2122,7 +3071,7 @@ export function SessionIrisTab() {
    * this button used to live in.
    */
   function openBoardPicker() {
-    const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+    const all = settled(bloqs)?.bloqs ?? []
     dialog.show(() => (
       <Dialog title="Board" description={`${all.length} boards`}>
         <List
@@ -2163,41 +3112,45 @@ export function SessionIrisTab() {
 
   // What the scope chip in the product row says (#187130 C). Project views NAME the project and
   // open the picker; session and account views state the scope and have nothing to pick.
+  const chipScope = useIrisPanelScope()
   createEffect(() => {
     const scope = rowScope()
-    const hasBoards = ((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0
+    const hasBoards = (settled(bloqs)?.bloqs?.length ?? 0) > 0
     const project = scope === "project"
-    setScopeChip({
+    chipScope.setChip({
       scope,
       label: scopeChipLabel(scope, project && hasBoards && activeBloq() ? activeBloqName() : undefined),
       pick: project && hasBoards ? openBoardPicker : undefined,
     })
   })
-  onCleanup(() => setScopeChip(undefined))
+  onCleanup(() => chipScope.setChip(undefined))
 
   return (
-    <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
+    <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2" onKeyDown={atlasKeys}>
+      <Show when={pane() === "atlas" && quick() && quickCard()}>
+        {(card) => (
+          <IrisQuickEdit
+            card={card()}
+            anchor={quick()!.anchor}
+            field={quick()!.field}
+            status={quickSchema()?.schema?.status}
+            priority={quickSchema()?.schema?.priority}
+            boardLabels={labelsInUse()}
+            now={now()}
+            note={quickNote()}
+            onSave={(patch) => void saveFace(card().id, patch)}
+            onClose={closeQuick}
+          />
+        )}
+      </Show>
       <Show when={busy()}>
         <div class="iris-activity" aria-hidden="true" />
       </Show>
       {/* TWO ROWS, NOT THREE (#187130). The scope/board row that sat here moved onto the side
-          panel's product row as a chip (irisScopeChip). What is left is the product's own views,
-          with the focus toggle at the end of that row. With no views — or in focus mode, where
-          the row is folded away — the toggle floats in the corner so there is always a way back. */}
-      <Show
-        when={!focus() && SUBVIEWS[surface()]}
-        fallback={
-          <button
-            type="button"
-            class="iris-focusbtn iris-focusbtn--float"
-            classList={{ "iris-focusbtn--on": focus() }}
-            title={focus() ? "Show tabs (Esc)" : "Focus — hide the tab rows"}
-            aria-pressed={focus()}
-            onClick={() => setFocus((v) => !v)}
-          >
-            ⤢
-          </button>
-        }
+          panel's product row as a chip (context/iris-panel-scope). What is left is the product's own views.
+          The ⤢ focus toggle that ended this row is gone (#191484): it cluttered every product's
+          row, and nothing else enters focus mode, so no one can be left in it. */}
+      <Show when={!focus() && SUBVIEWS[surface()]}
       >
         {(list) => (
           <div class="iris-subrow shrink-0">
@@ -2217,22 +3170,29 @@ export function SessionIrisTab() {
                 )}
               </For>
             </div>
-            <button
-              type="button"
-              class="iris-focusbtn"
-              title="Focus — hide the tab rows"
-              aria-pressed={false}
-              onClick={() => setFocus(true)}
-            >
-              ⤢
-            </button>
+            <Show when={syncChip()}>
+              {(c) => (
+                <button
+                  type="button"
+                  class="iris-sync"
+                  data-state={c().state}
+                  data-attention={c().attention ? "" : undefined}
+                  title={c().title}
+                  aria-live="polite"
+                  onClick={() => void refetchSurface()}
+                >
+                  <span class="iris-sync__dot" aria-hidden="true" />
+                  {c().text}
+                </button>
+              )}
+            </Show>
           </div>
         )}
       </Show>
 
       {/* SEARCH, for the pane that has enough in it to need one: a board's lists run to
           hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
-      <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow()}>
+      <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow() && !agentEditor()}>
         <div class="iris-search shrink-0">
           <Show when={pane() === "playbooks"}>
             <span class="pbf-search-ic">
@@ -2262,6 +3222,51 @@ export function SessionIrisTab() {
         </div>
       </Show>
 
+      {/* NEW AGENT (#191840) — on every Agents view that lists this board's agents, empty or not:
+          "Nothing in Agents › All on this board" with no way to make one was the bug. */}
+      <Show when={pane() === "agents" && !openRow() && !agentEditor()}>
+        <div class="iae-bar shrink-0">
+          <button
+            type="button"
+            class="iae-new"
+            data-testid="iris-agent-new"
+            disabled={activeBloq() == null}
+            onClick={() => setAgentEditor({})}
+          >
+            + New agent
+          </button>
+          <span class="iae-bar__hint">on {activeBloqName() ?? "this board"} · click an agent to edit it</span>
+        </div>
+      </Show>
+
+      <Show when={agentEditor()}>
+        {(ed) => (
+          <div class="flex-1 min-h-0 flex flex-col">
+            <IrisAgentEditor
+              doFetch={doFetch}
+              agentId={ed().agentId}
+              bloqId={activeBloq() != null ? Number(activeBloq()) : null}
+              bloqName={activeBloqName()}
+              boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              onClose={() => setAgentEditor(null)}
+              onSaved={(a) => {
+                void refetchSurface()
+                if (a.created) setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
+              }}
+              onDetails={
+                ed().row
+                  ? () => {
+                      const row = ed().row
+                      setAgentEditor(null)
+                      setOpenRow(describeRow("agents", row))
+                    }
+                  : undefined
+              }
+            />
+          </div>
+        )}
+      </Show>
+
       <Show when={pane() === "playbooks" && !openRow() && view() === "rows"}>
         <PlaybookFilters
           value={handsFilter()}
@@ -2273,6 +3278,27 @@ export function SessionIrisTab() {
 
       <Show when={pane() === "atlas" && !openRow() && view() === "rows"}>
         <div class="iris-atlas-tools shrink-0">
+          <div class="iris-atlas-tools__chips" role="group" aria-label="Layout">
+            <For each={ATLAS_LAYOUTS}>
+              {(o) => (
+                <button type="button" aria-pressed={atlasLayout() === o.id} onClick={() => setAtlasLayout(o.id)}>
+                  {o.label}
+                </button>
+              )}
+            </For>
+          </div>
+          <Show when={atlasLayout() === "board"}>
+            <div class="iris-atlas-tools__chips" role="group" aria-label={language.t("iris.delegate.title")}>
+              <button
+                type="button"
+                aria-pressed={delegateOpen()}
+                title={language.t("iris.delegate.toggle.title")}
+                onClick={() => setDelegateOpen(!delegateOpen())}
+              >
+                {language.t("iris.delegate.toggle")}
+              </button>
+            </div>
+          </Show>
           <label class="iris-atlas-tools__field">
             <span>Sort</span>
             <select
@@ -2312,11 +3338,122 @@ export function SessionIrisTab() {
             />
             <span>Hide empty</span>
           </label>
+          {/* Card-face filters (#189798): what is on the card, not when it was edited. */}
+          <Show when={labelsInUse().length > 0 || atlasView().label}>
+            <label class="iris-atlas-tools__field">
+              <span>Label</span>
+              <select value={atlasView().label} onChange={(e) => setAtlasView({ label: e.currentTarget.value })}>
+                <option value="">Any</option>
+                <For each={labelsInUse()}>{(l) => <option value={l}>{l}</option>}</For>
+              </select>
+            </label>
+          </Show>
+          <label class="iris-atlas-tools__field">
+            <span>Assigned</span>
+            <select
+              value={atlasView().assigned}
+              onChange={(e) => setAtlasView({ assigned: e.currentTarget.value as AtlasViewOptions["assigned"] })}
+            >
+              <For each={ATLAS_ASSIGNED}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__field">
+            <span>Due</span>
+            <select value={atlasView().due} onChange={(e) => setAtlasView({ due: e.currentTarget.value as AtlasViewOptions["due"] })}>
+              <For each={ATLAS_DUE}>{(o) => <option value={o.id}>{o.label}</option>}</For>
+            </select>
+          </label>
+          <label class="iris-atlas-tools__check">
+            <input type="checkbox" checked={atlasView().hasFiles} onChange={(e) => setAtlasView({ hasFiles: e.currentTarget.checked })} />
+            <span>Has files</span>
+          </label>
           <Show when={!isDefaultView(atlasView())}>
             <button type="button" class="iris-search__clear" onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}>
               reset
             </button>
           </Show>
+          {/* PRESENCE: who is on this board and whether it is live, in one pill. The dot is the
+              live state, the faces and the number are the members; words move to the tooltip,
+              and the live state is still announced to screen readers. */}
+          {(() => {
+            const memberCount = () =>
+              settled(boardMembers)?.measured ? settled(boardMembers)!.members.length + 1 : undefined
+            const membersText = () => {
+              const n = memberCount()
+              return n === undefined ? "Members" : `${n} ${n === 1 ? "member" : "members"}`
+            }
+            const shown = () => (settled(boardMembers)?.members ?? []).slice(0, 3)
+            return (
+              <button
+                type="button"
+                class="iris-atlas-presence"
+                data-state={liveState()}
+                title={`${membersText()} — who is on this board\n${liveLabel(liveState()).text}: ${liveLabel(liveState()).title}`}
+                aria-label={`${membersText()}, ${liveLabel(liveState()).text}`}
+                onClick={() => {
+                  const b = activeBloq()
+                  if (b == null) return
+                  dialog.show(() => (
+                    <IrisBoardMembers
+                      bloqId={Number(b)}
+                      boardName={activeBloqName()}
+                      doFetch={doFetch}
+                      onChanged={() => void refetchMembers()}
+                    />
+                  ))
+                }}
+              >
+                <span class="iris-atlas-live__dot" aria-hidden="true" />
+                <Show when={shown().length > 0}>
+                  <span class="iris-avatars" aria-hidden="true">
+                    <For each={shown()}>{(m) => <span class="iris-avatar">{initials(m.name || m.email)}</span>}</For>
+                  </span>
+                </Show>
+                <span class="iris-atlas-presence__count" aria-hidden="true">
+                  {memberCount() ?? "Members"}
+                </span>
+                <span class="sr-only" aria-live="polite">
+                  {liveLabel(liveState()).text}
+                </span>
+              </button>
+            )
+          })()}
+          <button
+            type="button"
+            class="iris-atlas-bell"
+            title="Offline copy — boards kept on this machine"
+            aria-label="Offline copy settings"
+            onClick={() => dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                d="M2.5 4.5h11v7h-11zM2.5 8.5h11M5 10h.01"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="iris-atlas-bell"
+            title="Notifications — what Atlas tells you about your cards"
+            aria-label="Notification settings"
+            onClick={() => dialog.show(() => <IrisNotifySettings doFetch={doFetch} />)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                d="M8 1.5a4 4 0 0 0-4 4v2.3L2.8 10a.6.6 0 0 0 .5.9h9.4a.6.6 0 0 0 .5-.9L12 7.8V5.5a4 4 0 0 0-4-4ZM6.3 12.5a1.8 1.8 0 0 0 3.4 0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
         </div>
       </Show>
 
@@ -2813,14 +3950,46 @@ export function SessionIrisTab() {
                         safe to share.
                       </p>
                     </Show>
+                    <div class="iris-records-tools">
+                      <input
+                        class="iris-records-tools__filter"
+                        type="search"
+                        placeholder="Filter this page…"
+                        value={recordQuery()}
+                        onInput={(e) => setRecordQuery(e.currentTarget.value)}
+                      />
+                      <Show when={recordQuery() || recordSort()}>
+                        <span class="font-mono tabular-nums">
+                          {recordRows().length} of {records.latest!.rows.length} on this page
+                        </span>
+                      </Show>
+                      <button
+                        type="button"
+                        class="iris-records-tools__btn"
+                        disabled={!!exporting()?.startsWith("Reading")}
+                        title="Every record in this dataset, not just this page"
+                        onClick={() => void exportRecords()}
+                      >
+                        {exporting() ?? "Export CSV"}
+                      </button>
+                    </div>
                     <div class="iris-table-wrap">
                       <table class="iris-table">
                         <thead>
                           <tr>
-                            <th class="iris-table__num">id</th>
+                            <th
+                              class="iris-table__num iris-table__sort"
+                              aria-sort={recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
+                              onClick={() => cycleSort("id")}
+                            >
+                              id{recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
+                            </th>
                             <For each={records.latest!.columns}>
                               {(c) => (
                                 <th
+                                  class="iris-table__sort"
+                                  aria-sort={recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
+                                  onClick={() => cycleSort(c.key)}
                                   title={
                                     c.visibility
                                       ? `${c.key} · ${c.type} · visibility: ${c.visibility}`
@@ -2828,6 +3997,7 @@ export function SessionIrisTab() {
                                   }
                                 >
                                   {c.label}
+                                  {recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
                                   {/* THREE STATES, DRAWN AS THREE (#185139).
                                       Declared phi, declared something else, and nobody said.
                                       Only the first two were ever drawn, so silence rendered
@@ -2853,7 +4023,7 @@ export function SessionIrisTab() {
                           </tr>
                         </thead>
                         <tbody>
-                          <For each={records.latest!.rows}>
+                          <For each={recordRows()}>
                             {(r) => (
                               <tr>
                                 <td class="iris-table__num">{r.id}</td>
@@ -2877,20 +4047,33 @@ export function SessionIrisTab() {
                     <div class="flex items-center gap-2 py-2 text-11-regular text-text-weaker">
                       <span class="font-mono tabular-nums">
                         {pageSummary({
-                          shown: (recordPage() - 1) * 25 + records.latest!.rows.length,
+                          shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
                           env: records.latest as unknown as PageEnvelope,
+                          noun: "records",
                         })}
                       </span>
-                      <Show when={records.latest!.hasMore}>
-                        <button
-                          type="button"
-                          class="ms-auto px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
-                          disabled={records.loading}
-                          onClick={() => setRecordPage((n) => n + 1)}
-                        >
-                          {records.loading ? "Loading…" : "Next page"}
-                        </button>
-                      </Show>
+                      <span class="ms-auto flex items-center gap-1">
+                        <Show when={recordPage() > 1}>
+                          <button
+                            type="button"
+                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                            disabled={records.loading}
+                            onClick={() => setRecordPage((n) => Math.max(1, n - 1))}
+                          >
+                            Previous page
+                          </button>
+                        </Show>
+                        <Show when={records.latest!.hasMore}>
+                          <button
+                            type="button"
+                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                            disabled={records.loading}
+                            onClick={() => setRecordPage((n) => n + 1)}
+                          >
+                            {records.loading ? "Loading…" : "Next page"}
+                          </button>
+                        </Show>
+                      </span>
                     </div>
                   </Match>
                 </Switch>
@@ -2906,11 +4089,22 @@ export function SessionIrisTab() {
       <div
         class="flex-1 min-h-0"
         classList={{
-          hidden: !!openRow(),
+          hidden: !!openRow() || !!agentEditor(),
           "overflow-y-auto": pane() !== "graph" && !SELF_PANES.has(pane()),
           "flex flex-col overflow-hidden": pane() === "graph" || SELF_PANES.has(pane()),
         }}
       >
+        {/* ITS OWN LOADING BOUNDARY (#190230). A pane that reads a resource on first load used to
+            suspend the boundary round the whole panel, so product switches ran in a transition
+            and every click waited for the new pane's data with no sign it had registered. Now the
+            switch is immediate and only this box waits. See chooseSurface. */}
+        <Suspense
+          fallback={
+            <div data-slot="iris-pane-loading" class="flex h-full items-center justify-center text-12-regular text-text-weak py-6">
+              Loading…
+            </div>
+          }
+        >
         <Switch>
           {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
               rooms, and "empty" must still show the New room button. */}
@@ -2919,6 +4113,16 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "hive"}>
             <IrisHiveMachines doFetch={doFetch} />
+          </Match>
+          <Match when={pane() === "inbox"}>
+            <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+          </Match>
+          <Match when={pane() === "hive-sessions"}>
+            <IrisHiveSessions
+              doFetch={doFetch}
+              openExternal={(url) => platform.openExternal(url)}
+              onContinue={dirSdk ? continueSessionHere : undefined}
+            />
           </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />
@@ -2960,7 +4164,7 @@ export function SessionIrisTab() {
               project={projectDir()}
               bloqId={activeBloq()}
               bloqName={activeBloqName()}
-              boards={() => ((bloqs.latest ?? bloqs())?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
               listen={(fn) => serverSDK().event.listen(fn as any)}
               files={sessionFiles}
               readFile={readSessionFile}
@@ -2989,7 +4193,7 @@ export function SessionIrisTab() {
           {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
           <Match when={view() === "unreachable"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">
-              Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.
+              Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
             </p>
           </Match>
           <Match when={view() === "surface-error"}>
@@ -2999,7 +4203,9 @@ export function SessionIrisTab() {
           </Match>
 
           <Match when={view() === "rows"}>
-            <Show when={current()?.measured && current()?.reason}>
+            {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
+                says Offline and what is waiting (#191003). */}
+            <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
               <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
             </Show>
 
@@ -3017,45 +4223,446 @@ export function SessionIrisTab() {
                     </button>
                   </p>
                 </Show>
+                <IrisOutboxHeld
+                  items={heldItems()}
+                  cardTitle={(id) => (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === id)?.title}
+                  listName={(id) => (rows() as AtlasList[]).find((l) => l.id === id)?.name}
+                  resolve={resolveHeld}
+                />
+                <Show when={moveNote()}>
+                  {(note) => (
+                    <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
+                      {note()}{" "}
+                      <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
+                        Dismiss
+                      </button>
+                    </p>
+                  )}
+                </Show>
+                <Show when={atlasLayout() === "board"}>
+                  <Show when={!canDrag() && !delegateOpen()}>
+                    <p class="px-2 pb-2 text-11-regular text-text-weak">
+                      Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
+                      Board order to drag cards.
+                    </p>
+                  </Show>
+                  <Show when={!canDrag() && delegateOpen()}>
+                    <p class="px-2 pb-2 text-11-regular text-text-weak">{language.t("iris.delegate.sort")}</p>
+                  </Show>
+                  <div
+                    class="iris-board-wrap"
+                    onDragOver={(e) => {
+                      // Held over the Delegate rail: the card is not going into the board, so the
+                      // placeholder leaves it. Letting go on the rail puts the card back.
+                      if (dragging() !== null && (e.target as HTMLElement).closest(".iris-delegate")) moveDropAt(null)
+                    }}
+                  >
+                  <div class="iris-board" aria-label="Board" ref={boardEl}>
+                    <For each={atlasRows()}>
+                      {(list) => (
+                        <section
+                          class="iris-board__col"
+                          classList={{
+                            "iris-board__col--over": lifted() && dropAt()?.listId === list.id,
+                          }}
+                          onDragOver={(e) => {
+                            if (dragging() === null || !canDrag()) return
+                            e.preventDefault()
+                            if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                            // In a gap between cards, or on the placeholder: stay put. Below the
+                            // last card, or arriving from another list: the end of this one.
+                            const cards = Array.from(
+                              e.currentTarget.querySelectorAll<HTMLElement>("[data-board-card]:not(.iris-board__card--source)"),
+                            )
+                            const last = cards.at(-1)?.getBoundingClientRect()
+                            if (dropAt()?.listId === list.id && last && e.clientY < last.bottom) return
+                            moveDropAt({ listId: list.id, beforeId: null })
+                          }}
+                          onDrop={(e) => {
+                            if (!canDrag()) return
+                            e.preventDefault()
+                            const itemId = dragging()
+                            const at = dropAt()
+                            endDrag(() => {
+                              if (itemId !== null)
+                                void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : null })
+                            })
+                          }}
+                        >
+                          <header class="iris-board__head">
+                            {/* Same heading as List view (#189764): a column title is not a card. */}
+                            <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
+                            <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
+                          </header>
+                          <div class="iris-board__cards">
+                            <For each={list.items}>
+                              {(item) => (
+                                <>
+                                <Show when={ghostAt(list.id, item.id)}>
+                                  <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
+                                </Show>
+                                <div
+                                  role="button"
+                                  tabindex="0"
+                                  class="iris-board__card"
+                                  data-board-card={item.id}
+                                  classList={{
+                                    "iris-board__card--dragging": dragging() === item.id && !lifted(),
+                                    "iris-board__card--source": dragging() === item.id && lifted(),
+                                    "iris-card--fileover": fileOver() === item.id,
+                                  }}
+                                  {...fileDropHandlers(item.id)}
+                                  draggable={canDrag() || delegateOpen()}
+                                  title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
+                                  onClick={() => openCard(item.id)}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault()
+                                    openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault()
+                                      openCard(item.id)
+                                    } else if (!e.metaKey && !e.ctrlKey && !e.altKey && quickFieldFor(e.key)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      openQuick(item.id, e.currentTarget, quickFieldFor(e.key))
+                                    }
+                                  }}
+                                  onDragStart={(e) => {
+                                    setDragging(item.id)
+                                    setMoveNote(null)
+                                    setDragHeight(e.currentTarget.getBoundingClientRect().height)
+                                    if (e.dataTransfer) {
+                                      e.dataTransfer.effectAllowed = "move"
+                                      e.dataTransfer.setData("text/plain", `atlas-item:${item.id}`)
+                                    }
+                                    // Moving between lists needs board order; delegating does not,
+                                    // and then the card stays where it is, dimmed.
+                                    if (!canDrag()) return
+                                    const id = item.id
+                                    requestAnimationFrame(() => {
+                                      if (dragging() !== id) return
+                                      slideCards(boardEl, () => {
+                                        setLifted(true)
+                                        setDropAt({ listId: list.id, beforeId: dropBeforeId(list.items, id, true, -1) })
+                                      })
+                                    })
+                                  }}
+                                  onDragEnd={() => {
+                                    if (dragging() !== null) endDrag()
+                                  }}
+                                  onDragOver={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                      return
+                                    }
+                                    if (dragging() === null || !canDrag()) return
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                                    const r = e.currentTarget.getBoundingClientRect()
+                                    moveDropAt({
+                                      listId: list.id,
+                                      beforeId: dropBeforeId(list.items, item.id, e.clientY > r.top + r.height / 2, dragging()!),
+                                    })
+                                  }}
+                                  onDrop={(e) => {
+                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                      return
+                                    }
+                                    if (!canDrag()) return
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    const itemId = dragging()
+                                    const at = dropAt()
+                                    endDrag(() => {
+                                      if (itemId !== null)
+                                        void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : item.id })
+                                    })
+                                  }}
+                                >
+                                  <Show when={item.cover}>
+                                    {(src) => <img class="iris-board__cover" src={src()} alt="" loading="lazy" draggable={false} />}
+                                  </Show>
+                                  <span class="text-12-regular text-text-base">{item.title}</span>
+                                  <CardBadges item={item} now={now()} />
+                                  <Show when={fileDrop()?.itemId === item.id}>
+                                    <span class="iris-card__uploading" role="status">{fileDrop()!.text}</span>
+                                  </Show>
+                                  <span class="iris-board__meta">
+                                    <Show when={isDone(item.status)}>
+                                      <span>✓ done</span>
+                                    </Show>
+                                    <Show when={item.updatedAt ?? item.createdAt}>
+                                      {(ts) => (
+                                        <span
+                                          class="font-mono tabular-nums"
+                                          title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                        >
+                                          {relativeTime(ts(), now())}
+                                        </span>
+                                      )}
+                                    </Show>
+                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">{item.id < 0 ? "new" : `#${item.id}`}</span>
+                                  </span>
+                                </div>
+                                </>
+                              )}
+                            </For>
+                            <Show when={ghostAt(list.id, null)}>
+                              <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
+                            </Show>
+                            <Show when={list.items.length === 0 && !ghostAt(list.id, null)}>
+                              <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
+                            </Show>
+                            {/* Quick add on the board too (#189768) — Board is the primary view now,
+                                so adding a card must not mean switching to List. Same composer,
+                                same Enter-adds / Esc-closes, same optimistic card. */}
+                            <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                              {(p) => (
+                                <div class="iris-board__card iris-board__card--pending" aria-busy="true">
+                                  <span class="text-12-regular text-text-base">{p.title}</span>
+                                  <span class="iris-board__meta">saving…</span>
+                                </div>
+                              )}
+                            </For>
+                            <Show
+                              when={composer() === list.id}
+                              fallback={
+                                <button type="button" class="iris-atlas-addcard iris-board__add" onClick={() => openComposer(list.id)}>
+                                  + Add card
+                                </button>
+                              }
+                            >
+                              <div class="iris-board__composer">
+                                <input
+                                  ref={(el) => queueMicrotask(() => el.focus())}
+                                  type="text"
+                                  placeholder="Card title — Enter to add, Esc to close"
+                                  value={composerText()}
+                                  onInput={(e) => setComposerText(e.currentTarget.value)}
+                                  onKeyDown={composerKeys}
+                                />
+                                <Show when={composerError()}>
+                                  <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                                </Show>
+                              </div>
+                            </Show>
+                          </div>
+                        </section>
+                      )}
+                    </For>
+                  </div>
+                  <Show when={delegateOpen()}>
+                    <IrisDelegateRail
+                      doFetch={doFetch}
+                      bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                      dragging={dragging}
+                      card={delegateCard}
+                      sessions={delegateSessions}
+                      sessionBusy={sessionBusy}
+                      sendToSession={sendToSession}
+                      onDropped={() => endDrag()}
+                      onChanged={() => void refetchSurface()}
+                    />
+                  </Show>
+                  </div>
+                </Show>
+                <Show when={atlasLayout() === "list"}>
                 <For each={atlasRows()}>
                   {(list) => (
-                    <section class="mb-4">
-                      <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
-                        <h3 class="text-12-medium text-text-base">{list.name}</h3>
-                        {/* Counts in mono + tabular, so columns of numbers line up and read as data. */}
-                        <span class="font-mono tabular-nums text-11-regular text-text-weak">{list.items.length}</span>
-                      </header>
-                      <For each={list.items}>
-                        {(item) => (
-                          <button
-                            type="button"
-                            class="w-full flex gap-2 px-2 py-1 text-start rounded cursor-pointer hover:bg-background-element"
-                            title="Open this card"
-                            onClick={() => openCard(item.id)}
-                          >
-                            <span class="text-12-regular text-text-weak shrink-0">
-                              {isDone(item.status) ? "✓" : "·"}
-                            </span>
-                            <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
-                            <Show when={item.updatedAt ?? item.createdAt}>
-                              {(ts) => (
-                                <span
-                                  class="shrink-0 font-mono tabular-nums text-11-regular text-text-weak"
-                                  title={`Last edited ${new Date(ts()).toLocaleString()}`}
-                                >
-                                  {relativeTime(ts(), now())}
+                    // data-prevent-autofocus: the session page sends any printable key to the chat
+                    // box (pages/session.tsx handleKeyDown) unless it comes from inside one of
+                    // these — on a card, j/k/x/c/n are this board's keys (#189771).
+                    <section
+                      class="iris-atlas-list"
+                      classList={{ "iris-atlas-list--folded": isFolded(list) }}
+                      data-prevent-autofocus
+                    >
+                      {/* The header folds the list. Counts in mono + tabular, so columns of numbers
+                          line up and read as data. */}
+                      <div class="iris-atlas-list__bar">
+                        <button
+                          type="button"
+                          class="iris-atlas-list__head"
+                          aria-expanded={!isFolded(list)}
+                          title={isFolded(list) ? "Show this list" : "Fold this list"}
+                          onClick={() => toggleFold(list)}
+                        >
+                          <span class="iris-atlas-list__chev" aria-hidden="true">
+                            ›
+                          </span>
+                          <h3 class="iris-atlas-list__title">{list.name}</h3>
+                          <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="iris-atlas-list__add"
+                          title={`Add a card to ${list.name}`}
+                          aria-label={`Add a card to ${list.name}`}
+                          onClick={() => {
+                            if (isFolded(list)) toggleFold(list)
+                            openComposer(list.id)
+                          }}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <Show when={!isFolded(list)}>
+                        <div class="iris-atlas-list__items">
+                        <For each={list.items}>
+                          {(item) => {
+                            // The board is read without bodies (#190231 0d): the row's line is fl-api's preview, or the
+                            // body when there is one (a search reads bodies).
+                            const preview = createMemo(() => cardPreview(item.content ?? item.preview, item.title))
+                            return (
+                              <div
+                                role="button"
+                                tabindex="0"
+                                data-item-id={item.id}
+                                data-list-id={list.id}
+                                aria-keyshortcuts="Enter x s p d l c n"
+                                class="iris-atlas-row"
+                                {...fileDropHandlers(item.id)}
+                                onDragOver={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                }}
+                                onDrop={(e) => {
+                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                  e.preventDefault()
+                                  void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                }}
+                                classList={{
+                                  "iris-card--fileover": fileOver() === item.id,
+                                  "iris-atlas-row--done": isDone(item.status),
+                                  "iris-atlas-row--live": liveIds().has(item.id),
+                                  "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
+                                }}
+                                title="Open this card — keys: j/k move · Enter open · x done · s status · p priority · d due · l labels · c copy #id · n new card · / search · right-click to change"
+                                onClick={() => openCard(item.id)}
+                                onContextMenu={(e) => {
+                                  e.preventDefault()
+                                  openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.target !== e.currentTarget) return
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault()
+                                    openCard(item.id)
+                                  }
+                                }}
+                              >
+                                <span class="iris-atlas-row__mark" aria-hidden="true">
+                                  {isDone(item.status) ? "✓" : "·"}
                                 </span>
-                              )}
+                                <span class="iris-atlas-row__text">
+                                  <span class="iris-atlas-row__title">{item.title}</span>
+                                  <Show when={preview()}>
+                                    <span class="iris-atlas-row__preview">{preview()}</span>
+                                  </Show>
+                                  <CardBadges item={item} now={now()} />
+                                </span>
+                                <Show when={liveIds().has(item.id) || awayIds().has(item.id)}>
+                                  <span class="iris-atlas-row__changed" title="Changed since you last looked" />
+                                </Show>
+                                <Show when={item.updatedAt ?? item.createdAt}>
+                                  {(ts) => (
+                                    <span
+                                      class="iris-atlas-row__meta font-mono tabular-nums text-11-regular text-text-weak"
+                                      title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                    >
+                                      {relativeTime(ts(), now())}
+                                    </span>
+                                  )}
+                                </Show>
+                                <button
+                                  type="button"
+                                  class="iris-atlas-row__id font-mono tabular-nums text-11-regular"
+                                  title={`Copy #${item.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    copyItemId(item.id)
+                                  }}
+                                >
+                                  {copiedId() === item.id ? "copied" : item.id < 0 ? "new" : `#${item.id}`}
+                                </button>
+                              </div>
+                            )
+                          }}
+                        </For>
+                        <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                          {(p) => (
+                            <div class="iris-atlas-row iris-atlas-row--pending" aria-busy="true">
+                              <span class="iris-atlas-row__mark" aria-hidden="true">
+                                ·
+                              </span>
+                              <span class="iris-atlas-row__text">
+                                <span class="iris-atlas-row__title">{p.title}</span>
+                              </span>
+                              <span class="iris-atlas-row__meta font-mono text-11-regular text-text-weaker">saving…</span>
+                            </div>
+                          )}
+                        </For>
+                        <Show
+                          when={composer() === list.id}
+                          fallback={
+                            <button type="button" class="iris-atlas-addcard" onClick={() => openComposer(list.id)}>
+                              + Add card
+                            </button>
+                          }
+                        >
+                          <div class="iris-atlas-composer">
+                            <input
+                              ref={(el) => queueMicrotask(() => el.focus())}
+                              type="text"
+                              placeholder="Card title — Enter to add, Esc to close"
+                              value={composerText()}
+                              onInput={(e) => setComposerText(e.currentTarget.value)}
+                              onKeyDown={composerKeys}
+                            />
+                            <Show when={composerError()}>
+                              <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
                             </Show>
-                            <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                              #{item.id}
-                            </span>
-                          </button>
-                        )}
-                      </For>
+                          </div>
+                        </Show>
+                        </div>
+                      </Show>
                     </section>
                   )}
                 </For>
+                <Show when={rows().length > 0 || current()?.measured}>
+                  <Show
+                    when={composer() === "list"}
+                    fallback={
+                      <button type="button" class="iris-atlas-addcard iris-atlas-addlist" onClick={() => openComposer("list")}>
+                        + Add list
+                      </button>
+                    }
+                  >
+                    <div class="iris-atlas-composer">
+                      <input
+                        ref={(el) => queueMicrotask(() => el.focus())}
+                        type="text"
+                        placeholder="List name — Enter to add, Esc to close"
+                        value={composerText()}
+                        onInput={(e) => setComposerText(e.currentTarget.value)}
+                        onKeyDown={composerKeys}
+                      />
+                      <Show when={composerError()}>
+                        <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                      </Show>
+                    </div>
+                  </Show>
+                </Show>
+                </Show>
               </Match>
 
               <Match when={pane() === "agents"}>
@@ -3064,7 +4671,9 @@ export function SessionIrisTab() {
                     <button
                       type="button"
                       class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), a))}
+                      data-testid="iris-agent-row"
+                      data-agent-id={a.id}
+                      onClick={() => setAgentEditor({ agentId: Number(a.id), row: a })}
                     >
                       <span
                         class="shrink-0"
@@ -3394,39 +5003,6 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={pane() === "inbox"}>
-                <For each={rows()}>
-                  {(m) => (
-                    <button
-                      type="button"
-                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow("inbox", m))}
-                    >
-                      <div class="flex items-baseline gap-2">
-                        {/* Filled means UNREAD — the one thing you are scanning this list for. */}
-                        <span class="shrink-0" classList={{ "text-text-base": !m.read, "text-text-weaker": m.read }}>
-                          {m.read ? "○" : "●"}
-                        </span>
-                        <span
-                          class="text-12-regular min-w-0 flex-1 truncate"
-                          classList={{ "text-text-strong": !m.read, "text-text-weak": m.read }}
-                        >
-                          {m.label}
-                        </span>
-                        {/* The manifest number, shown because it is the argument you need to
-                            read the thing — and because it is NOT the row's position here. */}
-                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">{m.index}</span>
-                      </div>
-                      <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
-                        {m.from}
-                        {m.receivedAt ? ` · ${relativeAge(m.receivedAt)}` : ""}
-                        {m.type && m.type !== "file" ? ` · ${m.type}` : ""}
-                      </p>
-                    </button>
-                  )}
-                </For>
-              </Match>
-
               <Match when={pane() === "playbooks"}>
                 <PlaybookFlowList
                   rows={playbookRows()}
@@ -3569,6 +5145,7 @@ export function SessionIrisTab() {
             </p>
           </Match>
         </Switch>
+        </Suspense>
 
         {/* Logo.dev attribution. A CONDITION of the free tier, so it renders from the same
             payload that supplies the marks — the panel cannot show logos without the credit.
@@ -3583,8 +5160,22 @@ export function SessionIrisTab() {
             would both be noise. */}
         <Show when={view() === "rows" && pane() !== "graph" && !SELF_PANES.has(pane())}>
           <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
-            <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
-              {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+            <Show
+              when={pane() === "atlas"}
+              fallback={
+                <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
+                  {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+                </Show>
+              }
+            >
+              <Show when={(current() as PageEnvelope | undefined)?.measured}>
+                <span class="font-mono tabular-nums">
+                  {atlasCountLine(rows() as AtlasList[], atlasRows(), {
+                    total: (current() as PageEnvelope | undefined)?.total ?? null,
+                    hasMore: !!(current() as PageEnvelope | undefined)?.hasMore,
+                  })}
+                </span>
+              </Show>
             </Show>
             <Show when={(current() as PageEnvelope | undefined)?.hasMore}>
               <button

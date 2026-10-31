@@ -1,0 +1,501 @@
+import { base64Encode } from "@opencode-ai/core/util/encode"
+import { useNavigate, useParams } from "@solidjs/router"
+import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, Suspense, untrack, type Component, type ParentProps } from "solid-js"
+import { useCommand } from "@/context/command"
+import { useLanguage } from "@/context/language"
+import { createPanePanel, SessionPaneProvider, type SessionPane } from "@/context/session-pane"
+import { SplitActionsProvider } from "@/context/split-actions"
+import { IrisPanelScopeProvider } from "@/context/iris-panel-scope"
+import { useServerSDK } from "@/context/server-sdk"
+import { useServerSync } from "@/context/server-sync"
+import { useSplit } from "@/context/split"
+import { handleTabDrop, tabDrag, type TabDrag } from "@/context/split-drag"
+import { useTabs } from "@/context/tabs"
+import { requireServerKey, sessionHref } from "@/utils/session-route"
+import { showToast } from "@/utils/toast"
+import { closeColumn, finalSlot, insertIndex, maxColumns, open, openAt, paneKey, PANE_GAP, PANE_MAX, prune, reconcile, samePane, visible, type PaneRef } from "./split-model"
+
+type ServerRoute = Component<ParentProps<{ serverKey?: () => string }>>
+
+const fromKey = (key: string): PaneRef => {
+  const at = key.indexOf("\n")
+  return { server: key.slice(0, at), sessionId: key.slice(at + 1) }
+}
+
+/**
+ * TWO OR THREE SESSIONS SIDE BY SIDE (#191484). The route names the focused column; the split
+ * (context/split.tsx) names the rest. With fewer than two columns on screen this renders exactly
+ * what the route rendered before — no pane, no extra chrome.
+ *
+ * Columns are keyed by session, so moving focus (which changes the route) never remounts one.
+ * Columns on the route's server share its sync and event stream; only a column on another
+ * server mounts its own.
+ */
+export function SessionSplitRoute(props: { server: ServerRoute; content: Component }) {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const split = useSplit()
+  const tabs = useTabs()
+  const command = useCommand()
+  const language = useLanguage()
+  const navigate = useNavigate()
+  const route = createMemo((): PaneRef => ({ server: requireServerKey(params.serverKey), sessionId: params.id }), undefined, {
+    equals: samePane,
+  })
+
+  const [width, setWidth] = createSignal<number>()
+  let row: HTMLDivElement | undefined
+  createResizeObserver(
+    () => row,
+    // A hidden row measures 0 (the route's Suspense hides it while a column loads). Taken
+    // literally, 0 fits one column: the split fell back to one, that page's loading kept the
+    // row hidden, and the window stayed on one column. Only a real width changes the layout.
+    ({ width }) => {
+      if (width > 0) setWidth(width)
+    },
+  )
+
+  // A tab picked from the strip while in a split lands in the column you were last in. Also runs
+  // when the stored split arrives: on a reload or deep link the route is known first, and a check
+  // that ran only on route changes left the split stuck off screen.
+  createEffect(
+    on([route, split.ready] as const, ([r, ready]) => {
+      if (!ready) return
+      const panes = untrack(split.panes)
+      const next = reconcile(panes, r, untrack(split.last))
+      if (next !== panes) split.set(next)
+      const at = next.findIndex((p) => samePane(p, r))
+      if (at >= 0) split.setLast(at)
+    }),
+  )
+
+  // Where focus is going. A navigation is a router transition: the URL moves at once, but the
+  // route's params only when the transition commits. Layout reads this, not the route — reading
+  // the route, a close showed the split without the (lagging) route in it, fell back to one
+  // column, mounted a fresh session page that suspended, which held the transition open, which
+  // kept the route stale: the window stuck on one column for good. Actions read it too.
+  const [moving, setMoving] = createSignal<PaneRef>()
+  // Cleared by any route change, so a navigation that lands elsewhere cannot leave it stale.
+  createEffect(on(route, () => setMoving(undefined), { defer: true }))
+  const focused = createMemo(() => moving() ?? route(), undefined, { equals: samePane })
+
+  // A column outlives nothing: close a session's tab (or the session is deleted and its tab
+  // closed) and its column goes too. The route's own session is exempt — it becomes a tab a
+  // moment after the route moves to it.
+  createEffect(() => {
+    if (!tabs.ready() || !split.ready()) return
+    const open = new Set(tabs.store.flatMap((t) => (t.type === "session" ? [paneKey({ server: t.server, sessionId: t.sessionId })] : [])))
+    const panes = split.panes()
+    // Spare where focus is going, not only the route: a new chat's tab is added in a transition,
+    // so for a moment its column has no tab yet — pruned on the route alone, it vanished.
+    const kept = prune(panes, untrack(focused), open)
+    if (kept !== panes) split.set(kept)
+  })
+
+  // What is drawn: the stored split with the focused session already placed. Derived, not written
+  // by an effect first — an effect runs after the render, so for one render after a tab click the
+  // focused session was missing, the view fell back to one column, and that mount stuck the
+  // window blank. The effect above only saves this so it survives a restart.
+  const drawn = createMemo(() => (split.ready() ? reconcile(split.panes(), focused(), split.last()) : split.panes()))
+  const shown = createMemo(() => visible(drawn(), focused(), maxColumns(width())))
+  const keys = createMemo(() => shown().map(paneKey))
+  const multi = createMemo(() => keys().length >= 2 && keys().includes(paneKey(focused())))
+  // Which sessions have a column of their own right now — none when one chat fills the window.
+  const columnSessions = createMemo(() => (multi() ? shown().map((p) => p.sessionId) : []))
+  const focusPane = (p: PaneRef) => {
+    setMoving(p)
+    navigate(sessionHref(p.server as never, p.sessionId))
+  }
+  // One update: written one after the other, the split briefly held [Y, Z] while focus was still
+  // the closed X — "not in the split" — so the view swapped to one column, began mounting a
+  // session page, swapped straight back, and the half-mounted page left the route's Suspense
+  // waiting on a load nobody would finish: a blank window.
+  const closePane = (p: PaneRef) => {
+    const next = closeColumn(drawn(), p, focused())
+    batch(() => {
+      split.set(next.panes)
+      if (next.focus) setMoving(next.focus)
+    })
+    if (next.focus) navigate(sessionHref(next.focus.server as never, next.focus.sessionId))
+  }
+
+  // A new chat for the column, when no other tab is waiting: splitting is never a dead end. Set
+  // by SplitNewSession, which lives under the server providers this component sits above.
+  let createSession: ((besideSessionID: string) => Promise<string | undefined>) | undefined
+  const columnsFree = () => drawn().length < Math.min(PANE_MAX, maxColumns(width()))
+  const canSplit = createMemo(() => maxColumns(width()) >= 2 && (drawn().length < 2 || columnsFree()))
+
+  const splitRight = async (fromSessionID?: string) => {
+    const onScreen = drawn()
+    const current = onScreen.find((p) => p.sessionId === fromSessionID) ?? focused()
+    if (maxColumns(width()) < 2) {
+      showToast({ title: language.t("split.narrow.title"), description: language.t("split.narrow.description") })
+      return
+    }
+    if (onScreen.length >= 2 && !columnsFree()) {
+      showToast({ title: language.t("split.full.title"), description: language.t("split.full.description") })
+      return
+    }
+    const waiting = tabs.store.find(
+      (t) =>
+        t.type === "session" &&
+        !samePane({ server: t.server, sessionId: t.sessionId }, current) &&
+        !onScreen.some((p) => samePane(p, { server: t.server, sessionId: t.sessionId })),
+    )
+    if (waiting && waiting.type === "session") {
+      split.set(open(onScreen, current, { server: waiting.server, sessionId: waiting.sessionId }))
+      return
+    }
+    const id = await createSession?.(current.sessionId)
+    if (!id) {
+      showToast({ title: language.t("split.none.title"), description: language.t("split.none.description") })
+      return
+    }
+    const next = { server: current.server, sessionId: id }
+    tabs.addSessionTab({ server: current.server as never, sessionId: id })
+    batch(() => {
+      split.set(open(drawn(), current, next))
+      setMoving(next)
+    })
+    navigate(sessionHref(next.server as never, next.sessionId))
+  }
+  // DRAG A TAB IN (#191484). The tab strip reports a session tab being dragged; once the pointer
+  // is over the chat area, the half of the column under it is where the tab would open.
+  const dropAt = (d: TabDrag): DropState | undefined => {
+    if (!row) return
+    const area = row.getBoundingClientRect()
+    if (d.y < area.top + 8 || d.y > area.bottom || d.x < area.left || d.x > area.right) return
+    const next = { server: d.server, sessionId: d.sessionId }
+    const onScreen = drawn()
+    if (samePane(next, focused()) && !multi()) return { kind: "self" }
+    if (maxColumns(width()) < 2) return { kind: "narrow" }
+    if (!onScreen.some((p) => samePane(p, next)) && onScreen.length >= 2 && !columnsFree()) return { kind: "full" }
+    // Read against the FINAL layout (make room): the columns on screen are sliding apart, and
+    // measuring them would move the target under the pointer.
+    const moving = onScreen.some((p) => samePane(p, next))
+    const visibleNow = (multi() ? shown() : [focused()]).filter((p) => !samePane(p, next))
+    const count = Math.min(visibleNow.length + 1, PANE_MAX)
+    const slot = finalSlot(area.width, count, d.x - area.left)
+    const base = onScreen.length >= 2 ? onScreen.filter((p) => !samePane(p, next)) : [focused()]
+    return { kind: "drop", next, index: insertIndex(base, visibleNow, slot), slot, moving }
+  }
+  const dropState = createMemo(() => {
+    const d = tabDrag()
+    return d ? dropAt(d) : undefined
+  })
+  onCleanup(
+    handleTabDrop((d) => {
+      const state = dropAt(d)
+      if (state?.kind !== "drop") return false
+      batch(() => {
+        split.set(openAt(drawn(), focused(), state.next, state.index))
+        setMoving(state.next)
+      })
+      navigate(sessionHref(state.next.server as never, state.next.sessionId))
+      return true
+    }),
+  )
+
+  const step = (by: number) => {
+    const list = shown()
+    const at = list.findIndex((p) => samePane(p, focused()))
+    const next = list[at + by]
+    if (next) focusPane(next)
+  }
+
+  command.register("split", () => [
+    {
+      id: "split.right",
+      title: language.t("split.right"),
+      category: language.t("command.category.view"),
+      keybind: "mod+alt+\\",
+      description: language.t("split.right.description"),
+      onSelect: () => void splitRight(),
+    },
+    {
+      id: "split.close",
+      title: language.t("split.close"),
+      category: language.t("command.category.view"),
+      keybind: "mod+alt+w",
+      disabled: !multi(),
+      onSelect: () => closePane(focused()),
+    },
+    {
+      id: "split.focus.left",
+      title: language.t("split.focus.left"),
+      category: language.t("command.category.view"),
+      keybind: "mod+alt+arrowleft",
+      disabled: !multi(),
+      onSelect: () => step(-1),
+    },
+    {
+      id: "split.focus.right",
+      title: language.t("split.focus.right"),
+      category: language.t("command.category.view"),
+      keybind: "mod+alt+arrowright",
+      disabled: !multi(),
+      onSelect: () => step(1),
+    },
+  ])
+
+  // The row as it will be after the drop: the ghost in its slot among the columns still shown.
+  const drop = () => {
+    const st = dropState()
+    return st?.kind === "drop" ? st : undefined
+  }
+  const dropNext = () => drop()?.next
+  const ghostAt = () => drop()?.slot
+  const draggedKey = () => (drop()?.moving ? paneKey(drop()!.next) : undefined)
+  const slots = createMemo(() => {
+    const list = keys()
+    const at = ghostAt()
+    if (at === undefined) return list
+    const out: string[] = []
+    let shownCount = 0
+    for (const key of list) {
+      if (shownCount === at && !out.includes(GHOST)) out.push(GHOST)
+      out.push(key)
+      if (key !== draggedKey()) shownCount++
+    }
+    if (!out.includes(GHOST)) out.push(GHOST)
+    return out
+  })
+
+  const Server = props.server
+  const Content = props.content
+  return (
+    <div ref={row} class="relative size-full min-h-0 min-w-0 flex">
+      {/* Mounted once, outside the split switch: these providers are gated on ready, and a second
+          copy mounted when a split starts never came ready — the window went blank. */}
+      <Server>
+        <SplitNewSession register={(fn) => (createSession = fn)} />
+        <SplitDropZone state={dropState} />
+        <SplitActionsProvider actions={{ splitRight: (id) => void splitRight(id), canSplit, columns: columnSessions }}>
+        <Show
+          when={multi()}
+          fallback={
+            // One chat: the ghost takes its half beside it while a tab is dragged in.
+            <div class="size-full min-h-0 min-w-0 flex" style={{ gap: `${PANE_GAP}px` }}>
+              <Show when={ghostAt() === 0}>
+                <SplitGhost next={dropNext} inset={SINGLE_INSET} />
+              </Show>
+              <div class="relative min-w-0 min-h-0 flex-1 basis-0 flex transition-[flex-grow] duration-200 ease-out motion-reduce:transition-none">
+                <Content />
+              </div>
+              <Show when={ghostAt() === 1}>
+                <SplitGhost next={dropNext} inset={SINGLE_INSET} />
+              </Show>
+            </div>
+          }
+        >
+          <div class="size-full min-h-0 min-w-0 flex" style={{ gap: `${PANE_GAP}px` }} data-component="session-split">
+            <For each={slots()}>
+              {(key) => {
+                if (key === GHOST) return <SplitGhost next={dropNext} inset={COLUMN_INSET} />
+                const pane = fromKey(key)
+                return (
+                  <SplitColumn
+                    pane={pane}
+                    // The chat being dragged to a new place steps out while the ghost shows where.
+                    hidden={() => draggedKey() === key}
+                    focused={() => samePane(pane, focused())}
+                    // A column whose tab was just closed (its "Close tab", a deleted session) must
+                    // not take focus from that same click: it navigated back to the closed session.
+                    focus={() => {
+                      if (tabs.store.some((t) => t.type === "session" && samePane({ server: t.server, sessionId: t.sessionId }, pane)))
+                        focusPane(pane)
+                    }}
+                    close={() => closePane(pane)}
+                    sameServer={() => pane.server === focused().server}
+                    server={Server}
+                    content={Content}
+                  />
+                )
+              }}
+            </For>
+          </div>
+        </Show>
+        </SplitActionsProvider>
+      </Server>
+    </div>
+  )
+}
+
+type DropState =
+  | { kind: "drop"; next: PaneRef; index: number; slot: number; moving: boolean }
+  | { kind: "self" | "narrow" | "full" }
+
+const GHOST = "\u0000ghost"
+/** Where a chat card sits inside its slot: below the column bar in a split, inside the frame alone. */
+const COLUMN_INSET = { top: 30, bottom: 7 }
+const SINGLE_INSET = { top: 6, bottom: 7 }
+
+/**
+ * The column a dropped tab will become, drawn where it will be: an empty column that grows in
+ * while the others ease to their new widths. Never takes the pointer.
+ */
+function SplitGhost(props: { next: () => PaneRef | undefined; inset: { top: number; bottom: number } }) {
+  const sync = useServerSync()
+  const language = useLanguage()
+  const [grow, setGrow] = createSignal(0)
+  onMount(() => requestAnimationFrame(() => setGrow(1)))
+  const title = () => {
+    const id = props.next()?.sessionId
+    return (id && sync().session.lineage.peek(id)?.session.title) || language.t("split.drop.untitled")
+  }
+  const green = "var(--v2-green-500, #34d399)"
+  return (
+    <div
+      class="pointer-events-none relative min-w-0 min-h-0 basis-0 flex items-center justify-center rounded-[10px] border-2 border-dashed transition-[flex-grow] duration-200 ease-out motion-reduce:transition-none"
+      style={{
+        "flex-grow": grow(),
+        // line up with the chat cards beside it, not the row around them
+        "margin-top": `${props.inset.top}px`,
+        "margin-bottom": `${props.inset.bottom}px`,
+        "border-color": green,
+        background: `color-mix(in srgb, ${green} 7%, transparent)`,
+      }}
+      data-component="session-split-ghost"
+    >
+      <div class="flex max-w-[85%] flex-col items-center gap-1 rounded-xl px-4 py-3 text-center bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
+        <span class="max-w-full truncate text-14-medium text-text-strong">{title()}</span>
+        <span class="text-12-regular text-text-weak">{language.t("split.drop.opens")}</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The drop zone: a column-shaped placeholder where the dragged tab would open, named — or, when
+ * it cannot open, the reason, where the pointer is looking. Never takes the pointer itself.
+ */
+function SplitDropZone(props: { state: () => DropState | undefined }) {
+  const sync = useServerSync()
+  const language = useLanguage()
+  const title = (id: string) => sync().session.lineage.peek(id)?.session.title || language.t("split.drop.untitled")
+  const accent = "var(--v2-border-border-focus,var(--border-interactive-base))"
+  return (
+    <Show when={props.state()}>
+      {(state) => (
+        <div class="pointer-events-none absolute inset-0 z-30" data-component="session-split-dropzone">
+          <Show when={state().kind !== "drop"}>
+            <div class="absolute inset-x-0 top-4 flex justify-center">
+              <div class="rounded-full px-3 py-1.5 text-12-medium text-text-strong bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
+                {language.t(`split.drop.${state().kind}` as "split.drop.full")}
+              </div>
+            </div>
+          </Show>
+        </div>
+      )}
+    </Show>
+  )
+}
+
+/** Creates the chat a new column opens on, in the same project as the session it opens beside. */
+function SplitNewSession(props: { register: (create: (besideSessionID: string) => Promise<string | undefined>) => void }) {
+  const serverSDK = useServerSDK()
+  const sync = useServerSync()
+  props.register(async (besideSessionID) => {
+    const directory = sync().session.lineage.peek(besideSessionID)?.session.directory
+    if (!directory) return
+    const created = await serverSDK()
+      .client.session.create({ directory })
+      .catch(() => undefined)
+    return created?.data?.id
+  })
+  return null
+}
+
+function SplitColumn(props: {
+  pane: PaneRef
+  hidden?: () => boolean
+  focused: () => boolean
+  focus: () => void
+  close: () => void
+  sameServer: () => boolean
+  server: ServerRoute
+  content: Component
+}) {
+  const pane: SessionPane = {
+    panel: createPanePanel(),
+    // The route's form: session code decodes it with requireServerKey, as it does the URL's.
+    params: () => ({ serverKey: base64Encode(props.pane.server), id: props.pane.sessionId }),
+    focused: props.focused,
+    focus: props.focus,
+  }
+  const Server = props.server
+  const Content = props.content
+  return (
+    <div
+      class="relative min-w-0 min-h-0 flex-1 basis-0 flex flex-col rounded-[10px] transition-[opacity,flex-grow] duration-200 ease-out motion-reduce:transition-none"
+      classList={{ "opacity-80 hover:opacity-100": !props.focused(), hidden: !!props.hidden?.() }}
+      data-component="session-split-column"
+      data-focused={props.focused() ? "" : undefined}
+      // Focus on click, after the column's own controls have handled it — focusing on pointerdown
+      // navigated first, re-rendered the column, and the click landed on a button that was gone
+      // (a deleted session's "Close tab" did nothing). Typing into a composer focuses too.
+      onClick={() => {
+        if (!props.focused()) props.focus()
+      }}
+      onFocusIn={(e) => {
+        const t = e.target as HTMLElement
+        if (!props.focused() && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT")) props.focus()
+      }}
+    >
+      <SessionPaneProvider pane={pane}>
+        <IrisPanelScopeProvider>
+        {/* Its own boundary: a column still loading must not blank the others (the route's
+            Suspense would otherwise hide the whole split). */}
+        <Suspense fallback={<div class="flex-1" data-slot="session-split-loading" />}>
+        <Show
+          when={props.sameServer()}
+          fallback={
+            <Server serverKey={() => base64Encode(props.pane.server)}>
+              <ColumnBar focused={props.focused} close={props.close} />
+              <Content />
+            </Server>
+          }
+        >
+          <ColumnBar focused={props.focused} close={props.close} />
+          <Content />
+        </Show>
+        </Suspense>
+        </IrisPanelScopeProvider>
+      </SessionPaneProvider>
+    </div>
+  )
+}
+
+/**
+ * Which column has focus, and a way out of it. No title: the session's own header sits right
+ * below and already says which session this is.
+ */
+function ColumnBar(props: { focused: () => boolean; close: () => void }) {
+  const language = useLanguage()
+  return (
+    <div class="shrink-0 h-6 pl-3 pr-1 flex items-center gap-2" data-slot="session-split-bar">
+      <span
+        class="flex-1 h-0.5 rounded-full transition-colors duration-150"
+        classList={{
+          "bg-[var(--v2-border-border-focus,var(--border-interactive-base))]": props.focused(),
+          "bg-transparent": !props.focused(),
+        }}
+      />
+      <IconButtonV2
+        type="button"
+        variant="ghost-muted"
+        size="small"
+        icon={<IconV2 name="xmark-small" class="text-v2-icon-icon-muted" />}
+        aria-label={language.t("split.close")}
+        title={language.t("split.close")}
+        onClick={(e: MouseEvent) => {
+          // the column's own click would focus the column being closed
+          e.stopPropagation()
+          props.close()
+        }}
+      />
+    </div>
+  )
+}

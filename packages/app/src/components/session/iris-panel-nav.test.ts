@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { filesTabPinned, panelScope, readPinnedIds, scopeChipLabel, visibleTabs } from "./iris-panel-nav"
+import {
+  openingSurface,
+  panelScope,
+  pinnedByChoice,
+  readPinnedIds,
+  scopeChipLabel,
+  visibleTabs,
+} from "./iris-panel-nav"
 
 const VALID = ["atlas", "agents", "leads", "pages", "mcp", "hive", "playbooks", "integrations"]
 const DEF = ["pages", "atlas", "agents"]
@@ -36,17 +43,6 @@ describe("the project row tells the truth about scope", () => {
   })
 })
 
-describe("the file tree is a pin (#187129)", () => {
-  test("nothing stored: a git project keeps it, anything else starts without it", () => {
-    expect(filesTabPinned(null, true)).toBe(true)
-    expect(filesTabPinned(null, false)).toBe(false)
-  })
-  test("a stored choice wins either way", () => {
-    expect(filesTabPinned("0", true)).toBe(false)
-    expect(filesTabPinned("1", false)).toBe(true)
-  })
-})
-
 describe("the scope chip names the project (#187130 C)", () => {
   test("project → the name, never the word 'project'", () => {
     expect(scopeChipLabel("project", "NCMA Fort Worth")).toBe("NCMA Fort Worth")
@@ -55,5 +51,21 @@ describe("the scope chip names the project (#187130 C)", () => {
   test("session and account say so", () => {
     expect(scopeChipLabel("session", "NCMA")).toBe("this session")
     expect(scopeChipLabel("account")).toBe("account")
+  })
+})
+
+describe("opening product (#189766)", () => {
+  test("only a pin the person stored counts — the default set is not a choice", () => {
+    expect(pinnedByChoice(null, "atlas")).toBe(false)
+    expect(pinnedByChoice("not json", "atlas")).toBe(false)
+    expect(pinnedByChoice(JSON.stringify(["pages", "agents"]), "atlas")).toBe(false)
+    expect(pinnedByChoice(JSON.stringify(["agents", "atlas"]), "atlas")).toBe(true)
+  })
+  test("pinned Atlas opens on Atlas, whatever was used last", () => {
+    expect(openingSurface("pulse", JSON.stringify(["pulse", "atlas"]))).toBe("atlas")
+  })
+  test("everyone else opens on the product they used last, as before", () => {
+    expect(openingSurface("pulse", null)).toBe("pulse")
+    expect(openingSurface("pulse", JSON.stringify(["pulse", "agents"]))).toBe("pulse")
   })
 })

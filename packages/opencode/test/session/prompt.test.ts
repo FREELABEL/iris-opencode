@@ -1368,6 +1368,186 @@ it.instance(
   10_000,
 )
 
+// #191779: aborting a session must clear its open permission/question requests. Tool execute
+// runs on a detached promise (SessionTools), so interrupting the run never reaches the
+// Deferred the ask is parked on — the request stayed listed and still accepted replies.
+const watchRequestEvents = Effect.fn("test.watchRequestEvents")(function* () {
+  const events = yield* EventV2Bridge.Service
+  const seen: Array<{ type: string; data: any }> = []
+  const off = yield* events.listen((event) => {
+    if (
+      event.type === Permission.Event.Replied.type ||
+      event.type === Question.Event.Rejected.type ||
+      event.type === Question.Event.Replied.type
+    )
+      seen.push({ type: event.type, data: event.data })
+    return Effect.void
+  })
+  yield* Effect.addFinalizer(() => off)
+  return seen
+})
+
+it.instance(
+  "cancel rejects the session's pending permission requests (#191779)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const permission = yield* Permission.Service
+      const seen = yield* watchRequestEvents()
+      const chat = yield* sessions.create({ title: "Abort with open permission" })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "read outside" }],
+      })
+      yield* llm.tool("read", { filePath: "/etc/hostname" })
+
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      const asked = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const pending = (yield* permission.list()).filter((item) => item.sessionID === chat.id)
+          return pending.length > 0 ? pending : undefined
+        }),
+        "timed out waiting for the permission request",
+        "10 seconds",
+      )
+
+      yield* prompt.cancel(chat.id)
+      const exit = yield* awaitWithTimeout(Fiber.await(run), "aborted loop did not finish", "10 seconds")
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      expect((yield* permission.list()).filter((item) => item.sessionID === chat.id)).toEqual([])
+      const replied = yield* pollWithTimeout(
+        Effect.sync(() =>
+          seen.find((e) => e.type === Permission.Event.Replied.type && e.data.requestID === asked[0].id),
+        ),
+        "timed out waiting for the reject event",
+      )
+      expect(replied.data).toEqual({ sessionID: chat.id, requestID: asked[0].id, reply: "reject" })
+
+      const late = yield* permission.reply({ requestID: asked[0].id, reply: "once" }).pipe(Effect.exit)
+      expect(Exit.isFailure(late)).toBe(true)
+
+      if (Exit.isFailure(exit)) return
+      const tool = toolPart(exit.value.parts)
+      expect(tool?.state.status).toBe("error")
+      // one reject event per request, no second error recorded after the clear
+      yield* Effect.sleep("200 millis")
+      expect(seen.filter((e) => e.type === Permission.Event.Replied.type).length).toBe(1)
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const after = msgs.findLast((item) => item.info.role === "assistant")
+      const ended = after ? toolPart(after.parts)?.state : undefined
+      expect(ended?.status).toBe("error")
+      // ends as the abort, not as a later "permission rejected" error from the cleared ask
+      if (ended?.status === "error") {
+        expect(ended.error).toBe("Tool execution aborted")
+        expect(ended.metadata?.interrupted).toBe(true)
+      }
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance(
+  "cancel rejects the session's pending question requests (#191779)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const question = yield* Question.Service
+      const seen = yield* watchRequestEvents()
+      const chat = yield* sessions.create({ title: "Abort with open question" })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "ask me" }],
+      })
+      yield* llm.tool("question", {
+        questions: [{ question: "Which one?", header: "Pick", options: [{ label: "A", description: "a" }] }],
+      })
+
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      const asked = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const pending = (yield* question.list()).filter((item) => item.sessionID === chat.id)
+          return pending.length > 0 ? pending : undefined
+        }),
+        "timed out waiting for the question request",
+        "10 seconds",
+      )
+
+      yield* prompt.cancel(chat.id)
+      const exit = yield* awaitWithTimeout(Fiber.await(run), "aborted loop did not finish", "10 seconds")
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      expect((yield* question.list()).filter((item) => item.sessionID === chat.id)).toEqual([])
+      const rejected = yield* pollWithTimeout(
+        Effect.sync(() =>
+          seen.find((e) => e.type === Question.Event.Rejected.type && e.data.requestID === asked[0].id),
+        ),
+        "timed out waiting for the question rejected event",
+      )
+      expect(rejected.data).toEqual({ sessionID: chat.id, requestID: asked[0].id })
+      const late = yield* question.reply({ requestID: asked[0].id, answers: [["A"]] }).pipe(Effect.exit)
+      expect(Exit.isFailure(late)).toBe(true)
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance(
+  "parent cancel rejects pending permission requests in subagent sessions (#191779)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const permission = yield* Permission.Service
+      const seen = yield* watchRequestEvents()
+      const chat = yield* sessions.create({ title: "Abort parent with child permission" })
+      const msg = yield* user(chat.id, "hello")
+      yield* addSubtask(chat.id, msg.id)
+      // the first model call is the child session's turn
+      yield* llm.tool("read", { filePath: "/etc/hostname" })
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      const asked = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const pending = (yield* permission.list()).filter((item) => item.sessionID !== chat.id)
+          return pending.length > 0 ? pending : undefined
+        }),
+        "timed out waiting for the child permission request",
+        "10 seconds",
+      )
+      const childID = asked[0].sessionID
+      expect((yield* sessions.get(childID)).parentID).toBe(chat.id)
+
+      yield* prompt.cancel(chat.id)
+      const exit = yield* awaitWithTimeout(Fiber.await(fiber), "aborted loop did not finish", "10 seconds")
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          return (yield* permission.list()).some((item) => item.sessionID === childID) ? undefined : true
+        }),
+        "child permission request still pending after parent cancel",
+      )
+      const replied = yield* pollWithTimeout(
+        Effect.sync(() =>
+          seen.find((e) => e.type === Permission.Event.Replied.type && e.data.requestID === asked[0].id),
+        ),
+        "timed out waiting for the child reject event",
+      )
+      expect(replied.data.reply).toBe("reject")
+    }),
+  { git: true },
+  30_000,
+)
 it.instance(
   "cancel with queued callers resolves all cleanly",
   () =>

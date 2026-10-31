@@ -29,3 +29,13 @@ describe("pageSummary", () => {
     expect(pageSummary({ shown: 25, env: env({ total: 127 }) })).toBe("25 of 127")
   })
 })
+
+describe("pageSummary with a noun (#189770)", () => {
+  test("a complete count names what it counts", () => {
+    expect(pageSummary({ shown: 6, env: env({ total: 6, totalIsExact: true }), noun: "records" })).toBe("6 records")
+    expect(pageSummary({ shown: 25, env: env({ total: 40, totalIsExact: true }), noun: "records" })).toBe("25 of 40 records")
+  })
+  test("without a noun nothing changes", () => {
+    expect(pageSummary({ shown: 6, env: env({ total: 6, totalIsExact: true }) })).toBe("6")
+  })
+})

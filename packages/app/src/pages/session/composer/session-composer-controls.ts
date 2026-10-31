@@ -7,6 +7,8 @@ import type { PromptProjectControls } from "@/components/prompt-project-selector
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { useGlobal } from "@/context/global"
 import { useLayout } from "@/context/layout"
+import { useSessionPane } from "@/context/session-pane"
+import { paneView } from "@/pages/session/session-layout"
 import { useLocal, type ModelSelection } from "@/context/local"
 import type { QueryOptionsApi } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
@@ -28,7 +30,7 @@ export function createPromptInputController(input: {
   const sdk = useSDK()
   const sync = useSync()
   const providers = useProviders(() => sdk().directory)
-  const view = layout.view(input.sessionKey)
+  const view = paneView(layout.view(input.sessionKey), useSessionPane())
   const agentsQuery = createQuery(() => input.queryOptions.agents(pathKey(sdk().directory)))
   const globalProvidersQuery = createQuery(() => input.queryOptions.providers(null))
   const providersQuery = createQuery(() => input.queryOptions.providers(pathKey(sdk().directory)))

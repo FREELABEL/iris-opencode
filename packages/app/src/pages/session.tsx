@@ -1,4 +1,5 @@
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { IrisCardNotices } from "@/components/session/iris-card-notices"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
@@ -39,7 +40,8 @@ import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
 import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
-import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
+import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
@@ -61,7 +63,8 @@ import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
-import { irisFilesPinned, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { irisFilesPinned, irisOpensOnAtlas, useRequestIrisSurface } from "@/components/session/session-iris-tab"
+import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -105,6 +108,7 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { useAllowanceNotice } from "./session/allowance-toast"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
+import { usePanelControl } from "@/components/session/use-panel-control"
 
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
@@ -159,7 +163,7 @@ export function SessionPage() {
 // session ID: session tabs on the same server share this route instance, and
 // workspace-scoped state (terminal, directory providers) lives below.
 export function TargetSessionRouteContent() {
-  const params = useParams<{ serverKey: string; id: string }>()
+  const params = useSessionParams<{ serverKey: string; id: string }>()
   const serverSync = useServerSync()
   const directory = createMemo(() => serverSync().session.lineage.peek(params.id)?.session.directory)
   return (
@@ -211,7 +215,9 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
     const conn = server.list.find((item) => ServerConnection.key(item) === key)
     return conn ? serverName(conn) : key
   })
-  const closeTab = () => {
+  const closeTab = (event?: MouseEvent) => {
+    // Closing, not choosing: in a split the click must not go on to focus this column (#191484).
+    event?.stopPropagation()
     if (!props.sessionID) return
     tabs.removeSessionTab({ server: props.serverKey ?? server.key, sessionId: props.sessionID })
   }
@@ -246,7 +252,7 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
 }
 
 function ResolvedTargetSessionRoute() {
-  const params = useParams<{ serverKey: string; id: string }>()
+  const params = useSessionParams<{ serverKey: string; id: string }>()
   const tabs = useTabs()
   const sync = useServerSync()
   const serverKey = createMemo(() => requireServerKey(params.serverKey))
@@ -339,6 +345,9 @@ function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
 function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean }>) {
   return (
     <div
+      // One chat's own panel (timeline + composer): what its docks search within, so a card in
+      // split view measures and focuses its own column, not the first one (#191780).
+      data-component="session-panel"
       classList={{
         "flex-1 min-h-0 flex flex-col": true,
         "bg-v2-background-bg-base": props.newLayout,
@@ -353,6 +362,7 @@ function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boo
 }
 
 export default function Page() {
+  const requestIrisSurface = useRequestIrisSurface()
   const serverSync = useServerSync()
   const layout = useLayout()
   const local = useLocal()
@@ -376,6 +386,7 @@ export default function Page() {
   const reviewMode = () => view().review.mode() ?? "git"
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
+
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
@@ -448,6 +459,8 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
+  // In a split (#191484) the file tree's open state is window-wide; only the focused column shows it.
+  const paneFocused = usePaneFocused()
   const size = createSizing()
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
@@ -459,6 +472,7 @@ export default function Page() {
   const desktopFileTreeOpen = createMemo(
     () =>
       isDesktop() &&
+      paneFocused() &&
       shouldShowFileTree({
         visible: settings.visibility.fileTree(),
         opened: layout.fileTree.opened(),
@@ -468,6 +482,31 @@ export default function Page() {
     newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
+  // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
+  usePanelControl({ open: desktopSidePanelOpen })
+
+  /*
+   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
+   * layout. This page owns the panel, so it opens it — the surface/sub-view itself travels through
+   * requestIrisNav and the tab applies it. Same two rules as use-panel-control's showTab: open the
+   * tab only when it is absent (open() re-orders the strip, which then falls back to its first tab),
+   * and when the panel was closed, select again after the strip has remounted.
+   */
+  createEffect(() => {
+    if (!irisPanelOpenRequest() || !paneFocused()) return
+    untrack(() => {
+      const wasOpen = desktopSidePanelOpen()
+      view().reviewPanel.open("other")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+      const select = () => {
+        if (!tabs().all().includes("iris")) void tabs().open("iris")
+        tabs().setActive("iris")
+      }
+      select()
+      if (!wasOpen) requestAnimationFrame(() => requestAnimationFrame(select))
+    })
+    clearIrisPanelOpen()
+  })
   let panelRow: HTMLDivElement | undefined
   const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(
@@ -546,7 +585,8 @@ export default function Page() {
     review: reviewTab,
     hasReview: canReview,
     reviewFirst,
-    filesPinned: () => irisFilesPinned(reviewFirst()),
+    filesPinned: () => irisFilesPinned(),
+    preferIris: irisOpensOnAtlas,
   })
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
@@ -1050,6 +1090,8 @@ export default function Page() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    // Every column listens on the window; only the focused one may pull keys into its composer.
+    if (!paneFocused()) return
     const path = event.composedPath()
     const target = path.find((item): item is HTMLElement => item instanceof HTMLElement)
     const activeElement = deepActiveElement()
@@ -2307,6 +2349,18 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      {/* Your own Atlas cards — assigned, mentioned, due tomorrow — as OS notifications (#189799). */}
+      <IrisCardNotices
+        url={() => serverSDK().url}
+        fetch={platform.fetch}
+        notify={(title, body, onClick) => platform.notify(title, body, onClick)}
+        open={() => {
+          view().reviewPanel.open("other")
+          if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+          void tabs().open("iris")
+          tabs().setActive("iris")
+        }}
+      />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"

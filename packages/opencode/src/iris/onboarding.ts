@@ -16,6 +16,8 @@
 import { mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { CRASH_EVENT, crashProps } from "./crash-report"
+import { UsageBeacon } from "./usage-beacon"
 import { IRIS_API, fetchIntegrations, irisFetch, resolveUserId, tokenSource, type PlatformResult } from "./platform"
 
 /** Mail providers in the order we prefer them. Outlook arrives with D2 #188248. */
@@ -352,7 +354,7 @@ export function workspace(name: string, root = path.join(homedir(), "IRIS")): Pl
  * The steps after sign-in, onto the same funnel the desktop shell writes (D7 #188247). Sent from
  * here, not from the webview: the webview's origin is not in iris-api's CORS list. Uses the same
  * install id the shell created (~/.iris/install-id), so one install is one row of the funnel.
- * Only names on fl-iris-api's GenesisEvent::DESKTOP_ONBOARDING are accepted there.
+ * Only names on fl-iris-api's GenesisEvent::DESKTOP_ONBOARDING / DESKTOP_UPGRADE are accepted there.
  */
 const APP_STEPS = new Set([
   "onboarding.mail_read",
@@ -360,22 +362,54 @@ const APP_STEPS = new Set([
   "onboarding.question_answered",
   "onboarding.workspace_created",
   "onboarding.working",
+  // The ask to pay (#190373): fl-iris-api GenesisEvent::DESKTOP_UPGRADE. Never a "paid" event —
+  // the server reads that from billing.
+  "upgrade.prompted",
+  "upgrade.opened",
+  "upgrade.checkout_started",
+  // The crash screen (#191430): fl-iris-api GenesisEvent::DESKTOP_APP. Carries props; see crash-report.ts.
+  CRASH_EVENT,
 ])
 
-export async function track(event: string, label?: string): Promise<void> {
+/** Who to tell, and how. A seam so the forwarding contract is tested without a network. */
+export const trackDeps = {
+  env: (): NodeJS.ProcessEnv => process.env,
+  home: (): string => homedir(),
+  send: async (body: Record<string, unknown>, opts: { anonymous: boolean }): Promise<void> => {
+    const init = { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(3000) }
+    // A crash report goes out without the person's token: the install id is the only identity.
+    if (opts.anonymous) await irisFetch(`/api/v1/genesis/events`, IRIS_API, init, null)
+    else await irisFetch(`/api/v1/genesis/events`, IRIS_API, init)
+  },
+}
+
+export async function track(event: string, label?: string, props?: unknown): Promise<void> {
   if (!APP_STEPS.has(event)) return
+  const env = trackDeps.env()
+  const home = trackDeps.home()
+  // Our own release checks launch the real app; they must not count as installs (#190488).
+  // Same switch, and the same reading of it, as the desktop shell's onboarding.rs.
+  const off = env.IRIS_NO_TELEMETRY?.trim()
+  if (off && off !== "0") return
+  const crash = event === CRASH_EVENT
+  // A crash report carries more than a name, so it also obeys the person's own switch —
+  // `iris telemetry off`, IRIS_TELEMETRY=0, DO_NOT_TRACK=1 — exactly as the usage beacon does.
+  if (crash && !UsageBeacon.enabled(env, home)) return
   let visitor: string | undefined
   try {
-    visitor = readFileSync(path.join(homedir(), ".iris", "install-id"), "utf8").trim()
+    visitor = readFileSync(path.join(home, ".iris", "install-id"), "utf8").trim()
   } catch {
-    return // no install id: the shell has not run, so there is no funnel row to join
+    if (!crash) return // no install id: the shell has not run, so there is no funnel row to join
   }
   try {
-    await irisFetch(`/api/v1/genesis/events`, IRIS_API, {
-      method: "POST",
-      body: JSON.stringify({ event, visitor_id: visitor, label, path: "desktop" }),
-      signal: AbortSignal.timeout(3000),
-    })
+    const body: Record<string, unknown> = { event, visitor_id: visitor || undefined, label, path: "desktop" }
+    if (crash) {
+      const p = crashProps(props)
+      body.props = p
+      body.variant = p.app_version // a column, so "crash screens this week by version" is a GROUP BY
+      body.label = p.message ? `${p.error_name ? `${p.error_name}: ` : ""}${p.message}`.slice(0, 191) : label
+    }
+    await trackDeps.send(body, { anonymous: crash })
   } catch {
     // Measurement never breaks onboarding.
   }

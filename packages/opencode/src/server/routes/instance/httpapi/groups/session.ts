@@ -5,6 +5,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { TerminalRun } from "@/session/terminal-run"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
@@ -70,6 +71,13 @@ export const SummarizePayload = Schema.Struct({
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const TerminalStartPayload = Schema.Struct(Struct.omit(SessionPrompt.TerminalStartInput.fields, ["sessionID"]))
+export const TerminalReadQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  from: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+})
+export const TerminalStarted = Schema.Struct({ id: Schema.String })
+export const TerminalCancelled = Schema.Struct({ cancelled: Schema.Boolean })
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
@@ -96,6 +104,9 @@ export const SessionPaths = {
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
   shell: `${root}/:sessionID/shell`,
+  terminalStart: `${root}/:sessionID/terminal`,
+  terminalRead: `${root}/:sessionID/terminal/:runID`,
+  terminalCancel: `${root}/:sessionID/terminal/:runID/cancel`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
   permissions: `${root}/:sessionID/permissions/:permissionID`,
@@ -364,6 +375,43 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.shell",
             summary: "Run shell command",
             description: "Execute a shell command within the session context and return the AI's response.",
+          }),
+        ),
+        HttpApiEndpoint.post("terminalStart", SessionPaths.terminalStart, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: TerminalStartPayload,
+          success: described(TerminalStarted, "Started run"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.terminalStart",
+            summary: "Run a terminal-mode command",
+            description:
+              "Run a shell command the way session.shell does, without recording it in the session. Read its output with session.terminalRead (#190530).",
+          }),
+        ),
+        HttpApiEndpoint.get("terminalRead", SessionPaths.terminalRead, {
+          params: { sessionID: SessionID, runID: Schema.String },
+          query: TerminalReadQuery,
+          success: described(TerminalRun.Read, "Run output and state"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.terminalRead",
+            summary: "Read a terminal-mode run",
+            description: "Output since offset `from`, the next offset, and the run's state.",
+          }),
+        ),
+        HttpApiEndpoint.post("terminalCancel", SessionPaths.terminalCancel, {
+          params: { sessionID: SessionID, runID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(TerminalCancelled, "Whether a running command was stopped"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.terminalCancel",
+            summary: "Stop a terminal-mode run",
+            description: "Interrupt a running terminal-mode command.",
           }),
         ),
         HttpApiEndpoint.post("revert", SessionPaths.revert, {

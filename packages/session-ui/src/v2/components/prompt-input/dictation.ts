@@ -36,6 +36,10 @@ const PROBE_MS = 400
  * mono): a long take uploaded fine, failed there, and was held and retried until pruned.
  */
 export const MAX_SECONDS = 300
+/** A take torn down mid-recording is kept (held) from this length up; shorter is a mis-press. */
+const KEEP_ON_UNMOUNT_SECONDS = 3
+/** An automatic retry that comes due during a take looks again after this. */
+const RETRY_WHILE_BUSY_MS = 5000
 /**
  * A shortcut held at least this long is push-to-talk: letting go stops. Anything shorter is a
  * tap, which toggles — the recording keeps going until the next press.
@@ -53,7 +57,7 @@ const RETRY_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000]
 
 export type DictationPhase = "idle" | "recording" | "transcribing"
 /** A recording the server saved because every engine failed — retryable without re-recording. */
-export type HeldRecording = { id: string; seconds: number }
+export type HeldRecording = { id: string; seconds: number; bloqId?: string }
 type CaptureMode = "webview" | "sidecar"
 
 /** Remembered across dictations; null until the first probe has run. */
@@ -64,7 +68,8 @@ let cachedMode: CaptureMode | null = null
  * for a person on THIS platform. The composer is built against exactly this shape.
  */
 export type DictationReadiness = {
-  recorder: { sidecar: boolean; reason?: string }
+  /** `native`: the sidecar records through a native helper (macOS iris-mic), so it is the recorder from the first take. */
+  recorder: { sidecar: boolean; native?: boolean; reason?: string }
   cloud: { configured: boolean; reason?: string }
   local: { whisper: boolean }
   /** The engines a dictation would try, in order. */
@@ -177,12 +182,11 @@ export interface DictationOptions {
   onError?: (message: string) => void
   /**
    * Live preview while recording (GET /dictate/live -> IRIS STT relay -> xAI streaming STT).
-   * onPartial REPLACES the in-progress segment; onFinal locks one. A final with `turn` restates
-   * the whole turn and replaces that turn's finals — see transcript-merge.ts. The batch transcript
-   * delivered to onTranscript after stop is still the text that ends the take.
+   * onPartial REPLACES the in-progress utterance; onFinal appends a locked one. The batch
+   * transcript delivered to onTranscript after stop is still the text that gets inserted.
    */
   onPartial?: (text: string) => void
-  onFinal?: (text: string, turn?: boolean) => void
+  onFinal?: (text: string) => void
   /** Live preview is off for this take (not configured, refused, dropped). Batch is unaffected. */
   onLiveUnavailable?: (reason: string) => void
   /**
@@ -191,6 +195,13 @@ export interface DictationOptions {
    * on screen saying a recording was waiting. Held recordings stay saved for a surface that shows them.
    */
   autoRetry?: boolean
+  /**
+   * The board this surface records for — an Atlas card's (#190041 ADR-01). Every upload carries it,
+   * so the platform applies THAT board's cloud/PHI policy, not the person's default board's. Held
+   * takes remember it, and each surface lists only the held takes recorded for its own board: a
+   * card's Retry must never insert a chat take, nor the composer a card's meeting.
+   */
+  bloqId?: () => string | undefined
 }
 
 /** Live preview state for the current take. */
@@ -242,7 +253,13 @@ function encodeWav(samples: Float32Array, rate: number): Blob {
 }
 
 export function createDictation(opts: DictationOptions) {
-  const [phase, setPhase] = createSignal<DictationPhase>("idle")
+  /** Retried transcripts that came back while a take was running (#189523). */
+  const afterTake: string[] = []
+  const [phase, setPhaseSignal] = createSignal<DictationPhase>("idle")
+  const setPhase = (next: DictationPhase) => {
+    setPhaseSignal(next)
+    if (next === "idle") flushAfterTake()
+  }
   // A moving number is the difference between "recording" and "hung".
   const [seconds, setSeconds] = createSignal(0)
   let ticker: ReturnType<typeof setInterval> | undefined
@@ -277,6 +294,12 @@ export function createDictation(opts: DictationOptions) {
   let openError: unknown
 
   const base = () => opts.url().replace(/\/$/, "")
+  const board = () => opts.bloqId?.()?.trim() || undefined
+  /** `path` with this surface's board appended, when it has one. */
+  const withBoard = (path: string) => {
+    const id = board()
+    return id ? `${path}${path.includes("?") ? "&" : "?"}bloq_id=${encodeURIComponent(id)}` : path
+  }
 
   // Live preview for the current take. See DictationOptions.onPartial.
   const [live, setLive] = createSignal<DictationLive>("off")
@@ -335,6 +358,9 @@ export function createDictation(opts: DictationOptions) {
         .then((body) => {
           if (!levelPoll || typeof body?.level !== "number") return
           setLevels((h) => pushLevel(h, levelFromRms(body.level)))
+          // The recorder ended on its own (its cap, an unplugged mic): stop and transcribe what it
+          // captured, rather than keep a clock running over audio that is no longer recorded (#189519).
+          if (body.capturing === false && phase() === "recording") void stop()
         })
         .catch(() => stopLevelPoll())
     }, LEVEL_POLL_MS)
@@ -483,6 +509,11 @@ export function createDictation(opts: DictationOptions) {
   async function openRecorder() {
     const id = ++attempt
 
+    // A native recorder (macOS iris-mic) is the right one from the first take. The webview probe
+    // would show the ring over ~400 ms that nobody records, then hand over to it anyway (#189531,
+    // #189875). Measured in the first test build: the first take of a session came back "No speech heard".
+    if (cachedMode === null && readiness()?.recorder.native) cachedMode = "sidecar"
+
     // Known-good path from a previous dictation in this session.
     if (cachedMode === "sidecar") {
       if (!(await startSidecar())) return
@@ -580,7 +611,7 @@ export function createDictation(opts: DictationOptions) {
       if (liveSocket !== ws || typeof message.data !== "string") return
       const event = parseLiveEvent(message.data)
       if (event?.type === "partial") opts.onPartial?.(event.text)
-      if (event?.type === "final") opts.onFinal?.(event.text, event.turn)
+      if (event?.type === "final") opts.onFinal?.(event.text)
       if (event?.type === "unavailable") liveUnavailable(event.reason)
     }
     ws.onerror = () => liveUnavailable("The live preview could not connect.")
@@ -693,7 +724,7 @@ export function createDictation(opts: DictationOptions) {
 
   async function stopSidecar() {
     try {
-      const res = await call("/dictate/stop", { method: "POST" })
+      const res = await call(withBoard("/dictate/stop"), { method: "POST" })
       const body = await res.json().catch(() => null)
       deliver(res.ok, body, retryAfterMs(res))
     } catch (e) {
@@ -720,16 +751,10 @@ export function createDictation(opts: DictationOptions) {
       )
     }
 
-    const merged = new Float32Array(total)
-    let offset = 0
-    for (const f of frames) {
-      merged.set(f, offset)
-      offset += f.length
-    }
-    const blob = encodeWav(downsample(merged, rate, TARGET_RATE), TARGET_RATE)
+    const blob = capturedWav(frames, rate)
 
     try {
-      const res = await call("/transcribe?filename=dictation.wav", {
+      const res = await call(withBoard("/transcribe?filename=dictation.wav"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: blob,
@@ -741,12 +766,32 @@ export function createDictation(opts: DictationOptions) {
     }
   }
 
+  /** Retried transcripts that came back while a take was running, in order. */
+  function deliverWhenIdle(text: string) {
+    if (phase() === "idle") return opts.onTranscript(text)
+    afterTake.push(text)
+  }
+  function flushAfterTake() {
+    for (const text of afterTake.splice(0)) opts.onTranscript(text)
+  }
+
+  /** The window recorder's frames as the 16 kHz WAV the server expects. */
+  function capturedWav(frames: Float32Array[], rate: number) {
+    const merged = new Float32Array(frames.reduce((n, f) => n + f.length, 0))
+    let offset = 0
+    for (const f of frames) {
+      merged.set(f, offset)
+      offset += f.length
+    }
+    return encodeWav(downsample(merged, rate, TARGET_RATE), TARGET_RATE)
+  }
+
   /** `wait` is the server's Retry-After: the automatic retry comes no sooner. */
   function deliver(ok: boolean, body: any, wait = 0) {
     // A 413 (over the platform's size limit) carries no `held`: nothing is kept, nothing retried,
     // and the server's message — which names the limit — is shown as is, below.
     if (!ok && typeof body?.held?.id === "string") {
-      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0 }])
+      setHeld((list) => [...list, { id: body.held.id, seconds: Number(body.held.seconds) || 0, bloqId: board() }])
       scheduleRetry(wait)
       return opts.onError?.(`${body.error || "Transcription failed."} Your recording is saved.`)
     }
@@ -804,6 +849,12 @@ export function createDictation(opts: DictationOptions) {
   async function retryHeld(automatic = false) {
     if (retrying()) return
     clearRetryTimers()
+    // Not while a take is running: its transcript would land in that take's panel and the take's
+    // own transcript was then dropped (#189523). Look again shortly, without spending a step.
+    if (automatic && phase() !== "idle") {
+      retryTimer = setTimeout(() => void retryHeld(true), RETRY_WHILE_BUSY_MS)
+      return
+    }
     if (!automatic) retryStep = 0
     setRetrying(true)
     try {
@@ -826,7 +877,9 @@ export function createDictation(opts: DictationOptions) {
           return
         }
         setHeld((list) => list.filter((h) => h.id !== item.id))
-        if (body.text.trim()) opts.onTranscript(body.text.trim())
+        // The server has released the file, so this text exists only here now: a take started
+        // while this was in flight gets it AFTER its own transcript, never instead of it.
+        if (body.text.trim()) deliverWhenIdle(body.text.trim())
       }
       retryStep = 0
     } catch (e) {
@@ -856,8 +909,12 @@ export function createDictation(opts: DictationOptions) {
     .then((body) => {
       if (disposed || !Array.isArray(body?.held)) return
       const recovered = body.held
-        .filter((h: { id?: unknown }) => typeof h?.id === "string")
-        .map((h: { id: string; seconds?: number }) => ({ id: h.id, seconds: Number(h.seconds) || 0 }))
+        .filter((h: { id?: unknown; bloqId?: unknown }) => typeof h?.id === "string" && (h.bloqId || undefined) === board())
+        .map((h: { id: string; seconds?: number; bloqId?: string }) => ({
+          id: h.id,
+          seconds: Number(h.seconds) || 0,
+          bloqId: h.bloqId,
+        }))
       if (recovered.length)
         setHeld((list) => [...recovered.filter((r: HeldRecording) => !list.some((h) => h.id === r.id)), ...list])
     })
@@ -911,12 +968,14 @@ export function createDictation(opts: DictationOptions) {
 
   /**
    * Lift a running take to the background cap ("Keep recording"). The window recorder honours it
-   * at once; a sidecar take keeps the limit ffmpeg was launched with (-t), so it still ends at
-   * the inline cap and its transcript goes to review.
+   * at once; a sidecar take is extended on the server too. Before, the sidecar kept ffmpeg's
+   * launch cap and silently stopped capturing at 5:00 while this clock ran on (#189519).
    */
   function extend() {
     if (phase() !== "recording") return
     maxSeconds = BACKGROUND_MAX_SECONDS
+    if (mode === "sidecar")
+      void call(`/dictate/extend?max_seconds=${BACKGROUND_MAX_SECONDS}`, { method: "POST" }).catch(() => {})
   }
 
   function toggle() {
@@ -927,15 +986,27 @@ export function createDictation(opts: DictationOptions) {
 
   onCleanup(() => {
     disposed = true
+    const recording = phase() === "recording" && !probing
+    // Torn down mid-take — New session, a session in another project — the take is KEPT, not
+    // thrown away: it waits in the held list with Retry (#189520). A take this short is a
+    // mis-press and is dropped, as before.
+    const keep = recording && seconds() >= KEEP_ON_UNMOUNT_SECONDS
+    const wav = keep && mode !== "sidecar" && captured.length && peak >= SILENCE_FLOOR ? capturedWav(captured, capturedRate) : undefined
     closeLive()
     clearRetryTimers()
     stopTicker()
     teardownWebview()
+    captured = []
     // Leaving the sidecar recording after the prompt unmounts is a hot microphone nobody can
-    // see or stop. Fire-and-forget: unmount must not wait on the network.
-    if (phase() === "recording" && mode === "sidecar") {
-      void call("/dictate/cancel", { method: "POST" }).catch(() => {})
-    }
+    // see or stop: it is always ended here. Fire-and-forget: unmount must not wait on the network.
+    if (recording && mode === "sidecar")
+      void call(keep ? withBoard("/dictate/hold") : "/dictate/cancel", { method: "POST" }).catch(() => {})
+    if (wav)
+      void call(withBoard("/transcribe?hold=1&filename=dictation.wav"), {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav" },
+        body: wav,
+      }).catch(() => {})
   })
 
   return {
@@ -1006,21 +1077,16 @@ export function toPcm16(samples: Float32Array) {
 /** Server frame on /dictate/live, or undefined for anything else. */
 export function parseLiveEvent(
   text: string,
-):
-  | { type: "partial"; text: string }
-  | { type: "final"; text: string; turn?: boolean }
-  | { type: "unavailable"; reason: string }
-  | undefined {
+): { type: "partial" | "final"; text: string } | { type: "unavailable"; reason: string } | undefined {
   const value = (() => {
     try {
-      return JSON.parse(text) as { type?: unknown; text?: unknown; reason?: unknown; turn?: unknown }
+      return JSON.parse(text) as { type?: unknown; text?: unknown; reason?: unknown }
     } catch {
       return undefined
     }
   })()
-  if (value?.type === "partial" && typeof value.text === "string") return { type: "partial", text: value.text }
-  if (value?.type === "final" && typeof value.text === "string")
-    return value.turn === true ? { type: "final", text: value.text, turn: true } : { type: "final", text: value.text }
+  if ((value?.type === "partial" || value?.type === "final") && typeof value.text === "string")
+    return { type: value.type, text: value.text }
   if (value?.type === "unavailable")
     return { type: "unavailable", reason: typeof value.reason === "string" ? value.reason : "Live preview stopped." }
   return undefined

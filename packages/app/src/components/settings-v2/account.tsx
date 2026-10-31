@@ -4,6 +4,7 @@ import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { PlanCards } from "../dialog-upgrade"
 import "./settings-v2.css"
 
 /**
@@ -24,7 +25,17 @@ export interface AccountState {
   id: number | null
   name: string | null
   email: string | null
-  plan: { measured: boolean; plan: string | null; paid: boolean | null; uncapped: boolean; upgradeUrl: string | null }
+  plan: {
+    measured: boolean
+    plan: string | null
+    paid: boolean | null
+    /** The server's own name for the plan ("Free", "IRIS Solo"). Absent from older servers. */
+    label?: string | null
+    /** When a trial ends, ISO-8601 (#189988). Absent from older servers. */
+    trialEndsAt?: string | null
+    uncapped: boolean
+    upgradeUrl: string | null
+  }
   allowance: {
     measured: boolean
     window: string
@@ -33,6 +44,7 @@ export interface AccountState {
     spendUsd: number | null
     fraction: number | null
     resetsAt: string | null
+    tokensUsed?: number | null
     thresholds: number[]
     upgradeUrl: string | null
   }
@@ -101,6 +113,9 @@ function resetsText(iso: string | null, now: Date): string | null {
  */
 export function planLabel(p: AccountState["plan"] | undefined): string {
   if (!p?.measured) return "Unknown"
+  // The server reads billing and licences to name the plan; `plan` is the entitlement tier, which
+  // calls every paid package "free". Prefer the name when the server sends one.
+  if (typeof p.label === "string" && p.label.trim()) return p.label.trim()
   if (p.plan === null) return "Staff"
   if (typeof p.plan !== "string" || !p.plan.trim()) return "Unknown"
   return p.plan
@@ -110,6 +125,15 @@ export function planLabel(p: AccountState["plan"] | undefined): string {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")
+}
+
+/**
+ * The line under Plan. Paid plans are not unlimited — every tier has a cap (config/allowance.php in
+ * fl-iris-api) — so the pitch says "much higher", never "unlimited".
+ */
+export function planPitch(p: AccountState["plan"] | undefined): string {
+  if (p?.measured && p.paid === true) return "Need more? Move up a plan for a higher allowance."
+  return "Paid plans get a much higher allowance, every product and every model."
 }
 
 /**
@@ -246,7 +270,9 @@ export const SettingsAccountV2: Component = () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ref }),
     })
-    const body = res.ok ? ((await res.json()) as { ok: boolean; reason?: string }) : { ok: false, reason: `${res.status}` }
+    const body = res.ok
+      ? ((await res.json()) as { ok: boolean; reason?: string })
+      : { ok: false, reason: `${res.status}` }
     if (!body.ok) throw new Error(body.reason ?? "refused")
   }
   const switchTo = async (a: SavedAccount) => {
@@ -278,9 +304,10 @@ export const SettingsAccountV2: Component = () => {
   }
 
   const meter = () => meterView(me()?.allowance)
-  const upgradeUrl = () => {
-    const p = me()?.plan
-    return p?.measured && p.paid === false ? (p.upgradeUrl ?? me()?.allowance.upgradeUrl ?? null) : null
+  let plansSection: HTMLDivElement | undefined
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => {
+    const base = server.current?.http?.url?.replace(/\/$/, "")
+    return (await (await (platform.fetch ?? globalThis.fetch)(`${base}${path}`, init)).json()) as T
   }
 
   return (
@@ -342,16 +369,16 @@ export const SettingsAccountV2: Component = () => {
                   #{me()?.id}
                 </span>
               </SettingsRowV2>
-              <SettingsRowV2 title="Plan" description={upgradeUrl() ? "Upgrade for a higher weekly allowance." : ""}>
+              <SettingsRowV2 title="Plan" description={planPitch(me()?.plan)}>
                 <div class="flex items-center gap-2">
                   <span data-action="account-plan">{planLabel(me()?.plan)}</span>
-                  <Show when={upgradeUrl()}>
-                    {(url) => (
-                      <ButtonV2 size="normal" variant="neutral" onClick={() => platform.openExternal(url())}>
-                        Upgrade
-                      </ButtonV2>
-                    )}
-                  </Show>
+                  <ButtonV2
+                    size="normal"
+                    variant="neutral"
+                    onClick={() => plansSection?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  >
+                    Upgrade
+                  </ButtonV2>
                 </div>
               </SettingsRowV2>
               <Show when={canSignOut()}>
@@ -535,6 +562,11 @@ export const SettingsAccountV2: Component = () => {
                 </div>
               </div>
             </SettingsListV2>
+          </div>
+
+          <div class="settings-v2-section" ref={plansSection} data-action="account-plans">
+            <h3 class="settings-v2-section-title">Plans</h3>
+            <PlanCards fetchJson={fetchJson} me={() => me()} layout="rows" source="settings" />
           </div>
         </Show>
       </div>

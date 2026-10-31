@@ -4,6 +4,7 @@ import {
   meterView,
   otherAccounts,
   planLabel,
+  planPitch,
   savedAccountLabel,
   signOutDescription,
   sourceNote,
@@ -153,5 +154,22 @@ describe("Settings > Account, more than one account (#189321)", () => {
     expect(signOutDescription([acct({ email: "b@example.com" })])).toBe(
       "Signs out of this account and switches to b@example.com. Hive keeps running on this machine.",
     )
+  })
+})
+
+describe("plan name from the server", () => {
+  const base = { measured: true, plan: "free", paid: true, uncapped: false, upgradeUrl: null }
+  test("the server's label wins over the tier, which calls every paid package free", () => {
+    expect(planLabel({ ...base, label: "IRIS Solo" })).toBe("IRIS Solo")
+    expect(planLabel({ ...base, label: "  " })).toBe("Free")
+    expect(planLabel({ ...base, label: null })).toBe("Free")
+  })
+  test("unmeasured stays Unknown even with a label", () => {
+    expect(planLabel({ ...base, measured: false, label: "Free" })).toBe("Unknown")
+  })
+  test("the pitch never promises unlimited", () => {
+    for (const p of [undefined, base, { ...base, paid: false }, { ...base, paid: null }]) {
+      expect(planPitch(p).toLowerCase()).not.toContain("unlimited")
+    }
   })
 })

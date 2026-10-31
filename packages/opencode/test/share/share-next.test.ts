@@ -101,39 +101,46 @@ describe("ShareNext", () => {
     ),
   )
 
-  it.live("request uses default URL when no enterprise config", () =>
+  // #191488 — the default was https://opncd.ai, opencode's public servers. IRIS shares go to IRIS.
+  it.live("request goes to IRIS's own share server with the IRIS key when no enterprise config", () =>
     provideTmpdirInstance(() =>
       ShareNext.Service.use((svc) =>
         Effect.gen(function* () {
-          const req = yield* svc.request()
-
-          expect(req.baseUrl).toBe("https://opncd.ai")
-          expect(req.api.create).toBe("/api/share")
-          expect(req.headers).toEqual({})
+          const before = process.env["IRIS_API_KEY"]
+          process.env["IRIS_API_KEY"] = "iris_test_key"
+          try {
+            const req = yield* svc.request()
+            expect(req.baseUrl).not.toContain("opncd.ai")
+            expect(req.api.create).toBe("/api/v6/shares")
+            expect(req.headers).toEqual({ authorization: "Bearer iris_test_key" })
+          } finally {
+            if (before === undefined) delete process.env["IRIS_API_KEY"]
+            else process.env["IRIS_API_KEY"] = before
+          }
         }),
       ).pipe(Effect.provide(requestLayer(none))),
     ),
   )
 
-  it.live("request uses org share API with auth headers when account is active", () =>
+  it.live("request refuses, rather than falling back to a third party, without an IRIS sign-in", () =>
     provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        yield* seed("https://control.example.com", "org-1")
-
-        const req = yield* ShareNext.use.request()
-
-        expect(req.api.create).toBe("/api/shares")
-        expect(req.api.sync("shr_123")).toBe("/api/shares/shr_123/sync")
-        expect(req.api.remove("shr_123")).toBe("/api/shares/shr_123")
-        expect(req.api.data("shr_123")).toBe("/api/shares/shr_123/data")
-        expect(req.baseUrl).toBe("https://control.example.com")
-        expect(req.headers).toEqual({
-          authorization: "Bearer st_test_token",
-          "x-org-id": "org-1",
-        })
-      }).pipe(Effect.provide(requestLayer(none))),
+      ShareNext.Service.use((svc) =>
+        Effect.gen(function* () {
+          const before = process.env["IRIS_API_KEY"]
+          delete process.env["IRIS_API_KEY"]
+          try {
+            const exit = yield* Effect.exit(svc.request())
+            expect(exit._tag).toBe("Failure")
+          } finally {
+            if (before !== undefined) process.env["IRIS_API_KEY"] = before
+          }
+        }),
+      ).pipe(Effect.provide(requestLayer(none))),
     ),
   )
+
+  // #191488: an opencode organisation account no longer changes where shares go. request() does not
+  // read opencode accounts at all; src/share/iris-target.test.ts guards that in the source.
 
   it.live("create posts share, persists it, and returns the result", () =>
     provideTmpdirInstance(

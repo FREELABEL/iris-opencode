@@ -400,6 +400,24 @@ it.instance("disabled server is marked disabled without opening a protocol sessi
   }),
 )
 
+it.instance("safe mode starts no MCP server, even an enabled one (#190980)", () =>
+  Effect.gen(function* () {
+    const server = yield* lifecycleServer()
+    const mcp = yield* MCP.Service
+    const before = process.env.OPENCODE_SAFE_MODE
+    process.env.OPENCODE_SAFE_MODE = "1"
+    try {
+      yield* mcp.add("safe-mode-server", remote(server.url))
+    } finally {
+      if (before === undefined) delete process.env.OPENCODE_SAFE_MODE
+      else process.env.OPENCODE_SAFE_MODE = before
+    }
+
+    expect((yield* mcp.status())["safe-mode-server"]?.status).toBe("disabled")
+    expect(server.state.requests).toEqual([])
+  }),
+)
+
 it.instance("returns prompts and URI-keyed resources from connected servers", () =>
   Effect.gen(function* () {
     const server = yield* lifecycleServer()

@@ -1,4 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { repairToolName } from "./tool-name-repair"
 import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
@@ -294,8 +295,10 @@ const live: Layer.Layer<
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot"),
           async experimental_repairToolCall(failed) {
-            const lower = failed.toolCall.toolName.toLowerCase()
-            if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
+            // Case, then a doubled segment (IRIS_OS_iris_iris_help → IRIS_OS_iris_help) — only onto
+            // exactly one real tool, never a guess between two (#189837).
+            const lower = repairToolName(failed.toolCall.toolName, Object.keys(prepared.tools)) ?? ""
+            if (lower && prepared.tools[lower]) {
               return {
                 ...failed.toolCall,
                 toolName: lower,

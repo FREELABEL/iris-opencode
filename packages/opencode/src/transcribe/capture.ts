@@ -44,14 +44,20 @@ interface Active {
   input: CaptureInput
   /** Inputs not yet tried. One that dies before producing a byte hands over to the next. */
   fallbacks: CaptureInput[]
-  /** The recording so far, straight from ffmpeg's stdout. 300 s caps it at ~9.6 MB. */
+  /** The recording so far, straight from ffmpeg's stdout: ~9.6 MB per 5 minutes. */
   chunks: Buffer[]
   bytes: number
   startedAt: number
   /** ffmpeg's own words. Without these, every capture failure is just "no audio". */
   stderr: string[]
-  /** ffmpeg -t for this take: MAX_SECONDS inline, up to MAX_BACKGROUND_SECONDS in background mode. */
+  /** This take's cap: MAX_SECONDS inline, up to MAX_BACKGROUND_SECONDS in background mode. */
   maxSeconds: number
+  /** Ends the take at maxSeconds. A timer, not ffmpeg -t, so "Keep recording" can move it. */
+  deadline?: ReturnType<typeof setTimeout>
+  /** The deadline fired: the process ending now is the cap, not a device to fall back from. */
+  expired?: boolean
+  /** Callers of waitForAudio(), told when the first byte arrives or the recorder exits. */
+  waiters?: Array<(live: boolean) => void>
 }
 
 let active: Active | undefined
@@ -85,6 +91,40 @@ export function ffmpegPath(): string | null {
 }
 
 /**
+ * The macOS capture helper (native/macos-mic/iris-mic.swift), or null. IRIS_MIC_HELPER wins; then a
+ * copy shipped next to this executable; then the build output beside the source (development).
+ *
+ * macOS records through this and not ffmpeg (#189828): ffmpeg's avfoundation input dropped over half
+ * the samples of a 96 kHz microphone, so speech reached the engines about 2.2x too fast and they
+ * answered with fluent, wrong sentences. The helper reads CoreAudio's real format, and chooses a real
+ * microphone when the system default is an aggregate or loopback device.
+ */
+export function micHelperPath(platform: string = process.platform): string | null {
+  if (platform !== "darwin") return null
+  const override = process.env["IRIS_MIC_HELPER"]?.trim()
+  if (override) return existsSync(override) ? override : null
+  const beside = join(dirname(process.execPath), "iris-mic")
+  if (existsSync(beside)) return beside
+  const dev = join(dirname(new URL(import.meta.url).pathname), "../../native/macos-mic/iris-mic")
+  return existsSync(dev) ? dev : null
+}
+
+/**
+ * A take whose audio is much shorter than the clock says the recorder dropped samples. Such audio
+ * plays back too fast, and an engine answers it with plausible, wrong text — so it must never be
+ * trusted silently. Under 3 s the clock's own start-up latency dominates, so nothing is said.
+ */
+export function captureShortfall(
+  bytes: number,
+  wallMs: number,
+): { audioSeconds: number; wallSeconds: number } | undefined {
+  if (wallMs < 3000) return undefined
+  const audioSeconds = bytes / BYTES_PER_SECOND
+  const wallSeconds = wallMs / 1000
+  return audioSeconds < wallSeconds * 0.8 ? { audioSeconds, wallSeconds } : undefined
+}
+
+/**
  * The inputs to try on this platform, in order. Throws a TranscribeError worded for THIS
  * platform when there is nothing to record from.
  */
@@ -92,7 +132,13 @@ export function inputCandidates(platform: string, ffmpeg: string, device?: strin
   switch (platform) {
     case "darwin":
       // ":default" follows the system input device; ":<index>" pins one.
-      return [{ backend: "avfoundation", args: ["-f", "avfoundation", "-i", `:${device ?? "default"}`], label: device ?? "default" }]
+      return [
+        {
+          backend: "avfoundation",
+          args: ["-f", "avfoundation", "-i", `:${device ?? "default"}`],
+          label: device ?? "default",
+        },
+      ]
     case "linux":
       // ALSA first: it is there on every desktop, and PipeWire/PulseAudio hosts route ALSA's
       // "default" through their own plugin. Pulse second for builds or hosts where ALSA cannot
@@ -107,9 +153,7 @@ export function inputCandidates(platform: string, ffmpeg: string, device?: strin
       // is named. The first one listed is the system's preferred input on every machine checked,
       // but that is DirectShow's ordering, not a promise — a named device always wins.
       const devices = listDshowAudioDevices(ffmpeg)
-      const chosen = device
-        ? devices.find((d) => d.name === device || d.alternative === device)
-        : devices[0]
+      const chosen = device ? devices.find((d) => d.name === device || d.alternative === device) : devices[0]
       if (!chosen) throw new TranscribeError(noMicrophoneMessage("win32", device))
       return [
         {
@@ -135,8 +179,9 @@ export function inputCandidates(platform: string, ffmpeg: string, device?: strin
 export function recorderReadiness(
   platform: string = process.platform,
   ffmpeg: string | null = ffmpegPath(),
-): { sidecar: boolean; reason?: string } {
+): { sidecar: boolean; native?: boolean; reason?: string } {
   if (!SUPPORTED.has(platform)) return { sidecar: false, reason: unsupportedMessage(platform) }
+  if (micHelperPath(platform)) return { sidecar: true, native: true }
   if (!ffmpeg) return { sidecar: false, reason: missingFfmpegMessage(platform) }
   if (platform === "win32") {
     try {
@@ -167,9 +212,20 @@ export function startCapture(device?: string, maxSeconds = MAX_SECONDS): { start
   // could not record on Windows at all, installed it, and got the identical error — an error that
   // survives its own remedy. Ask whether this platform has a backend before naming a missing tool.
   if (!SUPPORTED.has(process.platform)) throw new TranscribeError(unsupportedMessage(process.platform))
-  const ffmpeg = ffmpegPath()
+  const helper = micHelperPath()
+  const ffmpeg = helper ?? ffmpegPath()
   if (!ffmpeg) throw new TranscribeError(missingFfmpegMessage(process.platform))
-  const [first, ...fallbacks] = inputCandidates(process.platform, ffmpeg, device)
+  // The helper has no fallback: ffmpeg's macOS capture is the thing it replaces, and handing a
+  // failed start to it would bring the bad audio back without a word.
+  const [first, ...fallbacks] = helper
+    ? [
+        {
+          backend: "coreaudio",
+          args: device ? ["--device", device] : [],
+          label: device ?? "default",
+        } satisfies CaptureInput,
+      ]
+    : inputCandidates(process.platform, ffmpeg, device)
 
   active = {
     proc: undefined as unknown as ChildProcess,
@@ -183,45 +239,77 @@ export function startCapture(device?: string, maxSeconds = MAX_SECONDS): { start
     maxSeconds: Math.min(Math.max(1, Math.floor(maxSeconds)), MAX_BACKGROUND_SECONDS),
   }
   spawnInput(active, first!)
+  armDeadline(active)
   return { startedAt: active.startedAt }
+}
+
+/**
+ * "Keep recording": lift the running take to a longer cap. ffmpeg was launched with -t at the
+ * background maximum, so only this timer moves. Before (#189519) the cap was ffmpeg's -t from the
+ * start, so a take extended on macOS (always the sidecar) silently stopped capturing at 5:00 while
+ * the composer's clock kept running, and everything said after it was lost.
+ */
+export function extendCapture(maxSeconds: number): boolean {
+  const current = active
+  if (!current || current.expired) return false
+  current.maxSeconds = Math.min(Math.max(current.maxSeconds, Math.floor(maxSeconds)), MAX_BACKGROUND_SECONDS)
+  armDeadline(current)
+  return true
+}
+
+function armDeadline(session: Active) {
+  clearTimeout(session.deadline)
+  const left = session.maxSeconds * 1000 - (Date.now() - session.startedAt)
+  session.deadline = setTimeout(
+    () => {
+      if (active !== session) return
+      session.expired = true
+      // SIGINT, as stop does: raw PCM needs no clean close, and what was captured stays for /dictate/stop.
+      session.proc.kill("SIGINT")
+    },
+    Math.max(0, left),
+  )
 }
 
 function spawnInput(session: Active, input: CaptureInput) {
   const proc = spawn(
     session.ffmpeg,
-    [
-      "-hide_banner",
-      "-nostdin",
-      "-y",
-      ...input.args,
-      // pan, NOT `-ac 1`. The default macOS input here is a 17-channel aggregate ("Stream Mic
-      // Collection"), and -ac 1 fails on it outright:
-      //   "Rematrix is needed between 17 channels and mono but there is not enough
-      //    information to do it" -> "Nothing was written into output file"
-      // pan takes channel 0 and needs no layout information, so it works on both a plain
-      // mono mic and a multi-channel aggregate (and on DirectShow's usual stereo 44.1 kHz).
-      "-af",
-      "pan=mono|c0=c0",
-      "-ar",
-      "16000",
-      // RAW PCM, not WAV: a WAV header needs the final size, so ffmpeg writes nothing usable until
-      // a clean exit, and an interrupted recording came back as 0 bytes. Raw s16le has no header —
-      // every byte is usable even if the process is killed. The RIFF header is added at stop.
-      "-f",
-      "s16le",
-      "-acodec",
-      "pcm_s16le",
-      // Without this ffmpeg buffers its output and nothing arrives until the end — measured. The
-      // level meter reads this stream live, and a stop must not wait on a buffer.
-      "-flush_packets",
-      "1",
-      // A hard cap so a forgotten recording cannot run forever.
-      "-t",
-      String(session.maxSeconds),
-      // STDOUT, not a file: the same bytes feed the level meter (GET /dictate/level) and the
-      // recording, with no second process and nothing of someone's voice left on disk.
-      "pipe:1",
-    ],
+    input.backend === "coreaudio"
+      ? input.args
+      : [
+          "-hide_banner",
+          "-nostdin",
+          "-y",
+          ...input.args,
+          // pan, NOT `-ac 1`. The default macOS input here is a 17-channel aggregate ("Stream Mic
+          // Collection"), and -ac 1 fails on it outright:
+          //   "Rematrix is needed between 17 channels and mono but there is not enough
+          //    information to do it" -> "Nothing was written into output file"
+          // pan takes channel 0 and needs no layout information, so it works on both a plain
+          // mono mic and a multi-channel aggregate (and on DirectShow's usual stereo 44.1 kHz).
+          "-af",
+          "pan=mono|c0=c0",
+          "-ar",
+          "16000",
+          // RAW PCM, not WAV: a WAV header needs the final size, so ffmpeg writes nothing usable until
+          // a clean exit, and an interrupted recording came back as 0 bytes. Raw s16le has no header —
+          // every byte is usable even if the process is killed. The RIFF header is added at stop.
+          "-f",
+          "s16le",
+          "-acodec",
+          "pcm_s16le",
+          // Without this ffmpeg buffers its output and nothing arrives until the end — measured. The
+          // level meter reads this stream live, and a stop must not wait on a buffer.
+          "-flush_packets",
+          "1",
+          // A hard cap so a forgotten recording cannot run forever. The take's own cap (5 min inline)
+          // is the deadline timer, which "Keep recording" can extend; this one never moves.
+          "-t",
+          String(MAX_BACKGROUND_SECONDS),
+          // STDOUT, not a file: the same bytes feed the level meter (GET /dictate/level) and the
+          // recording, with no second process and nothing of someone's voice left on disk.
+          "pipe:1",
+        ],
     { stdio: ["ignore", "pipe", "pipe"] },
   )
   session.proc = proc
@@ -230,6 +318,7 @@ function spawnInput(session: Active, input: CaptureInput) {
   proc.stdout?.on("data", (b: Buffer) => {
     session.chunks.push(b)
     session.bytes += b.length
+    if (session.waiters?.length) for (const w of session.waiters.splice(0)) w(true)
     // Live dictation tees the same PCM to the relay. A listener that throws must never cost the
     // recording, which is the source of truth.
     for (const listener of chunkListeners) {
@@ -246,24 +335,54 @@ function spawnInput(session: Active, input: CaptureInput) {
   // pulse-only host): hand over to the next one while the person is still talking. Not once
   // audio has flowed — that is a recording ending, and the stop reports it.
   const next = () => {
-    if (active !== session || session.proc !== proc || session.bytes > 0) return
+    if (active !== session || session.proc !== proc || session.bytes > 0 || session.expired) return
     const fallback = session.fallbacks.shift()
     if (fallback) spawnInput(session, fallback)
   }
   proc.on("close", next)
   proc.on("error", next)
+  // A recorder that exits before any audio has nothing to wait for — unless a fallback took over.
+  proc.on("close", () => {
+    if (session.bytes === 0 && session.proc === proc && session.waiters?.length) for (const w of session.waiters.splice(0)) w(false)
+  })
+}
+
+/**
+ * Resolves true once the active recording has produced audio, false if it ends first or `timeoutMs`
+ * passes (#189875). /dictate/start awaits this, and the composer shows the recording ring only when
+ * that request returns — so the ring appears when the microphone is live, not ~0.3–1 s before, which
+ * is speech nobody recorded.
+ */
+export function waitForAudio(timeoutMs = 1500): Promise<boolean> {
+  const session = active
+  if (!session) return Promise.resolve(false)
+  if (session.bytes > 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const done = (live: boolean) => {
+      clearTimeout(timer)
+      resolve(live)
+    }
+    const timer = setTimeout(() => {
+      session.waiters = session.waiters?.filter((w) => w !== done)
+      resolve(false)
+    }, timeoutMs)
+    ;(session.waiters ??= []).push(done)
+  })
 }
 
 /**
  * Loudness of roughly the last 50 ms of the active recording: RMS, 0..1. `{0, 0}` when idle.
  * Read from the stream already being collected — the meter costs a few hundred multiplies.
  */
-export function currentLevel(): { level: number; seconds: number } {
+export function currentLevel(): { level: number; seconds: number; capturing?: boolean } {
   const current = active
   if (!current) return { level: 0, seconds: 0 }
   return {
     level: tailRms(current.chunks, current.bytes, LEVEL_WINDOW_BYTES),
     seconds: Math.round((Date.now() - current.startedAt) / 100) / 10,
+    // false once the recorder has ended — its cap, an unplugged mic, a crash. The take is still
+    // here for /dictate/stop; the composer stops rather than run a clock over nothing (#189519).
+    capturing: !current.expired && current.proc.exitCode === null && current.proc.signalCode === null,
   }
 }
 
@@ -300,10 +419,17 @@ function tailRms(chunks: Buffer[], total: number, want: number) {
  * even if it has to be killed. (On Windows, Node's SIGINT is TerminateProcess — still safe for
  * the same reason.)
  */
-export async function stopCapture(): Promise<{ audio: Uint8Array; ms: number; input: string }> {
+export async function stopCapture(): Promise<{
+  audio: Uint8Array
+  ms: number
+  input: string
+  /** Set when the recorder delivered much less audio than the clock ran — see captureShortfall. */
+  shortfall?: { audioSeconds: number; wallSeconds: number }
+}> {
   const current = active
   if (!current) throw new TranscribeError("Not recording.")
   active = undefined
+  clearTimeout(current.deadline)
 
   const proc = current.proc
   if (proc.exitCode === null && proc.signalCode === null) {
@@ -350,6 +476,7 @@ export async function stopCapture(): Promise<{ audio: Uint8Array; ms: number; in
     audio: wrapPcmAsWav(new Uint8Array(Buffer.concat(current.chunks))),
     ms: Date.now() - current.startedAt,
     input: current.input.backend,
+    shortfall: captureShortfall(current.bytes, Date.now() - current.startedAt),
   }
 }
 
@@ -374,7 +501,8 @@ function missingFfmpegMessage(platform: string) {
 }
 
 function noMicrophoneMessage(platform: string, device?: string) {
-  if (device) return `The microphone "${device}" was not found. Check that it is plugged in, or pick another in ${soundSettingsHint(platform)}.`
+  if (device)
+    return `The microphone "${device}" was not found. Check that it is plugged in, or pick another in ${soundSettingsHint(platform)}.`
   return `No microphone was found. Plug one in, or turn one on in ${soundSettingsHint(platform)}, then try again.`
 }
 
@@ -510,6 +638,7 @@ export function cancelCapture(): void {
   const current = active
   if (!current) return
   active = undefined
+  clearTimeout(current.deadline)
   try {
     current.proc.kill("SIGKILL")
   } catch {

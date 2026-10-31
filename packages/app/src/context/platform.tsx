@@ -122,8 +122,17 @@ type PlatformBase = {
   /** Force focus styles on interactive elements through desktop devtools (desktop only) */
   setForceFocus?(enabled: boolean): Promise<void>
 
+  /**
+   * The local engine's base URL (desktop sidecar). The crash screen reports through it (#191430):
+   * the top-level error boundary sits above the server providers, so it cannot ask them.
+   */
+  engineUrl?: string
+
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
+
+  /** iris:// links that opened or focused the app (#190233). Returns an unsubscribe. Desktop only. */
+  onDeepLink?(handler: (url: string) => void): () => void
 }
 
 export type Platform = PlatformBase &

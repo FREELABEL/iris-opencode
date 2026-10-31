@@ -123,7 +123,7 @@ const layer = Layer.effectDiscard(
                     ),
                   ),
                 )
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to grep for ${input.pattern}` }))),
+            }).pipe(Effect.mapError((cause) => new ToolFailure({ message: cause instanceof Ripgrep.Error ? cause.message : `Unable to grep for ${input.pattern}` }))),
         }),
       })
       .pipe(Effect.orDie)

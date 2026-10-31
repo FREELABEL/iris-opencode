@@ -1,6 +1,6 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { base64Encode } from "@opencode-ai/core/util/encode"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { batch, createEffect, createMemo, startTransition } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useModels } from "@/context/models"
@@ -59,7 +59,7 @@ const clone = (value: State | undefined) => {
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   init: () => {
-    const params = useParams()
+    const params = useSessionParams()
     const sdk = useSDK()
     const sync = useSync()
     const serverSDK = useServerSDK()

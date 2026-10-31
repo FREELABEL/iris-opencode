@@ -9,6 +9,7 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { TerminalRun } from "@/session/terminal-run"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -34,9 +35,10 @@ import {
   RevertPayload,
   ShellPayload,
   SummarizePayload,
+  TerminalStartPayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { PermissionNotFoundError, SessionBusyError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -346,6 +348,40 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
     })
 
+    const terminalStart = Effect.fn("SessionHttpApi.terminalStart")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof TerminalStartPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* promptSvc
+        .terminalStart({ ...ctx.payload, sessionID: ctx.params.sessionID })
+        .pipe(
+          Effect.catchTag("SessionPrompt.TerminalBusyError", () =>
+            Effect.fail(
+              new SessionBusyError({
+                sessionID: ctx.params.sessionID,
+                message: "Too many terminal commands are running in this session",
+              }),
+            ),
+          ),
+        )
+    })
+
+    const terminalRead = Effect.fn("SessionHttpApi.terminalRead")(function* (ctx: {
+      params: { sessionID: SessionID; runID: string }
+      query: { from?: number }
+    }) {
+      const run = TerminalRun.get(ctx.params.sessionID, ctx.params.runID)
+      if (!run) return yield* notFound(`Terminal run not found: ${ctx.params.runID}`)
+      return TerminalRun.read(run, ctx.query.from ?? 0)
+    })
+
+    const terminalCancel = Effect.fn("SessionHttpApi.terminalCancel")(function* (ctx: {
+      params: { sessionID: SessionID; runID: string }
+    }) {
+      return { cancelled: yield* promptSvc.terminalCancel(ctx.params.sessionID, ctx.params.runID) }
+    })
+
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
@@ -432,6 +468,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("promptAsync", promptAsync)
       .handle("command", command)
       .handle("shell", shell)
+      .handle("terminalStart", terminalStart)
+      .handle("terminalRead", terminalRead)
+      .handle("terminalCancel", terminalCancel)
       .handle("revert", revert)
       .handle("unrevert", unrevert)
       .handle("permissionRespond", permissionRespond)

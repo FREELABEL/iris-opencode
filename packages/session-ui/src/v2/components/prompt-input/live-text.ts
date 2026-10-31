@@ -99,3 +99,62 @@ function gapBefore(node: Text): string {
   }
   return before.length > 0 && !/\s$/.test(before) ? " " : ""
 }
+
+/**
+ * Comparable form of spoken text: case, punctuation and spacing ignored. Engines resend the same
+ * words with a different comma or a leading space, and strict equality let those through (#189546).
+ */
+export function speechKey(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+/**
+ * Add a locked utterance to the live take. A final that repeats what is already shown is dropped;
+ * one that restates the take so far, or extends its last utterance, replaces instead of appending.
+ * Appending every final typed a spoken sentence twice (#189546).
+ */
+export function appendFinal(finals: readonly string[], text: string): string[] {
+  const key = speechKey(text)
+  if (!key) return [...finals]
+  const shown = speechKey(finals.join(" "))
+  const last = speechKey(finals.at(-1) ?? "")
+  if (shown && (shown === key || shown.endsWith(key))) return [...finals]
+  if (shown && key.startsWith(shown)) return [text]
+  if (last && key.startsWith(last)) return [...finals.slice(0, -1), text]
+  return [...finals, text]
+}
+
+/** The live take as one line: the locked utterances, then the one being spoken. */
+export function composeLive(finals: readonly string[], partial: string): string {
+  const locked = finals.join(" ")
+  const lockedKey = speechKey(locked)
+  const partialKey = speechKey(partial)
+  // A partial that restates what is already locked (some engines send the whole take so far)
+  // is shown on its own, not after a second copy of it.
+  const text = lockedKey && partialKey.startsWith(lockedKey) ? partial : partialKey && lockedKey.endsWith(partialKey) ? locked : `${locked} ${partial}`
+  return text.replace(/\s+/g, " ").trim()
+}
+
+
+/** The parts of a scroll container this needs — an element, or a plain object in a test. */
+type Scrollable = { scrollTop: number; scrollHeight: number; clientHeight: number }
+
+/**
+ * Is the chat box scrolled to its bottom, within `slack` px? Asked BEFORE the live words grow, so a
+ * person who scrolled up to reread is left where they are, and everyone else is followed (#189977).
+ */
+export function atBottom(el: Scrollable, slack = 24): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= slack
+}
+
+/** Run `grow` (anything that adds content), then keep the view at the bottom if it was there before. */
+export function growFollowing<T>(el: Scrollable, grow: () => T): T {
+  const follow = atBottom(el)
+  const result = grow()
+  if (follow) el.scrollTop = el.scrollHeight
+  return result
+}

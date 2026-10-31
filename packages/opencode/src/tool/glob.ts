@@ -7,6 +7,23 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
+/**
+ * Glob lists FILES. A pattern whose last part names a directory (`**\/.git`, `**\/node_modules`)
+ * finds nothing — or only stray files of that name — and the model reads that as "none exist"
+ * (#191073: it went on to walk the whole disk looking for repositories).
+ */
+export function directoryHint(pattern: string, found: number): string | undefined {
+  const last = pattern.replace(/\/+$/u, "").split("/").pop() ?? ""
+  if (!last || /[*?[\]{}]/u.test(last)) return undefined
+  if (last === ".git") {
+    // Always: a worktree's .git is a FILE, so this pattern "finds" a few and hides every real repo.
+    return "(Glob matches files, not directories. To find git repositories, use **/.git/HEAD.)"
+  }
+  // Only when nothing matched: HEAD, Makefile and Dockerfile are files with no dot.
+  if (found > 0) return undefined
+  return `(Glob matches files, not directories. If ${last} is a directory, use ${pattern.replace(/\/+$/u, "")}/* to list what is inside it.)`
+}
+
 export const Parameters = Schema.Struct({
   pattern: Schema.String.annotate({ description: "The glob pattern to match files against" }),
   path: Schema.optional(Schema.String).annotate({
@@ -47,7 +64,14 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
-          const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit })
+          let cutoff: Ripgrep.Cutoff | undefined
+          const files = yield* ripgrep.glob({
+            cwd: search,
+            pattern: params.pattern,
+            limit,
+            signal: ctx.abort,
+            onCutoff: (info) => (cutoff = info),
+          })
           const truncated = files.length === limit
 
           const output = []
@@ -62,11 +86,24 @@ export const GlobTool = Tool.define(
             }
           }
 
+          if (cutoff) {
+            output.push("")
+            output.push(
+              `(Search stopped after ${Math.round(cutoff.elapsedMs / 1000)}s — the directory is too large to walk. ` +
+                `Results are partial. Search a narrower path.)`,
+            )
+          }
+          const note = directoryHint(params.pattern, files.length)
+          if (note) {
+            output.push("")
+            output.push(note)
+          }
+
           return {
             title: path.relative(ins.worktree, search),
             metadata: {
               count: files.length,
-              truncated,
+              truncated: truncated || cutoff !== undefined,
             },
             output: output.join("\n"),
           }
