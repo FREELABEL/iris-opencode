@@ -407,6 +407,17 @@ const HeartbeatsResponse = Schema.Struct({
   ...Measured,
   heartbeats: Schema.Array(HeartbeatRow),
 }).annotate({ identifier: "IrisHeartbeatsResponse" })
+/**
+ * One envelope for every agent-editor call (#191840): the upstream HTTP status is KEPT, because a
+ * 422 with field errors, a 404 tool catalogue (not deployed yet) and "could not reach" need three
+ * different sentences on screen. `data` is the upstream record, read by the editor's view-model.
+ */
+const AgentEditorProxied = Schema.Struct({
+  ok: Schema.Boolean,
+  status: Schema.Finite,
+  reason: Schema.optional(Schema.String),
+  data: Schema.optional(Schema.Unknown),
+}).annotate({ identifier: "IrisAgentEditorProxied" })
 const HeartbeatActionResponse = Schema.Struct({
   ok: Schema.Boolean,
   reason: Schema.optional(Schema.String),
@@ -1515,6 +1526,19 @@ export const IrisPaths = {
   heartbeats: `${root}/heartbeats`,
   heartbeatRun: `${root}/heartbeats/:jobID/run`,
   heartbeatPause: `${root}/heartbeats/:jobID/pause`,
+  // Agents › New agent / Edit agent (#191840). Under one prefix so `/agents/:bloqID` cannot claim them.
+  agentEditorAgent: `${root}/agent-editor/agent/:agentID`,
+  agentEditorSave: `${root}/agent-editor/save`,
+  agentEditorHeartbeat: `${root}/agent-editor/agent/:agentID/heartbeat`,
+  agentEditorPolicy: `${root}/agent-editor/agent/:agentID/policy`,
+  agentEditorTools: `${root}/agent-editor/agent/:agentID/tools`,
+  agentEditorToolsSave: `${root}/agent-editor/agent/:agentID/tools/save`,
+  agentEditorPolicySave: `${root}/agent-editor/agent/:agentID/policy/save`,
+  agentEditorModels: `${root}/agent-editor/models`,
+  agentEditorToolCatalog: `${root}/agent-editor/tool-catalog`,
+  agentEditorAlerts: `${root}/agent-editor/alerts`,
+  agentEditorAlertsSave: `${root}/agent-editor/alerts/save`,
+  agentEditorAlertsTest: `${root}/agent-editor/alerts/test`,
   pulseTopic: `${root}/pulse/topic`,
   pulseTopicStream: `${root}/pulse/topic/stream`,
   pulseContacts: `${root}/pulse/contacts`,
@@ -3375,6 +3399,67 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { jobID: Schema.NumberFromString },
         success: described(HeartbeatActionResponse, "Dispatched — one beat now, outside the schedule"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.heartbeatRun", summary: "Run a heartbeat now (iris schedules run)" })),
+      HttpApiEndpoint.get("agentEditorAgent", IrisPaths.agentEditorAgent, {
+        params: { agentID: Schema.NumberFromString },
+        success: described(AgentEditorProxied, "The agent as fl-api stores it (config, settings, prompts)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorAgent", summary: "Read an agent for the editor (#191840)" })),
+      HttpApiEndpoint.post("agentEditorSave", IrisPaths.agentEditorSave, {
+        payload: Schema.Struct({
+          agentID: Schema.optional(described(Schema.Finite, "Absent = create")),
+          body: described(Schema.Unknown, "fl-api's agent body. On update any `config` here is DROPPED — see configPatch."),
+          configPatch: Schema.optional(
+            described(
+              Schema.Record(Schema.String, Schema.Unknown),
+              "Update only: config keys to change. Merged into the config as stored NOW (re-read), because fl-api replaces config wholesale.",
+            ),
+          ),
+        }),
+        success: described(AgentEditorProxied, "The saved agent, or fl-api's refusal with its status"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorSave", summary: "Create or update an agent (#191840)" })),
+      HttpApiEndpoint.post("agentEditorHeartbeat", IrisPaths.agentEditorHeartbeat, {
+        params: { agentID: Schema.NumberFromString },
+        payload: Schema.Struct({ body: described(Schema.Unknown, "{mode, frequency, working_days, briefing_time?}") }),
+        success: described(AgentEditorProxied, "fl-api's answer"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorHeartbeat", summary: "Set an agent's heartbeat mode and cadence" })),
+      HttpApiEndpoint.get("agentEditorPolicy", IrisPaths.agentEditorPolicy, {
+        params: { agentID: Schema.NumberFromString },
+        success: described(AgentEditorProxied, "{agent_id, policy, autonomy, recent_refusals} from iris-api"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorPolicy", summary: "Read an agent's tool policy (fl-iris-api #230)" })),
+      HttpApiEndpoint.post("agentEditorPolicySave", IrisPaths.agentEditorPolicySave, {
+        params: { agentID: Schema.NumberFromString },
+        payload: Schema.Struct({ policy: described(Schema.Unknown, "The whole policy, or null to clear it") }),
+        success: described(AgentEditorProxied, "The policy iris-api saved, or its 422 reason"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorPolicySave", summary: "Replace an agent's tool policy" })),
+      HttpApiEndpoint.get("agentEditorTools", IrisPaths.agentEditorTools, {
+        params: { agentID: Schema.NumberFromString },
+        success: described(AgentEditorProxied, "{state, tools, resolved, unknown} from iris-api (fl-iris-api #253)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorTools", summary: "Read an agent's tool allowlist" })),
+      HttpApiEndpoint.post("agentEditorToolsSave", IrisPaths.agentEditorToolsSave, {
+        params: { agentID: Schema.NumberFromString },
+        payload: Schema.Struct({ tools: described(Schema.Array(Schema.String), "The whole allowlist. [] = NO tools, not all.") }),
+        success: described(AgentEditorProxied, "iris-api's answer; 422 names the unknown tools"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorToolsSave", summary: "Replace an agent's tool allowlist" })),
+      HttpApiEndpoint.get("agentEditorModels", IrisPaths.agentEditorModels, {
+        success: described(AgentEditorProxied, "{models}: the chat picker's manifest, available models only"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorModels", summary: "Models an agent may be given" })),
+      HttpApiEndpoint.get("agentEditorToolCatalog", IrisPaths.agentEditorToolCatalog, {
+        success: described(AgentEditorProxied, "{available, tools}. available=false when iris-api has no catalogue yet (404)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorToolCatalog", summary: "Every tool an agent can be allowed, with its effect" })),
+      HttpApiEndpoint.get("agentEditorAlerts", IrisPaths.agentEditorAlerts, {
+        query: Schema.Struct({ bloqID: Schema.optional(Schema.String) }),
+        success: described(AgentEditorProxied, "{project?, user, effective, defaults} — each tier separately (fl-api #170)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorAlerts", summary: "Status alert settings, by level" })),
+      HttpApiEndpoint.post("agentEditorAlertsSave", IrisPaths.agentEditorAlertsSave, {
+        payload: Schema.Struct({
+          bloqID: Schema.optional(described(Schema.Finite, "Absent = account level")),
+          changes: described(Schema.Unknown, "Any of channels, min_severity, platform_notices, emails, user_ids; null removes a key"),
+        }),
+        success: described(AgentEditorProxied, "The settings as now stored"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorAlertsSave", summary: "Save status alert settings at one level" })),
+      HttpApiEndpoint.post("agentEditorAlertsTest", IrisPaths.agentEditorAlertsTest, {
+        payload: Schema.Struct({ bloqID: Schema.optional(Schema.Finite) }),
+        success: described(AgentEditorProxied, "{success, results:[{type,to,channels,ok}]}"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentEditorAlertsTest", summary: "Send a test status alert to every configured contact" })),
       HttpApiEndpoint.post("heartbeatPause", IrisPaths.heartbeatPause, {
         params: { jobID: Schema.NumberFromString },
         payload: Schema.Struct({ paused: Schema.Boolean }),

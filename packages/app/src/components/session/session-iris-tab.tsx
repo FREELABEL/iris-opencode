@@ -76,6 +76,7 @@ import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
 import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
+import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
@@ -2660,6 +2661,14 @@ export function SessionIrisTab() {
   })
 
   const [detailTab, setDetailTab] = createSignal("info")
+  /**
+   * AGENTS › NEW / EDIT (#191840): ELON's SimpleAgentModal, in this panel. `{}` = a new agent on
+   * the open board; `{agentId}` = that agent. Clicking an agent opens it here; the read-only
+   * record (Info · Tasks · JSON) is one click away under "Details".
+   */
+  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any } | null>(null)
+  // A different product, sub-view or board is a different list: the editor belongs to the one it was opened from.
+  createEffect(on([pane, () => activeBloq()], () => setAgentEditor(null), { defer: true }))
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
 
   // A record always opens on Info. Carrying the previous record's tab over lands you on
@@ -3183,7 +3192,7 @@ export function SessionIrisTab() {
 
       {/* SEARCH, for the pane that has enough in it to need one: a board's lists run to
           hundreds of items and the reader is the only way in. Server-side — see the `q` param. */}
-      <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow()}>
+      <Show when={SEARCH_PLACEHOLDER[pane()] && !openRow() && !agentEditor()}>
         <div class="iris-search shrink-0">
           <Show when={pane() === "playbooks"}>
             <span class="pbf-search-ic">
@@ -3211,6 +3220,51 @@ export function SessionIrisTab() {
             </button>
           </Show>
         </div>
+      </Show>
+
+      {/* NEW AGENT (#191840) — on every Agents view that lists this board's agents, empty or not:
+          "Nothing in Agents › All on this board" with no way to make one was the bug. */}
+      <Show when={pane() === "agents" && !openRow() && !agentEditor()}>
+        <div class="iae-bar shrink-0">
+          <button
+            type="button"
+            class="iae-new"
+            data-testid="iris-agent-new"
+            disabled={activeBloq() == null}
+            onClick={() => setAgentEditor({})}
+          >
+            + New agent
+          </button>
+          <span class="iae-bar__hint">on {activeBloqName() ?? "this board"} · click an agent to edit it</span>
+        </div>
+      </Show>
+
+      <Show when={agentEditor()}>
+        {(ed) => (
+          <div class="flex-1 min-h-0 flex flex-col">
+            <IrisAgentEditor
+              doFetch={doFetch}
+              agentId={ed().agentId}
+              bloqId={activeBloq() != null ? Number(activeBloq()) : null}
+              bloqName={activeBloqName()}
+              boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              onClose={() => setAgentEditor(null)}
+              onSaved={(a) => {
+                void refetchSurface()
+                if (a.created) setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
+              }}
+              onDetails={
+                ed().row
+                  ? () => {
+                      const row = ed().row
+                      setAgentEditor(null)
+                      setOpenRow(describeRow("agents", row))
+                    }
+                  : undefined
+              }
+            />
+          </div>
+        )}
       </Show>
 
       <Show when={pane() === "playbooks" && !openRow() && view() === "rows"}>
@@ -4035,7 +4089,7 @@ export function SessionIrisTab() {
       <div
         class="flex-1 min-h-0"
         classList={{
-          hidden: !!openRow(),
+          hidden: !!openRow() || !!agentEditor(),
           "overflow-y-auto": pane() !== "graph" && !SELF_PANES.has(pane()),
           "flex flex-col overflow-hidden": pane() === "graph" || SELF_PANES.has(pane()),
         }}
@@ -4617,7 +4671,9 @@ export function SessionIrisTab() {
                     <button
                       type="button"
                       class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), a))}
+                      data-testid="iris-agent-row"
+                      data-agent-id={a.id}
+                      onClick={() => setAgentEditor({ agentId: Number(a.id), row: a })}
                     >
                       <span
                         class="shrink-0"
