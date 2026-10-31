@@ -303,6 +303,18 @@
       "purpose": "One folder on every machine in your Hive — read on demand, saved files visible everywhere at once."
     },
     {
+      "src": "how-to/claim-a-licence.md",
+      "dest": "how-to/claim-a-licence.md",
+      "managed": true,
+      "purpose": "How to claim an IRIS licence key on Desktop or the CLI and check its status"
+    },
+    {
+      "src": "how-to/team-licences.md",
+      "dest": "how-to/team-licences.md",
+      "managed": true,
+      "purpose": "How operators issue one licence for a team, track who claimed it and revoke it"
+    },
+    {
       "src": "how-to/iris-login.md",
       "dest": "how-to/iris-login.md",
       "managed": true,
