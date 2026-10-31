@@ -43,6 +43,45 @@ async function reportError(res: Response, action: string): Promise<void> {
   await handleApiError(res, action)
 }
 
+const money = (cents: unknown) => `$${(Number(cents ?? 0) / 100).toFixed(2)}`
+
+/** What the end of a licence is, in words. A subscription has a period, not an expiry. */
+export function endDate(d: any): string {
+  if (d?.expires_at) return String(d.expires_at).slice(0, 10)
+  if (d?.current_period_end) return `renews; period ends ${String(d.current_period_end).slice(0, 10)}`
+  return "none set"
+}
+
+export function allowanceLine(d: any): string {
+  return Number(d?.allowance_cents ?? 0) > 0 ? `${money(d.allowance_used_cents)} used of ${money(d.allowance_cents)}` : "none"
+}
+
+export function inviteWords(status: string): string {
+  if (status === "assigned") return "seat assigned"
+  if (status === "already_held") return "already holds a seat"
+  if (status === "invited") return "named, seat reserved until they claim with this confirmed address"
+  if (status === "already_invited") return "already named, seat still reserved"
+  return status
+}
+
+/** A seat list as text: holders, then who is reserved for, then who used to hold one. */
+export function seatLines(d: any): string[] {
+  const person = (s: any) => String(s.email ?? `user #${s.user_id}`).padEnd(36)
+  const day = (v: unknown) => String(v ?? "").slice(0, 10) || "—"
+  const lines = [
+    `  seats      ${d?.occupied ?? 0} of ${d?.seats ?? "—"} held, ${firstArray(d?.pending).length} reserved`,
+    `  owner      ${d?.owner_email ?? "—"}`,
+    `  ends       ${endDate(d)}`,
+    `  allowance  ${allowanceLine(d)}`,
+    `  claims     ${d?.claim_domain ? `named people and @${d.claim_domain}` : d?.named_only ? "named people only" : "anyone with the key"}`,
+    "",
+  ]
+  for (const s of firstArray(d?.holders)) lines.push(`  seat ${String(s.seat_id).padEnd(8)} ${person(s)} last active ${day(s.last_active)}${s.lead_id ? `  lead #${s.lead_id}` : ""}`)
+  for (const p of firstArray(d?.pending)) lines.push(`  reserved      ${person(p)} not claimed yet`)
+  for (const s of firstArray(d?.released)) lines.push(dim(`  seat ${String(s.seat_id).padEnd(8)} ${person(s)} released ${day(s.released_at)}`))
+  return lines
+}
+
 const IssueCmd = cmd({
   command: "issue",
   describe: "mint a licence key (operator only)",
@@ -54,6 +93,8 @@ const IssueCmd = cmd({
       .option("allowance", { describe: "spend allowance in CENTS", type: "number", default: 0 })
       .option("days", { describe: "expire this many days from now", type: "number" })
       .option("note", { describe: "what was actually agreed, in words", type: "string" })
+      .option("owner", { describe: "who owns it: an account's exact address", type: "string" })
+      .option("domain", { describe: "let anyone confirmed at this domain claim", type: "string" })
       .option("lead", { describe: "CRM lead this licence belongs to (shows on the lead)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -65,6 +106,8 @@ const IssueCmd = cmd({
     }
     if (args.days) body.days = args.days
     if (args.note) body.note = args.note
+    if (args.owner) body.owner_email = args.owner
+    if (args.domain) body.claim_domain = args.domain
     // #189718: the API has accepted lead_id since #183598; the CLI never sent it.
     if (args.lead) body.lead_id = args.lead
 
@@ -83,7 +126,7 @@ const IssueCmd = cmd({
     printKV("expires", data?.expires_at ? String(data.expires_at) : "never")
     printDivider()
     // The key is the credential. Say where it goes rather than leaving someone to guess.
-    prompts.outro(dim("Give the key to the buyer — they run: iris licence claim <key>"))
+    prompts.outro(dim("Name the people: iris licence invite <key> <email...>   ·   then: iris licence send <key> <email...>"))
   },
 })
 
@@ -215,14 +258,156 @@ const ShowCmd = cmd({
     printDivider()
     printKV("tier", String(data?.tier ?? "—"))
     printKV("status", String(data?.status ?? "—"))
-    printKV("seats", `${(data?.seat_rows?.length ?? 0)} of ${data?.seats ?? "—"} held`)
     printKV("issued to", String(data?.issued_to_email ?? "—"))
     printKV("lead", data?.lead_id ? `#${data.lead_id}` : "— (iris licence link <key> --lead <id>)")
+    printDivider()
+    // Holders, end date and allowance come from the seat view, so show and seats cannot disagree.
+    const seatsRes = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats`)
+    if (seatsRes.ok) for (const l of seatLines(((await seatsRes.json()) as any)?.data)) UI.println(l)
+    else prompts.log.warn(`Could not read the seats (HTTP ${seatsRes.status})`)
     printDivider()
     for (const e of data?.events ?? []) {
       UI.println(dim(`  ${String(e.created_at ?? "").slice(0, 19)}  ${e.event}`))
     }
     prompts.outro(dim("iris licence show <key> --json for everything"))
+  },
+})
+
+/** #191935 #191940 — name who may hold the seats. Operator only: this grants entitlement to someone else. */
+const InviteCmd = cmd({
+  command: "invite <key> <emails..>",
+  describe: "name people on a licence (operator only). Limits the key to them. Sends nothing: see licence send",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("emails", { type: "string", array: true })
+      .option("lead", { describe: "this person's CRM lead (one email only)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats`, {
+      method: "POST",
+      body: JSON.stringify({ emails: args.emails, ...(args.lead ? { lead_id: args.lead } : {}) }),
+    })
+    if (res.status === 404) return reportError(res, "Invite to licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      process.exitCode = 1
+      prompts.log.warn(body?.reason ?? body?.message ?? `Could not invite (HTTP ${res.status})`)
+      return
+    }
+    for (const r of body?.data?.results ?? []) UI.println(`  ${r.email}: ${inviteWords(r.status)}`)
+    printKV("seats", `${body?.data?.occupied ?? "—"} of ${body?.data?.seats ?? "—"} held, ${body?.data?.pending ?? 0} reserved`)
+  },
+})
+
+const SeatsCmd = cmd({
+  command: "seats <key>",
+  describe: "who holds which seat, last active, end date and allowance (the licence's owner or an operator)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/seats`)
+    if (!res.ok) return reportError(res, "List seats")
+    const data = ((await res.json()) as any)?.data
+    if (args.json) return writeJson(data)
+    UI.empty()
+    prompts.intro(`◈  ${args.key}`)
+    for (const l of seatLines(data)) UI.println(l)
+    prompts.outro(dim("iris licence release <key> <email>"))
+  },
+})
+
+const ReleaseCmd = cmd({
+  command: "release <key> <email>",
+  describe: "take one person off a licence, leaving it and everyone else alone (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).positional("email", { type: "string" }),
+  handler: (args: any) =>
+    operatorPost(args.key, "seats/release", { email: args.email }, "Release seat", `${args.email} taken off ${args.key}`),
+})
+
+/** POST one small operator change and say what the server said. */
+async function operatorPost(key: string, path: string, payload: unknown, action: string, done: string): Promise<void> {
+  const res = await irisFetch(`${BASE}/${encodeURIComponent(key)}/${path}`, { method: "POST", body: JSON.stringify(payload) })
+  if (res.status === 404) return reportError(res, action)
+  const body = (await res.json().catch(() => ({}))) as any
+  if (!res.ok) {
+    process.exitCode = 1
+    prompts.log.warn(body?.reason ?? body?.message ?? `${action} failed (HTTP ${res.status})`)
+    return
+  }
+  prompts.log.success(done)
+}
+
+const OwnerCmd = cmd({
+  command: "owner <key> <email>",
+  describe: "choose who owns a licence; grants no seat (operator only)",
+  builder: (y: any) => y.positional("key", { type: "string" }).positional("email", { type: "string" }),
+  handler: (args: any) => operatorPost(args.key, "owner", { email: args.email }, "Set owner", `${args.email} owns ${args.key}`),
+})
+
+const DomainCmd = cmd({
+  command: "domain <key> [domain]",
+  describe: "let anyone confirmed at one domain claim; --off to stop (operator only)",
+  builder: (y: any) =>
+    y.positional("key", { type: "string" }).positional("domain", { type: "string" }).option("off", { type: "boolean", default: false }),
+  async handler(args: any) {
+    if (!args.off && !args.domain) {
+      process.exitCode = 1
+      prompts.log.warn("Name a domain, or pass --off.")
+      return
+    }
+    await operatorPost(args.key, "domain", { domain: args.off ? null : args.domain }, "Set claim domain", args.off ? `Domain claim off for ${args.key}` : `${args.domain} may claim ${args.key}`)
+  },
+})
+
+const SeatLeadCmd = cmd({
+  command: "seat-lead <key> <seat>",
+  describe: "link one seat to its CRM lead (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("seat", { type: "number" })
+      .option("lead", { describe: "CRM lead id", type: "number", demandOption: true }),
+  handler: (args: any) => operatorPost(args.key, `seats/${args.seat}/lead`, { lead_id: args.lead }, "Link seat", `Seat ${args.seat} → lead #${args.lead}`),
+})
+
+const SendCmd = cmd({
+  command: "send <key> <emails..>",
+  describe: "preview the licence message for named people; --send delivers it, logged to their lead (operator only)",
+  builder: (y: any) =>
+    y
+      .positional("key", { type: "string" })
+      .positional("emails", { type: "string", array: true })
+      .option("send", { describe: "actually send. Without this nothing leaves", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(args.key)}/send`, {
+      method: "POST",
+      body: JSON.stringify({ emails: args.emails, send: args.send === true }),
+    })
+    if (res.status === 404) return reportError(res, "Send licence")
+    const body = (await res.json().catch(() => ({}))) as any
+    if (args.json) return writeJson(body)
+    if (!res.ok) {
+      process.exitCode = 1
+      prompts.log.warn(body?.reason ?? body?.message ?? `Could not send (HTTP ${res.status})`)
+      return
+    }
+    for (const r of body?.data?.results ?? []) {
+      printDivider()
+      if (r.status === "preview") {
+        UI.println(`  To: ${r.email}\n  Subject: ${r.subject}\n`)
+        UI.println(String(r.text))
+      } else if (r.status === "sent") prompts.log.success(`${r.email}: sent (comm #${r.comm_id}${r.lead_activity ? `, logged to lead #${r.lead_id}` : ", NOT logged to a lead"})`)
+      else if (r.status === "not_named") prompts.log.warn(`${r.email}: not named on this licence, nothing sent. iris licence invite first`)
+      else {
+        process.exitCode = 1
+        prompts.log.warn(`${r.email}: not sent: ${r.error ?? r.status}`)
+      }
+    }
+    if (body?.data?.sent !== true) prompts.outro(dim("Preview only, nothing was sent. Add --send to deliver."))
   },
 })
 
@@ -232,7 +417,7 @@ export const LicenceGroup = cmd({
   aliases: ["license", "licences", "licenses"],
   describe: "what a yes produces — issue, claim and check entitlement",
   builder: (y: any) =>
-    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(RevokeCmd).demandCommand(),
+    y.command(IssueCmd).command(ClaimCmd).command(MeCmd).command(ListCmd).command(ShowCmd).command(LinkCmd).command(InviteCmd).command(SeatsCmd).command(ReleaseCmd).command(OwnerCmd).command(DomainCmd).command(SeatLeadCmd).command(SendCmd).command(RevokeCmd).demandCommand(),
   async handler() {},
 })
 
@@ -252,6 +437,13 @@ export const LicenceCommand = productCommand({
       .command(ListCmd)
       .command(ShowCmd)
       .command(LinkCmd)
+      .command(InviteCmd)
+      .command(SeatsCmd)
+      .command(ReleaseCmd)
+      .command(OwnerCmd)
+      .command(DomainCmd)
+      .command(SeatLeadCmd)
+      .command(SendCmd)
       .command(RevokeCmd)
       .demandCommand(),
 })
