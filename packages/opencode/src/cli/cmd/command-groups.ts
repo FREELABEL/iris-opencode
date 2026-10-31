@@ -144,6 +144,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   workflows: "agents",
   schedules: "agents",
   monitor: "agents",
+  status: "agents",
   personality: "agents",
   recall: "knowledge",
   home: "integrations",

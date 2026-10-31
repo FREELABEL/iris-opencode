@@ -9,6 +9,7 @@ import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
+import { AgentsInstallCommand, AgentsPacksCommand } from "./platform-agents-packs"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
@@ -2067,7 +2068,7 @@ const AgentsDesktopSyncCommand = cmd({
 
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
+  describe: "manage IRIS platform agents — install packs, pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -2097,6 +2098,8 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsJoinCommand)
       .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
+      .command(AgentsPacksCommand)
+      .command(AgentsInstallCommand)
       .command(AgentsBenchCommand)
       .command(AgentsDesktopSyncCommand)
       .demandCommand(),
