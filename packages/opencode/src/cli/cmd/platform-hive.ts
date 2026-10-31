@@ -38,6 +38,7 @@ import { HiveTunnelCommand } from "./platform-hive-tunnel"
 import { HiveSshGateCommand } from "./platform-hive-ssh-gate"
 import { HiveRolloutCommand } from "./platform-hive-rollout"
 import { HiveModelsCommand } from "./platform-hive-models"
+import { HiveInventoryCommand } from "./hive-inventory"
 import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
@@ -5197,6 +5198,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveAskCommand)
       .command(HiveTunnelCommand)
       .command(HiveModelsCommand)
+      .command(HiveInventoryCommand)
       .command(HiveDriveCommand)
       .command(HiveAnswerCommand)
       .command(HiveTriggerCommand)
