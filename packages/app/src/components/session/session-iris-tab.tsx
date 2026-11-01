@@ -21,6 +21,7 @@ import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
 import { matchesHands, playbookDocBody, playbookSlugLine, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
 import { Ic, PlaybookFilters, PlaybookFlowInfo, PlaybookFlowList } from "./iris-playbook-flow"
+import { IrisPager } from "./iris-pager"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
@@ -81,6 +82,8 @@ import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
+import { IrisReachrReview } from "./iris-reachr-review"
+import { IrisLeads } from "./iris-leads"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_ASSIGNED,
@@ -675,7 +678,7 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "inbox"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox"])
 
 interface SubView {
   id: string
@@ -795,6 +798,12 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   // A pickup route (#189286): two ways in, one shape. There is deliberately no account route —
   // people in IRIS have contacts, not accounts. Both panes draw and fetch for themselves.
+  // ELON's leads experience (#190553), with the outreach review queue beside it (#191990). Both panes
+  // fetch for themselves, because their search and paging happen on the server.
+  leads: [
+    { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
+    { id: "review", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+  ],
   pulse: [
     { id: "topic", label: "Topic", pane: "pulse-topic", path: () => `/iris/pulse/topic`, default: true },
     { id: "contact", label: "Contact", pane: "pulse-contact", path: () => `/iris/pulse/contacts` },
@@ -1083,6 +1092,8 @@ const PANEL_HINTS: Record<string, string> = {
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
   "pulse/contact": "Recent activity of one contact",
+  "leads/all": "Search, follow up on and manage leads",
+  "leads/review": "Review exact messages, approve some, hold others, and schedule the send",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
   "playbooks/project": "Playbooks this project uses",
@@ -4047,37 +4058,18 @@ export function SessionIrisTab() {
                         </tbody>
                       </table>
                     </div>
-                    <div class="flex items-center gap-2 py-2 text-11-regular text-text-weaker">
-                      <span class="font-mono tabular-nums">
-                        {pageSummary({
-                          shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
-                          env: records.latest as unknown as PageEnvelope,
-                          noun: "records",
-                        })}
-                      </span>
-                      <span class="ms-auto flex items-center gap-1">
-                        <Show when={recordPage() > 1}>
-                          <button
-                            type="button"
-                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
-                            disabled={records.loading}
-                            onClick={() => setRecordPage((n) => Math.max(1, n - 1))}
-                          >
-                            Previous page
-                          </button>
-                        </Show>
-                        <Show when={records.latest!.hasMore}>
-                          <button
-                            type="button"
-                            class="px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
-                            disabled={records.loading}
-                            onClick={() => setRecordPage((n) => n + 1)}
-                          >
-                            {records.loading ? "Loading…" : "Next page"}
-                          </button>
-                        </Show>
-                      </span>
-                    </div>
+                    <IrisPager
+                      summary={pageSummary({
+                        shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
+                        env: records.latest as unknown as PageEnvelope,
+                        noun: "records",
+                      })}
+                      loading={records.loading}
+                      hasMore={records.latest!.hasMore}
+                      hasPrevious={recordPage() > 1}
+                      onPrevious={() => setRecordPage((n) => Math.max(1, n - 1))}
+                      onNext={() => setRecordPage((n) => n + 1)}
+                    />
                   </Match>
                 </Switch>
               </Match>
@@ -4129,6 +4121,12 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "heartbeats"}>
             <IrisHeartbeats doFetch={doFetch} />
+          </Match>
+          <Match when={pane() === "leads-crm"}>
+            <IrisLeads doFetch={doFetch} bloqId={activeBloq() != null ? Number(activeBloq()) : undefined} />
+          </Match>
+          <Match when={pane() === "reachr"}>
+            <IrisReachrReview doFetch={doFetch} />
           </Match>
           <Match when={pane() === "pulse-topic"}>
             <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
@@ -5185,35 +5183,22 @@ export function SessionIrisTab() {
         {/* No footer on the graph: it is never partial, so "39 of 39" and a dead Load more
             would both be noise. */}
         <Show when={view() === "rows" && pane() !== "graph" && !SELF_PANES.has(pane())}>
-          <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
-            <Show
-              when={pane() === "atlas"}
-              fallback={
-                <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
-                  {(text) => <span class="font-mono tabular-nums">{text()}</span>}
-                </Show>
-              }
-            >
-              <Show when={(current() as PageEnvelope | undefined)?.measured}>
-                <span class="font-mono tabular-nums">
-                  {atlasCountLine(rows() as AtlasList[], atlasRows(), {
-                    total: (current() as PageEnvelope | undefined)?.total ?? null,
-                    hasMore: !!(current() as PageEnvelope | undefined)?.hasMore,
-                  })}
-                </span>
-              </Show>
+          <IrisPager
+            class="px-2 py-2"
+            summary={pane() === "atlas" ? undefined : pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}
+            loading={data.loading}
+            hasMore={(current() as PageEnvelope | undefined)?.hasMore}
+            onNext={() => setPage((p) => p + 1)}
+          >
+            <Show when={pane() === "atlas" && (current() as PageEnvelope | undefined)?.measured}>
+              <span class="font-mono tabular-nums">
+                {atlasCountLine(rows() as AtlasList[], atlasRows(), {
+                  total: (current() as PageEnvelope | undefined)?.total ?? null,
+                  hasMore: !!(current() as PageEnvelope | undefined)?.hasMore,
+                })}
+              </span>
             </Show>
-            <Show when={(current() as PageEnvelope | undefined)?.hasMore}>
-              <button
-                type="button"
-                class="ms-auto px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
-                disabled={data.loading}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                {data.loading ? "Loading…" : "Load more"}
-              </button>
-            </Show>
-          </div>
+          </IrisPager>
         </Show>
       </div>
     </div>

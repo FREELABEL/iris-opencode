@@ -1484,6 +1484,13 @@ const ArtifactWhere = {
   dir: described(Schema.String, "The store folder on disk, for Reveal."),
 }
 
+const ReachrResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  // fl-api owns this shape; declaring it twice is how the Schema starts stripping new fields.
+  data: Schema.Unknown,
+}).annotate({ identifier: "IrisReachrResponse" })
+
 export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
@@ -1543,6 +1550,10 @@ export const IrisPaths = {
   pulseTopic: `${root}/pulse/topic`,
   pulseTopicStream: `${root}/pulse/topic/stream`,
   pulseContacts: `${root}/pulse/contacts`,
+  reachrBatches: `${root}/reachr/batches`,
+  reachrBatch: `${root}/reachr/batches/:batchID`,
+  reachrAction: `${root}/reachr/action`,
+  leadsApi: `${root}/leads-api`,
   pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
   runHandBack: `${root}/runs/:runID/hand-back`,
@@ -3381,6 +3392,38 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Pulse a topic, streamed stop by stop (read-only)",
           description:
             "#189319. Server-sent events: `start` {source,label} as Pulse reaches a stop (the route is sequential), `stop` {stop} as that stop's result lands, then `done` {data} with the same body /pulse/topic returns, or `error` {reason}.",
+        }),
+      ),
+      HttpApiEndpoint.get("reachrBatches", IrisPaths.reachrBatches, {
+        success: described(ReachrResponse, "The account's review batches"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.reachrBatches", summary: "List review batches" })),
+      HttpApiEndpoint.get("reachrBatch", IrisPaths.reachrBatch, {
+        params: { batchID: Schema.NumberFromString },
+        success: described(ReachrResponse, "One batch with the exact text of every message"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.reachrBatch", summary: "Read a review batch" })),
+      HttpApiEndpoint.post("leadsApi", IrisPaths.leadsApi, {
+        payload: Schema.Struct({
+          op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness"]),
+          leadId: Schema.optional(Schema.Number),
+          taskId: Schema.optional(Schema.Number),
+          query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+          body: Schema.optional(Schema.Unknown),
+        }),
+        success: described(ReachrResponse, "What fl-api answered"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.leadsApi", summary: "Search and manage leads" })),
+      HttpApiEndpoint.post("reachrAction", IrisPaths.reachrAction, {
+        payload: Schema.Struct({
+          action: Schema.Literals(["approve", "schedule", "stop", "edit", "hold", "release", "audit"]),
+          batchId: Schema.optional(Schema.Number),
+          messageId: Schema.optional(Schema.Number),
+          body: Schema.optional(Schema.Unknown),
+        }),
+        success: described(ReachrResponse, "What fl-api answered"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.reachrAction",
+          summary: "Decide on a batch or message",
+          description: "Approving records a decision and sends nothing. There is deliberately no send action here: a message only leaves through a schedule.",
         }),
       ),
       HttpApiEndpoint.get("pulseContacts", IrisPaths.pulseContacts, {
