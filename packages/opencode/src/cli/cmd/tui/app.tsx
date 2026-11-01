@@ -96,7 +96,13 @@ async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   })
 }
 
-export function tui(input: { url: string; args: Args; directory?: string; onExit?: () => Promise<void> }) {
+export function tui(input: {
+  url: string
+  headers?: Record<string, string>
+  args: Args
+  directory?: string
+  onExit?: () => Promise<void>
+}) {
   // promise to prevent immediate exit
   return new Promise<void>(async (resolve) => {
     const mode = await getTerminalBackgroundColor()
@@ -116,7 +122,7 @@ export function tui(input: { url: string; args: Args; directory?: string; onExit
                 <KVProvider>
                   <ToastProvider>
                     <RouteProvider>
-                      <SDKProvider url={input.url} directory={input.directory}>
+                      <SDKProvider url={input.url} headers={input.headers} directory={input.directory}>
                         <SyncProvider>
                           <ThemeProvider mode={mode}>
                             <LocalProvider>
@@ -448,7 +454,7 @@ function App() {
       title: "Open WebUI",
       value: "webui.open",
       onSelect: () => {
-        open(sdk.url).catch(() => {})
+        open(sdk.webUrl).catch(() => {})
         dialog.clear()
       },
       category: "System",

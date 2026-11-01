@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { type Config } from "./gen/types.gen.js"
 
 export type ServerOptions = {
@@ -31,10 +32,14 @@ export async function createOpencodeServer(options?: ServerOptions) {
   const args = [`serve`, `--hostname=${options.hostname}`, `--port=${options.port}`]
   if (options.config?.logLevel) args.push(`--log-level=${options.config.logLevel}`)
 
+  // The server requires a password (#192113). The caller keeps it to build its client, and an
+  // older server that does not ask for one ignores it.
+  const password = process.env.OPENCODE_SERVER_PASSWORD || randomBytes(32).toString("base64url")
   const proc = spawn(`opencode`, args, {
     signal: options.signal,
     env: {
       ...process.env,
+      OPENCODE_SERVER_PASSWORD: password,
       OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
     },
   })
@@ -84,6 +89,7 @@ export async function createOpencodeServer(options?: ServerOptions) {
 
   return {
     url,
+    headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` },
     close() {
       proc.kill()
     },

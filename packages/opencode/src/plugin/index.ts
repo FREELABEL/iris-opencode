@@ -17,7 +17,7 @@ export namespace Plugin {
     const client = createOpencodeClient({
       baseUrl: "http://localhost:4096",
       // @ts-ignore - fetch type incompatibility
-      fetch: async (...args) => Server.App().fetch(...args),
+      fetch: async (...args) => Server.internalFetch(...args),
     })
     const config = await Config.get()
     const hooks = []

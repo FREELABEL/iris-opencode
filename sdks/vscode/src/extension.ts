@@ -2,8 +2,15 @@
 export function deactivate() {}
 
 import * as vscode from "vscode"
+import { randomBytes } from "node:crypto"
 
 const TERMINAL_NAME = "opencode"
+
+// The server requires a password since #192113. This extension starts it, so this extension picks
+// it, per terminal. Basic auth, username `opencode`.
+function authorization(password: string) {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
+}
 
 export function activate(context: vscode.ExtensionContext) {
   let openNewTerminalDisposable = vscode.commands.registerCommand("opencode.openNewTerminal", async () => {
@@ -35,7 +42,9 @@ export function activate(context: vscode.ExtensionContext) {
     if (terminal.name === TERMINAL_NAME) {
       // @ts-ignore
       const port = terminal.creationOptions.env?.["_EXTENSION_OPENCODE_PORT"]
-      port ? await appendPrompt(parseInt(port), fileRef) : terminal.sendText(fileRef, false)
+      // @ts-ignore
+      const password = terminal.creationOptions.env?.["OPENCODE_SERVER_PASSWORD"]
+      port ? await appendPrompt(parseInt(port), fileRef, password) : terminal.sendText(fileRef, false)
       terminal.show()
     }
   })
@@ -45,6 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
   async function openTerminal() {
     // Create a new terminal in split screen
     const port = Math.floor(Math.random() * (65535 - 16384 + 1)) + 16384
+    const password = randomBytes(32).toString("base64url")
     const terminal = vscode.window.createTerminal({
       name: TERMINAL_NAME,
       iconPath: {
@@ -58,6 +68,7 @@ export function activate(context: vscode.ExtensionContext) {
       env: {
         _EXTENSION_OPENCODE_PORT: port.toString(),
         OPENCODE_CALLER: "vscode",
+        OPENCODE_SERVER_PASSWORD: password,
       },
     })
 
@@ -75,7 +86,7 @@ export function activate(context: vscode.ExtensionContext) {
     do {
       await new Promise((resolve) => setTimeout(resolve, 200))
       try {
-        await fetch(`http://localhost:${port}/app`)
+        await fetch(`http://localhost:${port}/app`, { headers: { Authorization: authorization(password) } })
         connected = true
         break
       } catch (e) {}
@@ -85,16 +96,17 @@ export function activate(context: vscode.ExtensionContext) {
 
     // If connected, append the prompt to the terminal
     if (connected) {
-      await appendPrompt(port, `In ${fileRef}`)
+      await appendPrompt(port, `In ${fileRef}`, password)
       terminal.show()
     }
   }
 
-  async function appendPrompt(port: number, text: string) {
+  async function appendPrompt(port: number, text: string, password?: string) {
     await fetch(`http://localhost:${port}/tui/append-prompt`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(password ? { Authorization: authorization(password) } : {}),
       },
       body: JSON.stringify({ text }),
     })

@@ -54,6 +54,8 @@ import { PermissionNext } from "@/permission/next"
 import { Installation } from "@/installation"
 import { MDNS } from "./mdns"
 import { Worktree } from "../worktree"
+import { LocalAuth } from "./local-auth"
+import { Egress } from "@/permission/egress"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -68,14 +70,10 @@ export namespace Server {
    * Who may make a cross-origin request to this server.
    *
    * This is the only thing standing between a page the user happens to visit and their sessions.
-   * The server binds 127.0.0.1, so a remote host cannot reach it — but a browser on this machine
-   * can, and `/session` answers without credentials. What stops a write is that an unknown origin
-   * gets NO `Access-Control-Allow-Origin` back, so the preflight fails and the browser never
-   * sends the POST. (A no-preflight `text/plain` POST is separately rejected 415.)
-   *
-   * A real control resting on one returned value, so it is a named function with tests rather
-   * than an inline closure: an edit that returned `input` unconditionally would open every
-   * session on the machine to any page, and nothing would have failed.
+   * Since #192113 the token and the Host check are what stop a stranger. This list decides which
+   * pages may hold a browser conversation at all: an unknown origin is refused outright, and gets
+   * NO `Access-Control-Allow-Origin` back. A named function with tests rather than an inline
+   * closure, because an edit returning `input` unconditionally would fail nothing else.
    *
    * Returning undefined = refuse.
    */
@@ -102,6 +100,23 @@ export namespace Server {
   // microphone reachable from the LAN. Recorded at listen() rather than checked per-request
   // because Bun's per-connection IP is not threaded through Hono's fetch here.
   let _boundHostname = "127.0.0.1"
+  // Set by listen(). Undefined means no socket is open in this process, so nothing can reach the
+  // app except this process's own in-memory calls.
+  let _credentials: LocalAuth.Credentials | undefined
+  let _allowedHosts = new Set<string>()
+
+  /** Headers for a client in this process talking to the socket it just opened. */
+  export function authHeaders(): Record<string, string> | undefined {
+    return _credentials ? { Authorization: LocalAuth.basicHeader(_credentials) } : undefined
+  }
+
+  /** In-memory access to the app for this process's own clients (the plugin SDK client). */
+  export function internalFetch(input: RequestInfo | URL, init?: RequestInit) {
+    const request = new Request(input, init)
+    if (_credentials && !request.headers.has("authorization"))
+      request.headers.set("authorization", LocalAuth.basicHeader(_credentials))
+    return App().fetch(request)
+  }
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -113,6 +128,61 @@ export namespace Server {
   }
 
   const app = new Hono()
+
+  // #192113. On `app` itself and ahead of every route: a route registered before a middleware (the
+  // /iris front door below) would otherwise answer without it.
+  //
+  // Before CORS, so a preflight from a rebound name is refused too.
+  app.use(async (c, next) => {
+    if (!_credentials) return next()
+    const host = c.req.header("host")
+    if (!LocalAuth.hostAllowed(host, _allowedHosts)) {
+      return c.text(
+        `Host not allowed. To reach this server by another name, start it with ${LocalAuth.ALLOWED_HOSTS_ENV}.`,
+        403,
+      )
+    }
+    // CORS stops a page reading the answer, not a websocket or a simple POST from being sent.
+    const origin = c.req.header("origin")
+    if (origin && !corsOrigin(origin, _corsWhitelist) && !LocalAuth.sameOrigin(origin, host)) {
+      return c.text("Origin not allowed.", 403)
+    }
+    return next()
+  })
+  app.use(
+    cors({
+      origin: (input) => corsOrigin(input, _corsWhitelist),
+    }),
+  )
+  // After CORS: a preflight carries no credentials, and a 401 must be readable.
+  app.use(async (c, next) => {
+    if (!_credentials) return next()
+    const verdict = LocalAuth.authorize(
+      {
+        authorization: c.req.header("authorization"),
+        cookie: c.req.header("cookie"),
+        authToken: c.req.query("auth_token"),
+        origin: c.req.header("origin"),
+        host: c.req.header("host"),
+      },
+      _credentials,
+    )
+    // Open, and says nothing else. A caller with the token still gets the version.
+    if (c.req.path === "/health" || (c.req.path === "/global/health" && !verdict.ok)) {
+      return c.json({ healthy: true })
+    }
+    if (!verdict.ok) {
+      // A native credentials prompt only where it helps: never on a page's own fetch.
+      const mode = c.req.header("sec-fetch-mode")
+      if (mode === undefined || mode === "navigate") c.header("WWW-Authenticate", 'Basic realm="IRIS"')
+      return c.json({ name: "Unauthorized", data: { message: LocalAuth.UNAUTHORIZED_MESSAGE } }, 401)
+    }
+    await next()
+    // `iris web` opens /iris?auth_token=…; the pages after it have only a cookie to show.
+    if (verdict.via === "query" && c.req.method === "GET" && !c.req.header("upgrade")) {
+      c.res.headers.append("set-cookie", LocalAuth.sessionCookie(c.req.header("host"), _credentials))
+    }
+  })
 
 /**
  * THE FRONT DOOR (#181991).
@@ -275,11 +345,6 @@ iris traces          what your agents did</pre>
           timer.stop()
         }
       })
-      .use(
-        cors({
-          origin: (input) => corsOrigin(input, _corsWhitelist),
-        }),
-      )
       .get(
         "/global/health",
         describeRoute({
@@ -330,6 +395,8 @@ iris traces          what your agents did</pre>
         async (c) => {
           log.info("global event connected")
           return streamSSE(c, async (stream) => {
+            const releaseEventClient = Egress.eventClientConnected()
+            stream.onAbort(releaseEventClient)
             stream.writeSSE({
               data: JSON.stringify({
                 payload: {
@@ -2980,6 +3047,8 @@ iris traces          what your agents did</pre>
         async (c) => {
           log.info("event connected")
           return streamSSE(c, async (stream) => {
+            const releaseEventClient = Egress.eventClientConnected()
+            stream.onAbort(releaseEventClient)
             stream.writeSSE({
               data: JSON.stringify({
                 type: "server.connected",
@@ -3046,6 +3115,7 @@ iris traces          what your agents did</pre>
   export function listen(opts: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     _corsWhitelist = opts.cors ?? []
     _boundHostname = opts.hostname
+    const credentials = LocalAuth.resolve({ hostname: opts.hostname })
 
     const args = {
       hostname: opts.hostname,
@@ -3064,6 +3134,13 @@ iris traces          what your agents did</pre>
     if (!server) throw new Error(`Failed to start server on port ${opts.port}`)
 
     _url = server.url
+    _credentials = credentials
+    _allowedHosts = LocalAuth.allowedHosts({ hostname: opts.hostname })
+    const port = server.port!
+    LocalAuth.writeRecord({ port, hostname: opts.hostname, credentials })
+    Egress.serverListening(true)
+    const removeRecord = () => LocalAuth.removeRecord(port)
+    process.once("exit", removeRecord)
 
     const shouldPublishMDNS =
       opts.mdns &&
@@ -3080,6 +3157,9 @@ iris traces          what your agents did</pre>
     const originalStop = server.stop.bind(server)
     server.stop = async (closeActiveConnections?: boolean) => {
       if (shouldPublishMDNS) MDNS.unpublish()
+      process.off("exit", removeRecord)
+      removeRecord()
+      Egress.serverListening(false)
       return originalStop(closeActiveConnections)
     }
 
