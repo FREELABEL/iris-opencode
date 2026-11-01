@@ -60,6 +60,15 @@ export function make(input: Partial<Interface> = {}): Interface {
   }
 }
 
+async function makePrivate(data: string, log: string) {
+  const files = await fs.promises.readdir(log).catch(() => [] as string[])
+  await Promise.all([
+    fs.promises.chmod(data, 0o700).catch(() => {}),
+    fs.promises.chmod(log, 0o700).catch(() => {}),
+    ...files.map((file) => fs.promises.chmod(path.join(log, file), 0o600).catch(() => {})),
+  ])
+}
+
 const acquire = (input: Partial<Interface>) =>
   Effect.gen(function* () {
     const service = Service.of(make(input))
@@ -70,6 +79,9 @@ const acquire = (input: Partial<Interface>) =>
         ),
       ),
     )
+    // Prompts and command output land under data and log (#192119). chmod as well as mkdir, because an
+    // existing install already has these open to other users, and mkdir leaves an existing mode alone.
+    yield* Effect.promise(() => makePrivate(service.data, service.log))
     const canonicalTmp = yield* Effect.promise(() => fs.promises.realpath(service.tmp))
     return Service.of({ ...service, tmp: input.tmp ?? canonicalTmp })
   })
