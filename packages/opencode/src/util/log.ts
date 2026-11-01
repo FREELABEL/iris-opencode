@@ -63,6 +63,9 @@ export namespace Log {
       Global.Path.log,
       options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
     )
+    // Created private, and logs left by earlier versions tightened (#192119).
+    await fs.open(logpath, "a", 0o600).then((handle) => handle.close()).catch(() => {})
+    await tighten(Global.Path.log)
     const logfile = Bun.file(logpath)
     await fs.truncate(logpath).catch(() => {})
     const writer = logfile.writer()
@@ -71,6 +74,11 @@ export namespace Log {
       writer.flush()
       return num
     }
+  }
+
+  async function tighten(dir: string) {
+    const files = await fs.readdir(dir).catch(() => [] as string[])
+    await Promise.all(files.map((file) => fs.chmod(path.join(dir, file), 0o600).catch(() => {})))
   }
 
   async function cleanup(dir: string) {
