@@ -106,7 +106,7 @@ const newId = () => `op_${Date.now().toString(36)}_${Math.random().toString(36).
 /** One field's value in one comparable form: fl-api answers a date as a timestamp, the editor sends YYYY-MM-DD. */
 export function norm(field: string, v: unknown): unknown {
   if (v === undefined || v === "" ) return null
-  if (field === "due_date") return typeof v === "string" ? v.slice(0, 10) : v
+  if (field === "due_date" || field === "start_date") return typeof v === "string" ? v.slice(0, 10) : v
   if (field === "bloq_list_id") return v === null ? null : Number(v)
   return v
 }
@@ -118,6 +118,7 @@ function wireOf(item: AtlasItem, listId: number): Data {
     status: item.status ?? null,
     priority: item.priority ?? null,
     card_type: item.cardType ?? null,
+    start_date: norm("start_date", item.startDate),
     due_date: norm("due_date", item.dueDate),
     bloq_list_id: listId,
   }
@@ -321,6 +322,7 @@ export function overlay(userId: number, bloqId: number, lists: readonly AtlasLis
     if (typeof p.status === "string") item.status = p.status
     if (p.priority !== undefined) item.priority = (p.priority as string | null) ?? undefined
     if (p.card_type !== undefined) item.cardType = (p.card_type as string | null) ?? undefined
+    if (p.start_date !== undefined) item.startDate = (p.start_date as string | null) ?? undefined
     if (p.due_date !== undefined) item.dueDate = (p.due_date as string | null) ?? undefined
     if (p.bloq_list_id !== undefined && Number(p.bloq_list_id) !== at.l.id) {
       const to = out.find((x) => x.id === Number(p.bloq_list_id))
@@ -338,7 +340,7 @@ export function overlay(userId: number, bloqId: number, lists: readonly AtlasLis
  * so a card reopened after an offline edit shows the edit, not the copy from before it.
  * `content` is the whole body: a waiting save carries the whole body, never a part of it.
  */
-export function overlayCard<C extends { title: string; content?: string; status?: string; priority?: string; cardType?: string; dueDate?: string; listId?: number }>(
+export function overlayCard<C extends { title: string; content?: string; status?: string; priority?: string; cardType?: string; startDate?: string; dueDate?: string; listId?: number }>(
   userId: number,
   itemId: number,
   card: C,
@@ -357,6 +359,7 @@ export function overlayCard<C extends { title: string; content?: string; status?
     if (typeof p.status === "string") out.status = p.status
     if (p.priority !== undefined) out.priority = (p.priority as string | null) ?? undefined
     if (p.card_type !== undefined) out.cardType = (p.card_type as string | null) ?? undefined
+    if (p.start_date !== undefined) out.startDate = (p.start_date as string | null) ?? undefined
     if (p.due_date !== undefined) out.dueDate = (p.due_date as string | null) ?? undefined
     if (p.bloq_list_id !== undefined) out.listId = Number(p.bloq_list_id)
   }
@@ -540,6 +543,7 @@ const FIELD_NAMES: Record<string, string> = {
   status: "status",
   priority: "priority",
   card_type: "type",
+  start_date: "start date",
   due_date: "due date",
   bloq_list_id: "list",
 }

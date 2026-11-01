@@ -364,7 +364,7 @@ export function keepUnchanged<L extends AtlasViewList>(prev: L[] | undefined, ne
  * dragging it. Layout is stored apart from the filters on purpose: "reset" clears what you are
  * filtering by, not how you like to look at the board.
  */
-export type AtlasLayout = "list" | "board"
+export type AtlasLayout = "list" | "board" | "timeline"
 /*
  * BOARD FIRST (Alex, 2026-10-19): Board is the primary view and the first tab; List is the
  * secondary one. Only a choice of List is stored now — before this, only Board was, so someone
@@ -373,9 +373,11 @@ export type AtlasLayout = "list" | "board"
 export const ATLAS_LAYOUTS: { id: AtlasLayout; label: string }[] = [
   { id: "board", label: "Board" },
   { id: "list", label: "List" },
+  { id: "timeline", label: "Timeline" },
 ]
 export const ATLAS_LAYOUT_DEFAULT: AtlasLayout = "board"
-export const readAtlasLayout = (raw: string | null | undefined): AtlasLayout => (raw === "list" ? "list" : "board")
+export const readAtlasLayout = (raw: string | null | undefined): AtlasLayout =>
+  raw === "list" || raw === "timeline" ? raw : "board"
 
 /**
  * Where a dragged card lands. `beforeId` is the card it was dropped onto (it goes in front of
@@ -450,7 +452,7 @@ export type DueState = "overdue" | "soon" | "later"
  * that is the previous evening anywhere west of UTC, so a card due today turns overdue before
  * the day starts. Midnight-UTC is treated as the date it names.
  */
-const asDate = (due: string) => (/^\d{4}-\d{2}-\d{2}T00:00:00(\.0+)?Z$/.test(due) ? due.slice(0, 10) : due)
+export const asDate = (due: string) => (/^\d{4}-\d{2}-\d{2}T00:00:00(\.0+)?Z$/.test(due) ? due.slice(0, 10) : due)
 export function dueState(rawDue: string | undefined, now: number): DueState | undefined {
   if (!rawDue) return undefined
   const due = asDate(rawDue)
@@ -491,6 +493,7 @@ export type QuickField = "status" | "priority" | "due" | "labels"
 export interface QuickPatch {
   status?: string
   priority?: string | null
+  startDate?: string | null
   dueDate?: string | null
   labels?: string[]
 }
@@ -516,6 +519,7 @@ export function applyFaceEdits<I extends AtlasViewItem, L extends AtlasViewList<
         const next: any = { ...item }
         if (p.status !== undefined) next.status = p.status
         if (p.priority !== undefined) next.priority = p.priority ?? undefined
+        if (p.startDate !== undefined) next.startDate = p.startDate ?? undefined
         if (p.dueDate !== undefined) next.dueDate = p.dueDate ?? undefined
         if (p.labels !== undefined) next.labels = p.labels
         return next as I

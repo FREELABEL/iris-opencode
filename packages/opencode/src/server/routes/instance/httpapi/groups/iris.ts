@@ -73,6 +73,7 @@ export const AtlasItem = Schema.Struct({
   ),
   createdAt: Schema.optional(described(Schema.String, "ISO timestamp the item was created.")),
   updatedAt: Schema.optional(described(Schema.String, "ISO timestamp the item was last edited.")),
+  startDate: Schema.optional(described(Schema.String, "Start date as fl-api stores it.")),
   dueDate: Schema.optional(described(Schema.String, "Due date as fl-api stores it (#189806).")),
   priority: Schema.optional(Schema.String),
   cardType: Schema.optional(Schema.String),
@@ -2541,6 +2542,7 @@ export const IrisApi = HttpApi.make("iris").add(
             ),
             priority: Schema.optional(Schema.String),
             status: Schema.optional(Schema.String),
+            startDate: described(Schema.optional(Schema.String), "YYYY-MM-DD"),
             dueDate: described(Schema.optional(Schema.String), "YYYY-MM-DD"),
             listId: Schema.optional(Schema.Finite),
             listName: Schema.optional(Schema.String),
@@ -2590,6 +2592,7 @@ export const IrisApi = HttpApi.make("iris").add(
           status: Schema.optional(Schema.String),
           priority: Schema.optional(Schema.NullOr(Schema.String)),
           cardType: Schema.optional(Schema.NullOr(Schema.String)),
+          startDate: described(Schema.optional(Schema.NullOr(Schema.String)), "YYYY-MM-DD, or null to clear"),
           dueDate: described(Schema.optional(Schema.NullOr(Schema.String)), "YYYY-MM-DD, or null to clear"),
           listId: described(Schema.optional(Schema.Finite), "Move the item to this list on the same board"),
           base: described(

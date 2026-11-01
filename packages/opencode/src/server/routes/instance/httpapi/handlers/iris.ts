@@ -478,6 +478,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           status?: string
           priority?: string | null
           cardType?: string | null
+          startDate?: string | null
           dueDate?: string | null
           listId?: number
         }

@@ -10,6 +10,7 @@ import { For, Show } from "solid-js"
 import { dueLabel, dueState, initials } from "./iris-atlas-view"
 
 export interface CardFace {
+  startDate?: string
   dueDate?: string
   priority?: string
   labels?: string[]

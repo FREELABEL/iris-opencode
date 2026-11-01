@@ -854,6 +854,212 @@
 
 /* Atlas › Lists (#189764). A list folds by its header; an empty one starts folded, so it costs
    one line instead of a section. */
+/* TIMELINE. Only cards with a start or due date are drawn. */
+.iris-atlas-tl {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  --tl-plan: #6366f1;
+}
+.iris-atlas-tl__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 8px;
+  font-size: 11px;
+}
+.iris-atlas-tl__undated {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 22px;
+  padding: 0 8px 0 22px;
+  color: var(--text-weak);
+  cursor: pointer;
+  position: sticky;
+  left: 0;
+}
+.iris-atlas-tl__undated:hover {
+  color: var(--text-base);
+}
+.iris-atlas-tl__track--open {
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.iris-atlas-tl__ghost {
+  position: absolute;
+  top: 6px;
+  height: 14px;
+  min-width: 6px;
+  border-radius: 4px;
+  border: 1px dashed var(--tl-plan);
+  pointer-events: none;
+}
+.iris-atlas-tl__date {
+  position: absolute;
+  top: 5px;
+  z-index: 1;
+  padding-inline-start: 6px;
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--text-base);
+  pointer-events: none;
+}
+.iris-atlas-tl__grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.iris-atlas-tl__grip[data-edge="start"] {
+  left: 0;
+}
+.iris-atlas-tl__grip[data-edge="end"] {
+  right: 0;
+}
+.iris-atlas-tl__note {
+  color: var(--text-weaker);
+}
+.iris-atlas-tl__scroll {
+  overflow: auto;
+  max-height: calc(100vh - 220px);
+  border-top: 1px solid var(--border-weaker-base);
+}
+.iris-atlas-tl__inner {
+  min-width: 100%;
+}
+.iris-atlas-tl__head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  height: 24px;
+  background: var(--background-stronger);
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-atlas-tl__corner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  background: var(--background-stronger);
+}
+.iris-atlas-tl__dates {
+  position: relative;
+  flex-shrink: 0;
+}
+.iris-atlas-tl__dates span {
+  position: absolute;
+  top: 5px;
+  padding-inline-start: 3px;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--text-weaker);
+}
+.iris-atlas-tl__dates .iris-atlas-tl__tick--today {
+  color: #ef4444;
+  font-weight: 600;
+}
+.iris-atlas-tl__group {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--background-stronger);
+}
+.iris-atlas-tl__row {
+  display: flex;
+  height: 26px;
+}
+.iris-atlas-tl__name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex-shrink: 0;
+  appearance: none;
+  border: 0;
+  background: var(--background-stronger);
+  font: inherit;
+  font-size: 12px;
+  line-height: 26px;
+  padding: 0 8px 0 22px;
+  text-align: start;
+  color: var(--text-base);
+  cursor: pointer;
+}
+.iris-atlas-tl__name:hover {
+  color: var(--text-strong);
+}
+.iris-atlas-tl__track {
+  position: relative;
+  flex-shrink: 0;
+}
+.iris-atlas-tl__row:hover .iris-atlas-tl__track {
+  background: var(--background-element);
+}
+.iris-atlas-tl__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.iris-atlas-tl__line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-weaker-base);
+  opacity: 0.45;
+}
+.iris-atlas-tl__line--major {
+  opacity: 1;
+}
+.iris-atlas-tl__today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ef4444;
+}
+.iris-atlas-tl__bar {
+  position: absolute;
+  top: 6px;
+  height: 14px;
+  min-width: 6px;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  background: var(--tl-plan);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.iris-atlas-tl--dragging,
+.iris-atlas-tl--dragging * {
+  cursor: grabbing;
+}
+.iris-atlas-tl__bar:hover,
+.iris-atlas-tl__bar:focus-visible {
+  outline: 1px solid var(--text-strong);
+  outline-offset: 1px;
+}
+.iris-atlas-tl__bar[data-state="overdue"] {
+  background: #ef4444;
+}
+.iris-atlas-tl__bar[data-state="soon"] {
+  background: #f59e0b;
+}
+.iris-atlas-tl__bar[data-state="done"] {
+  background: var(--text-weaker);
+  opacity: 0.55;
+}
+
 .iris-atlas-list {
   margin-bottom: 16px;
 }
