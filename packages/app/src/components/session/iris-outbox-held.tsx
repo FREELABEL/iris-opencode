@@ -31,6 +31,7 @@ const FIELD_LABEL: Record<string, string> = {
   status: "Status",
   priority: "Priority",
   card_type: "Type",
+  start_date: "Start",
   due_date: "Due",
   bloq_list_id: "List",
 }
@@ -38,7 +39,7 @@ const FIELD_LABEL: Record<string, string> = {
 /** One field's value as words. A body is cut to its start; an empty value says so rather than showing nothing. */
 export function heldValue(field: string, v: unknown, listName?: (id: number) => string | undefined): string {
   if (v === null || v === undefined || v === "") return "(empty)"
-  if (field === "due_date" && typeof v === "string") return v.slice(0, 10)
+  if ((field === "due_date" || field === "start_date") && typeof v === "string") return v.slice(0, 10)
   if (field === "bloq_list_id") return listName?.(Number(v)) ?? `list ${v}`
   if (field === "status" && typeof v === "string") return v.replace(/_/g, " ")
   const s = typeof v === "string" ? v : JSON.stringify(v)
