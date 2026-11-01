@@ -59,7 +59,7 @@ iris hive models serve on
 
 This does two things:
 - Switches on a small endpoint in the Hive daemon on this machine (`~/.iris/inference.json`).
-- Opens a Hive relay tunnel to it (`https://<machine>-ai.t.heyiris.io`).
+- Opens a Hive relay tunnel to it (`https://<machine>-ai.hivemesh.net`; `serve on` prints the exact address).
 
 The URL is public, but the endpoint answers **only** requests IRIS signed for *your* account,
 for one model, once. Nobody else's requests reach your machine. Options:
@@ -89,7 +89,8 @@ from first, and fails over to the next one if it is busy or asleep.
 
 ## Verify
 
-- `iris hive models` shows `● hive/<model> … serving`.
+- `iris hive models` shows `● hive/<model> … serving · checked 12s ago`. IRIS tests the path through
+  the tunnel to get that word, so it is not just the machine's own report. The answer can be up to 30 s old.
 - The `curl` above streams tokens.
 - `iris usage` shows the calls at $0.
 
@@ -101,6 +102,14 @@ from first, and fails over to the next one if it is busy or asleep.
 | "not served" | Serving is off on that machine | `iris hive models serve on` there |
 | "no tunnel URL yet" | The tunnel did not open | Run `serve on` again and read the error; the first certificate takes ~30 s |
 | "report is stale" / "machine offline" | The machine is asleep, or its daemon is down | Wake it; `iris hive doctor` |
+| `tunnel_down` | The relay is up, but this machine's tunnel is not connected to it | On that machine: `iris hive models serve off`, then `serve on` with the options you use |
+| `tls_failed` | The machine's certificate was refused | Read the detail in the message; the certificate is in `~/.iris/tunnels/<name>/` |
+| `endpoint_down` | The tunnel works, but nothing answers behind it | Check the IRIS daemon is running there; `iris hive doctor` |
+| `model_server_down` | The tunnel and daemon work, but the model server does not | Start it there (`ollama serve`) |
+| `relay_unreachable` | The relay itself did not answer | Not something the machine can fix; try again shortly |
+| `timeout` / `slow` | The machine did not confirm in time; it may be busy | The model may still answer: try it, or use a smaller model |
+| "reported by the machine, not tested" | The server could not run the check | Run `iris hive models` again; if it stays, update the CLI |
+| HTTP 424 `hive_unreachable` | A request was refused because the machine cannot be reached. The message names which of the above it is | Fix that. Nothing was sent to a cloud model |
 | 429 "your machine is busy" | It is already running `max_concurrent` requests | Wait, or raise `--max-concurrent` |
 | 401 from your machine | Its daemon predates serving, or its node key changed | Update the Hive daemon on it |
 | Very slow answers | A large model on a CPU | Use a smaller model (e.g. 7-8B), or a machine with a GPU |

@@ -7,6 +7,7 @@ import { inventoryFromNodes } from "./hive-inventory"
  */
 const NOW = Date.parse("2026-10-31T05:15:00+00:00")
 const SERVER = {
+  id: 1,
   name: "server",
   connection_status: "online",
   max_concurrent: 3,
@@ -40,7 +41,8 @@ const OFFLINE = {
 }
 
 describe("inventoryFromNodes", () => {
-  const { nodes, summary } = inventoryFromNodes([SERVER, OFFLINE], NOW)
+  const checks = [{ node_id: "1", state: "ok", ok: true, reason: "Reachable", checked_at: null, model_server_tested: true }]
+  const { nodes, summary } = inventoryFromNodes([SERVER, OFFLINE], NOW, checks)
   const server = nodes.find((n) => n.name === "server")!
   const laptop = nodes.find((n) => n.name === "laptop")!
 
@@ -70,7 +72,12 @@ describe("inventoryFromNodes", () => {
 
   test("a stale inference report does not count as serving", () => {
     const stale = { ...SERVER, inference: { ...SERVER.inference, updated_at: "2026-10-31T04:00:00+00:00" } }
-    expect(inventoryFromNodes([stale], NOW).nodes[0].models_serving).toEqual([])
+    expect(inventoryFromNodes([stale], NOW, checks).nodes[0].models_serving).toEqual([])
+  })
+
+  test("a machine's report with no check through its tunnel does not count as serving (#192146)", () => {
+    expect(inventoryFromNodes([SERVER], NOW).nodes[0].models_serving).toEqual([])
+    expect(inventoryFromNodes([SERVER], NOW, [{ ...checks[0], state: "tunnel_down", ok: false }]).nodes[0].models_serving).toEqual([])
   })
 
   test("no GPU, an unreported GPU and a real GPU are three different answers", () => {
