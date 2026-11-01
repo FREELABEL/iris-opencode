@@ -37,6 +37,11 @@ export function pageSummary(input: { shown: number; env?: PageEnvelope; noun?: s
   return `${input.shown} of ${e.total}${n}`
 }
 
+/** The same contract for an fl-api list a pane reads directly, from Laravel's paginator numbers. */
+export function envelopeOf(p: { page: number; perPage: number; total: number; lastPage: number }): PageEnvelope {
+  return { measured: true, page: p.page, perPage: p.perPage, total: p.total, totalIsExact: true, hasMore: p.page < p.lastPage }
+}
+
 export function createPagedSurface(reset: () => unknown) {
   const [page, setPage] = createSignal(1)
 

@@ -5071,3 +5071,101 @@ export async function fetchPlaybooks(
 
   return { measured: loaded.measured, reason: loaded.reason, data: { playbooks } }
 }
+
+// ─── Reachr Review (#191990) ─────────────────────────────────────────────────
+
+export type ReachrAction = {
+  action: "approve" | "schedule" | "stop" | "edit" | "hold" | "release" | "audit"
+  batchId?: number
+  messageId?: number
+  body?: unknown
+}
+
+async function reachrCall(path: string, init?: RequestInit): Promise<PlatformResult<unknown>> {
+  try {
+    const res = await irisFetch(`/api/v1/outreach/${path}`, FL_API, init)
+    const j = (await res.json().catch(() => null)) as any
+    if (!res.ok) return { measured: false, reason: j?.error ?? j?.message ?? `fl-api ${res.status}`, data: null }
+    return { measured: true, data: j?.data ?? null }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+export const fetchReachrBatches = () => reachrCall("batches")
+export const fetchReachrBatch = (id: number) => reachrCall(`batches/${id}`)
+
+/** The only writes this panel can make. Sending isn't one: a message only leaves through a schedule. */
+export async function runReachrAction(a: ReachrAction): Promise<PlatformResult<unknown>> {
+  const json = (method: string) => ({ method, body: JSON.stringify(a.body ?? {}) })
+  const needs = a.action === "edit" || a.action === "hold" || a.action === "release" ? a.messageId : a.batchId
+  if (!needs) return { measured: false, reason: `${a.action} needs an id`, data: null }
+  switch (a.action) {
+    case "approve":
+    case "schedule":
+    case "stop":
+      return reachrCall(`batches/${a.batchId}/${a.action}`, json("POST"))
+    case "audit":
+      return reachrCall(`batches/${a.batchId}/audit`)
+    case "edit":
+      return reachrCall(`messages/${a.messageId}/text`, json("PUT"))
+    case "hold":
+    case "release":
+      return reachrCall(`messages/${a.messageId}/${a.action}`, json("POST"))
+  }
+}
+
+// ─── Leads, the way ELON works them (#190553) ────────────────────────────────
+
+export type LeadsOp = {
+  op: "list" | "get" | "meta" | "update" | "addNote" | "tasks" | "addTask" | "saveTask" | "messages" | "steps" | "readiness"
+  leadId?: number
+  taskId?: number
+  query?: Record<string, string>
+  body?: unknown
+}
+
+/** fl-api's own answer, whole: the list needs its meta, which reachrCall's `data` would drop. */
+async function leadsCall(path: string, init?: RequestInit): Promise<PlatformResult<unknown>> {
+  try {
+    const res = await irisFetch(path, FL_API, init)
+    const j = (await res.json().catch(() => null)) as any
+    if (!res.ok) return { measured: false, reason: j?.error ?? j?.message ?? `fl-api ${res.status}`, data: null }
+    return { measured: true, data: j }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
+  const send = (method: string) => ({ method, body: JSON.stringify(a.body ?? {}) })
+  const lead = `/api/v1/leads/${a.leadId}`
+  if (a.op !== "list" && a.op !== "meta" && !a.leadId) return { measured: false, reason: `${a.op} needs a lead`, data: null }
+  switch (a.op) {
+    case "list": {
+      const userId = await resolveUserId()
+      if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: null }
+      return leadsCall(`/api/v1/users/${userId}/leads?${new URLSearchParams(a.query ?? {})}`)
+    }
+    case "meta":
+      return leadsCall(`/api/v1/leads/filter-metadata?${new URLSearchParams(a.query ?? {})}`)
+    case "get":
+      return leadsCall(lead)
+    case "update":
+      return leadsCall(lead, send("PUT"))
+    case "addNote":
+      return leadsCall(`${lead}/notes`, send("POST"))
+    case "tasks":
+      return leadsCall(`${lead}/tasks`)
+    case "addTask":
+      return leadsCall(`${lead}/tasks`, send("POST"))
+    case "saveTask":
+      return a.taskId ? leadsCall(`${lead}/tasks/${a.taskId}`, send("PUT")) : { measured: false, reason: "saveTask needs a task", data: null }
+    case "messages":
+      return leadsCall(`${lead}/messages`)
+    case "steps":
+      return leadsCall(`${lead}/outreach-steps`)
+    case "readiness":
+      return leadsCall(`${lead}/readiness`)
+  }
+}
