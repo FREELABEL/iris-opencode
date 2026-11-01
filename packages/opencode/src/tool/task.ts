@@ -1,4 +1,5 @@
 import * as Tool from "./tool"
+import { Egress } from "@/permission/egress"
 import DESCRIPTION from "./task.txt"
 import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -178,6 +179,17 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
+      // A subagent pinned to its own model takes this session's context to it (#192114). A normal
+      // session carries on; a local or private one is asked first.
+      const parentUrl = (ctx.extra?.model as { api?: { url?: string } } | undefined)?.api?.url
+      if (next.model && (Egress.isPrivate() || Egress.isLocalUrl(parentUrl))) {
+        yield* ctx.ask({
+          permission: "subagent_model",
+          patterns: [`${next.model.providerID}/${next.model.modelID}`],
+          always: ["*"],
+          metadata: { subagent_type: params.subagent_type },
+        })
+      }
       const model = next.model ?? {
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,

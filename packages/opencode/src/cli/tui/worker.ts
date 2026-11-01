@@ -1,3 +1,4 @@
+import { LocalAuth } from "@/server/shared/local-auth"
 import { Server } from "@/server/server"
 import { InstanceRuntime } from "@/project/instance-runtime"
 import { Rpc } from "@/util/rpc"
@@ -53,7 +54,11 @@ export const rpc = {
   },
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     if (server) await server.stop(true)
+    // #192113: a TUI asked to listen on a port makes its own token. It talks to itself in-process,
+    // through ServerAuth.header(), so only outside clients need the record.
+    const auth = LocalAuth.prepareListener({ hostname: input.hostname })
     server = await Server.listen(input)
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: input.hostname, credentials: auth.credentials })
     return { url: server.url.toString() }
   },
   async checkUpgrade(input: { directory: string }) {

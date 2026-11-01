@@ -1,3 +1,4 @@
+import { LocalAuth } from "@/server/shared/local-auth"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk"
@@ -22,7 +23,10 @@ export const AcpCommand = effectCmd({
     ACPProfile.mark("cli.acp.handler")
     process.env.OPENCODE_CLIENT = "acp"
     const opts = yield* resolveNetworkOptions(args)
+    // #192113: ACP talks to its own socket with ServerAuth.headers(), read after this sets the token.
+    const auth = LocalAuth.prepareListener({ hostname: opts.hostname })
     const server = yield* Effect.promise(() => ACPProfile.measure("cli.acp.server.listen", () => Server.listen(opts)))
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, credentials: auth.credentials })
 
     const sdk = createOpencodeClient({
       baseUrl: `http://${server.hostname}:${server.port}`,

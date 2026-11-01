@@ -4,10 +4,9 @@
 // were same-origin. What it cannot change is the Host header the browser sends: that stays the
 // page's own name. So a server that knows the only names it is reached by refuses everything else.
 //
-// Opt-in, because only the launcher knows those names. IRIS Desktop sets
-// OPENCODE_SERVER_ALLOWED_HOSTS=127.0.0.1:<port>,localhost:<port> for its engine. Unset, the
-// server behaves exactly as before — a remote `serve --hostname 0.0.0.0`, a tunnel, a reverse
-// proxy all keep working.
+// IRIS Desktop sets OPENCODE_SERVER_ALLOWED_HOSTS=127.0.0.1:<port>,localhost:<port> for its engine.
+// Unset, a command that opens a socket gets the default in local-auth.ts since #192113: loopback
+// names and the bound host. A tunnel or a reverse proxy names itself with this variable.
 
 export const ALLOWED_HOSTS_ENV = "OPENCODE_SERVER_ALLOWED_HOSTS"
 

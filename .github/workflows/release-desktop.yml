@@ -296,7 +296,8 @@ jobs:
           echo "bundle version $PLIST ✓"
           # An Intel binary cannot execute on the arm64 runner; only boot when native.
           if [ "${{ matrix.arch }}" = "arm64" ] || [ "$(uname -m)" = "x86_64" ]; then
-            "$APP/Contents/MacOS/$SIDECAR" serve --port=47999 >/tmp/sc.log 2>&1 &
+            # #192113: the boot test reads /global/health with no credentials, on loopback only.
+            OPENCODE_SERVER_AUTH=off "$APP/Contents/MacOS/$SIDECAR" serve --port=47999 >/tmp/sc.log 2>&1 &
             for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null http://127.0.0.1:47999/doc && break; sleep 0.5; done
             H=$(curl -s -m 10 http://127.0.0.1:47999/global/health)
             kill %1 2>/dev/null || true
@@ -632,7 +633,8 @@ jobs:
           boot() {
             local sc="$1" port="$2" H
             [ -n "$sc" ] && [ -x "$sc" ] || { echo "::error::$3 is missing sidecar '$SIDECAR'"; return 1; }
-            "$sc" serve --port="$port" >"/tmp/sc-$port.log" 2>&1 &
+            # #192113: the boot test reads /global/health with no credentials, on loopback only.
+            OPENCODE_SERVER_AUTH=off "$sc" serve --port="$port" >"/tmp/sc-$port.log" 2>&1 &
             local pid=$!
             for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null "http://127.0.0.1:$port/doc" && break; sleep 0.5; done
             H=$(curl -s -m 10 "http://127.0.0.1:$port/global/health")
