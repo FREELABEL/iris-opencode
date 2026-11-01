@@ -35,6 +35,8 @@ export interface HiveNode {
   capabilities?: Record<string, unknown>
   max_concurrent?: number
   active_tasks?: number
+  /** Why a node with free slots is refusing work, e.g. "CPU at 97%" (#192109). */
+  busy_reason?: string | null
   total_tasks_completed?: number
   last_heartbeat_at?: string | null
   last_ip?: string | null
@@ -290,6 +292,7 @@ const HiveNodesListCommand = cmd({
 
       const cv = views.byIndex[nodes.indexOf(n)]
       const cvText = cv.text.replace("<name>", n.name)
+      if (n.busy_reason) console.log(`    ${UI.Style.TEXT_WARNING}not taking work: ${n.busy_reason}${UI.Style.TEXT_NORMAL}`)
       console.log(`    ${dim("daemon commit:")} ${cv.behind || cv.drift ? `${UI.Style.TEXT_WARNING}${cvText}${UI.Style.TEXT_NORMAL}` : cvText}`)
       const ver = (n as any).daemon_version
       const caps = (n as any).bridge_capabilities
@@ -447,6 +450,7 @@ const HiveNodesShowCommand = cmd({
     console.log(`${bold(node.name)}  ${statusBadge(node.connection_status)}`)
     console.log(`  ${dim("id:")}                ${node.id}`)
     console.log(`  ${dim("active tasks:")}      ${node.active_tasks ?? 0} / ${node.max_concurrent ?? "?"}`)
+    if (node.busy_reason) console.log(`  ${dim("not taking work:")}   ${UI.Style.TEXT_WARNING}${node.busy_reason}${UI.Style.TEXT_NORMAL}`)
     console.log(`  ${dim("completed total:")}   ${node.total_tasks_completed ?? 0}`)
     console.log(`  ${dim("last heartbeat:")}    ${timeAgo(node.last_heartbeat_at)}`)
     if (node.last_ip) console.log(`  ${dim("last ip:")}           ${node.last_ip}`)
