@@ -113,6 +113,24 @@ function taskLabel(s: Record<string, any>): string {
   return data.task_type ?? data.type ?? s.task_name ?? ""
 }
 
+/** "github.pull_request.opened" → source + event. The source never has a dot; events may. */
+export function parseListenerEvent(on: string): { source: string; event: string } | null {
+  const dot = on.indexOf(".")
+  if (dot <= 0 || dot === on.length - 1) return null
+  return { source: on.slice(0, dot), event: on.slice(dot + 1) }
+}
+
+/** ["action=opened", "repository.full_name=a/b"] → an object, or null if any is malformed. */
+export function parseListenerFilters(pairs: string[]): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=")
+    if (eq <= 0) return null
+    out[pair.slice(0, eq)] = pair.slice(eq + 1)
+  }
+  return out
+}
+
 function executionEnv(s: Record<string, any>): { label: string; icon: string } {
   const data = s.data ?? {}
   const taskName = String(s.task_name ?? "")
@@ -233,6 +251,7 @@ const SchedulesListCommand = cmd({
       .option("overdue", { describe: "show only overdue schedules", type: "boolean", default: false })
       .option("latest", { describe: "include latest execution result for each job", type: "boolean", default: false })
       .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("listeners", { describe: "show only event listeners (see create --on)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -253,7 +272,7 @@ const SchedulesListCommand = cmd({
     spinner.start("Loading schedules…")
 
     try {
-      const clientSideFilter = Boolean(args.active || args.overdue)
+      const clientSideFilter = Boolean(args.active || args.overdue || args.listeners)
       const params = schedulesListParams({
         limit: args.limit,
         page: args.page,
@@ -293,6 +312,10 @@ const SchedulesListCommand = cmd({
           const status = String(s.status ?? "").toLowerCase()
           return ["scheduled", "running", "paused", "active", "enabled"].includes(status)
         })
+      }
+
+      if (args.listeners) {
+        schedules = schedules.filter((s: any) => s.trigger_type === "listener")
       }
 
       // --overdue: only show schedules past their next_run_at
@@ -344,14 +367,14 @@ const SchedulesListCommand = cmd({
       }
 
       // The list contract (#191863): one envelope for --json, one footer for humans.
-      const listCmd = commandWith("schedules list", { active: args.active, overdue: args.overdue, latest: args.latest, "agent-id": args["agent-id"] })
+      const listCmd = commandWith("schedules list", { active: args.active, overdue: args.overdue, listeners: args.listeners, latest: args.latest, "agent-id": args["agent-id"] })
       const contract = (rows: any[]) =>
         listEnvelope(
           { rows, total: pagination.total, page: pagination.page, perPage: pagination.per_page, lastPage: pagination.last_page, hasMore: pagination.has_more },
           { resource: "schedules", command: listCmd },
         )
 
-      const filterLabel = [args.active && "active", args.overdue && "overdue"].filter(Boolean).join(", ")
+      const filterLabel = [args.active && "active", args.overdue && "overdue", args.listeners && "listeners"].filter(Boolean).join(", ")
       const pageLabel = pagination.last_page > 1 ? ` — page ${pagination.page}/${pagination.last_page} of ${pagination.total}` : ""
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
@@ -1046,7 +1069,6 @@ const SchedulesCreateCommand = cmd({
         describe: "job type",
         type: "string",
         choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow", "browser_workflow", "agentic_browser"],
-        demandOption: true,
       })
       .option("frequency", {
         describe: "run frequency",
@@ -1055,6 +1077,8 @@ const SchedulesCreateCommand = cmd({
         default: "daily",
       })
       .option("agent", { describe: "agent ID (required — used for scheduling)", type: "number", demandOption: true })
+      .option("on", { describe: "run the agent when this event arrives instead of on a schedule, e.g. github.pull_request.opened", type: "string" })
+      .option("filter", { describe: "only events where this payload field matches: key=value (repeatable; with --on)", type: "array", string: true })
       .option("name", { describe: "job name/task_name", type: "string" })
       .option("prompt", { describe: "task prompt (for agent_task type)", type: "string" })
       .option("time", { describe: "time of day to run (HH:MM, 24h)", type: "string", default: "09:00" })
@@ -1079,13 +1103,65 @@ const SchedulesCreateCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Create Schedule: ${args.type}`)
+    prompts.intro(args.on ? `◈  Create Listener: ${args.on}` : `◈  Create Schedule: ${args.type}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
+
+    // #187532 — an event listener, not a schedule: no frequency, and the result is a URL to hand
+    // to the provider. That URL is the credential, so it is printed here and nowhere else.
+    if (args.on) {
+      const event = parseListenerEvent(args.on)
+      const filters = parseListenerFilters((args.filter ?? []) as string[])
+      if (!event || !filters) {
+        prompts.log.error(!event ? "--on takes <source>.<event>, e.g. github.pull_request.opened" : "--filter takes key=value")
+        prompts.outro("Done")
+        return
+      }
+      if (!args.prompt) {
+        prompts.log.error("--prompt is required with --on: it is what the agent is told to do with the event")
+        prompts.outro("Done")
+        return
+      }
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/listeners`, {
+        method: "POST",
+        body: JSON.stringify({
+          agent_id: args.agent,
+          source_integration: event.source,
+          event_type: event.event,
+          prompt: args.prompt,
+          task_name: args.name ?? `On ${args.on}`,
+          filters,
+          ...(args["max-runs"] ? { max_runs: args["max-runs"] } : {}),
+        }),
+      })
+      const body = (await res.json().catch(() => ({}))) as any
+      if (!res.ok) {
+        prompts.log.error(body.message ?? `HTTP ${res.status}`)
+        if (Array.isArray(body.supported)) prompts.log.info(`Supported: ${body.supported.join(", ") || "none for this source"}`)
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+      if (args.json) {
+        console.log(JSON.stringify(body, null, 2))
+        return
+      }
+      prompts.log.success(`Listener #${body.listener?.id} created for agent ${args.agent}`)
+      console.log(`  Webhook URL (treat it like a password; anyone with it can fire this agent):`)
+      console.log(`  ${body.webhook_url}`)
+      prompts.outro(`Paste that URL into ${event.source}'s webhook settings.`)
+      return
+    }
+    if (!args.type) {
+      prompts.log.error("--type is required, or --on <source>.<event> for an event listener")
+      prompts.outro("Done")
+      process.exitCode = 1
+      return
+    }
 
     // Parse params JSON
     let params: Record<string, unknown> = {}

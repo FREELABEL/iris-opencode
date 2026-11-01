@@ -89,7 +89,7 @@ export const HiveInventoryCommand = cmd({
     const { nodes, summary } = inventoryFromNodes(await fleet(userId))
     if (argv.json) return void (await writeJson({ nodes, summary }))
     console.log()
-    if (!nodes.length) return void console.log(dim("  No machines yet. Add one: iris hive scan, then iris playbook run iris-hive-start"))
+    if (!nodes.length) return void console.log(dim("  No machines yet. Connect one: iris how-to view hive-dispatch"))
     for (const n of nodes) {
       const gpu = n.gpu.available === null ? "GPU ?" : n.gpu.available ? (n.gpu.name ?? "GPU") : "no GPU"
       console.log(`  ${n.online ? success("●") : dim("○")} ${bold(n.name.padEnd(26))} ${shown(n.cpu_cores, " cores").padEnd(9)} ${shown(n.memory_gb, "GB").padEnd(6)} ${shown(n.free_disk_gb, "GB free").padEnd(11)} ${gpu}`)
