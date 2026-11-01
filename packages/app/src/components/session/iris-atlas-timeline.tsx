@@ -99,7 +99,7 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
       if (!d) return
       // A bar that did not change days was clicked, not dragged.
       if (d.mode !== "new" && d.anchor === d.current) return props.onOpen(d.item.id)
-      props.onSchedule(d.item as I, datesFromDrag(d.item, d.mode, d.anchor, d.current))
+      props.onSchedule(d.item as I, datesFromDrag(d.item, d.mode, d.anchor, d.current, model().today))
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") stopDrag()
@@ -117,7 +117,9 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
   }
   const dragSpan = (id: number) => {
     const d = drag()
-    return d?.item.id === id ? spanOf(d.item, datesFromDrag(d.item, d.mode, d.anchor, d.current)) : undefined
+    return d?.item.id === id
+      ? spanOf(d.item, datesFromDrag(d.item, d.mode, d.anchor, d.current, model().today))
+      : undefined
   }
 
   const [opened, setOpened] = createSignal<Record<number, boolean>>({})
@@ -163,7 +165,7 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
           class="iris-atlas-tl__track"
           classList={{ "iris-atlas-tl__track--open": !bar }}
           style={{ width: `${width()}px` }}
-          title={bar ? undefined : "Click to set a due date, or drag to set start and due"}
+          title={bar ? undefined : "Click to set a due date, or drag to choose start and due"}
           onPointerDown={bar ? undefined : (e) => startDrag(e, item, "new")}
           onPointerMove={bar ? undefined : (e) => setHover(dayAt(e.clientX))}
           onPointerLeave={bar ? undefined : () => setHover(null)}

@@ -155,13 +155,20 @@ export interface TimelineDates {
 
 /**
  * What a gesture changes on a card, and nothing else: a card with only a due date keeps only a due
- * date when it is moved. On a new card a click sets the due date, and a drag sets both.
+ * date when it is moved. On a new card a drag sets both, and a click sets the due date and starts
+ * today, as fl-api does for any due date set without a start. A past date starts on that day.
  */
-export function datesFromDrag(item: TimelineItem, mode: TimelineDrag, anchor: number, current: number): TimelineDates {
+export function datesFromDrag(
+  item: TimelineItem,
+  mode: TimelineDrag,
+  anchor: number,
+  current: number,
+  today: number,
+): TimelineDates {
   const start = dayOf(item.startDate)
   const due = dayOf(item.dueDate)
   if (mode === "new") {
-    if (anchor === current) return { dueDate: dayToDate(anchor) }
+    if (anchor === current) return { startDate: dayToDate(Math.min(today, anchor)), dueDate: dayToDate(anchor) }
     return { startDate: dayToDate(Math.min(anchor, current)), dueDate: dayToDate(Math.max(anchor, current)) }
   }
   if (mode === "move") {

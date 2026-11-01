@@ -99,24 +99,27 @@ test("a stored Timeline choice survives a reload; anything else opens on Board",
 describe("datesFromDrag", () => {
   const a = { id: 1, title: "a" }
   const n = day("2026-11-10")
-  test("a click on a new card sets a due date; a drag sets both, in either direction", () => {
-    expect(datesFromDrag(a, "new", n, n)).toEqual({ dueDate: "2026-11-10" })
-    expect(datesFromDrag(a, "new", n, n + 2)).toEqual({ startDate: "2026-11-10", dueDate: "2026-11-12" })
-    expect(datesFromDrag(a, "new", n, n - 2)).toEqual({ startDate: "2026-11-08", dueDate: "2026-11-10" })
+  test("a click on a new card sets a due date that starts today; a past one starts that day", () => {
+    expect(datesFromDrag(a, "new", n + 5, n + 5, n)).toEqual({ startDate: "2026-11-10", dueDate: "2026-11-15" })
+    expect(datesFromDrag(a, "new", n - 5, n - 5, n)).toEqual({ startDate: "2026-11-05", dueDate: "2026-11-05" })
+  })
+  test("a drag sets both, in either direction", () => {
+    expect(datesFromDrag(a, "new", n, n + 2, n)).toEqual({ startDate: "2026-11-10", dueDate: "2026-11-12" })
+    expect(datesFromDrag(a, "new", n, n - 2, n)).toEqual({ startDate: "2026-11-08", dueDate: "2026-11-10" })
   })
   test("moving shifts only the dates the card has", () => {
-    expect(datesFromDrag({ ...a, dueDate: "2026-11-10" }, "move", n, n + 3)).toEqual({ dueDate: "2026-11-13" })
-    expect(datesFromDrag({ ...a, startDate: "2026-11-01", dueDate: "2026-11-10" }, "move", n, n - 1)).toEqual({
+    expect(datesFromDrag({ ...a, dueDate: "2026-11-10" }, "move", n, n + 3, n)).toEqual({ dueDate: "2026-11-13" })
+    expect(datesFromDrag({ ...a, startDate: "2026-11-01", dueDate: "2026-11-10" }, "move", n, n - 1, n)).toEqual({
       startDate: "2026-10-31",
       dueDate: "2026-11-09",
     })
   })
   test("an edge changes that end and cannot pass the other", () => {
     const c = { ...a, startDate: "2026-11-05", dueDate: "2026-11-10" }
-    expect(datesFromDrag(c, "start", n, day("2026-11-01")).startDate).toBe("2026-11-01")
-    expect(datesFromDrag(c, "start", n, day("2026-11-20")).startDate).toBe("2026-11-10")
-    expect(datesFromDrag(c, "end", n, day("2026-11-20")).dueDate).toBe("2026-11-20")
-    expect(datesFromDrag(c, "end", n, day("2026-11-01")).dueDate).toBe("2026-11-05")
+    expect(datesFromDrag(c, "start", n, day("2026-11-01"), n).startDate).toBe("2026-11-01")
+    expect(datesFromDrag(c, "start", n, day("2026-11-20"), n).startDate).toBe("2026-11-10")
+    expect(datesFromDrag(c, "end", n, day("2026-11-20"), n).dueDate).toBe("2026-11-20")
+    expect(datesFromDrag(c, "end", n, day("2026-11-01"), n).dueDate).toBe("2026-11-05")
   })
   test("a drag previews the span it would save", () => {
     expect(spanOf(a, { dueDate: "2026-11-10" })).toEqual({ start: n, end: n })
