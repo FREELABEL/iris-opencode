@@ -228,3 +228,33 @@ describe("friendly errors + JSON mode end to end", () => {
     expect(out).toBe("email,audience,status,sent_at,mailjet_message_id,error\na@b.com,members,sent,,1,\n")
   })
 })
+
+describe("the list audit (#192096)", () => {
+  const flagged = { total: 2, bounce_risk: 1, flagged: [{ email: "gone@no-mail.example", status: "undeliverable", reason: "no mail server (no MX)" }], suppressed: [], unchecked_domains: 0, complete: true, passed: false, unverified: 1 }
+
+  test("a refusal names each bad address and the override, and doesn't watch a send that never started", async () => {
+    process.argv.push("--json")
+    mock({
+      "GET /api/v1/mailings/12": () => ({ json: draft }),
+      "POST /api/v1/mailings/12/send": () => ({ status: 422, json: { success: false, reason: "list_audit_failed", message: "1 of 2 addresses can't receive mail.", audit: flagged } }),
+    })
+    await runSend({ id: "12", yes: true, json: true }, { interactive: false } as any)
+    expect(out).toContain("gone@no-mail.example")
+    expect(out).toContain("no mail server (no MX)")
+    expect(out).toContain("--override-audit-count 1")
+    expect(process.exitCode).toBe(1)
+  })
+
+  test("the override goes to the server from a person, and is refused from a script before it can", async () => {
+    mock({
+      "GET /api/v1/mailings/12": () => ({ json: draft }),
+      "POST /api/v1/mailings/12/send": () => ({ status: 202, json: { ...draft, status: "sending" } }),
+    })
+    const flags = { "override-audit": "Checked by hand", "override-audit-count": 1 }
+    await runSend({ id: "12", yes: true, json: true, ...flags }, { interactive: false } as any)
+    expect(sends()).toHaveLength(0)
+
+    await runSend({ id: "12", yes: true, json: true, "no-wait": true, ...flags }, { interactive: true } as any)
+    expect(sends()[0]!.body.audit_override).toEqual({ reason: "Checked by hand", count: 1 })
+  })
+})

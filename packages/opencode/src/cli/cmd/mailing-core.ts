@@ -10,6 +10,8 @@
  * dedupe, exclusion and sending; this client never sends an email itself.
  */
 
+import { auditLines } from "./list-audit"
+
 // ── audiences ──────────────────────────────────────────────────────────────
 
 export type Audience = { name: string; dataset_item_id: number } | { name: string; rows: Record<string, string>[] }
@@ -392,6 +394,11 @@ export function friendlyError(status: number, body: any, ctx: { id?: string | nu
 
   if (status === 401 || is("unauthenticated")) {
     return { code: "auth", message: "You are not signed in to IRIS (or your sign-in expired).", fix: ["iris auth login --force"] }
+  }
+  if (is("list_audit_failed", "suppressed_recipients", "audit_override_needs_person", "audit_override_invalid", "audit_override_stale")) {
+    const lines = body?.audit ? auditLines(body.audit) : []
+    if (is("list_audit_failed")) lines.push(`Fix the list, or a person overrides: iris mailing send ${id} --override-audit "<why>" --override-audit-count ${body?.audit?.bounce_risk ?? "<flagged>"}`)
+    return { code, message: body?.message ?? "The list audit refused this send. Nothing was sent.", fix: lines }
   }
   if (is("no_mailjet", "mailjet_not_connected", "integration_not_found") || says(/mailjet.*(not connected|no .*connection)|connect .*mailjet/i)) {
     return {

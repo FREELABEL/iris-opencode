@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
+import { auditLines, overrideOptions, readOverride } from "./list-audit"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, irisFetch, requireAuth, writeJson, PUBLIC_SITE, IRIS_API } from "./iris-api"
+import { dim, bold, success, highlight, irisFetch, isNonInteractive, requireAuth, writeJson, PUBLIC_SITE, IRIS_API } from "./iris-api"
 import { resolveWalkthrough } from "../lib/walkthrough"
 import { execFileSync } from "child_process"
 
@@ -469,9 +470,18 @@ const NewsroomSendCommand = cmd({
       .option("limit", { describe: "cap recipients — use for a first small send", type: "number" })
       .option("send", { describe: "actually send — also needs --confirm", type: "boolean", default: false })
       .option("confirm", { describe: "the second key", type: "boolean", default: false })
+      .options(overrideOptions)
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
     if (!(await requireAuth())) return
+
+    const typed = readOverride(args, !isNonInteractive())
+    if (!typed.ok) {
+      if (args.json) await writeJson({ success: false, error: typed.error })
+      else prompts.log.error(typed.error)
+      process.exitCode = 1
+      return
+    }
 
     const res = await irisFetch(`/api/v1/newsroom/${Number(args.bloq)}/send`, {
       method: "POST",
@@ -481,12 +491,17 @@ const NewsroomSendCommand = cmd({
         limit: args.limit ?? null,
         apply: !!args.send,
         confirm: !!args.confirm,
+        ...(typed.override ? { audit_override: typed.override } : {}),
       }),
     })
     const body = (await res.json().catch(() => ({}))) as any
-    if (args.json) return writeJson(body)
+    if (args.json) {
+      if (!res.ok) process.exitCode = 1
+      return writeJson(body)
+    }
 
     if (!res.ok) {
+      if (body?.data?.audit) for (const l of auditLines(body.data.audit)) console.log(`  ${l}`)
       prompts.log.error(body?.data?.message ?? body?.message ?? body?.error ?? `HTTP ${res.status}`)
       process.exitCode = 1
       return
@@ -502,6 +517,7 @@ const NewsroomSendCommand = cmd({
       prompts.log.info(dim("  ── body ──"))
       for (const line of String(d.body_preview).split("\n").slice(0, 12)) prompts.log.info(dim(`  ${line}`))
     }
+    if (d.audit) for (const l of auditLines(d.audit)) prompts.log.info(`  ${l}`)
     if (d.consent_enforced === false) {
       prompts.log.warn("Consent is not enforced on this path yet — see #186372.")
     }
