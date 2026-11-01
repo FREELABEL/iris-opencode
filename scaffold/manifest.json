@@ -282,7 +282,7 @@
       "src": "how-to/public-url-for-a-local-port.md",
       "dest": "how-to/public-url-for-a-local-port.md",
       "managed": true,
-      "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
+      "purpose": "Give something running on your machine a public https URL (<name>.hivemesh.net), encrypted to the machine, that closes when you stop."
     },
     {
       "src": "how-to/your-own-domain.md",
