@@ -92,6 +92,10 @@ describe("iris email send", () => {
   let out = ""
 
   beforeEach(() => {
+
+    // CI runs every file in one process, and other files can clear this after load.
+
+    process.env.IRIS_API_KEY = process.env.IRIS_API_KEY || "test-token"
     calls = []
     out = ""
     audit = clean
