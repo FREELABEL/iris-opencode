@@ -25,7 +25,7 @@ export const AttachCommand = cmd({
       .option("password", {
         alias: ["p"],
         type: "string",
-        describe: "server password (default: OPENCODE_SERVER_PASSWORD, or this machine's server record)",
+        describe: "server password (default on this machine: OPENCODE_SERVER_PASSWORD, or the server's record; another machine only gets this flag)",
       })
       .option("username", {
         alias: ["u"],
