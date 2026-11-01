@@ -44,6 +44,7 @@ export interface CardTask {
   status?: string
   agentId?: number
   agentName?: string
+  startDate?: string
   dueDate?: string
   completedAt?: string
   source?: string
@@ -61,6 +62,7 @@ export interface CardDoc {
   cardType?: string
   priority?: string
   status?: string
+  startDate?: string
   dueDate?: string
   listId?: number
   listName?: string
@@ -93,6 +95,7 @@ export interface CardDraft {
   status: string
   cardType: string
   priority: string
+  startDate: string
   dueDate: string
   listId: string
 }
@@ -104,6 +107,7 @@ export interface CardPatch {
   status?: string
   priority?: string | null
   cardType?: string | null
+  startDate?: string | null
   dueDate?: string | null
   listId?: number
 }
@@ -115,6 +119,7 @@ export function draftFrom(doc: CardDoc): CardDraft {
     status: doc.status ?? "",
     cardType: doc.cardType ?? "",
     priority: doc.priority ?? "",
+    startDate: doc.startDate ?? "",
     dueDate: doc.dueDate ?? "",
     listId: doc.listId != null ? String(doc.listId) : "",
   }
@@ -131,6 +136,7 @@ export function diffDraft(doc: CardDoc, draft: CardDraft): CardPatch {
   if (draft.status !== base.status && draft.status) patch.status = draft.status
   if (draft.cardType !== base.cardType) patch.cardType = draft.cardType || null
   if (draft.priority !== base.priority) patch.priority = draft.priority || null
+  if (draft.startDate !== base.startDate) patch.startDate = draft.startDate || null
   if (draft.dueDate !== base.dueDate) patch.dueDate = draft.dueDate || null
   if (draft.listId !== base.listId && draft.listId) patch.listId = Number(draft.listId)
   return patch
@@ -590,6 +596,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
               status: p.status ?? cur.status,
               cardType: p.cardType === undefined ? cur.cardType : (p.cardType ?? undefined),
               priority: p.priority === undefined ? cur.priority : (p.priority ?? undefined),
+              startDate: p.startDate === undefined ? cur.startDate : (p.startDate ?? undefined),
               dueDate: p.dueDate === undefined ? cur.dueDate : (p.dueDate ?? undefined),
               listId: p.listId ?? cur.listId,
               listName: p.listId != null ? (props.lists.find((l) => l.id === p.listId)?.name ?? cur.listName) : cur.listName,
@@ -1780,6 +1787,19 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                               </Show>
                             </select>
                             <Icon name="chevron-down" size="small" />
+                          </label>
+                          <label class="iris-dd iris-dd--wide" title="Start date">
+                            <Icon name="clock" size="small" />
+                            <span class="iris-dd__label">Start</span>
+                            <input
+                              type="date"
+                              class="iris-dd__select"
+                              value={form()?.startDate ?? ""}
+                              onChange={(e) => {
+                                set("startDate", e.currentTarget.value)
+                                void saveDetails()
+                              }}
+                            />
                           </label>
                           <Dd
                             icon="clock"
