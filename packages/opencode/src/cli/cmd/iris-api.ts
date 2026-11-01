@@ -185,11 +185,9 @@ let _cachedToken: string | undefined
 let _cachedTokenSource: string | undefined
 
 export async function resolveToken(): Promise<string> {
-  if (_cachedToken) return _cachedToken
-  // Only a real token is remembered: caching "no token" kept a process signed out after a login.
-  const token = await resolveTokenUncached()
-  if (token) _cachedToken = token
-  return token
+  if (_cachedToken !== undefined) return _cachedToken
+  _cachedToken = await resolveTokenUncached()
+  return _cachedToken
 }
 
 /**
