@@ -33,6 +33,7 @@ export const AcpCommand = cmd({
 
       const sdk = createOpencodeClient({
         baseUrl: `http://${server.hostname}:${server.port}`,
+        headers: Server.authHeaders(),
       })
 
       const input = new WritableStream<Uint8Array>({

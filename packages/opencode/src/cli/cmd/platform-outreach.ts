@@ -8,6 +8,7 @@ import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bol
 import { OutreachApproveGroup } from "./platform-outreach-approve"
 import { ScriptGroup } from "./platform-outreach-script"
 import { ReachrScrapeCmd } from "./platform-reachr-scrape"
+import { ReachrPostRunCmd } from "./platform-reachr-post-run"
 import { ReachrInboxCmd } from "./platform-reachr-inbox"
 import { ReachrDraftsCmd } from "./platform-reachr-drafts"
 import { ReachrAuditRepliesCmd } from "./platform-reachr-audit"
@@ -288,6 +289,7 @@ export const PlatformOutreachCommand = productCommand({
   builder: (yargs) =>
     yargs
       .command(ReachrScrapeCmd)
+      .command(ReachrPostRunCmd)
       .command(ReachrInboxCmd)
       .command(ReachrDraftsCmd)
       .command(ReachrAuditRepliesCmd)
