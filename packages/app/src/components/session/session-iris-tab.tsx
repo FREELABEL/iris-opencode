@@ -36,6 +36,9 @@ import { usePlatform } from "@/context/platform"
 import { useSync } from "@/context/sync"
 import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
+import { showToast } from "@opencode-ai/ui/toast"
+import { IrisAtlasTimeline } from "./iris-atlas-timeline"
+import { timelineDatesLabel } from "./iris-atlas-timeline-model"
 import { IrisCardEditor } from "./iris-card-editor"
 import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { dictationAuthFor } from "@/utils/dictation-auth"
@@ -4473,6 +4476,29 @@ export function SessionIrisTab() {
                     />
                   </Show>
                   </div>
+                </Show>
+                <Show when={atlasLayout() === "timeline"}>
+                  <IrisAtlasTimeline
+                    lists={atlasRows()}
+                    now={now()}
+                    isFolded={(row) => {
+                      const list = atlasRows().find((l) => l.id === row.id)
+                      return list ? isFolded(list) : false
+                    }}
+                    onToggleFold={(id) => {
+                      const list = atlasRows().find((l) => l.id === id)
+                      if (list) toggleFold(list)
+                    }}
+                    onOpen={(id) => openCard(id)}
+                    onSchedule={(item, dates) => {
+                      const before = { startDate: item.startDate ?? null, dueDate: item.dueDate ?? null }
+                      void saveFace(item.id, dates)
+                      showToast({
+                        description: `${item.title} · ${timelineDatesLabel(dates)}`,
+                        actions: [{ label: "Undo", onClick: () => void saveFace(item.id, before) }],
+                      })
+                    }}
+                  />
                 </Show>
                 <Show when={atlasLayout() === "list"}>
                 <For each={atlasRows()}>

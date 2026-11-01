@@ -317,6 +317,7 @@ export interface AtlasItem {
   createdAt?: string
   updatedAt?: string
   /** What a card FACE shows (#189806). Columns on every item, so present even on an older fl-api. */
+  startDate?: string
   dueDate?: string
   priority?: string
   cardType?: string
@@ -399,6 +400,7 @@ export function atlasItemOf(i: any): AtlasItem {
 
 export function cardFace(i: any): Partial<AtlasItem> {
   const out: Partial<AtlasItem> = {}
+  if (typeof i?.start_date === "string" && i.start_date) out.startDate = i.start_date
   if (typeof i?.due_date === "string" && i.due_date) out.dueDate = i.due_date
   if (typeof i?.priority === "string" && i.priority) out.priority = i.priority
   if (typeof i?.card_type === "string" && i.card_type) out.cardType = i.card_type
@@ -3164,6 +3166,7 @@ export interface ItemDoc {
   cardType?: string
   priority?: string
   status?: string
+  startDate?: string
   dueDate?: string
   listId?: number
   listName?: string
@@ -3245,6 +3248,7 @@ export function readItemDoc(raw: any): Omit<ItemDoc, "tasks" | "tasksMeasured" |
     cardType: raw.card_type || undefined,
     priority: raw.priority || undefined,
     status: raw.status || undefined,
+    startDate: raw.start_date ? String(raw.start_date).slice(0, 10) : undefined,
     dueDate: raw.due_date ? String(raw.due_date).slice(0, 10) : undefined,
     listId: raw.bloq_list_id != null ? Number(raw.bloq_list_id) : undefined,
     listName: raw.list_name || undefined,
@@ -3322,6 +3326,8 @@ export interface ItemPatch {
   priority?: string | null
   cardType?: string | null
   /** YYYY-MM-DD, or null to clear. */
+  startDate?: string | null
+  /** YYYY-MM-DD, or null to clear. */
   dueDate?: string | null
   /** Move to another list on the same board. */
   listId?: number
@@ -3352,6 +3358,7 @@ export function itemPatchBody(patch: ItemPatch): Record<string, unknown> {
   if (patch.status !== undefined) body.status = patch.status
   if (patch.priority !== undefined) body.priority = patch.priority
   if (patch.cardType !== undefined) body.card_type = patch.cardType
+  if (patch.startDate !== undefined) body.start_date = patch.startDate
   if (patch.dueDate !== undefined) body.due_date = patch.dueDate
   if (patch.listId !== undefined) body.bloq_list_id = patch.listId
   return body
