@@ -5,6 +5,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
+import { Egress } from "@/permission/egress"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -46,6 +47,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  egress: { modelUrl: unknown; writtenRules: Parameters<typeof Permission.merge>[0] }
 }) {
   const tools: Record<string, AITool> = {}
   const run = yield* EffectBridge.make()
@@ -55,6 +57,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
+  // #192114: on a local model or a private session, a tool that sends data out must be approved.
+  const egress = Egress.mode({ modelUrl: input.egress.modelUrl })
+  const writtenRules = input.egress.writtenRules
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -84,7 +89,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+          ruleset: Egress.tighten({
+            mode: egress,
+            permission: req.permission,
+            patterns: req.patterns,
+            ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+            explicit: writtenRules,
+          }),
+          ignoreApproved: egress === "private" && Egress.sendsDataOut(req.permission),
         })
         .pipe(Effect.orDie),
   })
@@ -108,6 +120,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
+            // A plugin tool does not ask for itself. On a local or private session it must.
+            if (egress !== "normal" && !Egress.asksForItself(item.id))
+              yield* ctx.ask({ permission: item.id, patterns: ["*"], always: ["*"], metadata: {} })
             const result = yield* item.execute(args, ctx)
             const output = {
               ...result,

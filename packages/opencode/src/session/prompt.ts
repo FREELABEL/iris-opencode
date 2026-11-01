@@ -1327,6 +1327,10 @@ const layer = Layer.effect(
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
+            const egressProvider = yield* provider
+              .getProvider(model.providerID)
+              .pipe(Effect.orElseSucceed(() => undefined))
+            const egressConfig = yield* config.get()
             const tools = yield* SessionTools.resolve({
               agent,
               session,
@@ -1335,6 +1339,14 @@ const layer = Layer.effect(
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              egress: {
+                modelUrl: egressProvider?.options?.baseURL ?? model.api.url,
+                writtenRules: Permission.merge(
+                  Permission.fromConfig(egressConfig.permission ?? {}),
+                  Permission.fromConfig(egressConfig.agent?.[agent.name]?.permission ?? {}),
+                  session.permission ?? [],
+                ),
+              },
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),

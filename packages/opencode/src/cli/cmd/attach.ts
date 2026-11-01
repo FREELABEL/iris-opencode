@@ -3,6 +3,8 @@ import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
 import { ServerAuth } from "@/server/auth"
+import { LocalAuth } from "@/server/shared/local-auth"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -83,7 +85,7 @@ export const AttachCommand = cmd({
       await runMini({
         attach: args.url,
         directory,
-        password: args.password,
+        password: args.password ?? LocalAuth.recordedPassword(args.url),
         username: args.username,
         continue: args.continue,
         session: args.session,
@@ -111,7 +113,14 @@ export const AttachCommand = cmd({
       return
     }
 
-    const headers = ServerAuth.headers({ password: args.password, username: args.username })
+    const password = args.password ?? Flag.OPENCODE_SERVER_PASSWORD ?? LocalAuth.recordedPassword(args.url)
+    const headers = ServerAuth.headers({ password, username: args.username })
+    const problem = await LocalAuth.attachProblem(args.url, headers)
+    if (problem) {
+      UI.error(problem)
+      process.exitCode = 1
+      return
+    }
     const config = await TuiConfig.get()
 
     try {

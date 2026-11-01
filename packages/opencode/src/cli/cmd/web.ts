@@ -37,11 +37,31 @@ export const WebCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.web")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
-    if (!Flag.OPENCODE_SERVER_PASSWORD) {
-      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
-    }
     const opts = yield* resolveNetworkOptions(args)
+    // #192113: a server nobody gave a password to makes its own, and the browser arrives signed in.
+    // The link holds the token, so it is opened and never printed.
+    const { LocalAuth } = yield* Effect.promise(() => import("../../server/shared/local-auth"))
+    const auth = LocalAuth.prepareListener({ hostname: opts.hostname })
+    if (!Flag.OPENCODE_SERVER_PASSWORD) {
+      UI.println(
+        UI.Style.TEXT_WARNING_BOLD + `!  ${LocalAuth.AUTH_ENV}=off; any process on this machine can reach this server.`,
+      )
+    }
     const server = yield* Effect.promise(() => Server.listen(opts))
+    if (auth.generated) {
+      LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, password: auth.password })
+      UI.println(
+        UI.Style.TEXT_INFO_BOLD + "  Password:         ",
+        UI.Style.TEXT_NORMAL,
+        `username ${LocalAuth.USERNAME}, in ${LocalAuth.recordPath(server.port)}`,
+      )
+    }
+    const signIn = (url: string) => {
+      const password = Flag.OPENCODE_SERVER_PASSWORD
+      if (!password) return url
+      const token = Buffer.from(`${Flag.OPENCODE_SERVER_USERNAME ?? LocalAuth.USERNAME}:${password}`).toString("base64")
+      return `${url.replace(/\/$/, "")}/?auth_token=${encodeURIComponent(token)}`
+    }
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
@@ -72,11 +92,11 @@ export const WebCommand = effectCmd({
       }
 
       // Open localhost in browser
-      open(localhostUrl).catch(() => {})
+      open(signIn(localhostUrl)).catch(() => {})
     } else {
       const displayUrl = server.url.toString()
       UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
-      open(displayUrl).catch(() => {})
+      open(signIn(displayUrl)).catch(() => {})
     }
 
     yield* Effect.never

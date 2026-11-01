@@ -19,6 +19,8 @@ import { pathToFileURL } from "url"
 import { open } from "node:fs/promises"
 import { Effect } from "effect"
 import { UI } from "../ui"
+import { LocalAuth } from "@/server/shared/local-auth"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
@@ -344,8 +346,18 @@ export const RunCommand = effectCmd({
         }
       })()
       const attachHeaders = args.attach
-        ? ServerAuth.headers({ password: args.password, username: args.username })
+        ? ServerAuth.headers({
+            password: args.password ?? Flag.OPENCODE_SERVER_PASSWORD ?? LocalAuth.recordedPassword(args.attach),
+            username: args.username,
+          })
         : undefined
+      if (args.attach) {
+        const problem = await LocalAuth.attachProblem(args.attach, attachHeaders)
+        if (problem) {
+          UI.error(problem)
+          process.exit(1)
+        }
+      }
       const attachSDK = (dir?: string) => {
         return createOpencodeClient({
           baseUrl: args.attach!,
