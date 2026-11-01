@@ -1,5 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
+import { argvShape } from "./util/argv-shape"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
@@ -352,7 +353,7 @@ const cli = yargs(rawArgs)
 
     Log.Default.info("opencode", {
       version: Installation.VERSION,
-      args: process.argv.slice(2),
+      ...argvShape(process.argv.slice(2)),
     })
 
     // THE CLUTCH (#184906), at the one point every command passes through.
