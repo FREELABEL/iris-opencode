@@ -2,7 +2,8 @@ import { readFileSync, existsSync } from "fs"
 import { basename } from "path"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, warn, writeJson, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, warn, writeJson, IRIS_API } from "./iris-api"
+import { auditLines, decide, fetchAudit, isBulk, overrideOptions, readOverride, type AuditReport } from "./list-audit"
 import {
   buildRecipientList,
   checkMode,
@@ -43,8 +44,9 @@ async function reportRefusal(res: Response, json: boolean): Promise<boolean> {
   const b = await body(res)
   const msg = b?.message || "The server refused the send."
   if (json) {
-    await writeJson({ success: false, error: msg, reason: b?.reason, invalid: b?.invalid, errors: b?.errors })
+    await writeJson({ success: false, error: msg, reason: b?.reason, invalid: b?.invalid, errors: b?.errors, audit: b?.audit })
   } else {
+    if (b?.audit) for (const l of auditLines(b.audit)) console.log(`  ${l}`)
     prompts.log.error(msg + (b?.reason ? dim(`  (${b.reason})`) : ""))
     for (const bad of b?.invalid ?? []) console.log(`  ${dim("invalid:")} ${bad}`)
     for (const [k, v] of Object.entries(b?.errors ?? {})) console.log(`  ${dim(k + ":")} ${(v as string[]).join(", ")}`)
@@ -209,7 +211,68 @@ function printSkipped(skipped: Skipped[]): void {
   if (skipped.length > 50) console.log(dim(`    … and ${skipped.length - 50} more`))
 }
 
-const SendCommand = cmd({
+/** Ask the server to audit a list. The send runs the same check again; this is what the person reads. */
+function postAudit(bloq: number) {
+  return async (recipients: string[]) => {
+    const res = await irisFetch(`/api/v1/email/bloqs/${bloq}/audit`, { method: "POST", body: JSON.stringify({ recipients }) }, IRIS_API)
+    return { status: res.status, body: await body(res) }
+  }
+}
+
+/** --to and --to-file → the accounted-for list, or null after saying why not. */
+function readRecipients(args: any): { inputs: number; list: ReturnType<typeof buildRecipientList> } | null {
+  const inputs: Array<{ value: string; line?: number }> = flattenToArgs(args.to).map((v) => ({ value: v }))
+  const toFile = args["to-file"] as string | undefined
+  if (toFile) {
+    if (!existsSync(toFile)) {
+      prompts.log.error(`No such file: ${toFile}`)
+      process.exitCode = 1
+      return null
+    }
+    const parsed = parseRecipientFile(readFileSync(toFile, "utf8"), toFile)
+    if (parsed.error) {
+      prompts.log.error(`${toFile}: ${parsed.error}`)
+      process.exitCode = 1
+      return null
+    }
+    inputs.push(...parsed.entries)
+  }
+  if (!inputs.length) {
+    prompts.log.error("No recipients — pass --to <addr> (repeatable) or --to-file <list.txt|members.csv>.")
+    process.exitCode = 1
+    return null
+  }
+  return { inputs: inputs.length, list: buildRecipientList(inputs) }
+}
+
+export const AuditCommand = cmd({
+  command: "audit",
+  describe: "check a list before sending: which addresses can't receive mail and why. Sends nothing, stores nothing",
+  builder: (y) =>
+    y
+      .option("bloq", { type: "number", describe: "board id", demandOption: true })
+      .option("to", { type: "string", array: true, describe: "recipient (repeat, or comma-separate)" })
+      .option("to-file", { type: "string", describe: "recipient file: one address per line, or a CSV with an \"email\" column" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    const read = readRecipients(args)
+    if (!read) return
+    if (!(await requireAuth())) return
+    const got = await fetchAudit(postAudit(bloqOf(args)), read.list.recipients)
+    if (!got.ok) {
+      if (args.json) await writeJson({ success: false, error: got.error, skipped: read.list.skipped })
+      else prompts.log.error(got.error)
+      process.exitCode = 1
+      return
+    }
+    if (!got.report.passed) process.exitCode = 1
+    if (args.json) return writeJson({ success: got.report.passed, audit: got.report, skipped: read.list.skipped })
+    printSkipped(read.list.skipped)
+    for (const l of auditLines(got.report)) console.log(`  ${l}`)
+  },
+})
+
+export const SendCommand = cmd({
   command: "send <slug>",
   describe:
     "send a template (newsletter, announcement) to a list — one message per recipient, every attempt logged. --test first, then --live --confirm-count N",
@@ -227,34 +290,17 @@ const SendCommand = cmd({
       .option("live", { type: "boolean", describe: "real send — requires --confirm-count" })
       .option("confirm-count", { type: "number", describe: "with --live: the number of unique valid recipients you expect to mail" })
       .option("subject", { type: "string", describe: "override the template subject for this send" })
+      .options(overrideOptions)
       .option("json", { type: "boolean", default: false, describe: "JSON output" }),
   async handler(args) {
     const json = !!args.json
     const slug = String(args.slug)
 
     // 1. The list — accounted for before anything else happens.
-    const inputs: Array<{ value: string; line?: number }> = flattenToArgs(args.to).map((v) => ({ value: v }))
-    const toFile = args["to-file"] as string | undefined
-    if (toFile) {
-      if (!existsSync(toFile)) {
-        prompts.log.error(`No such file: ${toFile}`)
-        process.exitCode = 1
-        return
-      }
-      const parsed = parseRecipientFile(readFileSync(toFile, "utf8"), toFile)
-      if (parsed.error) {
-        prompts.log.error(`${toFile}: ${parsed.error}`)
-        process.exitCode = 1
-        return
-      }
-      inputs.push(...parsed.entries)
-    }
-    if (!inputs.length) {
-      prompts.log.error("No recipients — pass --to <addr> (repeatable) or --to-file <list.txt|members.csv>.")
-      process.exitCode = 1
-      return
-    }
-    const list = buildRecipientList(inputs)
+    const read = readRecipients(args)
+    if (!read) return
+    const list = read.list
+    const inputs = { length: read.inputs }
     const mode = checkMode({
       test: !!args.test,
       live: !!args.live,
@@ -271,8 +317,8 @@ const SendCommand = cmd({
       printDivider()
     }
 
-    const refuse = async (error: string) => {
-      if (json) await writeJson({ success: false, error, recipients: list.recipients.length, skipped: list.skipped })
+    const refuse = async (error: string, audit?: AuditReport) => {
+      if (json) await writeJson({ success: false, error, recipients: list.recipients.length, skipped: list.skipped, ...(audit ? { audit } : {}) })
       else prompts.log.error(error)
       process.exitCode = 1
     }
@@ -282,6 +328,20 @@ const SendCommand = cmd({
 
     if (!(await requireAuth())) return
     const bloq = bloqOf(args)
+
+    // The list audit, for a real send to two or more people. The server checks again on the send.
+    let auditOverride: { reason: string; count?: number } | undefined
+    if (isBulk(mode.mode, list.recipients.length)) {
+      const typed = readOverride(args, !isNonInteractive())
+      if (!typed.ok) return refuse(typed.error)
+      const got = await fetchAudit(postAudit(bloq), list.recipients)
+      if (!got.ok) return refuse(got.error)
+      if (!json) for (const l of auditLines(got.report)) console.log(`  ${l}`)
+      const verdict = decide(got.report, typed.override)
+      if (!verdict.go) return refuse(verdict.error, got.report)
+      auditOverride = verdict.override
+      if (auditOverride && !json) prompts.log.warn(`Audit overridden: "${auditOverride.reason}". This is logged on the send.`)
+    }
 
     // 2. Send. A test runs inline on the server; a live list is queued and polled.
     const payload = {
@@ -293,6 +353,7 @@ const SendCommand = cmd({
       ...(args["from-name"] ? { from_name: args["from-name"] } : {}),
       ...(args.subject ? { subject: mode.mode === "test" ? testSubject(String(args.subject)) : args.subject } : {}),
       ...(mode.mode === "live" ? { confirm_count: args["confirm-count"] } : {}),
+      ...(auditOverride ? { audit_override: auditOverride } : {}),
     }
     const spinner = json ? null : prompts.spinner()
     spinner?.start(mode.mode === "test" ? `Sending test to ${list.recipients.length}…` : `Queuing live send to ${list.recipients.length}…`)
@@ -454,6 +515,6 @@ export const PlatformEmailCommand = cmd({
   command: "email",
   describe:
     "email — send a newsletter or announcement to a list from a board: versioned templates, one message per recipient via Mailjet or Resend, delivery status per recipient",
-  builder: (y) => y.command(TemplatesCommand).command(SendCommand).command(StatusCommand).demandCommand(),
+  builder: (y) => y.command(TemplatesCommand).command(AuditCommand).command(SendCommand).command(StatusCommand).demandCommand(),
   async handler() {},
 })
