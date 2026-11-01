@@ -54,10 +54,10 @@ describe("normalizeSurface", () => {
 
 describe("resolvePane", () => {
   test("a surface with no sub-views resolves to itself", () => {
-    const r = resolvePane("leads", undefined)
+    const r = resolvePane("mcp", undefined)
     expect(r.sub).toBeUndefined()
-    expect(r.pane).toBe("leads")
-    expect(r.path(674)).toBe("/iris/leads/674")
+    expect(r.pane).toBe("mcp")
+    expect(r.path(674)).toBe("/mcp")
   })
 
   test("the pane and the endpoint come from the SAME sub-view", () => {
