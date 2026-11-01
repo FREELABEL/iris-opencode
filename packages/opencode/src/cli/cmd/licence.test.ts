@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import yargs from "yargs"
-import { AllowCmd, ClaimCmd, IssueCmd, LicenceCommand, LinkCmd, ReleaseCmd, RenewCmd, RevokeCmd } from "./licence"
+import { licenceStatusWords, AllowCmd, ClaimCmd, IssueCmd, LicenceCommand, LinkCmd, ReleaseCmd, RenewCmd, RevokeCmd } from "./licence"
 
 /**
  * #191947: --days 0 was dropped as falsy, so the server applied its default and handed back a
@@ -161,5 +161,16 @@ describe("licence extend (#191970)", () => {
 
   test("is declared on the shared command, so `iris reachr licence extend` gets it too", () => {
     expect((RenewCmd as any).aliases).toContain("extend")
+  })
+})
+
+// #191996: an issued licence read as a bare "expiring" or "issued" with nobody having started it.
+describe("licenceStatusWords", () => {
+  test("says a licence nobody has claimed has not been claimed", () => {
+    expect(licenceStatusWords({ status: "issued", end_state: "issued" })).toBe("issued (not claimed yet)")
+    expect(licenceStatusWords({ status: "issued", end_state: "expiring" })).toBe("expiring (not claimed yet)")
+  })
+  test("a licence in use reads as its state", () => {
+    expect(licenceStatusWords({ status: "active", end_state: "expiring" })).toBe("expiring")
   })
 })

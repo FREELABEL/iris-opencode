@@ -66,14 +66,34 @@ export interface ModelRow {
   model: string
   node: string
   serving: boolean
+  /** True only after a real check through the tunnel succeeded, never from the machine's report. */
   reachable: boolean
   why?: string
+  state?: string
+  checked_at?: string | null
+  model_server_tested?: boolean
+}
+
+/** One machine, checked by the server through its tunnel: GET /api/v6/nodes/inference-status (#192146). */
+export interface InferenceCheck {
+  node_id: string
+  state: string
+  ok: boolean
+  reason: string
+  checked_at: string | null
+  model_server_tested: boolean
 }
 
 const FRESH_MS = 180_000
 
-/** One row per (node, model) from the fleet's node detail. Pure, so it is tested without a fleet. */
-export function rowsFromNodes(nodes: any[], now = Date.now()): ModelRow[] {
+/**
+ * One row per (node, model) from the fleet's node detail. Pure, so it is tested without a fleet.
+ *
+ * A heartbeat is the machine's opinion of itself: it cannot see its own tunnel from outside. So a
+ * row is reachable only when `checks` holds a passing check for that machine. Without one it says
+ * so, rather than repeating the report as fact.
+ */
+export function rowsFromNodes(nodes: any[], now = Date.now(), checks?: InferenceCheck[] | null): ModelRow[] {
   const out: ModelRow[] = []
   for (const n of nodes) {
     const llm = n?.local_llm
@@ -88,7 +108,19 @@ export function rowsFromNodes(nodes: any[], now = Date.now()): ModelRow[] {
       else if (!online) why = "machine offline"
       else if (!inf?.url) why = "no tunnel URL yet"
       else if (!fresh) why = "report is stale"
-      out.push({ model: m, node: String(n?.name ?? n?.id ?? "?"), serving, reachable: serving && online && !!inf?.url && fresh, why })
+      const check = checks?.find((c) => String(c.node_id) === String(n?.id))
+      const reported = serving && online && !!inf?.url && fresh
+      if (reported && !check) why = "reported by the machine, not tested"
+      else if (reported && check && !check.ok) why = `${check.state}: ${check.reason}`
+      else if (reported && check && !check.model_server_tested) why = check.reason
+      out.push({
+        model: m,
+        node: String(n?.name ?? n?.id ?? "?"),
+        serving,
+        reachable: reported && check?.ok === true,
+        why,
+        ...(reported && check ? { state: check.state, checked_at: check.checked_at, model_server_tested: check.model_server_tested } : {}),
+      })
     }
   }
   return out.sort((a, b) => a.model.localeCompare(b.model) || a.node.localeCompare(b.node))
@@ -99,6 +131,26 @@ export async function fleet(userId: number): Promise<any[]> {
   const body: any = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
   return body.nodes || body.data || []
+}
+
+/** Each serving machine, checked through its tunnel. null when the server cannot say (it is older, or unreachable). */
+export async function inferenceChecks(userId: number): Promise<InferenceCheck[] | null> {
+  try {
+    const res = await hiveFetch(`/api/v6/nodes/inference-status?user_id=${userId}`)
+    if (!res.ok) return null
+    const body: any = await res.json().catch(() => null)
+    return Array.isArray(body?.data) ? body.data : null
+  } catch {
+    return null
+  }
+}
+
+/** "checked 12s ago", for a row the server tested. */
+export function checkedAgo(at: string | null | undefined, now = Date.now()): string {
+  const t = at ? Date.parse(at) : NaN
+  if (Number.isNaN(t)) return ""
+  const s = Math.max(0, Math.round((now - t) / 1000))
+  return s < 60 ? `checked ${s}s ago` : `checked ${Math.round(s / 60)}m ago`
 }
 
 const ListCommand = cmd({
@@ -115,7 +167,8 @@ const ListCommand = cmd({
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
-    const rows = rowsFromNodes(await fleet(userId))
+    const [nodes, checks] = await Promise.all([fleet(userId), inferenceChecks(userId)])
+    const rows = rowsFromNodes(nodes, Date.now(), checks)
     if (argv.json) return void (await writeJson(rows.map((r) => ({ id: `hive/${r.model}`, ...r }))))
     console.log()
     if (!rows.length) {
@@ -125,7 +178,7 @@ const ListCommand = cmd({
     }
     for (const r of rows)
       console.log(
-        `  ${r.reachable ? success("●") : dim("○")} ${bold(`hive/${r.model}`.padEnd(34))} ${r.node.padEnd(22)} ${r.reachable ? success("serving") : dim(r.why ?? "")}`,
+        `  ${r.reachable ? success("●") : dim("○")} ${bold(`hive/${r.model}`.padEnd(34))} ${r.node.padEnd(22)} ${r.reachable ? `${success("serving")} ${dim([checkedAgo(r.checked_at), r.why].filter(Boolean).join(" · "))}` : dim([r.why, checkedAgo(r.checked_at)].filter(Boolean).join(" · "))}`,
       )
     const local = readSettings()
     console.log()
