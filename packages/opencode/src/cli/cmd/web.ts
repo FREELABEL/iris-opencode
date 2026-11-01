@@ -48,8 +48,8 @@ export const WebCommand = effectCmd({
       )
     }
     const server = yield* Effect.promise(() => Server.listen(opts))
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, credentials: auth.credentials })
     if (auth.generated) {
-      LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, password: auth.password })
       UI.println(
         UI.Style.TEXT_INFO_BOLD + "  Password:         ",
         UI.Style.TEXT_NORMAL,

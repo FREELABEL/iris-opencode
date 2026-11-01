@@ -84,7 +84,7 @@ describe("Host", () => {
 })
 
 describe("the way Desktop launches its engine", () => {
-  test("its password and allowlist win, and it writes no second record", async () => {
+  test("its password and allowlist win, and it publishes the same way as any other server", async () => {
     const h = tempHome()
     const p = await freePort()
     const child = spawnIris(["serve", `--port=${p}`], {
@@ -103,7 +103,10 @@ describe("the way Desktop launches its engine", () => {
       expect((await rawGet(p, "/session", { Host: `127.0.0.1:${p}`, Authorization: authorization, ...directory })).status).toBe(200)
       expect((await rawGet(p, "/session", { Host: `127.0.0.1:${p}`, ...directory })).status).toBe(401)
       expect((await rawGet(p, "/session", { Host: "box.example", Authorization: authorization })).status).toBe(403)
-      expect(fs.existsSync(path.join(h.root, ".iris", "servers", `${p}.json`))).toBe(false)
+      const file = path.join(h.root, ".iris", "servers", `${p}.json`)
+      expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({ port: p, password: "fake-desktop-password" })
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600)
+      expect(fs.existsSync(path.join(h.root, ".iris", "desktop-engine.json"))).toBe(false)
     } finally {
       child.kill()
       h.cleanup()
@@ -124,6 +127,7 @@ describe("the dev loop", () => {
       const directory = { "x-opencode-directory": h.project }
       expect((await rawGet(p, "/session", { Host: `127.0.0.1:${p}`, ...directory })).status).toBe(200)
       expect((await rawGet(p, "/session", { Host: "evil.example", ...directory })).status).toBe(403)
+      expect(fs.existsSync(path.join(h.root, ".iris", "servers", `${p}.json`))).toBe(false)
     } finally {
       child.kill()
       h.cleanup()

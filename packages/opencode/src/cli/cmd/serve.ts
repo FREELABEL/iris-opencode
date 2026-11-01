@@ -23,8 +23,8 @@ export const ServeCommand = effectCmd({
       console.log(`Warning: ${LocalAuth.AUTH_ENV}=off; any process on this machine can reach this server.`)
     }
     const server = yield* Effect.promise(() => Server.listen(opts))
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, credentials: auth.credentials })
     if (auth.generated) {
-      LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, password: auth.password })
       console.log(`Password: username ${LocalAuth.USERNAME}, in ${LocalAuth.recordPath(server.port)}`)
     }
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)

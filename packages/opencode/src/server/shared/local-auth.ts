@@ -5,8 +5,9 @@
 // `iris web`, a `--port` on the TUI or ACP) was still open: `/session` answered with no
 // credentials, and any Host was served. This gives those the same two controls by default.
 //
-// The token goes where Desktop's goes (OPENCODE_SERVER_PASSWORD, read by server/auth.ts), and local
-// clients find it in ~/.iris/servers/<port>.json, 0600 in a 0700 directory. That stops other OS
+// The token goes where Desktop's goes (OPENCODE_SERVER_PASSWORD, read by server/auth.ts). Every
+// server publishes its password, generated or chosen, so local clients and iris-daemon find it in
+// ~/.iris/servers/<port>.json, 0600 in a 0700 directory. That stops other OS
 // users and every browser page. It does NOT stop a process running as the same user, which can
 // read that file, and could read the session database anyway.
 //
@@ -63,26 +64,33 @@ export function resetLocalAuth() {
   defaultHosts = undefined
 }
 
+export type Credentials = { username: string; password: string }
+
 /**
- * Call before Server.listen. Returns whether this call generated the token, which is what decides
- * if a record is published: a password somebody chose is theirs to pass around, and Desktop writes
- * its own record (engine_auth.rs).
+ * Call before Server.listen. `credentials` is what the server will require, to hand to
+ * publishRecord once it has a port; `generated` is whether nobody chose them. No credentials means
+ * OPENCODE_SERVER_AUTH=off, which leaves nothing to publish.
  */
-export function prepareListener(input: { hostname: string; env?: NodeJS.ProcessEnv }) {
+export function prepareListener(input: {
+  hostname: string
+  env?: NodeJS.ProcessEnv
+}): { generated: boolean; credentials?: Credentials } {
   const env = input.env ?? process.env
   defaultHosts = namesFor(input.hostname)
-  if (env.OPENCODE_SERVER_PASSWORD?.trim()) return { generated: false as const }
+  const chosen = env.OPENCODE_SERVER_PASSWORD
+  if (chosen?.trim())
+    return { generated: false, credentials: { username: env.OPENCODE_SERVER_USERNAME || USERNAME, password: chosen } }
   if (env[AUTH_ENV] === "off") {
     if (!isLoopbackName(input.hostname))
       throw new Error(`${AUTH_ENV}=off is for a loopback server only; this one binds ${input.hostname}.`)
-    return { generated: false as const }
+    return { generated: false }
   }
   const password = crypto.randomBytes(32).toString("base64url")
   env.OPENCODE_SERVER_PASSWORD = password
   env.OPENCODE_SERVER_USERNAME = USERNAME
   Flag.OPENCODE_SERVER_PASSWORD = password
   Flag.OPENCODE_SERVER_USERNAME = USERNAME
-  return { generated: true as const, password }
+  return { generated: true, credentials: { username: USERNAME, password } }
 }
 
 export function recordPath(port: number) {
@@ -90,14 +98,15 @@ export function recordPath(port: number) {
 }
 
 /** Atomic and owner-only from the first byte. A failure must not stop the server starting. */
-export function publishRecord(input: { port: number; hostname: string; password: string }) {
+export function publishRecord(input: { port: number; hostname: string; credentials: Credentials }) {
   const target = recordPath(input.port)
   const dir = path.dirname(target)
   const tmp = path.join(dir, `.${input.port}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`)
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     if (process.platform !== "win32") fs.chmodSync(dir, 0o700)
-    const body = { version: 1, port: input.port, pid: process.pid, hostname: input.hostname, username: USERNAME, password: input.password }
+    sweep(dir)
+    const body = { version: 1, port: input.port, pid: process.pid, hostname: input.hostname, ...input.credentials }
     fs.writeFileSync(tmp, JSON.stringify(body) + "\n", { mode: 0o600, flag: "wx" })
     fs.renameSync(tmp, target)
     const remove = () => {
@@ -111,10 +120,31 @@ export function publishRecord(input: { port: number; hostname: string; password:
   }
 }
 
-/** A file anyone else could have written or read is not a credential: the rule iris-daemon applies. */
+/**
+ * Records of servers that died without stopping (`kill -9` runs no exit handler), or that name no
+ * process. Only ever files this module named, and only real files this person owns: readOwnerOnly
+ * refuses anything else, so a symlink stays where it is. Tidying must not stop the server starting.
+ */
+function sweep(dir: string) {
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^\d+\.json$/.test(name)) continue
+      const file = path.join(dir, name)
+      const record = readOwnerOnly(file)
+      if (record && !alive(record.pid)) fs.rmSync(file, { force: true })
+    }
+  } catch {}
+}
+
+/**
+ * A file anyone else could have written or read is not a credential: the rule iris-daemon applies.
+ * lstat, because a symlink's own target decides nothing here, and a real file only: a FIFO would
+ * hang the read.
+ */
 function readOwnerOnly(file: string): any {
   try {
-    const stat = fs.statSync(file)
+    const stat = fs.lstatSync(file)
+    if (!stat.isFile()) return undefined
     if (process.platform !== "win32") {
       if (stat.mode & 0o077) return undefined
       if (process.getuid && stat.uid !== process.getuid()) return undefined
@@ -125,33 +155,67 @@ function readOwnerOnly(file: string): any {
   }
 }
 
-function alive(pid: number) {
+/**
+ * A positive integer pid that is running. Anything else is not a live server: `process.kill(0, 0)`
+ * and a negative pid signal a process group, so they succeed for a record that names no process.
+ */
+function alive(pid: unknown) {
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return false
   try {
-    process.kill(pid, 0)
+    process.kill(pid as number, 0)
     return true
   } catch (e: any) {
     return e?.code === "EPERM"
   }
 }
 
-function fromRecord(file: string, port: number): string | undefined {
+function fromRecord(file: string, port: number): Credentials | undefined {
   const record = readOwnerOnly(file)
-  if (!record || Number(record.port) !== port || typeof record.password !== "string") return undefined
-  if (typeof record.pid === "number" && !alive(record.pid)) return undefined
-  return record.password
+  if (!record || Number(record.port) !== port || typeof record.password !== "string" || !record.password)
+    return undefined
+  if (!alive(record.pid)) return undefined
+  return { username: typeof record.username === "string" && record.username ? record.username : USERNAME, password: record.password }
 }
 
-/** The password for a server on this machine, from its record or Desktop's. Never for a remote URL. */
-export function recordedPassword(url: string): string | undefined {
+/** The port of a plain-http URL on this machine, else undefined. iris-daemon's loopbackPort. */
+function loopbackPort(url: string) {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
     return undefined
   }
+  if (parsed.protocol !== "http:" || parsed.username || parsed.password) return undefined
   if (!isLoopbackName(parsed.hostname)) return undefined
-  const port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))
+  return Number(parsed.port || 80)
+}
+
+/**
+ * Credentials this machine holds for the server at `url`: the environment, then the server's own
+ * record, then Desktop's. All of them stop at loopback, OPENCODE_SERVER_PASSWORD included, because
+ * it names this machine's server and is often set for a whole shell. The one way to send a secret
+ * to another machine is `--password`, on the command that names that URL: see headersFor.
+ */
+export function credentialsFor(url: string, env: NodeJS.ProcessEnv = process.env): Credentials | undefined {
+  const port = loopbackPort(url)
+  if (port === undefined) return undefined
+  if (env.OPENCODE_SERVER_PASSWORD?.trim())
+    return { username: env.OPENCODE_SERVER_USERNAME || USERNAME, password: env.OPENCODE_SERVER_PASSWORD }
   return fromRecord(recordPath(port), port) ?? fromRecord(path.join(os.homedir(), ".iris", "desktop-engine.json"), port)
+}
+
+/** Headers for a client reaching `url`. An explicit password goes where it was aimed; see credentialsFor. */
+export function headersFor(
+  url: string,
+  explicit?: { password?: string; username?: string },
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const found = explicit?.password
+    ? { username: env.OPENCODE_SERVER_USERNAME || USERNAME, password: explicit.password }
+    : credentialsFor(url, env)
+  if (!found) return undefined
+  const username = explicit?.username ?? found.username
+  return { Authorization: `Basic ${Buffer.from(`${username}:${found.password}`).toString("base64")}` }
 }
 
 /**
@@ -162,10 +226,16 @@ export async function attachProblem(url: string, headers: Record<string, string>
   const base = url.replace(/\/+$/, "")
   const res = await fetch(`${base}/config`, { headers, signal: AbortSignal.timeout(5000) }).catch(() => undefined)
   if (!res || res.status !== 401) return undefined
-  return headers
-    ? `${base} refused these credentials. Check --password or OPENCODE_SERVER_PASSWORD.`
-    : `${base} requires a token and none was found. Pass --password or set OPENCODE_SERVER_PASSWORD. ` +
-        `A server on this machine publishes it in ~/.iris/servers/<port>.json for its owner.`
+  if (headers) return `${base} refused these credentials. Check --password or OPENCODE_SERVER_PASSWORD.`
+  if (loopbackPort(url) === undefined)
+    return (
+      `${base} requires a token. OPENCODE_SERVER_PASSWORD and this machine's server records are only ` +
+      `sent to a server on this machine, so name this one's with --password.`
+    )
+  return (
+    `${base} requires a token and none was found. Pass --password or set OPENCODE_SERVER_PASSWORD. ` +
+    `A server on this machine publishes it in ~/.iris/servers/<port>.json for its owner.`
+  )
 }
 
 export * as LocalAuth from "./local-auth"

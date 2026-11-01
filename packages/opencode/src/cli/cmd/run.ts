@@ -20,7 +20,6 @@ import { open } from "node:fs/promises"
 import { Effect } from "effect"
 import { UI } from "../ui"
 import { LocalAuth } from "@/server/shared/local-auth"
-import { Flag } from "@opencode-ai/core/flag/flag"
 import { effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
@@ -196,7 +195,7 @@ export const RunCommand = effectCmd({
       .option("password", {
         alias: ["p"],
         type: "string",
-        describe: "basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
+        describe: "basic auth password (default on this machine: OPENCODE_SERVER_PASSWORD, or the server's record; another machine only gets this flag)",
       })
       .option("username", {
         alias: ["u"],
@@ -346,10 +345,7 @@ export const RunCommand = effectCmd({
         }
       })()
       const attachHeaders = args.attach
-        ? ServerAuth.headers({
-            password: args.password ?? Flag.OPENCODE_SERVER_PASSWORD ?? LocalAuth.recordedPassword(args.attach),
-            username: args.username,
-          })
+        ? LocalAuth.headersFor(args.attach, { password: args.password, username: args.username })
         : undefined
       if (args.attach) {
         const problem = await LocalAuth.attachProblem(args.attach, attachHeaders)

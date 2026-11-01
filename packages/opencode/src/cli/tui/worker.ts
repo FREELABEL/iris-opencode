@@ -58,7 +58,7 @@ export const rpc = {
     // through ServerAuth.header(), so only outside clients need the record.
     const auth = LocalAuth.prepareListener({ hostname: input.hostname })
     server = await Server.listen(input)
-    if (auth.generated) LocalAuth.publishRecord({ port: server.port, hostname: input.hostname, password: auth.password })
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: input.hostname, credentials: auth.credentials })
     return { url: server.url.toString() }
   },
   async checkUpgrade(input: { directory: string }) {

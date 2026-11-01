@@ -2,9 +2,7 @@ import { cmd } from "./cmd"
 import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
-import { ServerAuth } from "@/server/auth"
 import { LocalAuth } from "@/server/shared/local-auth"
-import { Flag } from "@opencode-ai/core/flag/flag"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -37,7 +35,7 @@ export const AttachCommand = cmd({
       .option("password", {
         alias: ["p"],
         type: "string",
-        describe: "basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
+        describe: "basic auth password (default on this machine: OPENCODE_SERVER_PASSWORD, or the server's record; another machine only gets this flag)",
       })
       .option("username", {
         alias: ["u"],
@@ -85,7 +83,7 @@ export const AttachCommand = cmd({
       await runMini({
         attach: args.url,
         directory,
-        password: args.password ?? LocalAuth.recordedPassword(args.url),
+        password: args.password,
         username: args.username,
         continue: args.continue,
         session: args.session,
@@ -113,8 +111,7 @@ export const AttachCommand = cmd({
       return
     }
 
-    const password = args.password ?? Flag.OPENCODE_SERVER_PASSWORD ?? LocalAuth.recordedPassword(args.url)
-    const headers = ServerAuth.headers({ password, username: args.username })
+    const headers = LocalAuth.headersFor(args.url, { password: args.password, username: args.username })
     const problem = await LocalAuth.attachProblem(args.url, headers)
     if (problem) {
       UI.error(problem)
