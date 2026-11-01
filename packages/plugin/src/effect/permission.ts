@@ -11,6 +11,8 @@ export interface PermissionEvaluation {
   readonly resources: ReadonlyArray<string>
   readonly metadata?: Record<string, unknown>
   readonly source?: Permission.Source
+  /** The person already answered "always" for this action and every resource. */
+  readonly saved?: boolean
   effect: Permission.Effect
   message?: string
 }
