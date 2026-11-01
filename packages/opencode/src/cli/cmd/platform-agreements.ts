@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -21,9 +22,16 @@ import {
 // Signing is deliberately NOT a command. The value of the audit chain is that the signature is
 // attributable to the person who gave it, and an operator running a flag is not that person.
 
+// Mirrors config/agreements.php in fl-api, which is what actually decides. It lives here only for
+// help text: `--type` is not restricted to these locally, so a type added on the server works
+// before the next CLI release, and an unknown one gets the server's refusal.
+const AGREEMENT_TYPES =
+  "nda, baa, engagement, fee, services, sow, co_counsel, tolling, settlement, release, letter_of_protection, medical_authorization, other"
+
 interface LedgerRow {
   id: number
   type: string
+  kind?: string
   counterparty: string
   org?: string | null
   email?: string | null
@@ -55,90 +63,97 @@ function shortHash(h?: string | null): string {
   return h ? `${h.slice(0, 8)}…${h.slice(-4)}` : "—"
 }
 
+/** The ledger, for `iris agreements list` and `iris lexicon agreements list` alike. */
+export async function printLedger(title: string, filters: Record<string, string | undefined>, json: boolean): Promise<void> {
+  UI.empty()
+  prompts.intro(title)
+  if (!(await requireAuth())) {
+    prompts.outro("Done")
+    return
+  }
+
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(filters)) if (v) qs.set(k, v)
+  const suffix = qs.toString() ? `?${qs}` : ""
+
+  const spinner = prompts.spinner()
+  spinner.start("Loading…")
+  const res = await irisFetch(`/api/v1/agreements${suffix}`)
+  if (!res.ok) {
+    spinner.stop("Failed")
+    await handleApiError(res, "load agreements")
+    prompts.outro("Failed")
+    return
+  }
+  const body = (await res.json()) as { summary: Record<string, number>; agreements: LedgerRow[] }
+  spinner.stop(`${body.agreements.length} agreement(s)`)
+
+  if (json) {
+    await writeJson(body)
+    prompts.outro("Done")
+    return
+  }
+
+  if (body.agreements.length === 0) {
+    prompts.log.info("No agreements match.")
+    prompts.outro("Done")
+    return
+  }
+
+  const s = body.summary
+  printDivider()
+  console.log(
+    `  ${bold(String(s.awaiting))} awaiting   ${bold(String(s.executed))} executed   ` +
+      `${bold(String(s.expiringSoon))} expiring ≤30d   ${bold(String(s.revoked))} revoked`,
+  )
+  printDivider()
+
+  for (const r of body.agreements) {
+    // The wait is the number this list exists for, so it sits immediately after the state
+    // rather than being something you work out from the dates further along the row.
+    const wait =
+      r.waitingDays === null || r.waitingDays === undefined
+        ? ""
+        : r.waitingDays >= 7
+          ? `  ${bold(`${r.waitingDays}d waiting`)}`
+          : `  ${dim(`${r.waitingDays}d waiting`)}`
+
+    console.log(
+      `  ${dim(`#${r.id}`)}  ${bold(r.counterparty.slice(0, 26).padEnd(26))} ` +
+        `${dim(r.type.padEnd(10))} ${highlight(stateLabel(r).padEnd(9))}${wait}`,
+    )
+    const detail = [
+      r.org ? r.org : null,
+      // Half-signed is a different situation from not-started and needs different chasing.
+      r.partiesTotal && r.partiesTotal > 1
+        ? `${r.partiesSigned ?? 0}/${r.partiesTotal} signed${r.waitingOn ? ` — waiting on ${r.waitingOn}` : ""}`
+        : null,
+      r.executedAt ? `executed ${r.executedAt}` : null,
+      r.expiryDate ? `expires ${r.expiryDate}` : null,
+      r.documentHash ? `seal ${shortHash(r.documentHash)}` : null,
+    ].filter(Boolean)
+    if (detail.length) console.log(`       ${dim(detail.join("  ·  "))}`)
+  }
+  printDivider()
+  prompts.outro(dim("iris agreements show <id>   ·   iris agreements link <id>"))
+}
+
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list agreements and what is still outstanding",
   builder: (y) =>
     y
-      .option("status", { type: "string", describe: "draft | sent | opened | executed | revoked" })
-      .option("type", { type: "string", describe: "nda | baa" })
+      .option("status", { type: "string", describe: "draft | sent | opened | partially_signed | executed | declined | expired | revoked" })
+      .option("type", { type: "string", describe: AGREEMENT_TYPES })
       .option("subject", { type: "string", describe: "filter by subject_ref" })
       .option("json", { type: "boolean" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Agreements")
-    if (!(await requireAuth())) {
-      prompts.outro("Done")
-      return
-    }
-
-    const qs = new URLSearchParams()
-    if (args.status) qs.set("status", String(args.status))
-    if (args.type) qs.set("type", String(args.type))
-    if (args.subject) qs.set("subject", String(args.subject))
-    const suffix = qs.toString() ? `?${qs}` : ""
-
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
-    const res = await irisFetch(`/api/v1/agreements${suffix}`)
-    if (!res.ok) {
-      spinner.stop("Failed")
-      await handleApiError(res, "load agreements")
-      prompts.outro("Failed")
-      return
-    }
-    const body = (await res.json()) as { summary: Record<string, number>; agreements: LedgerRow[] }
-    spinner.stop(`${body.agreements.length} agreement(s)`)
-
-    if (args.json) {
-      await writeJson(body)
-      prompts.outro("Done")
-      return
-    }
-
-    if (body.agreements.length === 0) {
-      prompts.log.info("No agreements match.")
-      prompts.outro("Done")
-      return
-    }
-
-    const s = body.summary
-    printDivider()
-    console.log(
-      `  ${bold(String(s.awaiting))} awaiting   ${bold(String(s.executed))} executed   ` +
-        `${bold(String(s.expiringSoon))} expiring ≤30d   ${bold(String(s.revoked))} revoked`,
-    )
-    printDivider()
-
-    for (const r of body.agreements) {
-      // The wait is the number this list exists for, so it sits immediately after the state
-      // rather than being something you work out from the dates further along the row.
-      const wait =
-        r.waitingDays === null || r.waitingDays === undefined
-          ? ""
-          : r.waitingDays >= 7
-            ? `  ${bold(`${r.waitingDays}d waiting`)}`
-            : `  ${dim(`${r.waitingDays}d waiting`)}`
-
-      console.log(
-        `  ${dim(`#${r.id}`)}  ${bold(r.counterparty.slice(0, 26).padEnd(26))} ` +
-          `${dim(r.type.padEnd(4))} ${highlight(stateLabel(r).padEnd(9))}${wait}`,
-      )
-      const detail = [
-        r.org ? r.org : null,
-        // Half-signed is a different situation from not-started and needs different chasing.
-        r.partiesTotal && r.partiesTotal > 1
-          ? `${r.partiesSigned ?? 0}/${r.partiesTotal} signed${r.waitingOn ? ` — waiting on ${r.waitingOn}` : ""}`
-          : null,
-        r.executedAt ? `executed ${r.executedAt}` : null,
-        r.expiryDate ? `expires ${r.expiryDate}` : null,
-        r.documentHash ? `seal ${shortHash(r.documentHash)}` : null,
-      ].filter(Boolean)
-      if (detail.length) console.log(`       ${dim(detail.join("  ·  "))}`)
-    }
-    printDivider()
-    prompts.outro(dim("iris agreements show <id>   ·   iris agreements link <id>"))
+    await printLedger("◈  Agreements", {
+      status: args.status as string | undefined,
+      type: args.type as string | undefined,
+      subject: args.subject as string | undefined,
+    }, Boolean(args.json))
   },
 })
 
@@ -244,6 +259,13 @@ const LinkCommand = cmd({
       prompts.log.info(`Already executed on ${body.agreement.executedAt} — nothing to chase.`)
     }
 
+    if (!body.agreement.signingUrl) {
+      // A colleague can read the firm's ledger without holding its bearer links.
+      prompts.log.warn("Only the person who raised this, or the firm's board owner, can get its signing links.")
+      prompts.outro("Done")
+      return
+    }
+
     const links = body.agreement.partyLinks ?? []
     console.log()
     if (links.length > 1) {
@@ -269,6 +291,88 @@ const LinkCommand = cmd({
 })
 
 
+export interface RaiseOptions {
+  type: string
+  name: string
+  email?: string
+  org?: string
+  disclosing: string
+  subject?: string
+  tier: string
+  term?: string
+  expires?: string
+  bodyFile?: string
+  template?: string
+  issue: boolean
+  json: boolean
+}
+
+/** Raise and optionally issue, for `iris agreements raise` and `iris lexicon agreements raise` alike. */
+export async function raiseAgreement(opts: RaiseOptions): Promise<void> {
+  if (opts.issue && !opts.email) {
+    // Issuing means emailing. Without an address the agreement would be marked sent while
+    // nothing left the building — the exact failure send() was fixed for.
+    prompts.log.error("--issue needs --email: there is nowhere to send the link")
+    prompts.outro("Failed")
+    return
+  }
+
+  let wording: string | null = null
+  if (opts.bodyFile) {
+    wording = await readFile(opts.bodyFile, "utf8").catch(() => null)
+    if (!wording?.trim()) {
+      prompts.log.error(`--body-file: nothing to read at ${opts.bodyFile}`)
+      prompts.outro("Failed")
+      return
+    }
+  }
+
+  const spinner = prompts.spinner()
+  spinner.start("Raising…")
+  const res = await irisFetch("/api/v1/agreements", {
+    method: "POST",
+    body: JSON.stringify({
+      agreement_type: opts.type,
+      template_slug: opts.template ?? null,
+      body: wording,
+      counterparty_name: opts.name,
+      counterparty_email: opts.email ?? null,
+      counterparty_org: opts.org ?? null,
+      disclosing_party: opts.disclosing,
+      subject_ref: opts.subject ?? null,
+      access_tier: opts.tier,
+      term: opts.term ?? null,
+      expiry_date: opts.expires ?? null,
+      issue: Boolean(opts.issue),
+    }),
+  })
+  if (!res.ok) {
+    spinner.stop("Failed")
+    await handleApiError(res, "raise agreement")
+    prompts.outro("Failed")
+    return
+  }
+  const body = (await res.json()) as any
+  spinner.stop("Raised")
+
+  if (opts.json) { await writeJson(body); prompts.outro("Done"); return }
+
+  const a = body.agreement
+  printDivider()
+  console.log(`  ${dim("agreement")}  #${a.id}  ${bold(a.type)}`)
+  console.log(`  ${dim("between")}    ${a.disclosingParty}  and  ${bold(a.counterparty)}`)
+  console.log(`  ${dim("term")}       ${a.expiryDate ? `expires ${a.expiryDate}` : "—"}  ·  tier ${a.tier}`)
+  console.log(`  ${dim("state")}      ${highlight(stateLabel(a))}`)
+  if (a.signingUrl) console.log(`  ${dim("sign at")}    ${a.signingUrl}`)
+  printDivider()
+  if (opts.issue) {
+    prompts.log.warn("That URL is a bearer link — anyone holding it can sign.")
+  } else {
+    prompts.log.info(`Not issued yet: iris agreements issue ${a.id}`)
+  }
+  prompts.outro("Done")
+}
+
 const RaiseCommand = cmd({
   command: "raise",
   aliases: ["new", "create"],
@@ -278,11 +382,13 @@ const RaiseCommand = cmd({
       .option("name", { type: "string", describe: "counterparty full name", demandOption: true })
       .option("email", { type: "string", describe: "counterparty email — required to issue" })
       .option("org", { type: "string" })
-      .option("type", { type: "string", default: "nda", choices: ["nda", "baa"] })
+      .option("type", { type: "string", default: "nda", describe: AGREEMENT_TYPES })
+      .option("body-file", { type: "string", describe: "the wording, from a text file. Required for every type but nda and baa, unless --template names one" })
+      .option("template", { type: "string", describe: "contract template slug to use instead of the type's default" })
       .option("disclosing", { type: "string", default: "IRIS", describe: "the disclosing party" })
       .option("subject", { type: "string", describe: "what this agreement gates" })
       .option("tier", { type: "string", default: "standard", choices: ["standard", "phi"] })
-      .option("term", { type: "string", default: "one year" })
+      .option("term", { type: "string", describe: 'e.g. "two years". nda and baa default to one year; other types run until revoked' })
       .option("expires", { type: "string", describe: "YYYY-MM-DD; derived from --term when omitted" })
       .option("issue", { type: "boolean", describe: "email the signing link straight away" })
       .option("json", { type: "boolean" })
@@ -299,9 +405,10 @@ const RaiseCommand = cmd({
           // What this command CANNOT produce belongs here, not only on the parent's
           // epilogue: `raise --help` is the screen a user reads after deciding to raise
           // something, and it used to say nothing about the two types it accepts (#190002).
-          "TYPES: --type nda or baa, nothing else. An NDA gates who may SEE something; a BAA",
-          "gates who may touch PHI. For a services agreement or statement of work there is no",
-          "type here — that paperwork lives in a payment gate:",
+          `TYPES: ${AGREEMENT_TYPES}.`,
+          "Only an NDA or a BAA satisfies an access gate; the others are signed and kept. Only those",
+          "two have default wording, so every other type needs --body-file or --template. To be paid",
+          "as well as signed, use a payment gate:",
           "  iris leads payment-gate <lead-id> --amount 500 --scope \"...\"",
           "",
           "--term and the expiry date state the same fact, so the date is DERIVED from the term.",
@@ -318,56 +425,21 @@ const RaiseCommand = cmd({
     prompts.intro("◈  Raise an agreement")
     if (!(await requireAuth())) { prompts.outro("Done"); return }
 
-    if (args.issue && !args.email) {
-      // Issuing means emailing. Without an address the agreement would be marked sent while
-      // nothing left the building — the exact failure send() was fixed for.
-      prompts.log.error("--issue needs --email: there is nowhere to send the link")
-      prompts.outro("Failed")
-      return
-    }
-
-    const spinner = prompts.spinner()
-    spinner.start("Raising…")
-    const res = await irisFetch("/api/v1/agreements", {
-      method: "POST",
-      body: JSON.stringify({
-        agreement_type: args.type,
-        counterparty_name: args.name,
-        counterparty_email: args.email ?? null,
-        counterparty_org: args.org ?? null,
-        disclosing_party: args.disclosing,
-        subject_ref: args.subject ?? null,
-        access_tier: args.tier,
-        term: args.term,
-        expiry_date: args.expires ?? null,
-        issue: Boolean(args.issue),
-      }),
+    await raiseAgreement({
+      type: args.type as string,
+      name: args.name as string,
+      email: args.email as string | undefined,
+      org: args.org as string | undefined,
+      disclosing: args.disclosing as string,
+      subject: args.subject as string | undefined,
+      tier: args.tier as string,
+      term: args.term as string | undefined,
+      expires: args.expires as string | undefined,
+      bodyFile: args.bodyFile as string | undefined,
+      template: args.template as string | undefined,
+      issue: Boolean(args.issue),
+      json: Boolean(args.json),
     })
-    if (!res.ok) {
-      spinner.stop("Failed")
-      await handleApiError(res, "raise agreement")
-      prompts.outro("Failed")
-      return
-    }
-    const body = (await res.json()) as any
-    spinner.stop("Raised")
-
-    if (args.json) { await writeJson(body); prompts.outro("Done"); return }
-
-    const a = body.agreement
-    printDivider()
-    console.log(`  ${dim("agreement")}  #${a.id}  ${bold(a.type)}`)
-    console.log(`  ${dim("between")}    ${a.disclosingParty}  and  ${bold(a.counterparty)}`)
-    console.log(`  ${dim("term")}       ${a.expiryDate ? `expires ${a.expiryDate}` : "—"}  ·  tier ${a.tier}`)
-    console.log(`  ${dim("state")}      ${highlight(stateLabel(a))}`)
-    if (a.signingUrl) console.log(`  ${dim("sign at")}    ${a.signingUrl}`)
-    printDivider()
-    if (args.issue) {
-      prompts.log.warn("That URL is a bearer link — anyone holding it can sign.")
-    } else {
-      prompts.log.info(`Not issued yet: iris agreements issue ${a.id}`)
-    }
-    prompts.outro("Done")
   },
 })
 
@@ -449,7 +521,7 @@ const RevokeCommand = cmd({
 export const PlatformAgreementsCommand = cmd({
   command: "agreements",
   aliases: ["nda"],
-  describe: "[Agreements] NDAs, BAAs — what is outstanding, executed, or expiring",
+  describe: "[Agreements] NDAs, BAAs, engagement letters and more — what is outstanding, executed, or expiring",
   builder: (yargs) =>
     yargs
       .command(ListCommand)
@@ -461,9 +533,10 @@ export const PlatformAgreementsCommand = cmd({
       .demandCommand()
       .epilogue(
         [
-          "Agreements GATE work: an NDA before someone sees anything confidential, a BAA before",
-          "they touch PHI. For selling — proposals, invoices, Stripe — see `iris invoices` and",
-          "the payment-gate-contracts recipe instead.",
+          "Anything that needs a signature and proof of it. An NDA or a BAA also GATES work: an NDA",
+          "before someone sees anything confidential, a BAA before they touch PHI. To be paid as",
+          "well as signed — proposals, invoices, Stripe — see `iris invoices` and the",
+          "payment-gate-contracts recipe.",
           "",
           "There is no `sign` command, deliberately. The value of the audit chain is that a",
           "signature is attributable to the person who gave it, and an operator running a flag",
