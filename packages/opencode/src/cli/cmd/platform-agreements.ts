@@ -259,6 +259,13 @@ const LinkCommand = cmd({
       prompts.log.info(`Already executed on ${body.agreement.executedAt} — nothing to chase.`)
     }
 
+    if (!body.agreement.signingUrl) {
+      // A colleague can read the firm's ledger without holding its bearer links.
+      prompts.log.warn("Only the person who raised this, or the firm's board owner, can get its signing links.")
+      prompts.outro("Done")
+      return
+    }
+
     const links = body.agreement.partyLinks ?? []
     console.log()
     if (links.length > 1) {

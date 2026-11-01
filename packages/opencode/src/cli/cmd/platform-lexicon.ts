@@ -138,22 +138,22 @@ const IntakeCmd = cmd({
 })
 
 const AgreementsListCmd = cmd({
-  command: "list [lead]",
+  command: "list [matter]",
   aliases: ["ls"],
   describe: "what is out for signature and what is signed — on one matter, or across every matter",
   builder: (yargs) =>
     yargs
-      .positional("lead", { describe: "lead / matter id; omit for every matter", type: "number" })
+      .positional("matter", { describe: "lead id or matter ref (e.g. LEX-CLIO-9); omit for every matter", type: "string" })
       .option("status", { type: "string", describe: "draft | sent | opened | partially_signed | executed | declined | expired | revoked" })
       .option("type", { type: "string", describe: "engagement, fee, tolling, settlement, release, …" })
       .option("json", { type: "boolean" }),
   async handler(args) {
     await printLedger(
-      args.lead ? `◈  Agreements — matter ${args.lead}` : "◈  Agreements — all matters",
+      args.matter ? `◈  Agreements — matter ${args.matter}` : "◈  Agreements — all matters",
       {
         status: args.status as string | undefined,
         type: args.type as string | undefined,
-        ...(args.lead ? { subject: `matter:${args.lead}` } : { subject_prefix: "matter:" }),
+        ...(args.matter ? { subject: `matter:${args.matter}` } : { subject_prefix: "matter:" }),
       },
       Boolean(args.json),
     )
@@ -161,12 +161,12 @@ const AgreementsListCmd = cmd({
 })
 
 const AgreementsRaiseCmd = cmd({
-  command: "raise <lead>",
+  command: "raise <matter>",
   aliases: ["new"],
   describe: "file an agreement against a matter and optionally send it for signature",
   builder: (yargs) =>
     yargs
-      .positional("lead", { describe: "lead / matter id", type: "number", demandOption: true })
+      .positional("matter", { describe: "lead id or matter ref (e.g. LEX-CLIO-9)", type: "string", demandOption: true })
       .option("name", { type: "string", describe: "who signs, as named in the document", demandOption: true })
       .option("firm", { type: "string", describe: "the firm issuing it, as named in the document", demandOption: true })
       .option("email", { type: "string", describe: "signer's email — required with --issue" })
@@ -196,7 +196,7 @@ const AgreementsRaiseCmd = cmd({
       email: args.email as string | undefined,
       org: args.org as string | undefined,
       disclosing: args.firm as string,
-      subject: `matter:${args.lead}`,
+      subject: `matter:${args.matter}`,
       tier: "standard",
       term: args.term as string | undefined,
       expires: args.expires as string | undefined,
