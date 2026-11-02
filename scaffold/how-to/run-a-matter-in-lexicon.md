@@ -4,11 +4,11 @@ level: beginner
 tags: [legal, lexicon, law-firm, engagement, conflicts, signature]
 duration_min: 10
 ---
-# How to: Run a matter in Lexicon
+# How to: Run a case in Lexicon
 
 ## What this does
 
-Takes a new matter from first enquiry to a signed engagement letter, then a chronology and a
+Takes a new case from first enquiry to a signed engagement letter, then a chronology and a
 demand draft. Lexicon does the assembling. Your attorneys make every decision.
 
 **Lexicon is not a lawyer.** Everything it writes is a draft for a qualified person to review.
@@ -23,7 +23,7 @@ If your firm runs a practice platform such as Clio, that platform stays your sys
 
 ---
 
-## 1. Open the matter
+## 1. Open the case
 
 ```bash
 iris lexicon intake "Jane Roe called: rear-ended on I-35 on March 3, adverse driver insured by Acme" \
@@ -31,7 +31,7 @@ iris lexicon intake "Jane Roe called: rear-ended on I-35 on March 3, adverse dri
 ```
 
 Check the dates it flags against the source. A date marked `computed` is a prompt to check a
-limitation period, not an authority. Note the matter's lead id; the next steps use it, shown here
+limitation period, not an authority. Note the case's lead id, which is the case id; the next steps use it, shown here
 as `123`.
 
 ## 2. Check for conflicts
@@ -51,7 +51,7 @@ Once an attorney has reviewed the sheet:
 iris lexicon conflicts "Jane Roe" --lead 123 --cleared-by "Pat Partner"
 ```
 
-Until this is recorded, an engagement letter on this matter is refused.
+Until this is recorded, an engagement letter on this case is refused.
 
 ## 4. Draft the engagement letter
 
@@ -79,8 +79,8 @@ The same command sends other documents with `--type`: `fee`, `co_counsel`, `toll
 ## 6. See where things stand
 
 ```bash
-iris lexicon agreements list 123     # this matter
-iris lexicon agreements list         # every matter
+iris lexicon agreements list 123     # this case
+iris lexicon agreements list         # every case
 iris agreements show <id>            # one agreement, with its audit trail and seal check
 ```
 
@@ -92,7 +92,7 @@ The list counts how long each one has been waiting. `iris agreements issue <id>`
 iris lexicon chronology 123 --record yes
 ```
 
-Read the channel breakdown first. A short chronology can mean a quiet matter, or that nothing was
+Read the channel breakdown first. A short chronology can mean a quiet case, or that nothing was
 logged, and the output cannot tell you which.
 
 ## 8. Draft the demand
@@ -109,13 +109,13 @@ Nothing here sends a demand to anyone.
 
 ## Troubleshooting
 
-**`conflicts_not_cleared` when sending** — step 3 has not been recorded for this matter.
+**`conflicts_not_cleared` when sending** — step 3 has not been recorded for this case.
 
 **`document_required`** — only NDAs and BAAs have default wording. Pass `--body-file` or `--template`.
 
 **The list is empty but agreements exist** — you may be signed in under a different account from
-the one that raised them. Colleagues on the firm's board can see matter agreements once they are
-filed against a matter on that board.
+the one that raised them. Colleagues on the firm's board can see case agreements once they are
+filed against a case on that board.
 
 ## Related
 
