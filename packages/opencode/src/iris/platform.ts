@@ -634,6 +634,12 @@ export interface HiveNode {
   recentRestarts?: number
   transport?: string
   tailscaleIp?: string
+  /** Undefined when the node never reported a GPU; `available: false` when it reported none (#192222). */
+  gpu?: { available: boolean; name?: string; type?: string; vramGb?: number }
+  /** Models a local server on the node has (Ollama, mesh-llm…). Installed is not serving. */
+  modelsInstalled?: string[]
+  /** Models reachable through the IRIS gateway right now, as `hive/<model>`. */
+  modelsServing?: string[]
   /**
    * When the hardware profile was captured — NOT when the node last heartbeat.
    *
@@ -704,6 +710,40 @@ export async function fetchHivePeers(): Promise<PlatformResult<{ peers: HivePeer
   }
 }
 
+/**
+ * What a node can offer for AI work, read from the payload it already sends (#192222).
+ *
+ * A model counts as SERVING only when the gateway could reach it now: inference on, the model
+ * listed, the machine online, a tunnel URL, and an inference report under three minutes old.
+ * The same rule as `iris hive inventory`, so the two never disagree about the same machine.
+ */
+export function nodeAiOf(n: any, now = Date.now()): Pick<HiveNode, "gpu" | "modelsInstalled" | "modelsServing"> {
+  const g = n?.hardware_profile?.gpu
+  const gpu =
+    g && typeof g.available === "boolean"
+      ? {
+          available: g.available,
+          ...(g.name ? { name: String(g.name) } : {}),
+          ...(g.type ? { type: String(g.type) } : {}),
+          ...(typeof g.vram_gb === "number" ? { vramGb: g.vram_gb } : {}),
+        }
+      : undefined
+  const installed: string[] = Array.isArray(n?.local_llm?.models)
+    ? n.local_llm.models.filter((m: unknown) => typeof m === "string")
+    : []
+  const inf = n?.inference
+  const online = n?.connection_status === "online" || n?.connection_status === "busy"
+  const fresh = inf?.updated_at ? now - Date.parse(inf.updated_at) < 180_000 : false
+  const listed = new Set<string>(Array.isArray(inf?.models) ? inf.models : [])
+  const serving =
+    inf?.enabled === true && online && !!inf?.url && fresh ? installed.filter((m) => listed.has(m)).map((m) => `hive/${m}`) : []
+  return {
+    ...(gpu ? { gpu } : {}),
+    ...(installed.length ? { modelsInstalled: [...installed].sort() } : {}),
+    ...(serving.length ? { modelsServing: serving.sort() } : {}),
+  }
+}
+
 export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { nodes: [] } }
@@ -739,6 +779,7 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
       transport: n.transport?.default_rail ?? undefined,
       tailscaleIp: n.tailscale_ip ?? undefined,
       hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,
+      ...nodeAiOf(n),
     }))
     return { measured: true, data: { nodes } }
   } catch (e) {
@@ -1780,7 +1821,7 @@ export interface Agent {
  * lets a card be assigned any agent that belongs to the board OR to the board's owner. A board
  * with no agents of its own otherwise offered none, which read as "you cannot add agents".
  */
-export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[] }>> {
+export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[]; total?: number }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { agents: [] } }
   try {
@@ -1794,6 +1835,8 @@ export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: nu
         agents: list
           .filter((a: any) => Number.isFinite(Number(a?.id)) && typeof a?.name === "string")
           .map((a: any) => ({ id: Number(a.id), name: a.name as string })),
+        // The list stops at one page of 200; the paginator's total is the real count (#192222).
+        ...(Number.isFinite(Number(j?.data?.total)) ? { total: Number(j.data.total) } : {}),
       },
     }
   } catch (e) {

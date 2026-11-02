@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { attentionOf, fleetSummary, gb, machinesOf, mapLayout, readMachinesView, specOf, statusOf } from "./iris-hive-machines-model"
+import { aiOf, attentionOf, fleetSummary, gb, gpuOf, machinesOf, mapLayout, readMachinesView, specOf, statusOf } from "./iris-hive-machines-model"
 import type { HiveNodeRow } from "./iris-hive-scripts-model"
 
 // The real fleet of account #193 on 2026-10-09 (6 registrations, 4 computers).
@@ -57,5 +57,20 @@ describe("Hive › Machines", () => {
     expect(dist(m.find((n) => n.kind === "peer")!)).toBeGreaterThan(dist(comp[0]) + 20)
     expect(comp.filter((n) => n.attention).length).toBe(2)
     expect(mapLayout(cs, peers, 500, 400, NOW)).toEqual(m)
+  })
+})
+
+describe("#192222 Machines › GPU and AI models", () => {
+  const base = { id: "1", name: "n", online: true, lastHeartbeat: null } as HiveNodeRow
+  test("never reported, none, and a real GPU are three different answers", () => {
+    expect(gpuOf(base)).toBe("Not reported")
+    expect(gpuOf({ ...base, gpu: { available: false } })).toBe("None")
+    expect(gpuOf({ ...base, gpu: { available: true, name: "Apple M1 Pro", type: "metal", vramGb: 16 } })).toBe("Apple M1 Pro · 16 GB")
+  })
+  test("serving is named; installed-but-not-shared never reads as serving; nothing says nothing", () => {
+    expect(aiOf({ ...base, modelsServing: ["hive/qwen3:14b"] })?.text).toBe("Serving qwen3:14b")
+    expect(aiOf({ ...base, modelsServing: ["hive/a", "hive/b", "hive/c"], modelsInstalled: ["a", "b", "c", "d"] })?.text).toBe("Serving a +2")
+    expect(aiOf({ ...base, modelsInstalled: ["a", "b"] })?.text).toBe("2 models installed, not shared")
+    expect(aiOf(base)).toBeNull()
   })
 })

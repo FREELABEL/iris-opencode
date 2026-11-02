@@ -270,3 +270,28 @@ describe("createCheckout — Stripe straight from the app, no web sign-in (#1901
     expect(seen.url).toBeUndefined()
   })
 })
+
+describe("nodeAiOf — GPU and models from the payload the node already sends (#192222)", () => {
+  // Field shapes recorded from /api/v6/nodes on 2026-11-02 (names changed).
+  const NOW = Date.parse("2026-11-02T06:00:00Z")
+  const server = {
+    connection_status: "online",
+    hardware_profile: { gpu: { name: null, type: null, vram_gb: null, available: false } },
+    local_llm: { server: "ollama", available: true, models: ["qwen3:14b", "phi4:latest", "llama3.2:3b"] },
+    inference: { enabled: true, url: "https://x", models: ["qwen3:14b", "llama3.2:3b"], updated_at: "2026-11-02T05:59:00Z" },
+  }
+  test("serving needs inference on, the model listed, online, a URL and a fresh report", () => {
+    const ai = Platform.nodeAiOf(server, NOW)
+    expect(ai.gpu).toEqual({ available: false })
+    expect(ai.modelsInstalled).toEqual(["llama3.2:3b", "phi4:latest", "qwen3:14b"])
+    expect(ai.modelsServing).toEqual(["hive/llama3.2:3b", "hive/qwen3:14b"])
+    expect(Platform.nodeAiOf({ ...server, connection_status: "offline" }, NOW).modelsServing).toBeUndefined()
+    const stale = { ...server, inference: { ...server.inference, updated_at: "2026-11-02T05:00:00Z" } }
+    expect(Platform.nodeAiOf(stale, NOW).modelsServing).toBeUndefined()
+  })
+  test("a real GPU keeps its name and memory; a node that never reported one has no gpu field", () => {
+    const mac = { hardware_profile: { gpu: { name: "Apple M1 Pro", type: "metal", vram_gb: 16, available: true } } }
+    expect(Platform.nodeAiOf(mac, NOW).gpu).toEqual({ available: true, name: "Apple M1 Pro", type: "metal", vramGb: 16 })
+    expect(Platform.nodeAiOf({ hardware_profile: {} }, NOW)).toEqual({})
+  })
+})

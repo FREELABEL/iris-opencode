@@ -183,6 +183,22 @@ const HiveResponse = Schema.Struct({
       recentRestarts: Schema.optional(Schema.Finite),
       transport: Schema.optional(Schema.String),
       tailscaleIp: Schema.optional(Schema.String),
+      gpu: described(
+        Schema.optional(
+          Schema.Struct({
+            available: Schema.Boolean,
+            name: Schema.optional(Schema.String),
+            type: Schema.optional(Schema.String),
+            vramGb: Schema.optional(Schema.Finite),
+          }),
+        ),
+        "Absent when the node never reported a GPU; available:false when it reported none.",
+      ),
+      modelsInstalled: Schema.optional(Schema.Array(Schema.String)),
+      modelsServing: described(
+        Schema.optional(Schema.Array(Schema.String)),
+        "Models the IRIS gateway can reach on this machine now, as hive/<model>.",
+      ),
       hardwareDetectedAt: described(
         Schema.optional(Schema.String),
         "When the hardware snapshot was taken — NOT the heartbeat. Can be many hours older.",
@@ -2128,7 +2144,7 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("agentsMine", IrisPaths.agentsMine, {
         success: described(
-          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })) }).annotate({ identifier: "IrisAgentsMine" }),
+          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })), total: Schema.optional(described(Schema.Finite, "All your agents; `agents` holds at most one page of 200.")) }).annotate({ identifier: "IrisAgentsMine" }),
           "Every agent you own, on any board",
         ),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentsMine", summary: "Your agents across all boards (#190269)" })),

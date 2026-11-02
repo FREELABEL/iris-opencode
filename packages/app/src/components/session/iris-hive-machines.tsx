@@ -11,6 +11,8 @@ import {
   mapLayout,
   readMachinesView,
   specOf,
+  gpuOf,
+  aiOf,
   statusOf,
   type Computer,
   type HivePeerRow,
@@ -179,6 +181,14 @@ export function IrisHiveMachines(props: {
                           <span class="hsc-num">{gb(d()!.free)} free</span>
                         </Show>
                       </div>
+                      <Show when={aiOf(c)}>
+                        {(ai) => (
+                          <div class="hmc-ai" data-serving={ai().serving.length ? "1" : undefined} title={ai().serving.join(", ")}>
+                            <Ic name="chip" />
+                            <span>{ai().text}</span>
+                          </div>
+                        )}
+                      </Show>
                       <Show when={skillsOf(c, 4).length}>
                         <div class="hmc-skills">
                           <For each={skillsOf(c, 4)}>{(s) => <Ic name={s.icon as IconName} title={s.word} class="hmc-skill" />}</For>
@@ -297,6 +307,20 @@ export function IrisHiveMachines(props: {
                     <dt>Disk</dt>
                     <dd class="hsc-num" data-low={att().some((a) => a.kind === "disk") ? "1" : undefined}>
                       {d() ? `${gb(d()!.free)} free` : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>GPU</dt>
+                    <dd class="hsc-num">{gpuOf(c())}</dd>
+                  </div>
+                  <div>
+                    <dt>AI models</dt>
+                    <dd class="hsc-num" title={(c().modelsServing ?? []).join(", ")}>
+                      {(c().modelsServing ?? []).length
+                        ? `${(c().modelsServing ?? []).length} serving`
+                        : (c().modelsInstalled ?? []).length
+                          ? `${(c().modelsInstalled ?? []).length} installed`
+                          : "—"}
                     </dd>
                   </div>
                   <div>

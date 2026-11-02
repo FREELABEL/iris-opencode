@@ -61,6 +61,11 @@ export type HiveNodeRow = {
   hardwareDetectedAt?: string
   /** Physical cameras by product name, from the node's device report. */
   cameras?: readonly string[]
+  /** Absent: never reported. `available: false`: reported, and there is none. */
+  gpu?: { available: boolean; name?: string; type?: string; vramGb?: number }
+  modelsInstalled?: readonly string[]
+  /** Reachable through the IRIS gateway now, as hive/<model>. */
+  modelsServing?: readonly string[]
 }
 
 export type TaskView = {

@@ -9,6 +9,7 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
+import { HomeToday } from "./home/home-today"
 import { HomeFirstRun, createSignedOut, firstRunPending } from "./home/home-first-run"
 import { ServerConnection } from "@/context/server"
 
@@ -120,6 +121,9 @@ export function NewHome() {
       >
         <Show when={showFirstRun()}>
           <HomeFirstRun onStart={startFirstSession} onDone={() => setFirstRun(false)} />
+        </Show>
+        <Show when={!showFirstRun()}>
+          <HomeToday class="mx-auto w-full max-w-[1080px] px-3 pt-3 lg:px-6" />
         </Show>
         <div
           classList={{ hidden: showFirstRun() }}
