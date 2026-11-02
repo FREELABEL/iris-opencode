@@ -113,7 +113,7 @@ const ChronologyCmd = cmd({
       .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-matter-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, list: args.list, record: recordArg(args.record), yes: args.yes })
+    await runPlaybook("legal-case-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, list: args.list, record: recordArg(args.record), yes: args.yes })
   },
 })
 
@@ -160,7 +160,7 @@ const ConflictsCmd = cmd({
 
 const IntakeCmd = cmd({
   command: "intake <enquiry>",
-  aliases: ["new-case", "new-matter"],
+  aliases: ["new-case"],
   describe: "turn a free-text enquiry into a structured case — parties, posture, dates that bite",
   builder: (yargs) =>
     yargs
@@ -170,11 +170,10 @@ const IntakeCmd = cmd({
       .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-matter-intake", { enquiry: args.enquiry, practice: args.practice, open: args.open, record: recordArg(args.record), yes: args.yes })
+    await runPlaybook("legal-case-intake", { enquiry: args.enquiry, practice: args.practice, open: args.open, record: recordArg(args.record), yes: args.yes })
   },
 })
 
-// Lawyers say "case"; the stored subject stays `matter:` so existing records keep resolving.
 const AgreementsListCmd = cmd({
   command: "list [case]",
   aliases: ["ls"],
@@ -191,7 +190,7 @@ const AgreementsListCmd = cmd({
       {
         status: args.status as string | undefined,
         type: args.type as string | undefined,
-        ...(args.case ? { subject: `matter:${args.case}` } : { subject_prefix: "matter:" }),
+        ...(args.case ? { subject: `case:${args.case}` } : { subject_prefix: "case:" }),
       },
       Boolean(args.json),
     )
@@ -234,7 +233,7 @@ const AgreementsRaiseCmd = cmd({
       email: args.email as string | undefined,
       org: args.org as string | undefined,
       disclosing: args.firm as string,
-      subject: `matter:${args.case}`,
+      subject: `case:${args.case}`,
       tier: "standard",
       term: args.term as string | undefined,
       expires: args.expires as string | undefined,
@@ -258,13 +257,13 @@ export const PlatformLexiconCommand = productCommand({
   name: "lexicon",
   aliases: ["legal", "lex"],
   purpose: "Lexicon — legal cases end to end: intake, conflicts, engagement, chronology, demand, agreements",
-  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "case", "matter", "firm", "litigation", "agreements", "signature", "engagement letter", "retainer", "law firm", "lawyer", "attorney"],
-  howtos: ["run-a-matter-in-lexicon", "agreements-and-signing"],
+  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "case", "firm", "litigation", "agreements", "signature", "engagement letter", "retainer", "law firm", "lawyer", "attorney"],
+  howtos: ["run-a-case-in-lexicon", "agreements-and-signing"],
   playbooks: [
-    "legal-matter-intake",
+    "legal-case-intake",
     "legal-conflict-check",
     "legal-engagement-letter",
-    "legal-matter-chronology",
+    "legal-case-chronology",
     "legal-demand-letter",
   ],
   subcommands: [IntakeCmd, ConflictsCmd, EngagementCmd, ChronologyCmd, DemandCmd, AgreementsCmd],
