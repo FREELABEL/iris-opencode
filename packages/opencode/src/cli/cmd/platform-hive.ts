@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -3428,6 +3429,8 @@ const HiveExecCommand = cmd({
       .option("timeout", { describe: "max seconds (1-60)", type: "number", default: 30 })
       .option("user-id", { describe: "user ID", type: "number" }),
   async handler(args) {
+    const timeoutError = wholeNumberError("timeout", args.timeout, { min: 1, max: 60 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, args.json)) return
     UI.empty()
     prompts.intro("◈  Hive Remote Exec")
 
