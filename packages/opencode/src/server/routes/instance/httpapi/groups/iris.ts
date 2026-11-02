@@ -183,6 +183,22 @@ const HiveResponse = Schema.Struct({
       recentRestarts: Schema.optional(Schema.Finite),
       transport: Schema.optional(Schema.String),
       tailscaleIp: Schema.optional(Schema.String),
+      gpu: described(
+        Schema.optional(
+          Schema.Struct({
+            available: Schema.Boolean,
+            name: Schema.optional(Schema.String),
+            type: Schema.optional(Schema.String),
+            vramGb: Schema.optional(Schema.Finite),
+          }),
+        ),
+        "Absent when the node never reported a GPU; available:false when it reported none.",
+      ),
+      modelsInstalled: Schema.optional(Schema.Array(Schema.String)),
+      modelsServing: described(
+        Schema.optional(Schema.Array(Schema.String)),
+        "Models the IRIS gateway can reach on this machine now, as hive/<model>.",
+      ),
       hardwareDetectedAt: described(
         Schema.optional(Schema.String),
         "When the hardware snapshot was taken — NOT the heartbeat. Can be many hours older.",

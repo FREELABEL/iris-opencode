@@ -111,6 +111,29 @@ export function specOf(c: HiveNodeRow): string {
     .join(" · ")
 }
 
+/** The GPU in words. Never reported and "no GPU" are different answers (#192222). */
+export function gpuOf(c: HiveNodeRow): string {
+  if (!c.gpu) return "Not reported"
+  if (!c.gpu.available) return "None"
+  const vram = c.gpu.vramGb ? ` · ${c.gpu.vramGb} GB` : ""
+  return `${c.gpu.name ?? "GPU"}${vram}`
+}
+
+/**
+ * The AI line on a card: what this machine lends to the IRIS gateway right now. Installed models
+ * that are not shared get their own wording, so "has models" never reads as "serving models".
+ */
+export function aiOf(c: HiveNodeRow): { serving: readonly string[]; text: string } | null {
+  const serving = c.modelsServing ?? []
+  const installed = c.modelsInstalled ?? []
+  if (serving.length) {
+    const first = serving[0].replace(/^hive\//, "")
+    return { serving, text: serving.length > 1 ? `Serving ${first} +${serving.length - 1}` : `Serving ${first}` }
+  }
+  if (installed.length) return { serving, text: `${installed.length} model${installed.length > 1 ? "s" : ""} installed, not shared` }
+  return null
+}
+
 export type MachinesView = "list" | "map"
 export const readMachinesView = (raw: string | null | undefined): MachinesView => (raw === "map" ? "map" : "list")
 
