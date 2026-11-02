@@ -2144,7 +2144,7 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("agentsMine", IrisPaths.agentsMine, {
         success: described(
-          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })) }).annotate({ identifier: "IrisAgentsMine" }),
+          Schema.Struct({ ...Measured, agents: Schema.Array(Schema.Struct({ id: Schema.Finite, name: Schema.String })), total: Schema.optional(described(Schema.Finite, "All your agents; `agents` holds at most one page of 200.")) }).annotate({ identifier: "IrisAgentsMine" }),
           "Every agent you own, on any board",
         ),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.agentsMine", summary: "Your agents across all boards (#190269)" })),

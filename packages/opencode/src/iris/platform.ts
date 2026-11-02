@@ -1821,7 +1821,7 @@ export interface Agent {
  * lets a card be assigned any agent that belongs to the board OR to the board's owner. A board
  * with no agents of its own otherwise offered none, which read as "you cannot add agents".
  */
-export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[] }>> {
+export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[]; total?: number }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { agents: [] } }
   try {
@@ -1835,6 +1835,8 @@ export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: nu
         agents: list
           .filter((a: any) => Number.isFinite(Number(a?.id)) && typeof a?.name === "string")
           .map((a: any) => ({ id: Number(a.id), name: a.name as string })),
+        // The list stops at one page of 200; the paginator's total is the real count (#192222).
+        ...(Number.isFinite(Number(j?.data?.total)) ? { total: Number(j.data.total) } : {}),
       },
     }
   } catch (e) {

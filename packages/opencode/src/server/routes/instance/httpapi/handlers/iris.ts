@@ -588,7 +588,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       }),
     )
     const agentsMine = Effect.fn("IrisHttpApi.agentsMine")(() =>
-      Effect.promise(() => fetchMyAgents()).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, agents: r.data.agents }))),
+      Effect.promise(() => fetchMyAgents()).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, agents: r.data.agents, total: r.data.total }))),
     )
     const itemActivity = Effect.fn("IrisHttpApi.itemActivity")((ctx: { params: { itemID: number } }) =>
       Effect.promise(() => fetchActivity(ctx.params.itemID)).pipe(
