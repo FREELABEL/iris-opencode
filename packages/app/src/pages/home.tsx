@@ -9,7 +9,7 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
-import { HomeToday } from "./home/home-today"
+import { HomeDashboard } from "./home/home-dashboard"
 import { HomeFirstRun, createSignedOut, firstRunPending } from "./home/home-first-run"
 import { ServerConnection } from "@/context/server"
 
@@ -123,7 +123,15 @@ export function NewHome() {
           <HomeFirstRun onStart={startFirstSession} onDone={() => setFirstRun(false)} />
         </Show>
         <Show when={!showFirstRun()}>
-          <HomeToday class="mx-auto w-full max-w-[1080px] px-3 pt-3 lg:px-6" />
+          <HomeDashboard
+            class="mx-auto w-full max-w-[1080px] px-3 pt-5 pb-2 lg:px-6"
+            onSettings={projects.utility.settings}
+            onNewChat={() => {
+              const conn = home.server.focused()
+              const project = home.project.newSession()
+              if (conn && project) home.project.openProjectNewSession(conn, project.worktree)
+            }}
+          />
         </Show>
         <div
           classList={{ hidden: showFirstRun() }}
