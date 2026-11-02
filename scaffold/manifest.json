@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.02-run-a-matter-in-lexicon",
+  "version": "2026.11.02-run-a-case-in-lexicon",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -21,8 +21,8 @@
       "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
     },
     {
-      "src": "how-to/run-a-matter-in-lexicon.md",
-      "dest": "how-to/run-a-matter-in-lexicon.md",
+      "src": "how-to/run-a-case-in-lexicon.md",
+      "dest": "how-to/run-a-case-in-lexicon.md",
       "managed": true,
       "purpose": "Lawyer-facing path through a matter: intake, conflicts, engagement, signature, chronology, demand."
     },

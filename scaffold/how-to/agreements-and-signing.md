@@ -25,15 +25,15 @@ and audit trail. Three differences: they have no default wording, so pass `--bod
 `--template`; they run until revoked unless given a term; and none of them satisfies an access
 gate. `medical_authorization` always requires the emailed code.
 
-**On a Lexicon matter**, file it against the matter:
+**On a Lexicon case**, file it against the case:
 
 ```bash
 iris lexicon agreements raise 123 --firm="Harlan PI" --name="Jane Roe" --email=jane@example.com \
   --type=engagement --body-file=letter.txt --issue
-iris lexicon agreements list 123   # one matter; omit the id for every matter
+iris lexicon agreements list 123   # one case; omit the id for every case
 ```
 
-An engagement letter on a recorded matter is refused (409 `conflicts_not_cleared`) until an
+An engagement letter on a recorded case is refused (409 `conflicts_not_cleared`) until an
 attorney has recorded the clearance. The wording is sealed as supplied, so resolve every
 `[to confirm: ...]` first.
 
