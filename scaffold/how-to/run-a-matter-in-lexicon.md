@@ -1,5 +1,5 @@
 ---
-category: Legal
+category: CRM & Sales
 level: beginner
 tags: [legal, lexicon, law-firm, engagement, conflicts, signature]
 duration_min: 10
@@ -19,7 +19,7 @@ If your firm runs a practice platform such as Clio, that platform stays your sys
 ## Prerequisites
 
 - `iris auth login` completed
-- CLI **v1.5.31 or later** (`iris --version`) for the signature step
+- CLI **v1.5.33 or later** (`iris --version`). Older versions lack `--record` and `--cleared-by`, and their doors can fail with "Playbook not found"
 
 ---
 
