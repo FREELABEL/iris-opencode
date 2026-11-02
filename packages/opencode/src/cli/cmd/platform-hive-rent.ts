@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
 import { UI } from "../ui"
 import { hiveFetch } from "./platform-hive-nodes"
@@ -237,6 +238,8 @@ const SandboxCommand = cmd({
       .example("iris hive sandbox \"python3 -c 'print(6*7)'\"", "42, in a fresh sandbox that is gone afterwards")
       .example("iris hive sandbox --keep \"git clone https://github.com/x/y && ls y\" --internet", "keep it; reuse it with --id"),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 1, max: 120 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)

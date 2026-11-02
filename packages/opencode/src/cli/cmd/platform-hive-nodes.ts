@@ -12,7 +12,7 @@ import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
-import { listEnvelope, listFooter } from "./pagination-args"
+import { listEnvelope, listFooter, wholeNumberError, rejectFieldErrors } from "./pagination-args"
 
 // ============================================================================
 // iris hive nodes / run
@@ -656,7 +656,7 @@ const HiveRunCommand = cmd({
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
       .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
       .option("timeout", {
-        describe: "task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
+        describe: "task timeout in seconds, 30 to 3600 (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
         type: "number",
         default: 300,
       })
@@ -676,6 +676,8 @@ const HiveRunCommand = cmd({
       .option("no-fail-fast", { describe: "run every statement even after one fails (no `set -e`)", type: "boolean", default: false })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 30, max: 3600 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
