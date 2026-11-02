@@ -175,7 +175,53 @@
       "remember",
       "recall",
       "knowledge base",
-      "rag"
+      "rag",
+      "everything my business knows",
+      "everything we know",
+      "what did we promise",
+      "company brain",
+      "second brain",
+      "search my notes"
+    ],
+    "atlas:comms": [
+      "one feed",
+      "every message",
+      "all my messages",
+      "unified inbox",
+      "all channels",
+      "messages in one place",
+      "conversation history"
+    ],
+    "leads stats": [
+      "funnel",
+      "funnel stage",
+      "by stage",
+      "conversion rate",
+      "how many leads",
+      "deals by stage"
+    ],
+    "broadcast": [
+      "all my agents",
+      "every agent",
+      "one instruction",
+      "tell everyone",
+      "announce to",
+      "the whole team"
+    ],
+    "mint import": [
+      "bank statement",
+      "bank statements",
+      "profit and loss",
+      "card statement"
+    ],
+    "hive inventory": [
+      "what machines",
+      "machines i own",
+      "my machines",
+      "compute i own",
+      "my hardware",
+      "what can my machines run",
+      "free slots"
     ],
     "bug": [
       "issue",
@@ -1542,7 +1588,7 @@
         "leads:comms"
       ],
       "run": "iris atlas:comms",
-      "haystack": "atlas:comms comms leads:comms [atlas os] unified lead communications log — ingest, view, search messages and attachments across all channels list ingest log delete summary attachments"
+      "haystack": "atlas:comms comms leads:comms [atlas os] unified lead communications log — ingest, view, search messages and attachments across all channels list ingest log delete summary attachments one feed every message all my messages unified inbox all channels messages in one place conversation history"
     },
     {
       "kind": "command",
@@ -3455,7 +3501,7 @@
       "describe": "Broadcast an announcement to every member of a Bloq — humans (email) + AI agents (inbox)",
       "aliases": [],
       "run": "iris broadcast <message>",
-      "haystack": "broadcast broadcast an announcement to every member of a bloq — humans (email) + ai agents (inbox) bloq-id bloq to broadcast to (default: default_bloq_id in ~/.iris/config.json) title optional headline / email subject audience who to reach: all members, humans only, or agents only dry-run preview the recipient list without sending"
+      "haystack": "broadcast broadcast an announcement to every member of a bloq — humans (email) + ai agents (inbox) bloq-id bloq to broadcast to (default: default_bloq_id in ~/.iris/config.json) title optional headline / email subject audience who to reach: all members, humans only, or agents only dry-run preview the recipient list without sending all my agents every agent one instruction tell everyone announce to the whole team"
     },
     {
       "kind": "command",
@@ -7494,7 +7540,7 @@
       "describe": "the machines you own as one answer for planning — compute, GPU, disk, free slots, models serving now",
       "aliases": [],
       "run": "iris hive inventory",
-      "haystack": "hive inventory the machines you own as one answer for planning — compute, gpu, disk, free slots, models serving now json user-id"
+      "haystack": "hive inventory the machines you own as one answer for planning — compute, gpu, disk, free slots, models serving now json user-id what machines machines i own my machines compute i own my hardware what can my machines run free slots"
     },
     {
       "kind": "command",
@@ -7766,7 +7812,7 @@
       "describe": "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
       "aliases": [],
       "run": "iris hive run <target> <command>",
-      "haystack": "hive run run a shell command on a hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`) timeout task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that) title task title shown in the dashboard priority task priority 1-10 (higher = sooner) queue queue the task and exit immediately (don force run it on this node even though it reports high cpu/memory (a full or offline node still refuses) wait-for-slot if the node is full or busy, wait in its queue for a free slot (up to --timeout) instead of failing no-wait-for-slot fail at once if the node is full or busy user-id user id fail-fast stop at the first failing statement ( no-fail-fast run every statement even after one fails (no  json json output (full task object)"
+      "haystack": "hive run run a shell command on a hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`) timeout task timeout in seconds, 30 to 3600 (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that) title task title shown in the dashboard priority task priority 1-10 (higher = sooner) queue queue the task and exit immediately (don force run it on this node even though it reports high cpu/memory (a full or offline node still refuses) wait-for-slot if the node is full or busy, wait in its queue for a free slot (up to --timeout) instead of failing no-wait-for-slot fail at once if the node is full or busy user-id user id fail-fast stop at the first failing statement ( no-fail-fast run every statement even after one fails (no  json json output (full task object)"
     },
     {
       "kind": "command",
@@ -9585,7 +9631,7 @@
       "describe": "outreach stats — DMs, replies, pipeline, revenue",
       "aliases": [],
       "run": "iris leads stats",
-      "haystack": "leads stats outreach stats — dms, replies, pipeline, revenue board bloq/board id period time period json json output"
+      "haystack": "leads stats outreach stats — dms, replies, pipeline, revenue board bloq/board id period time period json json output funnel funnel stage by stage conversion rate how many leads deals by stage"
     },
     {
       "kind": "command",
@@ -10437,7 +10483,7 @@
       "describe": "audit agent memory (status) — list/show/add/compose remain ALIASES of bloqs",
       "aliases": [],
       "run": "iris memory",
-      "haystack": "memory audit agent memory (status) — list/show/add/compose remain aliases of bloqs status list show add compose remember recall knowledge base rag"
+      "haystack": "memory audit agent memory (status) — list/show/add/compose remain aliases of bloqs status list show add compose remember recall knowledge base rag everything my business knows everything we know what did we promise company brain second brain search my notes"
     },
     {
       "kind": "command",
@@ -10597,7 +10643,7 @@
       "describe": "ingest a bank/card/usage CSV — idempotent, re-running changes nothing",
       "aliases": [],
       "run": "iris mint import <file>",
-      "haystack": "mint import ingest ingest a bank/card/usage csv — idempotent, re-running changes nothing scope category category for every row account-id date-col override the date column header amount-col override the amount column header desc-col override the description column header group-by none | day | month — roll many small rows into one label description prefix when grouping (default: file name) invert flip the sign (some exports list spend as positive) min-amount skip rows below this absolute amount revenue import as revenue instead of expense paid-from the account that actually paid, when different from --scope — e.g. a business ad bought on a personal card (#182036) dry-run json"
+      "haystack": "mint import ingest ingest a bank/card/usage csv — idempotent, re-running changes nothing scope category category for every row account-id date-col override the date column header amount-col override the amount column header desc-col override the description column header group-by none | day | month — roll many small rows into one label description prefix when grouping (default: file name) invert flip the sign (some exports list spend as positive) min-amount skip rows below this absolute amount revenue import as revenue instead of expense paid-from the account that actually paid, when different from --scope — e.g. a business ad bought on a personal card (#182036) dry-run json bank statement bank statements profit and loss card statement"
     },
     {
       "kind": "command",
