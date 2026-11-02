@@ -19,16 +19,38 @@ import { printLedger, raiseAgreement } from "./platform-agreements"
 // or an agent invokes the playbook directly.
 // ============================================================================
 
+/** Find the playbook, or fetch it: a firm's first command must not fail because nothing was synced. */
+async function resolvePlaybook(name: string) {
+  const find = () => Instance.provide({ directory: process.cwd(), fn: () => Skill.get(name) })
+  const found = await find()
+  if (found) return found
+
+  const { PlaybookInstallCommand } = await import("./platform-playbook")
+  await (PlaybookInstallCommand.handler as (a: unknown) => Promise<void>)({
+    name,
+    force: false,
+    global: true,
+    project: false,
+    sync: false,
+    "no-sync": true,
+    noSync: true,
+    json: false,
+  })
+  // The skill list is read once per instance, so it has to be re-read to see the new file.
+  await Instance.provide({ directory: process.cwd(), fn: () => Instance.dispose() })
+  return find()
+}
+
 /** Run a playbook in-process, the same path `iris playbook run` takes. */
 async function runPlaybook(name: string, args: Record<string, unknown>): Promise<void> {
+  const info = await resolvePlaybook(name)
+  if (!info) {
+    console.error(`Could not get the "${name}" playbook. Check your connection and sign-in (iris auth login), then try again.`)
+    process.exit(1)
+  }
   await Instance.provide({
     directory: process.cwd(),
     fn: async () => {
-      const info = await Skill.get(name)
-      if (!info) {
-        console.error(`Playbook "${name}" not found. Is it synced? Try: iris playbook sync`)
-        process.exit(1)
-      }
       const plan = await parsePlan(info)
       // Drop undefined so a playbook's own defaults survive.
       const clean: Record<string, unknown> = {}
@@ -49,6 +71,14 @@ async function runPlaybook(name: string, args: Record<string, unknown>): Promise
   })
 }
 
+const RECORD_OPTION = {
+  describe: "keep this on the matter so the console can show it (--record yes)",
+  type: "string",
+} as const
+
+/** The playbooks read `yes`. `--record` alone means the same; absent stays absent. */
+const recordArg = (v: unknown) => (v === undefined ? undefined : "yes") // clearing needs the sweep on file, so --cleared-by implies it
+
 const DemandCmd = cmd({
   command: "demand <lead>",
   aliases: ["demand-letter"],
@@ -60,11 +90,12 @@ const DemandCmd = cmd({
       .option("recipient", { describe: "carrier / adverse counsel the letter is addressed to", type: "string" })
       .option("bloq", { describe: "matter bloq id to file the result into", type: "number" })
       .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
+      .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
     await runPlaybook("legal-demand-letter", {
       lead: args.lead, demand: args.demand, recipient: args.recipient,
-      bloq: args.bloq, list: args.list, yes: args.yes,
+      bloq: args.bloq, list: args.list, record: recordArg(args.record), yes: args.yes,
     })
   },
 })
@@ -79,9 +110,10 @@ const ChronologyCmd = cmd({
       .option("rate", { describe: "hourly rate — adds estimated time and value to the work summary", type: "number" })
       .option("bloq", { describe: "matter bloq id to file the chronology into", type: "number" })
       .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
+      .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-matter-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, list: args.list, yes: args.yes })
+    await runPlaybook("legal-matter-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, list: args.list, record: recordArg(args.record), yes: args.yes })
   },
 })
 
@@ -97,11 +129,12 @@ const EngagementCmd = cmd({
       .option("fee", { describe: 'fee arrangement in plain words (e.g. "contingency 33.3% pre-suit, 40% post-filing")', type: "string" })
       .option("bloq", { describe: "matter bloq id to file the result into", type: "number" })
       .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
+      .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
     await runPlaybook("legal-engagement-letter", {
       lead: args.lead, mode: args.mode, letter: args.letter, fee: args.fee,
-      bloq: args.bloq, list: args.list, yes: args.yes,
+      bloq: args.bloq, list: args.list, record: recordArg(args.record), yes: args.yes,
     })
   },
 })
@@ -114,11 +147,14 @@ const ConflictsCmd = cmd({
     yargs
       .positional("party", { describe: "prospective client or adverse party name", type: "string", demandOption: true })
       .option("also", { describe: "comma-separated related names (spouse, employer, carrier, entities)", type: "string" })
+      .option("lead", { describe: "lead / matter id this sweep belongs to", type: "number" })
+      .option("cleared-by", { describe: "the attorney clearing conflicts on --lead. Only a person's sign-off clears; it is refused with no sweep on file", type: "string" })
       .option("bloq", { describe: "matter bloq id to file the candidate sheet into", type: "number" })
       .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
+      .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-conflict-check", { party: args.party, also: args.also, bloq: args.bloq, list: args.list, yes: args.yes })
+    await runPlaybook("legal-conflict-check", { party: args.party, also: args.also, bloq: args.bloq, list: args.list, lead: args.lead, cleared_by: args.clearedBy, record: recordArg(args.clearedBy ?? args.record), yes: args.yes })
   },
 })
 
@@ -130,10 +166,11 @@ const IntakeCmd = cmd({
     yargs
       .positional("enquiry", { describe: "raw enquiry — call notes, form submission, pasted email", type: "string", demandOption: true })
       .option("practice", { describe: "practice area hint", type: "string", default: "general" })
-      .option("open", { describe: "open the matter (see the playbook's own arg)", type: "string" })
+      .option("open", { describe: "create the matter's lead record (--open yes)", type: "string" })
+      .option("record", RECORD_OPTION)
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-matter-intake", { enquiry: args.enquiry, practice: args.practice, open: args.open, yes: args.yes })
+    await runPlaybook("legal-matter-intake", { enquiry: args.enquiry, practice: args.practice, open: args.open, record: recordArg(args.record), yes: args.yes })
   },
 })
 
@@ -163,7 +200,7 @@ const AgreementsListCmd = cmd({
 const AgreementsRaiseCmd = cmd({
   command: "raise <matter>",
   aliases: ["new"],
-  describe: "file an agreement against a matter and optionally send it for signature",
+  describe: "send an engagement letter, retainer, fee agreement or release for signature on a matter",
   builder: (yargs) =>
     yargs
       .positional("matter", { describe: "lead id or matter ref (e.g. LEX-CLIO-9)", type: "string", demandOption: true })
@@ -220,8 +257,8 @@ export const PlatformLexiconCommand = productCommand({
   name: "lexicon",
   aliases: ["legal", "lex"],
   purpose: "Lexicon — legal matters end to end: intake, conflicts, engagement, chronology, demand, agreements",
-  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "matter", "firm", "litigation", "agreements", "signature"],
-  howtos: ["agreements-and-signing"],
+  keywords: ["legal", "demand", "chronology", "engagement", "conflicts", "intake", "matter", "firm", "litigation", "agreements", "signature", "engagement letter", "retainer", "law firm", "lawyer", "attorney"],
+  howtos: ["run-a-matter-in-lexicon", "agreements-and-signing"],
   playbooks: [
     "legal-matter-intake",
     "legal-conflict-check",

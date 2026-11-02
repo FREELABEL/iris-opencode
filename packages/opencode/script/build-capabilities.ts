@@ -353,6 +353,11 @@ function collectCommands(): Entry[] {
     // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
     // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
     const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
+    // A product declares its children as `subcommands: [A, B]` and productCommand() registers
+    // them, so they never appear as `.command(...)`: every door of `iris lexicon` was missing.
+    const productChildren = (b.body.match(/subcommands:\s*\[([^\]]*)\]/)?.[1] ?? "")
+      .split(",").map((n) => n.trim()).filter(Boolean)
+    childNames.push(...productChildren)
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
