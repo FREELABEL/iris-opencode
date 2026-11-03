@@ -62,7 +62,7 @@ describe("#192251 Home › resting", () => {
     wakes: [wake("2026-11-02T15:00:00Z")], ledgerSince: "2026-10-26T00:00:00Z",
   } as any)
   test("a resting agent gets the moon, not the stop, and leaves Needs attention", () => {
-    expect(rowOf(resting, NOW)).toMatchObject({ indicator: "resting", why: "Resting by choice — skipped 1 in a row; runs again within 5 beats" })
+    expect(rowOf(resting, NOW)).toMatchObject({ indicator: "resting", why: "Resting by choice — skipped 1 in a row; runs again within 6 beats" })
     expect(tabRows([resting, stuck], "attention", NOW).map((x) => x.agentName)).toEqual(["Stuck"])
     expect(overviewOf([resting, stuck], NOW, DAY)).toMatchObject({ resting: 1, stopped: 1 })
   })

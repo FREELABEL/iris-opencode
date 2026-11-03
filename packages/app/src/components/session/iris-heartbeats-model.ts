@@ -357,7 +357,9 @@ export function restOf(r: HeartbeatRow, now: number): { skipped: number; left: n
   const skipped = r.wakes.filter(
     (w) => w.outcome === "skipped" && !byDesign(w.reason) && (!Number.isFinite(beat) || t(w.at) > beat),
   ).length
-  return skipped < PLANNER_SKIP_LIMIT ? { skipped, left: PLANNER_SKIP_LIMIT - skipped } : null
+  // The server runs the beat once the streak REACHES the limit: with 6 skips behind it the next one
+  // runs; with 5 it may skip once more and then must. So `left` counts the forced beat itself.
+  return skipped <= PLANNER_SKIP_LIMIT ? { skipped, left: PLANNER_SKIP_LIMIT - skipped + 1 } : null
 }
 
 export type Problem = { kind: "late" | "silent" | "failing" | "stopped" | "config"; text: string; fix: string }
