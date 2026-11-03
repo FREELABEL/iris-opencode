@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { useTabs } from "@/context/tabs"
 import { createHomeController } from "./home/home-controller"
@@ -68,6 +68,13 @@ export function NewHome() {
     if (!conn || !project) return // no project yet — Home is right; try again if one appears
     bootRouted = true
     home.project.openProjectNewSession(conn, project.worktree)
+  })
+  // Leaving Home ends boot routing even if it never got to act (#192442). On a slow start the
+  // stores above settle after the person has already clicked into a tab; without this the
+  // flag stays false, and every later click on Home re-runs the boot redirect and bounces
+  // them straight back out — the exact bug module scope was meant to prevent.
+  onCleanup(() => {
+    bootRouted = true
   })
 
   // First run (D4/D5 #188245/#188243): a brand-new install — no tabs, no project, onboarding
