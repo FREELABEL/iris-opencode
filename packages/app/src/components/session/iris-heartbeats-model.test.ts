@@ -351,6 +351,11 @@ describe("#192251 resting — skipping by choice, under the planner's limit", ()
     expect(stateOf(r, Date.parse("2026-11-03T07:30:00Z"))).toBe("silent")
     expect(restOf(r, Date.parse("2026-11-03T07:30:00Z"))).toBeNull()
   })
+  test("a last beat older than the ledger window makes no claim — the skips before it are unseen", () => {
+    const old = { ...base, lastRunAt: "2026-10-22T19:00:00Z", runs: [{ ...base.runs[0], startedAt: "2026-10-22T19:00:00Z", completedAt: "2026-10-22T19:01:00Z" }], wakes: [wake("2026-10-28T19:00:00Z")] }
+    expect(stateOf(old, NOW)).toBe("silent")
+    expect(restOf(old, NOW)).toBeNull()
+  })
   test("no wake ledger means no claim either way", () => {
     expect(restOf({ ...base, wakes: null }, NOW)).toBeNull()
   })

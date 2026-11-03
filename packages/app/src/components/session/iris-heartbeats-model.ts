@@ -346,6 +346,9 @@ export function stateOf(r: HeartbeatRow, now: number): BeatState {
  */
 export const PLANNER_SKIP_LIMIT = 6
 
+/** How far back the engine reads the wake ledger (`/wakes?days=8` in heartbeats.ts). */
+export const WAKE_WINDOW_MS = 8 * 86_400_000
+
 /**
  * RESTING, not stuck (#192251): it skipped by choice fewer times in a row than the limit, so the
  * platform will run it again within `left` beats whatever the planner decides. Measured from the
@@ -354,6 +357,9 @@ export const PLANNER_SKIP_LIMIT = 6
 export function restOf(r: HeartbeatRow, now: number): { skipped: number; left: number } | null {
   if (stateOf(r, now) !== "silent" || !r.wakes) return null
   const beat = t(lastBeatAt(r))
+  // The engine reads 8 days of ledger. A last beat older than that leaves skips we cannot see, so
+  // a count would be a floor dressed as a fact (DELO, 2026-11-03: 11 days silent read "6 skipped").
+  if (!Number.isFinite(beat) || beat < now - WAKE_WINDOW_MS) return null
   const skipped = r.wakes.filter(
     (w) => w.outcome === "skipped" && !byDesign(w.reason) && (!Number.isFinite(beat) || t(w.at) > beat),
   ).length
