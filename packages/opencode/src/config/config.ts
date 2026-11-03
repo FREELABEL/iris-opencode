@@ -268,7 +268,15 @@ const layer = Layer.effect(
               if (provider && model) result.model = `${provider}/${model}`
               result["$schema"] = "https://opencode.ai/config.json"
               result = mergeConfig(result, rest)
-              await fsNode.writeFile(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
+              // result holds resolved values from other files, so write only what is migrated.
+              const target = path.join(Global.Path.config, "config.json")
+              const raw = await fsNode.readFile(target, "utf8").catch(() => "{}")
+              const migrated: Record<string, unknown> = { ...rest, $schema: "https://opencode.ai/config.json" }
+              if (provider && model) migrated.model = `${provider}/${model}`
+              await fsNode.writeFile(
+                target,
+                JSON.stringify(mergeDeep(ConfigParse.jsonc(raw, target) as Record<string, unknown>, migrated), null, 2),
+              )
               await fsNode.unlink(legacy)
             })
             .catch(() => {}),
@@ -624,7 +632,9 @@ const layer = Layer.effect(
     const update = Effect.fn("Config.update")(function* (config: Info) {
       const dir = yield* InstanceState.directory
       const file = path.join(dir, "config.json")
-      const existing = yield* loadFile(file)
+      // From the file as written: loadFile fills in {env:} and {file:}, and those must never reach disk.
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
       yield* fs
         .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
         .pipe(Effect.orDie)
