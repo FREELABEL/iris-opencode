@@ -104,6 +104,16 @@ export const cleanup = Effect.fn("Shell.cleanup")(function* () {
     { concurrency: 8 },
   )
   yield* FileRetention.cleanup(fs, files.flat(), RETENTION)
+  // Output from earlier versions is readable by other users until it ages out, so tighten what remains (#192119).
+  yield* Effect.forEach(
+    [directory, ...projects.map((project) => path.join(directory, project.name))],
+    (target) => fs.chmod(target, 0o700).pipe(Effect.ignore),
+    { concurrency: 8, discard: true },
+  )
+  yield* Effect.forEach(files.flat(), (file) => fs.chmod(file, 0o600).pipe(Effect.ignore), {
+    concurrency: 8,
+    discard: true,
+  })
 })
 
 const cleanupLayer = Layer.effectDiscard(
@@ -136,7 +146,7 @@ const layer = () =>
       const outputDir = path.join(global.data, DIRECTORY, location.project.id)
       const { mkdir, unlink } = yield* Effect.promise(() => import("fs/promises"))
       const { createWriteStream, createReadStream } = yield* Effect.promise(() => import("fs"))
-      yield* Effect.promise(() => mkdir(outputDir, { recursive: true }))
+      yield* Effect.promise(() => mkdir(outputDir, { recursive: true, mode: 0o700 }))
 
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
@@ -320,7 +330,7 @@ const layer = () =>
               }
               commands.set(id, command)
 
-              const stream = createWriteStream(file)
+              const stream = createWriteStream(file, { mode: 0o600 })
               const outputDone = Latch.makeUnsafe()
               const pump = handle.all.pipe(
                 Stream.runForEach((chunk: Uint8Array) =>

@@ -66,7 +66,9 @@ export function fileLogger(target = file(), id: string = runID()) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-    const logger = yield* Logger.toFile(formatter(id), target, { flag: "a" })
+    const logger = yield* Logger.toFile(formatter(id), target, { flag: "a", mode: 0o600 })
+    // `mode` applies only when the file is created; a log from an earlier version keeps its own (#192119).
+    yield* fs.chmod(target, 0o600).pipe(Effect.ignore)
     yield* trim(target).pipe(
       Effect.ignore,
       Effect.repeat(Schedule.spaced(LOG_TRIM_INTERVAL)),
