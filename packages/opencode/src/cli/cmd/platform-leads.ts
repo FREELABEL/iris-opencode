@@ -14,7 +14,7 @@ import {
   walkCursorPages,
   type CursorPage,
 } from "./leads-scope"
-import { analyzeJson, inPeriod, messagesHeader, messagesInPeriod, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
+import { analyzeJson, dmLedger, dmTrend, inPeriod, messagesHeader, messagesInPeriod, sentHeadline, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
 import { cmd } from "./cmd"
 import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
@@ -67,6 +67,7 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import { rejectFieldErrors, listEnvelope, listFooter, commandWith, type FieldErrors } from "./pagination-args"
 import { LeadsTagCommand, LeadsUntagCommand } from "./leads-tag"
 import { ENRICH_DESCRIBE, enrichMany, enrichOne, formatOutcome, type EnrichFetch } from "./leads-enrich"
 import {
@@ -311,8 +312,10 @@ const LeadsListCommand = cmd({
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  IRIS Leads")
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  IRIS Leads")
+    }
 
     // #191691 — refuse a bad --limit before any request, so it can never become a 500.
     // A walk defaults to the server's largest page; a single page to 20.
@@ -335,11 +338,13 @@ const LeadsListCommand = cmd({
                 ? "--all-pages walks from the first page; drop --cursor/--page"
                 : null
     if (usageError || !parsedLimit.ok || !parsedMin.ok || !parsedMax.ok || !parsedPage.ok) {
+      // Same as every list command (#191863): a usage error is exit 2, as JSON on stdout in
+      // --json mode, keyed by the flag at fault.
       const msg = usageError ?? "invalid arguments"
-      if (args.json) process.stderr.write(`[leads list] ${msg}\n`)
-      prompts.log.error(msg)
-      process.exitCode = 1
-      prompts.outro("Done")
+      const field = !parsedLimit.ok ? "limit" : !parsedMin.ok ? "min-price" : !parsedMax.ok ? "max-price" : !parsedPage.ok ? "page" : args.cursor ? "cursor" : "all-pages"
+      const errors: FieldErrors = { [field]: [msg] }
+      rejectFieldErrors(errors, args.json)
+      if (!args.json) prompts.outro("Done")
       return
     }
     const limit = parsedLimit.value
@@ -503,16 +508,50 @@ const LeadsListCommand = cmd({
         spinner.stop(`${leads.length} lead(s)${suffix}`)
       }
 
+      // The list contract (#191863). `--all-pages` is the whole matching book; a cursor page
+      // is paged by the server's keyset cursor; otherwise offset pages (the default activity
+      // view re-bands a wider window, then the first `limit` rows are shown).
+      const listCmd = commandWith("leads list", {
+        status: args.status,
+        search: args.search,
+        "bloq-id": args["bloq-id"],
+        all: args.all,
+        "min-price": args["min-price"],
+        "max-price": args["max-price"],
+        sort: args.sort === "activity" ? undefined : args.sort,
+      }) + (args.tag ?? []).map((t) => ` ${commandWith("", { tag: String(t) }).trim()}`).join("")
+      const apiTotal = typeof data?.total === "number" ? data.total : typeof data?.meta?.total === "number" ? data.meta.total : null
+      const usesCursor = !allPages && (Boolean(args.cursor) || nextCursor !== null || (!parsedPage.value && !request.reorderByStatus))
+      const env = allPages
+        ? listEnvelope(leads, { resource: "leads", complete: true, command: listCmd })
+        : listEnvelope(
+            {
+              rows: leads,
+              total: apiTotal,
+              page: parsedPage.value ?? 1,
+              perPage: limit,
+              lastPage: typeof data?.last_page === "number" ? data.last_page : null,
+              hasMore: null,
+            },
+            {
+              resource: "leads",
+              command: listCmd,
+              search: "iris leads search <query>",
+              ...(usesCursor ? { cursor: { next: nextCursor, continued: Boolean(args.cursor) } } : {}),
+            },
+          )
+      if (prospectedCount > 0) {
+        const note = `${prospectedCount} Prospected leads are hidden (not counted in total); --all includes them.`
+        env.meta.hint = env.meta.hint ? `${env.meta.hint} ${note}` : note
+      }
+
       if (args.json) {
-        // The array shape is preserved because callers parse it, so the caveat goes to
-        // STDERR — it reaches a human or an agent without corrupting piped stdout. A
-        // silent truncation in JSON is the exact failure this fix exists for.
+        // An envelope, not a bare array (#191863): the total, the page and how to get the next
+        // one travel with the rows. The scope caveats still go to STDERR as well.
         if (truncated || prospectedCount > 0) {
           process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
         }
-        if (nextCursor) process.stderr.write(`[leads list] next page: --cursor ${nextCursor}\n`)
-        else if (nextPage) process.stderr.write(`[leads list] next page: --page ${nextPage}\n`)
-        await writeJson(leads)
+        await writeJson(env)
         return
       }
 
@@ -536,6 +575,7 @@ const LeadsListCommand = cmd({
       }
       printDivider()
 
+      console.log(`  ${dim(listFooter(env.meta, "leads"))}`)
       if (nextCursor) prompts.log.info(`Next page: ${dim(`--cursor ${nextCursor}`)} (same filters and --sort)  ·  every page: ${dim("--all-pages")}`)
       else if (nextPage) prompts.log.info(`Next page: ${dim(`--page ${nextPage}`)}  ·  every page: ${dim("--all-pages")}`)
       else if (truncated && request.reorderByStatus) prompts.log.info(`More: ${dim("--all-pages")}, or page by page in server order: ${dim("--page 1")}`)
@@ -11427,11 +11467,15 @@ const LeadsAnalyzeCommand = cmd({
 
     // Gather first, render once: the table and --json are two views of ONE report (#191701).
     // 1. Performance metrics — also carries the period window every section is scoped to.
-    const metricsRes = await irisFetch(`/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}`)
+    const metricsRes = await irisFetch(
+      `/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}&messages_limit=${showMessages ? Math.min(Math.max(limit, 0), 100) : 0}`,
+    )
     if (!(await handleApiError(metricsRes, "Outreach metrics"))) return
     const metrics = ((await metricsRes.json()) as any).data || {}
     const s = metrics.summary || {}
     const window: AnalyzePeriod | undefined = metrics.period
+    // #191709 — count and list from the server's one DM query, when it has one.
+    const ledger = dmLedger(metrics, limit)
 
     // 2. Quota progress
     let quota: { quotas?: any; progress?: any; percent?: any } | null = null
@@ -11444,8 +11488,8 @@ const LeadsAnalyzeCommand = cmd({
     // 3. Messages sent IN THE PERIOD (#191706) — it used to be the last N ever, beside a
     // period-scoped "DMs Sent". Sample a wider set of recently-outreached leads, keep each
     // one's in-window DMs, then take the newest `limit`.
-    let messages: SentMessage[] | null = null
-    if (showMessages) {
+    let messages: SentMessage[] | null = ledger && showMessages ? ledger.messages : null
+    if (showMessages && !ledger) {
       const found: SentMessage[] = []
       const sample = Math.min(Math.max(limit * 3, 30), 100)
       const leadsRes = await irisFetch(
@@ -11501,7 +11545,7 @@ const LeadsAnalyzeCommand = cmd({
     }
 
     if (json) {
-      await writeJson(analyzeJson({ boardId, periodName: period, metrics, quota, messages }))
+      await writeJson(analyzeJson({ boardId, periodName: period, metrics, quota, messages, ledger }))
       return
     }
 
@@ -11511,11 +11555,13 @@ const LeadsAnalyzeCommand = cmd({
 
     console.log()
     console.log(bold("  Performance:"))
-    printKV("DMs Sent", String(s.total_completed ?? 0))
-    printKV("Avg/Day", String(s.avg_per_day ?? 0))
+    const headline = sentHeadline(s, ledger)
+    printKV(headline.label, String(headline.value))
+    printKV("Avg/Day", String(ledger?.avg_per_day ?? s.avg_per_day ?? 0))
     printKV("Completion Rate", `${s.completion_rate ?? 0}%`)
-    const arrow = s.trend === "up" ? "↑" : s.trend === "down" ? "↓" : "→"
-    printKV("Trend", `${arrow} ${s.percent_change ?? 0}% vs prior period`)
+    const t = dmTrend(ledger) ?? { trend: s.trend, percent: s.percent_change ?? 0 }
+    const arrow = t.trend === "up" ? "↑" : t.trend === "down" ? "↓" : "→"
+    printKV("Trend", `${arrow} ${t.percent}% vs prior period`)
     printKV("Pipeline", `$${Number(s.pipeline_value ?? 0).toLocaleString()}`)
     printKV("Outreached", `${s.outreached_lead_count ?? 0} leads`)
 

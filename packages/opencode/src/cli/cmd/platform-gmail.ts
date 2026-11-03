@@ -4,7 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { mailComposeOptions, collectArgs, runComposedSend } from "./platform-mail"
-import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken } from "../lib/gmail"
+import { getToken, getLabels, listMessages, searchMessages, getThread, lastError, setGmailAccount, lastGmailAccount, nextPageToken, searchFailure } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
   const token = await getToken()
@@ -18,7 +18,7 @@ async function requireToken(): Promise<string | null> {
     // NOT list-connected: it reads a store that cannot see Composio-backed connections, so
     // it will happily confirm "nothing connected" for a working account and send people into
     // a reconnect loop. Point at the call that proves it either way.
-    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail fetch_emails max_results=5"))
+    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail read_emails max_results=5"))
   }
   return token
 }
@@ -51,7 +51,7 @@ const GmailInboxCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Inbox") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const sp = args.json ? null : prompts.spinner()
@@ -60,7 +60,10 @@ const GmailInboxCommand = cmd({
       const messages = await listMessages(token, args.query as string, args.limit as number, { pageToken: (args as any)["page-token"], all: Boolean((args as any).all) })
 
       if (sp) sp.stop(`${messages.length} message(s)`)
+      reportStoppedEarly()
 
+      // --json with nothing found is an empty array, not prose (#189395).
+      if (!messages.length && args.json) { await writeJson([]); return }
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
         printMailboxLine()
@@ -77,14 +80,15 @@ const GmailInboxCommand = cmd({
         const date = formatDate(msg.date)
         console.log(`  ${unread} ${bold(from.padEnd(20).slice(0, 20))}  ${msg.subject.slice(0, 50)}  ${dim(date)}`)
         if (msg.snippet) console.log(`    ${dim(msg.snippet.slice(0, 80))}`)
+        // The outro says "iris gmail read <message-id>" — so print the id (#189393).
+        console.log(`    ${dim(`id:${msg.id}`)}`)
       }
       printDivider()
       printMailboxLine()
       moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}\n  ${dim("iris gmail read <message-id>")}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -101,7 +105,7 @@ const GmailReadCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Read") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       if (args.thread) {
@@ -135,11 +139,7 @@ const GmailReadCommand = cmd({
       } else {
         const { getMessageById } = await import("../lib/gmail")
         const msg = await getMessageById(token, args.id)
-        if (!msg) {
-          prompts.log.error(`Message ${args.id} not found`)
-          prompts.outro("Done")
-          return
-        }
+        if (!msg) return fail(args, `Message ${args.id} not found in this mailbox`)
 
         if (args.json) { await writeJson(msg); return }
 
@@ -163,8 +163,7 @@ const GmailReadCommand = cmd({
         prompts.outro(success("✓"))
       }
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -184,7 +183,7 @@ const GmailSearchCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro(`◈  Gmail Search — "${args.query}"`) }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const sp = args.json ? null : prompts.spinner()
@@ -194,6 +193,10 @@ const GmailSearchCommand = cmd({
 
       if (sp) sp.stop(`${messages.length} result(s)`)
 
+      reportStoppedEarly()
+
+      // --json with nothing found is an empty array, not prose (#189395).
+      if (!messages.length && args.json) { await writeJson([]); return }
       if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
         printMailboxLine()
@@ -218,8 +221,7 @@ const GmailSearchCommand = cmd({
       moreHint(false)
       prompts.outro(`${success("✓")} ${messages.length} result${messages.length === 1 ? "" : "s"}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -234,7 +236,7 @@ const GmailLabelsCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Gmail Labels") }
 
     const token = await requireToken()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { process.exitCode = 1; if (args.json) process.stdout.write(JSON.stringify({ success: false, error: lastError() }) + "\n"); else prompts.outro("Done"); return }
 
     try {
       const labels = await getLabels(token)
@@ -260,8 +262,7 @@ const GmailLabelsCommand = cmd({
       printMailboxLine()
       prompts.outro(`${success("✓")} ${labels.length} label${labels.length === 1 ? "" : "s"}`)
     } catch (err: any) {
-      prompts.log.error(err.message)
-      prompts.outro("Done")
+      fail(args, err?.message ?? String(err))
     }
   },
 })
@@ -286,16 +287,40 @@ const GmailUnreadCommand = cmd({
  * each message carries `mailbox` + `integration_id` itself. Message ids are only valid in the
  * mailbox they came from — act on them with the same --integration-id.
  */
-/** Say when there is more — the token to continue, or --all. JSON keeps stdout an array; the hint goes to stderr. */
+/**
+ * A failed gmail command FAILS: exit 1, and under --json a JSON error on stdout so a parser gets
+ * JSON either way. It used to print "not found" and exit 0 — an agent cannot tell that from
+ * success, and a contract test could not see it (#189389).
+ */
+function fail(args: { json?: unknown }, message: string): void {
+  process.exitCode = 1
+  if (args.json) {
+    process.stdout.write(JSON.stringify({ success: false, error: message }) + "\n")
+    return
+  }
+  prompts.log.error(message)
+  prompts.outro("Done")
+}
+
+/** Say when there is more — the token to continue, or --all. Under --json it says nothing: see below. */
 function moreHint(json: boolean): void {
   const t = nextPageToken()
   if (!t) return
   const line = `More messages match. Next page: --page-token=${t}  ·  everything: --all`
-  if (json) process.stderr.write(`next_page_token: ${t}\n`)
-  else console.log(dim(`  ${line}`))
+  // --json: say nothing. Anything on stderr makes PowerShell's `2>&1` report a SUCCESSFUL call as
+  // exit 1 — a client's agent abandoned working commands because of it (#189389). Use --all.
+  if (!json) console.log(dim(`  ${line}`))
 }
 
-export function printMailboxLine(): void {
+export /** Some results and then a failure: they still print, and the command fails so it can't pass as complete. */
+function reportStoppedEarly(): void {
+  const stopped = searchFailure()
+  if (!stopped) return
+  process.exitCode = 1
+  process.stderr.write(`Gmail stopped early, so these results are incomplete: ${stopped}\n`)
+}
+
+function printMailboxLine(): void {
   const a = lastGmailAccount()
   if (!a) return
   const who = a.account ?? `connection #${a.integration_id}`

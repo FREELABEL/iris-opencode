@@ -22,26 +22,16 @@
  * expensive. Prompt guidance can compensate for both; it should not have to.
  */
 
-export interface ListMeta {
-  /** How many rows are in `data`. */
-  returned: number
-  /** How many exist server-side, when the API tells us. Absent means unknown. */
-  total?: number
-  /** True when rows are being withheld — or when we cannot rule it out. */
-  truncated: boolean
-  /** The page size that produced this result. */
-  limit?: number
-  /** Present only when truncated: how to actually get the rest. */
-  hint?: string
-}
+import { listEnvelope, type ListEnvelope, type ListMeta } from "./pagination-args"
 
-export interface ListEnvelope<T> {
-  data: T[]
-  meta: ListMeta
-}
+export type { ListEnvelope, ListMeta }
 
 /**
  * Wrap rows with metadata that makes withholding visible.
+ *
+ * Thin adapter over `listEnvelope` in pagination-args.ts — the one implementation of the list
+ * contract (#191863). Kept so existing callers (agents, pages, workflows, atlas list, page
+ * components) emit the full contract without each being rewritten.
  *
  * When the server sends no total, a FULL page is treated as truncated. That is
  * deliberate: a full page is the only evidence available, and claiming
@@ -51,30 +41,30 @@ export interface ListEnvelope<T> {
  */
 export function buildListEnvelope<T>(
   rows: T[],
-  opts: { total?: number; limit?: number; resource?: string } = {},
+  opts: { total?: number; limit?: number; page?: number; resource?: string; command?: string } = {},
 ): ListEnvelope<T> {
-  const returned = rows.length
-  const { total, limit, resource } = opts
-
-  const truncated =
-    typeof total === "number"
-      ? returned < total
-      : typeof limit === "number" && returned >= limit && returned > 0
-
-  const meta: ListMeta = { returned, truncated }
-  if (typeof total === "number") meta.total = total
-  if (typeof limit === "number") meta.limit = limit
-
-  if (truncated) {
-    const noun = resource ?? "results"
-    const searchCmd = resource ? `iris ${resource} search <term>` : "search"
-    meta.hint =
-      `Showing ${returned}${typeof total === "number" ? ` of ${total}` : ""} ${noun}. ` +
-      `This is NOT the full set — do not answer "which do I have" from it. ` +
-      `Use --limit <n> for more, or ${searchCmd} to find by keyword across everything.`
-  }
-
-  return { data: rows, meta }
+  const { total, limit, page, resource, command } = opts
+  const env = listEnvelope<T>(
+    {
+      rows,
+      total: typeof total === "number" ? total : null,
+      page: null,
+      perPage: null,
+      lastPage: null,
+      // No total and no page size: these callers pass a whole list (pre-#191863 behaviour).
+      hasMore: typeof total !== "number" && typeof limit !== "number" ? false : null,
+    },
+    {
+      resource: resource ?? "results",
+      command,
+      page,
+      limit,
+      search: resource ? `iris ${resource} search <term>` : "search",
+    },
+  )
+  // v1.5.25 callers read meta.limit; keep it (deprecated alias of per_page).
+  if (typeof limit === "number") env.meta.limit = limit
+  return env
 }
 
 /**

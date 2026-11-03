@@ -18,6 +18,7 @@ import { McpServeCommand } from "./mcp-serve"
 import { McpInstallCommand } from "./mcp-install"
 import { McpClients } from "../../mcp/clients"
 import { firstArray } from "../../util/array"
+import { buildMcpListJson } from "./mcp-list-json"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -207,10 +208,35 @@ export const McpListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list MCP servers and their status",
-  async handler() {
+  builder: (y) => y.option("json", { type: "boolean", default: false, describe: "machine-readable output — pipeable" }),
+  async handler(args) {
     await Instance.provide({
       directory: process.cwd(),
       async fn() {
+        if (args.json) {
+          // #191845: same facts as the listing below, as one JSON object on stdout.
+          try {
+            const config = await Config.get()
+            const statuses = await MCP.status()
+            const servers = Object.entries(config.mcp ?? {})
+              .filter((entry): entry is [string, McpConfigured] => isMcpConfigured(entry[1]))
+              .map(([name, serverConfig]) => ({ name, config: serverConfig, status: statuses[name] }))
+            const clients = await Promise.all(
+              McpClients.all().map(async (c) => ({
+                id: c.id,
+                label: c.label,
+                configPath: c.configPath,
+                detected: c.detected,
+                registered: await McpClients.isWired(c),
+              })),
+            )
+            console.log(JSON.stringify(buildMcpListJson(servers, clients), null, 2))
+          } catch (e: any) {
+            console.log(JSON.stringify({ ok: false, error: e?.message ?? String(e) }))
+            process.exitCode = 1
+          }
+          return
+        }
         UI.empty()
         prompts.intro("MCP Servers")
 

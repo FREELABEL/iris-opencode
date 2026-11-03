@@ -28,6 +28,8 @@ export interface LogInput {
   cc?: string[]
   /** Every address the message actually went To, when it is known (iris mail send). Defaults to the leads' emails. */
   toIdentifiers?: string[]
+  /** The address it was sent from, when known. Omitted (not null) when unknown. */
+  fromIdentifier?: string | null
   /** Extra facts for the record — the full To/CC/BCC, In-Reply-To. Never overrides the group fields. */
   metadata?: Record<string, unknown>
   loggedVia?: string
@@ -63,6 +65,7 @@ export function buildLogPayloads(recipients: Recipient[], input: LogInput) {
     sent_at: input.sentAt,
     message_group_id: input.groupId,
     to_identifiers: to.length ? to : null,
+    ...(input.fromIdentifier ? { from_identifier: input.fromIdentifier } : {}),
     metadata: {
       ...(input.metadata ?? {}),
       message_group_id: input.groupId,

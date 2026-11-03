@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.12-agreements-and-design-standard",
+  "version": "2026.11.02-run-a-case-in-lexicon",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -19,6 +19,12 @@
       "dest": "how-to/agentic-loops.md",
       "managed": true,
       "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
+    },
+    {
+      "src": "how-to/run-a-case-in-lexicon.md",
+      "dest": "how-to/run-a-case-in-lexicon.md",
+      "managed": true,
+      "purpose": "Lawyer-facing path through a matter: intake, conflicts, engagement, signature, chronology, demand."
     },
     {
       "src": "how-to/agreements-and-signing.md",
@@ -231,6 +237,12 @@
       "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
     },
     {
+      "src": "how-to/hive-inventory.md",
+      "dest": "how-to/hive-inventory.md",
+      "managed": true,
+      "purpose": "See what your own machines can run before choosing where work goes."
+    },
+    {
       "src": "how-to/hive-tailscale.md",
       "dest": "how-to/hive-tailscale.md",
       "managed": true,
@@ -276,7 +288,7 @@
       "src": "how-to/public-url-for-a-local-port.md",
       "dest": "how-to/public-url-for-a-local-port.md",
       "managed": true,
-      "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
+      "purpose": "Give something running on your machine a public https URL (<name>.hivemesh.net), encrypted to the machine, that closes when you stop."
     },
     {
       "src": "how-to/your-own-domain.md",
@@ -301,6 +313,18 @@
       "dest": "how-to/shared-folder-across-machines.md",
       "managed": true,
       "purpose": "One folder on every machine in your Hive — read on demand, saved files visible everywhere at once."
+    },
+    {
+      "src": "how-to/claim-a-licence.md",
+      "dest": "how-to/claim-a-licence.md",
+      "managed": true,
+      "purpose": "How to claim an IRIS licence key on Desktop or the CLI and check its status"
+    },
+    {
+      "src": "how-to/team-licences.md",
+      "dest": "how-to/team-licences.md",
+      "managed": true,
+      "purpose": "How operators issue one licence for a team, track who claimed it and revoke it"
     },
     {
       "src": "how-to/iris-login.md",

@@ -12,6 +12,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "model gateway", "openrouter alternative", "ai gateway", "failover", "my ai spend", "ollama", "my own gpu", "local models", "serve my models", "hive/<model>" | `iris-model-gateway.md` |
 | "run claude code from iris", "codex", "gemini cli", "switch agents", "ACP", "agent client protocol", "keep a session open", "steer an agent from my phone", "message a running agent" | `run-other-coding-agents.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
+| "law firm", "legal matter", "legal case", "new case", "new client matter", "conflict check", "engagement letter", "retainer", "demand letter", "chronology", "Lexicon" | `run-a-case-in-lexicon.md` |
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
@@ -26,6 +27,8 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
 | "diary", "daily diary", "log my day", "publish my notes", "sync daily-diary", "journal", "what did I do" | `diary.md` |
+| "licence key", "claim my key", "activate", "am I licensed", "my seat", "my licence expired" | `claim-a-licence.md` |
+| "team licence", "issue a licence", "grant seats", "who claimed the key", "revoke a licence" | `team-licences.md` |
 | "meeting", "call notes", "transcript", "wispr", "what did we agree", "action items from the call", "file this meeting" | `meetings.md` |
 | "share a bloq", "invite someone to a board", "give the client access", "scoped invite", "who can see this board", "revoke access", "what did I share", "keep this internal", "permissions" | `bloq-access-control.md` |
 | "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |

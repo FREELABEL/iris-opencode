@@ -1,6 +1,21 @@
 import fs from "fs"
+import path from "path"
 import { spawn } from "child_process"
 import { shouldRetrySpec } from "./reachr-core"
+
+function hasXvfbRun(): boolean {
+  return (process.env.PATH ?? "").split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, "xvfb-run")))
+}
+
+/** The spec's command line. The browser is headed, so a Linux machine with no display needs xvfb. */
+export function specCommand(
+  spec: string,
+  timeoutMs: number,
+  o: { platform: string; hasDisplay: boolean; hasXvfb: boolean; noRetry?: boolean },
+): string[] {
+  const pw = ["npx", "playwright", "test", spec, "--headed", "--timeout", String(timeoutMs), ...(o.noRetry ? ["--retries=0"] : [])]
+  return o.platform === "linux" && !o.hasDisplay && o.hasXvfb ? ["xvfb-run", "-a", "--server-args=-screen 0 1440x900x24", ...pw] : pw
+}
 
 /**
  * Run one of the Freelabel Playwright specs (Instagram / LinkedIn scrapers, the inbox scan) the
@@ -20,10 +35,18 @@ export async function runSpec(o: {
   env: NodeJS.ProcessEnv
   timeoutMs: number
   resultFile: string
+  /** A spec with effects outside this machine (a send): one attempt, whatever happens. */
+  noRetry?: boolean
 }): Promise<{ code: number; text: string; attempts: number }> {
   const once = () =>
     new Promise<{ code: number; text: string }>((resolve) => {
-      const child = spawn("npx", ["playwright", "test", o.spec, "--headed", "--timeout", String(o.timeoutMs)], {
+      const [cmd, ...argv] = specCommand(o.spec, o.timeoutMs, {
+        platform: process.platform,
+        hasDisplay: !!(o.env.DISPLAY || o.env.WAYLAND_DISPLAY),
+        hasXvfb: hasXvfbRun(),
+        noRetry: o.noRetry,
+      })
+      const child = spawn(cmd, argv, {
         cwd: o.root,
         env: o.env,
       })
@@ -36,6 +59,7 @@ export async function runSpec(o: {
 
   const started = Date.now()
   const first = await once()
+  if (o.noRetry) return { ...first, attempts: 1 }
   const retry = shouldRetrySpec({ resultFileExists: fs.existsSync(o.resultFile), text: first.text, elapsedMs: Date.now() - started })
   if (!retry) return { ...first, attempts: 1 }
   await new Promise((r) => setTimeout(r, 5000)) // let the dead browser finish tearing down

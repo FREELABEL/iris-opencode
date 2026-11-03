@@ -12,6 +12,7 @@ import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
 import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
+import { listEnvelope, listFooter, wholeNumberError, rejectFieldErrors } from "./pagination-args"
 
 // ============================================================================
 // iris hive nodes / run
@@ -195,7 +196,9 @@ const HiveNodesListCommand = cmd({
     const views = await commitViews(nodes.map((n) => (n as any).daemon_version))
 
     if (argv.json) {
-      await writeJson(nodes.map((n, i) => ({ ...n, daemon_commit: views.byIndex[i].commit, daemon_drift: views.byIndex[i].drift, behind_main: views.byIndex[i].behind, main_commit: views.main })))
+      // The list contract (#191863): the nodes endpoint returns every node, so the total is exact.
+      const rows = nodes.map((n, i) => ({ ...n, daemon_commit: views.byIndex[i].commit, daemon_drift: views.byIndex[i].drift, behind_main: views.byIndex[i].behind, main_commit: views.main }))
+      await writeJson(listEnvelope(rows, { resource: "nodes", complete: true }))
       return
     }
 
@@ -319,7 +322,7 @@ const HiveNodesListCommand = cmd({
 
     const stale = nodes.filter((n) => n.connection_status === "online" && !(n as any).bridge_capabilities).length
     console.log()
-    console.log(dim(`  ${nodes.length} node(s).  Run on one: iris hive run <name|id> "<command>"`))
+    console.log(dim(`  ${listFooter(listEnvelope(nodes, { resource: "nodes", complete: true }).meta, "nodes")}.  Run on one: iris hive run <name|id> "<command>"`))
     const behind = views.byIndex.filter((v) => v.behind).length
     if (behind > 0) console.log(`  ${UI.Style.TEXT_WARNING}${behind} node(s) behind main.${UI.Style.TEXT_NORMAL} ${dim("Update every machine: iris hive rollout --dry-run, then iris hive rollout")}`)
     if (stale > 0) {
@@ -653,7 +656,7 @@ const HiveRunCommand = cmd({
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
       .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
       .option("timeout", {
-        describe: "task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
+        describe: "task timeout in seconds, 30 to 3600 (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
         type: "number",
         default: 300,
       })
@@ -673,6 +676,8 @@ const HiveRunCommand = cmd({
       .option("no-fail-fast", { describe: "run every statement even after one fails (no `set -e`)", type: "boolean", default: false })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 30, max: 3600 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)

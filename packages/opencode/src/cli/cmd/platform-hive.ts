@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -38,6 +39,7 @@ import { HiveTunnelCommand } from "./platform-hive-tunnel"
 import { HiveSshGateCommand } from "./platform-hive-ssh-gate"
 import { HiveRolloutCommand } from "./platform-hive-rollout"
 import { HiveModelsCommand } from "./platform-hive-models"
+import { HiveInventoryCommand } from "./hive-inventory"
 import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
@@ -2532,7 +2534,9 @@ const HiveScriptListCommand = cmd({
           const name = bold(String(entry.name))
           const size = dim(`${entry.size} bytes`)
           const modified = entry.modified ? dim(new Date(String(entry.modified)).toLocaleString()) : ""
-          console.log(`  ${success("■")} ${name}  ${size}  ${modified}`)
+          // `local`: a file on this node, not a registry script (`iris scripts list`) — the two
+          // share a word and nothing else, so the listing says which one you are looking at (#191674).
+          console.log(`  ${success("■")} ${name}  ${dim("local")}  ${size}  ${modified}`)
         }
         console.log()
         console.log(dim(`  ${entries.length} script(s) on node`))
@@ -2665,8 +2669,8 @@ echo "=== Report Complete ==="
 
       // Optionally schedule it
       if (args.schedule) {
-        const schedUrl = await bridgeUrl("/daemon/schedules")
-        const schedRes = await fetch(schedUrl, {
+        // bridgeFetch: the /daemon prefix AND the bridge key (#189156 — a bare fetch 404s/401s).
+        const schedRes = await bridgeFetch("/daemon/schedules", {
           method: "POST",
           headers: bridgeHeaders(),
           body: JSON.stringify({
@@ -2779,7 +2783,7 @@ const HiveScheduleAddCommand = cmd({
     spinner.start("Creating schedule...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+      const res = await bridgeFetch(`/schedules`, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -2823,7 +2827,7 @@ const HiveScheduleRmCommand = cmd({
     prompts.intro("◈  Remove Schedule")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}`, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
@@ -2851,7 +2855,7 @@ const HiveSchedulePauseCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/pause`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -2875,7 +2879,7 @@ const HiveScheduleResumeCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/resume`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -3425,6 +3429,8 @@ const HiveExecCommand = cmd({
       .option("timeout", { describe: "max seconds (1-60)", type: "number", default: 30 })
       .option("user-id", { describe: "user ID", type: "number" }),
   async handler(args) {
+    const timeoutError = wholeNumberError("timeout", args.timeout, { min: 1, max: 60 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, args.json)) return
     UI.empty()
     prompts.intro("◈  Hive Remote Exec")
 
@@ -5195,6 +5201,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveAskCommand)
       .command(HiveTunnelCommand)
       .command(HiveModelsCommand)
+      .command(HiveInventoryCommand)
       .command(HiveDriveCommand)
       .command(HiveAnswerCommand)
       .command(HiveTriggerCommand)

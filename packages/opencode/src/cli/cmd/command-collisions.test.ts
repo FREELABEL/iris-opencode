@@ -40,6 +40,18 @@ function blockAt(src: string, from: number): string {
   return ""
 }
 
+/** The block with every nested `{…}` removed, so only its own keys remain. */
+function topLevel(block: string): string {
+  let depth = 0
+  let out = ""
+  for (const c of block) {
+    if (c === "{") depth++
+    if (depth <= 1) out += c
+    if (c === "}") depth--
+  }
+  return out
+}
+
 type Decl = { token: string; aliases: string[] }
 
 function collectDeclarations(): Map<string, Decl> {
@@ -58,7 +70,10 @@ function collectDeclarations(): Map<string, Decl> {
       // productCommand spells `command:` as `name:`.
       const token = (body.match(/command:\s*"([^"]+)"/) ?? body.match(/\bname:\s*"([^"]+)"/))?.[1]
       if (!token) continue
-      const aliasRaw = body.match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
+      // Only the block's OWN aliases (brace depth 1). A subcommand declared inline in the builder
+      // (`iris home list`, aliases ["status"]) is not a top-level claim — reading it as one made
+      // `iris status` (#191444) look shadowed by `iris home` while yargs routed it correctly.
+      const aliasRaw = topLevel(body).match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
       if (!out.has(m[1])) {
         out.set(m[1], {
           token: token.split(/\s+/)[0],

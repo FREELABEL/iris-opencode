@@ -1,4 +1,5 @@
 import { fetchClaims } from "./platform-hive-claim"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
@@ -379,6 +380,8 @@ const AskCommand = cmd({
       .option("interval", { describe: "seconds between transcript reads", type: "number", default: 2 })
       .option("user-id", { describe: "user ID", type: "number" }),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 10 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)

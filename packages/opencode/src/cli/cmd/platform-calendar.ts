@@ -17,7 +17,7 @@ import {
   readWindowsOutlook,
   uniqueAttendees,
 } from "./calendar-search"
-import { executeIntegrationCall } from "./platform-run"
+import { accountLine, attendeeLines, executeIntegrationCall } from "./platform-run"
 import { firstArray } from "../../util/array"
 
 // Google Calendar integration via iris-api execute-direct endpoint
@@ -130,7 +130,7 @@ function eventTime(v: any): string {
   return v.dateTime || v.date || ""
 }
 
-function printEvent(ev: any): void {
+function printEvent(ev: any, opts: { attendees?: boolean } = {}): void {
   const start = eventTime(ev.start)
   const end = eventTime(ev.end)
   const time = start.includes("T")
@@ -142,8 +142,22 @@ function printEvent(ev: any): void {
     const desc = ev.description.replace(/\n*___\ncreated by heyiris\.io/g, "").trim()
     if (desc) console.log(`  ${dim("  " + desc.slice(0, 120))}`)
   }
+  if (opts.attendees) for (const line of attendeeLines(ev.attendees)) console.log(`  ${dim("  " + line)}`)
   console.log(`  ${dim("  id: " + (ev.id || "").slice(0, 30))}`)
   console.log()
+}
+
+/** Which account answered. Printed on every read, above all an empty one: "no events" alone can't be told from "wrong calendar". */
+function printAnsweredBy(result: any): void {
+  const who = accountLine(result)
+  if (who) console.log(dim(`  ${who}`))
+  if (result?._account?.notice) console.log(dim(`  ${result._account.notice}`))
+}
+
+/** `list --search` asks Google. Filtering one fetched page afterwards missed anything past --limit. */
+export function listSearchParams(search: unknown): { q?: string } {
+  const q = typeof search === "string" ? search.trim() : ""
+  return q ? { q } : {}
 }
 
 // ── LIST ──────────────────────────────────────────────────────
@@ -160,7 +174,8 @@ const CalendarListCommand = cmd({
       // this way.
       .option("since", { type: "string", describe: "start of window, YYYY-MM-DD (past allowed)" })
       .option("until", { type: "string", describe: "end of window, YYYY-MM-DD" })
-      .option("search", { type: "string", alias: "q", describe: "filter by event title (case-insensitive)" })
+      .option("search", { type: "string", alias: "q", describe: "text search: title, description, location or attendees" })
+      .option("attendees", { type: "boolean", default: false, describe: "print each event's attendees and their responses" })
       .option("limit", { type: "number", default: 20, describe: "max events" })
       .option("calendar", { type: "string", alias: "c", describe: "calendar ID (default: primary)" })
       .option("json", { type: "boolean", default: false }),
@@ -211,6 +226,7 @@ const CalendarListCommand = cmd({
         max_results: args.limit,
         time_min: start.toISOString(),
         time_max: end.toISOString(),
+        ...listSearchParams(args.search),
         ...(args.calendar ? { calendar_id: args.calendar } : {}),
       }, getAccountOpts(args))
     } catch (err: any) {
@@ -229,17 +245,17 @@ const CalendarListCommand = cmd({
       return
     }
 
+    printAnsweredBy(result)
+
     // The Google Calendar API returns events at data.items; result.events does not exist and
     // never did, so the human-readable list has ALWAYS printed "No events" while --json quietly
     // returned them. Found 2026-08-02 with 5 real events in the window. Accept both shapes so a
     // future response change cannot silently blank the list again.
     let events: any[] = firstArray(result.events, result.data?.items, result.items)
+    // Google's q is the filter; this holds it to the same rule on a server that has not honoured it.
     if (args.search) {
-      const q = String(args.search).toLowerCase()
-      events = events.filter((e: any) =>
-        String(e.summary ?? e.title ?? "").toLowerCase().includes(q) ||
-        String(e.description ?? "").toLowerCase().includes(q),
-      )
+      const q = String(args.search)
+      events = events.filter((e: any) => matchesQuery({ ...fromGoogleEvent(e, ""), description: e.description }, q))
     }
     if (events.length === 0) {
       prompts.log.info(`No events — ${label}${args.search ? ` matching "${args.search}"` : ""}`)
@@ -255,7 +271,7 @@ const CalendarListCommand = cmd({
         console.log(`  ${bold(d)}`)
         lastDate = d
       }
-      printEvent(ev)
+      printEvent(ev, { attendees: Boolean(args.attendees) })
     }
 
     prompts.outro(`${success("✓")} ${events.length} event${events.length === 1 ? "" : "s"}`)
@@ -302,6 +318,8 @@ const CalendarTodayCommand = cmd({
       prompts.outro("Done")
       return
     }
+
+    printAnsweredBy(result)
 
     // Same shape bug the `list` fix caught: the Google Calendar API returns events at
     // data.items, so `result.events` is always undefined and this printed "nothing on
@@ -358,6 +376,8 @@ const CalendarTomorrowCommand = cmd({
       prompts.outro("Done")
       return
     }
+
+    printAnsweredBy(result)
 
     // Same shape bug the `list` fix caught: the Google Calendar API returns events at
     // data.items, so `result.events` is always undefined and this printed "nothing on
@@ -1286,6 +1306,8 @@ async function resolveGoogleAccount(conn: any): Promise<GoogleAccount> {
   }
 }
 
+const SEARCH_PAGE = 250
+
 async function searchGoogleAccount(
   acct: GoogleAccount,
   query: string,
@@ -1304,12 +1326,13 @@ async function searchGoogleAccount(
   const cals = acct.cals
   const events: FoundEvent[] = []
   const failures: string[] = []
+  const truncated: string[] = []
   await pool(cals, 4, async (cal: any) => {
     const calName = String(cal.summary || cal.name || cal.id)
     try {
       const r = await calExec(
         "get_events",
-        { q: query, time_min: from.toISOString(), time_max: to.toISOString(), max_results: 250, calendar_id: cal.id },
+        { q: query, time_min: from.toISOString(), time_max: to.toISOString(), max_results: SEARCH_PAGE, calendar_id: cal.id },
         opts,
       )
       if (!r?.success) throw new Error(typeof r?.error === "string" ? r.error : JSON.stringify(r?.error ?? "no response"))
@@ -1320,11 +1343,13 @@ async function searchGoogleAccount(
         if (matchesQuery({ ...fe, description: ev.description }, query)) events.push(fe)
       }
       source.calendars = (source.calendars ?? 0) + 1
+      if (r.has_more || r.data?.nextPageToken) truncated.push(calName)
     } catch (err: any) {
       failures.push(`${calName}: ${summarizeProviderError(err?.message ?? String(err))}`)
     }
   })
   source.count = events.length
+  if (truncated.length > 0) source.reason = `more than ${SEARCH_PAGE} matches in ${truncated.join(", ")}: narrow the search or the window`
   if (failures.length > 0) {
     source.status = "failed"
     source.reason = (source.calendars ?? 0) === 0 ? failures[0] : `${failures.length} of ${cals.length} calendars failed — ${failures[0]}`
@@ -1435,7 +1460,10 @@ const CalendarSearchCommand = cmd({
       return
     }
 
-    if (events.length === 0) prompts.log.info(`No events matched "${query}" in the sources below.`)
+    if (events.length === 0) {
+      prompts.log.info(`No events matched "${query}" between ${from.toISOString().slice(0, 10)} and ${to.toISOString().slice(0, 10)} in the sources below.`)
+      prompts.log.info(dim("Searched that window only. Widen it with --days, or --since and --until."))
+    }
     let lastDate = ""
     for (const ev of events) {
       const d = formatDate(ev.start)
@@ -1449,7 +1477,7 @@ const CalendarSearchCommand = cmd({
       console.log(`  ${dim("  in: " + ev.seenIn.join("  |  "))}`)
       if (args.attendees && ev.attendees.length) {
         for (const a of ev.attendees)
-          console.log(`  ${dim("   ")}${a.email}${a.name ? dim(" · " + a.name) : ""}${a.organizer ? dim(" (organizer)") : ""}`)
+          console.log(`  ${dim("   ")}${a.email}${a.name ? dim(" · " + a.name) : ""}${a.response ? dim(` (${a.response})`) : ""}${a.organizer ? dim(" (organizer)") : ""}`)
       }
       console.log()
     }
@@ -1470,7 +1498,7 @@ const CalendarSearchCommand = cmd({
       const mark = s.status === "ok" ? success("✓") : s.status === "failed" ? "✗" : dim("–")
       const detail =
         s.status === "ok"
-          ? dim(`${s.count} match${s.count === 1 ? "" : "es"}${s.calendars !== undefined ? ` · ${s.calendars} calendar${s.calendars === 1 ? "" : "s"}` : ""}`)
+          ? dim(`${s.count} match${s.count === 1 ? "" : "es"}${s.calendars !== undefined ? ` · ${s.calendars} calendar${s.calendars === 1 ? "" : "s"}` : ""}${s.reason ? ` · ${s.reason}` : ""}`)
           : dim(`${s.status} — ${s.reason ?? ""}`)
       console.log(`  ${mark} ${s.name.padEnd(36)} ${detail}`)
     }

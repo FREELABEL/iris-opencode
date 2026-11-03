@@ -48,7 +48,7 @@ describe("the embedded Mail reader", () => {
 
   test("matches by exact address and reads one named account — never the unified inbox", () => {
     expect(MAIL_THREAD_READER_JXA).toContain("emailOf(snd[i]) === addr")
-    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(acctName)")
+    expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(sel)")
     expect(MAIL_THREAD_READER_JXA).not.toContain("Mail.inbox")
     expect(MAIL_THREAD_READER_JXA).not.toContain("_contains")
   })

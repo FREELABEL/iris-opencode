@@ -11,6 +11,7 @@
  * Nothing in here can reach Mail.app, Gmail or the API on its own: the transport, the lead
  * resolver and the log writer are all parameters, which is what lets the tests use fakes.
  */
+import { basename } from "node:path"
 import type { LeadResolution, UnloggedSend } from "./comms-send"
 import { buildLogPayloads, checkLogged, type LogOutcome, type Recipient } from "./comms-log-group"
 import {
@@ -108,6 +109,11 @@ export interface Delivery {
   error?: string
   /** The transport's own answer, for --json. */
   detail?: unknown
+  /** The address it actually went out from, when the transport knows (Gmail: the connected mailbox). */
+  from?: string | null
+  /** The provider's id for the sent message (Gmail message/thread id). Mail.app returns none. */
+  messageId?: string | null
+  threadId?: string | null
 }
 
 export interface Transport {
@@ -144,9 +150,18 @@ export function bridgeTransport(bridgeFetch: FetchLike): Transport {
         body: JSON.stringify(toBridgePayload(m)),
       }).catch((e: any) => ({ ok: false, status: 0, text: async () => String(e?.message ?? e), json: async () => null }) as unknown as Response)
       if (!res.ok) return { ok: false, error: `${await res.text().catch(() => "unknown error")}` }
-      const body = (await res.json().catch(() => ({}))) as { mode?: string }
+      const body = (await res.json().catch(() => ({}))) as { mode?: string; message_id?: string; from_email?: string }
       // The bridge's own `mode`, not our intent: only it knows whether Mail sent or opened a window.
-      return { ok: true, mode: body.mode === "draft" ? "draft" : "sent", detail: body }
+      return {
+        ok: true,
+        mode: body.mode === "draft" ? "draft" : "sent",
+        detail: body,
+        // --from is checked against Mail.app's accounts by the bridge (a 422 otherwise), so the
+        // address asked for is the address it went from. Without --from, Mail's default account
+        // sent it and the bridge does not say which: recorded as unknown, never guessed.
+        from: body.from_email ?? m.from ?? null,
+        messageId: body.message_id ?? null,
+      }
     },
   }
 }
@@ -158,7 +173,7 @@ type GmailExec = (action: string, params: Record<string, unknown>) => Promise<an
  * Does not need the Mac. A Gmail reply always goes To the original's sender — the server sets it
  * — so every other recipient rides as CC, and a different first To is refused, not rewritten.
  */
-export function gmailTransport(exec: GmailExec): Transport {
+export function gmailTransport(exec: GmailExec, mailbox: () => string | null | undefined = () => null): Transport {
   return {
     name: "gmail",
     async deliver(m) {
@@ -188,7 +203,14 @@ export function gmailTransport(exec: GmailExec): Transport {
           bcc: m.bcc.join(", "),
         })
         if (r?.success === false) return { ok: false, error: String(r.error ?? "reply_to_email failed") }
-        return { ok: true, mode: "sent", detail: r }
+        return {
+          ok: true,
+          mode: "sent",
+          detail: r,
+          from: mailbox() ?? null,
+          messageId: r?.message_id ?? r?.id ?? null,
+          threadId: r?.thread_id ?? null,
+        }
       } catch (e: any) {
         return { ok: false, error: String(e?.message ?? e) }
       }
@@ -257,8 +279,38 @@ export async function sendAndLog(
   }
   report.sent = true
 
-  const to = m.to
-  const spoolEntry = (leadId: number | undefined, reason: string): UnloggedSend => ({
+  // #184795 / #183515 / #181928: the record is of what was SENT — who it was from, every
+  // recipient, the files on it and the provider's id — not only of who it was for. Before this,
+  // --from and --attachment reached the bridge and never the comms row.
+  const from = d.from ?? m.from ?? null
+  const logInput = {
+    channel: deps.transport.name,
+    direction: "outbound",
+    body: m.body,
+    subject: m.subject,
+    sentAt,
+    groupId: deps.groupId,
+    cc: plan.nonLeads,
+    toIdentifiers: m.to,
+    fromIdentifier: from,
+    loggedVia: deps.origin,
+    metadata: {
+      ...(from ? { from } : {}),
+      to: m.to,
+      cc_all: m.cc,
+      ...(m.bcc.length ? { bcc: m.bcc } : {}),
+      // Names only: a local path says nothing to anyone reading the lead and leaks the sender's disk.
+      ...(m.attachments.length ? { attachments: m.attachments.map((a) => basename(a)) } : {}),
+      ...(m.headers["In-Reply-To"] ? { in_reply_to: m.headers["In-Reply-To"], references: m.headers.References } : {}),
+      provider: deps.transport.name,
+      ...(d.messageId ? { provider_message_id: d.messageId } : {}),
+      ...(d.threadId ? { provider_thread_id: d.threadId } : {}),
+    },
+  }
+
+  // The spool keeps the exact row that should have been written, so `iris mail audit --backfill`
+  // writes THAT (same group id — idempotent per lead), not a thinner copy without from/cc/files.
+  const spoolEntry = (leadId: number | undefined, reason: string, payload: Record<string, unknown>): UnloggedSend => ({
     at: sentAt,
     channel: deps.transport.name,
     to: [...m.to, ...m.cc, ...m.bcc].join(", "),
@@ -267,31 +319,21 @@ export async function sendAndLog(
     ...(leadId != null ? { leadId } : {}),
     reason,
     origin: deps.origin,
+    ...(from ? { from } : {}),
+    payload,
   })
 
   if (!plan.leads.length) {
-    const path = await deps.log.spool(spoolEntry(undefined, "sent with --force and no lead to attach it to"))
+    // No lead to hang it on: the row is kept whole, lead-less, for `iris mail audit --backfill --lead <id>`.
+    const [template] = buildLogPayloads([{ lead_id: 0, name: null, email: null }], logInput)
+    const { lead_id: _none, ...payload } = template
+    payload.metadata = { ...payload.metadata, recipients: [] }
+    const path = await deps.log.spool(spoolEntry(undefined, "sent with --force and no lead to attach it to", payload))
     report.spooled.push({ path, reason: "no lead" })
     return report
   }
 
-  const payloads = buildLogPayloads(plan.leads, {
-    channel: deps.transport.name,
-    direction: "outbound",
-    body: m.body,
-    subject: m.subject,
-    sentAt,
-    groupId: deps.groupId,
-    cc: plan.nonLeads,
-    toIdentifiers: to,
-    loggedVia: deps.origin,
-    metadata: {
-      to: m.to,
-      cc_all: m.cc,
-      ...(m.bcc.length ? { bcc: m.bcc } : {}),
-      ...(m.headers["In-Reply-To"] ? { in_reply_to: m.headers["In-Reply-To"], references: m.headers.References } : {}),
-    },
-  })
+  const payloads = buildLogPayloads(plan.leads, logInput)
 
   for (const body of payloads) {
     const who = plan.leads.find((r) => r.lead_id === body.lead_id)!
@@ -306,7 +348,7 @@ export async function sendAndLog(
     const error = outcome === "failed" || outcome === "wrong_lead" ? String(payload?.error ?? payload?.message ?? `HTTP ${status}`) : undefined
     report.results.push({ lead_id: body.lead_id, name: who.name, outcome, ...(error ? { error } : {}) })
     if (error) {
-      const path = await deps.log.spool(spoolEntry(body.lead_id, outcome === "wrong_lead" ? "server returned another lead's record" : error))
+      const path = await deps.log.spool(spoolEntry(body.lead_id, outcome === "wrong_lead" ? "server returned another lead's record" : error, body))
       report.spooled.push({ lead_id: body.lead_id, path, reason: error })
     }
   }

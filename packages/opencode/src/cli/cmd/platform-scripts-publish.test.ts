@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { publishGate, scriptReach, publishFailure } from "./platform-scripts"
+import { publishGate, scriptReach, publishFailure, publishBody, parseScriptRef, scriptTags } from "./platform-scripts"
 
 /**
  * `iris scripts publish` / `unpublish` — the rules, tested as pure functions (house pattern:
@@ -61,5 +61,61 @@ describe("publishFailure — a refusal names its cause", () => {
 
   test("anything else keeps the status so it can be reported", () => {
     expect(publishFailure(500, { message: "Server Error" }, "x")).toContain("500")
+  })
+})
+
+
+// #191674 — playbook-style scoping for scripts.
+describe("publishBody — project needs a board", () => {
+  test("project with no --bloq is refused before any request", () => {
+    expect(publishBody("project", [])).toEqual({ error: "--bloq <id> is required when --scope project" })
+  })
+
+  test("project with repeated --bloq sends every board once", () => {
+    expect(publishBody("project", [12, "40", 12])).toEqual({ body: { visibility: "project", bloq_ids: [12, 40] } })
+  })
+
+  test("a non-numeric --bloq is refused", () => {
+    expect("error" in publishBody("project", ["abc"])).toBe(true)
+  })
+
+  test("unlisted/public without --bloq send visibility alone, as before", () => {
+    expect(publishBody("unlisted", [])).toEqual({ body: { visibility: "unlisted" } })
+  })
+
+  test("project needs no consent prompt — a board's members are a bounded audience", () => {
+    expect(publishGate({ scope: "project", force: false, interactive: false })).toBe("go")
+  })
+
+  test("project reach names its boards", () => {
+    expect(scriptReach("project", [12, 40])).toContain("boards #12, #40")
+  })
+})
+
+describe("parseScriptRef — only a plain slug of mine is hashed locally", () => {
+  const uuid = "3f2a1c9e-8b7d-4e6f-9a0b-1c2d3e4f5a6b"
+
+  test("plain slug", () => {
+    expect(parseScriptRef("photo-resize")).toMatchObject({ ref: "photo-resize", plainSlug: true, uuid: false, version: null })
+  })
+
+  test("slug@3 is pinned — the server hashes it", () => {
+    expect(parseScriptRef("photo-resize@3")).toMatchObject({ ref: "photo-resize@3", base: "photo-resize", version: "3", plainSlug: false })
+  })
+
+  test("uuid and uuid@3 are someone else's script", () => {
+    expect(parseScriptRef(uuid)).toMatchObject({ uuid: true, plainSlug: false, version: null })
+    expect(parseScriptRef(`${uuid}@3`)).toMatchObject({ ref: `${uuid}@3`, uuid: true, version: "3", plainSlug: false })
+  })
+})
+
+describe("scriptTags — version, visibility, audience, routing on one line", () => {
+  test("all fields", () => {
+    expect(scriptTags({ version: 3, visibility: "project", bloq_ids: [12], runs_on: "capability:gpu" }))
+      .toBe("v3 · project · board #12 · runs-on capability:gpu")
+  })
+
+  test("an older API row with none of them prints nothing extra", () => {
+    expect(scriptTags({})).toBe("")
   })
 })

@@ -1,5 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
+import { argvShape } from "./util/argv-shape"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
@@ -8,6 +9,7 @@ import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
 import { InstallAppCommand } from "./cli/cmd/install-app"
+import { PlatformAppConfigCommand } from "./cli/cmd/platform-app-config"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
@@ -52,6 +54,7 @@ import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
+import { PlatformAtlasGraphCommand } from "./cli/cmd/platform-atlas-graph"
 import { PlatformAtlasStorageCommand } from "./cli/cmd/platform-atlas-storage"
 import { PlatformMintCommand } from "./cli/cmd/platform-mint"
 import { PlatformOkrCommand } from "./cli/cmd/platform-okr"
@@ -98,6 +101,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformStatusCommand } from "./cli/cmd/platform-status"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
@@ -350,7 +354,7 @@ const cli = yargs(rawArgs)
 
     Log.Default.info("opencode", {
       version: Installation.VERSION,
-      args: process.argv.slice(2),
+      ...argvShape(process.argv.slice(2)),
     })
 
     // THE CLUTCH (#184906), at the one point every command passes through.
@@ -395,6 +399,7 @@ const cli = yargs(rawArgs)
   .command(reg(UpgradeCommand))
   .command(reg(UninstallCommand))
   .command(reg(InstallAppCommand))
+  .command(reg(PlatformAppConfigCommand))
   .command(reg(ServeCommand))
   .command(reg(TunnelCommand))
   .command(reg(WebCommand))
@@ -429,6 +434,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLinkedInCommand))
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
+  .command(reg(PlatformAtlasGraphCommand))
   .command(reg(PlatformAtlasStorageCommand))
   .command(reg(PlatformMintCommand))
   .command(reg(PlatformOkrCommand))
@@ -481,6 +487,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformStatusCommand))
   .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))

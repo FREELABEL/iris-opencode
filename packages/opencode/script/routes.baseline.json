@@ -133,11 +133,6 @@
    "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
   },
   {
-   "method": "POST",
-   "path": "/api/v1/integrations/exec",
-   "why": "deliberate — this is a PROBE. platform-run.ts calls it expecting a 404 and the next line reads 'probe endpoint /integrations/exec returned 404'. Not a defect."
-  },
-  {
    "method": "GET",
    "path": "/api/v1/bloqs/{}/service-packages",
    "why": "Called by offers.ts from the reachr commit 4147af8306. Verified genuinely dead 2026-09-02: a routes snapshot read from PRODUCTION contains 0 matches, so the endpoint was never deployed. Baselined only to unblock an unrelated push (#183399 compute CLI) — it is a REAL defect and is tracked separately. Either ship the fl-api route or fix the call site; do not let this sit."

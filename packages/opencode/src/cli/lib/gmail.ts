@@ -34,6 +34,8 @@ export interface GmailMessage {
   is_unread: boolean
   /** The mailbox this message lives in. Its id is only valid there (see setGmailAccount). */
   mailbox?: string
+  /** RFC 5322 Message-ID header, when the backend returned headers — the cross-channel key (#191879). */
+  rfc822_message_id?: string
   integration_id?: number
   attachments?: { filename: string; type: string; size: number; attachment_id: string | null }[]
 }
@@ -216,7 +218,22 @@ export async function gmailExec(action: string, params: Record<string, unknown>)
     throw new Error(String(data?.error ?? data?.message ?? "Gmail request failed."))
   }
 
+  // Composio answered one page and then failed on the next (#190573): success:true with a hole in
+  // it. Unwrapping `data` below drops the flag, so a search stopped early read as a finished one,
+  // and "stopped before anything was found" read as "no replies" (#191935).
+  if (data?.error_after_page) {
+    const reason = String(data.error_after_page)
+    if (extractMessages(data?.data ?? data).length === 0) throw new Error(`Gmail search failed: ${reason}`)
+    lastSearchFailure = reason
+  }
+
   return data?.data ?? data?.result ?? data
+}
+
+let lastSearchFailure: string | null = null
+/** Why the last listing stopped early, with results in hand. null = it finished. */
+export function searchFailure(): string | null {
+  return lastSearchFailure
 }
 
 // ── Labels ──
@@ -260,9 +277,12 @@ export async function listMessages(
   limit = 50,
   opts: { pageToken?: string | null; all?: boolean } = {},
 ): Promise<GmailMessage[]> {
+  // --limit abc arrives as NaN; Math.min(NaN) is NaN and the backend answered "no messages" (#189399).
+  if (!opts.all && !(Number.isFinite(limit) && limit > 0)) throw new Error(`--limit must be a positive number (got "${limit}")`)
   const want = opts.all ? ALL_CAP : Math.max(1, Math.min(limit, opts.all ? ALL_CAP : PAGE_MAX))
   const out: GmailMessage[] = []
   let token: string | null = opts.pageToken ?? null
+  lastSearchFailure = null
   do {
     const params: Record<string, unknown> = { query: query || "in:inbox", max_results: Math.min(PAGE_MAX, want - out.length) }
     if (token) params.page_token = String(token)
@@ -286,7 +306,14 @@ export async function getMessageById(_token: string, messageId: string): Promise
   try {
     const data = await gmailExec("get_email", { message_id: messageId })
     const e = data?.email ?? data
-    if (!e || typeof e !== "object" || !(e.id || e.messageId)) return null
+    if (!e || typeof e !== "object") return null
+    // A real message with no id is the backend's bug, not a missing message (#189389: Composio's
+    // `messageId` was read as `id`, so every message came back id:""). We asked for this id; if
+    // the server returned a message with content, it is that message.
+    if (!(e.id || e.messageId)) {
+      if (!(e.from || e.subject || e.body)) return null
+      e.id = messageId
+    }
     const labels: string[] = Array.isArray(e.labels) ? e.labels : []
     return {
       id: str(e.id ?? e.messageId),
@@ -303,8 +330,12 @@ export async function getMessageById(_token: string, messageId: string): Promise
       ...(e.integration_id ? { integration_id: Number(e.integration_id) } : {}),
       ...(Array.isArray(e.attachments) ? { attachments: e.attachments.map((a: any) => ({ filename: str(a.filename), type: str(a.type), size: Number(a.size ?? 0), attachment_id: a.attachment_id ?? null })) } : {}),
     } as GmailMessage
-  } catch {
-    return null
+  } catch (err: any) {
+    // A failed request is NOT "not found". Swallowing it here printed "Message <id> not found"
+    // for every id on a client machine, and her agent spent ten calls varying flags (#189385).
+    // Gmail's own 404 is the only failure that means not-found; everything else propagates.
+    if (/\b404\b|not\s*found|Requested entity was not found/i.test(String(err?.message ?? ""))) return null
+    throw err
   }
 }
 
@@ -368,6 +399,7 @@ function extractMessages(data: any): GmailMessage[] {
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
       ...(m.mailbox ? { mailbox: String(m.mailbox) } : {}),
       ...(m.integration_id ? { integration_id: Number(m.integration_id) } : {}),
+      ...(hdr("Message-ID") || m.message_id_header ? { rfc822_message_id: str(hdr("Message-ID") || m.message_id_header) } : {}),
     }
   })
 }
