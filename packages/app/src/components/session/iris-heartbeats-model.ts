@@ -340,6 +340,26 @@ export function stateOf(r: HeartbeatRow, now: number): BeatState {
   return "ok"
 }
 
+/**
+ * The planner may skip at most this many beats in a row; past it the next beat runs (fl-iris-api
+ * #290/#296, #192251). Mirrors HeartbeatExecutorService::MAX_CONSECUTIVE_PLANNER_SKIPS.
+ */
+export const PLANNER_SKIP_LIMIT = 6
+
+/**
+ * RESTING, not stuck (#192251): it skipped by choice fewer times in a row than the limit, so the
+ * platform will run it again within `left` beats whatever the planner decides. Measured from the
+ * wake ledger — skipped wakes since its last real beat — so with no ledger it is null, never a guess.
+ */
+export function restOf(r: HeartbeatRow, now: number): { skipped: number; left: number } | null {
+  if (stateOf(r, now) !== "silent" || !r.wakes) return null
+  const beat = t(lastBeatAt(r))
+  const skipped = r.wakes.filter(
+    (w) => w.outcome === "skipped" && !byDesign(w.reason) && (!Number.isFinite(beat) || t(w.at) > beat),
+  ).length
+  return skipped < PLANNER_SKIP_LIMIT ? { skipped, left: PLANNER_SKIP_LIMIT - skipped } : null
+}
+
 export type Problem = { kind: "late" | "silent" | "failing" | "stopped" | "config"; text: string; fix: string }
 
 export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
@@ -353,7 +373,7 @@ export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
     })
   const quiet = silentSince(r, now)
   const why = r.lastSkip && !byDesign(r.lastSkip.reason) ? r.lastSkip.reason : null
-  if (s === "silent" && quiet)
+  if (s === "silent" && quiet && !restOf(r, now))
     out.push({
       kind: "silent",
       text:
@@ -434,6 +454,9 @@ export function lineOf(r: HeartbeatRow, now: number): string {
   if (s === "running") return "Beating now"
   if (s === "late") return `Late · due ${ago(r.nextRunAt, now)}`
   if (s === "silent") {
+    const rest = restOf(r, now)
+    if (rest)
+      return `Resting by choice · skipped ${rest.skipped} in a row · runs again within ${rest.left} beat${rest.left === 1 ? "" : "s"}`
     const why = r.lastSkip && !byDesign(r.lastSkip.reason) && r.lastSkip.reason ? ` · ${oneLine(r.lastSkip.reason).slice(0, 60)}` : ""
     return `Wakes but does nothing · ${last ? `last real beat ${ago(last, now)}` : "never ran"}${why}`
   }
@@ -446,7 +469,8 @@ const RANK: Record<BeatState, number> = { late: 0, silent: 1, failing: 2, runnin
 /** Problems first; then the next beat soonest; paused last. Stable by name. */
 export function sortBeats(rows: readonly HeartbeatRow[], now: number): HeartbeatRow[] {
   return [...rows].sort((a, b) => {
-    const r = RANK[stateOf(a, now)] - RANK[stateOf(b, now)]
+    const rank = (x: HeartbeatRow) => (restOf(x, now) ? 2.5 : RANK[stateOf(x, now)])
+    const r = rank(a) - rank(b)
     if (r) return r
     const na = t(a.nextRunAt)
     const nb = t(b.nextRunAt)
@@ -460,7 +484,8 @@ export function beatSummary(rows: readonly HeartbeatRow[], now: number) {
   return {
     total: rows.length,
     beating: states.filter((s) => s === "ok" || s === "running").length,
-    attention: states.filter((s) => s === "late" || s === "silent" || s === "failing").length,
+    attention: rows.filter((r, i) => (states[i] === "late" || states[i] === "silent" || states[i] === "failing") && !restOf(r, now)).length,
+    resting: rows.filter((r) => restOf(r, now)).length,
     paused: states.filter((s) => s === "paused").length,
   }
 }

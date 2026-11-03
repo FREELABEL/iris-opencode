@@ -38,7 +38,7 @@ describe("#192222 Home › agents", () => {
     expect(tabCount(rows, "all", NOW)).toBe(4)
   })
   test("overview counts and today's runs and tokens", () => {
-    expect(overviewOf(rows, NOW, DAY)).toEqual({ scheduled: 3, healthy: 1, stopped: 1, failing: 1, paused: 1, runsToday: 3, tokensToday: 2000 })
+    expect(overviewOf(rows, NOW, DAY)).toEqual({ scheduled: 3, healthy: 1, resting: 0, stopped: 1, failing: 1, paused: 1, runsToday: 3, tokensToday: 2000 })
   })
   test("pagination clamps the page and reports the range", () => {
     const all = Array.from({ length: 16 }, (_, i) => i)
@@ -51,5 +51,19 @@ describe("#192222 Home › agents", () => {
     expect([shortAgo("2026-11-02T15:16:00Z", NOW), shortAgo("2026-11-02T05:00:00Z", NOW), shortAgo(null, NOW)]).toEqual(["44m", "11h", "—"])
     expect([compact(697_000), compact(1_250_000), compact(12)]).toEqual(["697k", "1.3M", "12"])
     expect([greetingOf(9), greetingOf(14), greetingOf(20)]).toEqual(["Good morning", "Good afternoon", "Good evening"])
+  })
+})
+
+describe("#192251 Home › resting", () => {
+  const wake = (at: string) => ({ at, dueAt: at, outcome: "skipped", kind: "skipped", reason: "Repetition detected.", heldUntil: null }) as any
+  const resting = beat({
+    agentName: "Resting", frequency: "hourly", lastRunAt: "2026-11-02T14:00:00Z", runs: [run("2026-11-02T14:00:00Z")],
+    lastSkip: { at: "2026-11-02T15:00:00Z", reason: "Repetition detected.", kind: "skipped" } as any,
+    wakes: [wake("2026-11-02T15:00:00Z")], ledgerSince: "2026-10-26T00:00:00Z",
+  } as any)
+  test("a resting agent gets the moon, not the stop, and leaves Needs attention", () => {
+    expect(rowOf(resting, NOW)).toMatchObject({ indicator: "resting", why: "Resting by choice — skipped 1 in a row; runs again within 5 beats" })
+    expect(tabRows([resting, stuck], "attention", NOW).map((x) => x.agentName)).toEqual(["Stuck"])
+    expect(overviewOf([resting, stuck], NOW, DAY)).toMatchObject({ resting: 1, stopped: 1 })
   })
 })

@@ -1,6 +1,8 @@
 import { For, Show, createMemo, createResource, createSignal, onCleanup, type JSX } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
+import { useTabs } from "@/context/tabs"
+import { openIrisPanel } from "@/components/session/iris-nav"
 import type { HeartbeatRow } from "@/components/session/iris-heartbeats-model"
 import { todayOf, type AgentsPayload, type HivePayload, type InboxPayload } from "./home-today-model"
 import {
@@ -37,6 +39,7 @@ const PATHS: Record<string, string> = {
   token: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM5.6 8h4.8M8 5.6v4.8",
   mail: "M2 3.6h12v8.8H2zM2.6 4.4 8 8.6l5.4-4.2",
   grid: "M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z",
+  moon: "M12.8 10.2A5.6 5.6 0 0 1 5.8 3.2a5.6 5.6 0 1 0 7 7z",
 }
 
 function Icon(props: { name: keyof typeof PATHS; color?: string }) {
@@ -59,6 +62,8 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
       return <i class="ihd-live" />
     case "running":
       return <i class="ihd-spin" />
+    case "resting":
+      return <Icon name="moon" color="var(--ihd-in)" />
     case "stopped":
       return <Icon name="stop" color={RED} />
     case "late":
@@ -84,6 +89,13 @@ const TAB_LABEL: Record<Tab, string> = { attention: "Needs attention", active: "
 export function HomeDashboard(props: { class?: string; onNewChat?: () => void; onSettings?: () => void }) {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
+  const tabs = useTabs()
+  // Open Agents › Heartbeats in the panel of the chat you were last in (the panel lives in a chat).
+  const openHeartbeats = () => {
+    if (!tabs.store.length) return
+    openIrisPanel({ surface: "agents", sub: "heartbeats" })
+    tabs.toggleHome({ home: true })
+  }
   const get = async <T,>(path: string, fallback: T): Promise<T> => {
     try {
       const res = await (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}${path}`, {
@@ -285,6 +297,12 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                 <i class="ihd-live" />
                 <b>{ov().healthy}</b>
               </span>
+              <Show when={ov().resting}>
+                <span class="ihd-ov" title="Resting by choice — each runs again within a few beats">
+                  <Icon name="moon" color="var(--ihd-in)" />
+                  <b>{ov().resting}</b>
+                </span>
+              </Show>
               <Show when={ov().stopped}>
                 <span class="ihd-ov" data-tone="bad" title="Not running">
                   <Icon name="stop" color={RED} />
@@ -343,7 +361,15 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                 {(r) => {
                   const a = () => rowOf(r, now())
                   return (
-                    <div class="ihd-tr" data-indicator={a().indicator} title={a().why}>
+                    <div
+                      class="ihd-tr"
+                      data-indicator={a().indicator}
+                      title={tabs.store.length ? `${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)` : a().why}
+                      role="button"
+                      tabIndex={0}
+                      onClick={openHeartbeats}
+                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openHeartbeats()}
+                    >
                       <span class="ihd-st">
                         <Indicate kind={a().indicator} />
                       </span>
@@ -388,6 +414,10 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               <span>
                 <i class="ihd-spin" style={{ width: "10px", height: "10px" }} />
                 running
+              </span>
+              <span>
+                <Icon name="moon" color="var(--ihd-in)" />
+                resting
               </span>
               <span>
                 <Icon name="stop" color={RED} />

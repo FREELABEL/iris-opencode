@@ -1,4 +1,4 @@
-import { lastBeatAt, periodOf, sortBeats, stateOf, stripOf, type BeatKind, type BeatState, type HeartbeatRow } from "@/components/session/iris-heartbeats-model"
+import { lastBeatAt, periodOf, restOf, sortBeats, stateOf, stripOf, type BeatKind, type BeatState, type HeartbeatRow } from "@/components/session/iris-heartbeats-model"
 
 /**
  * Home (#192222): the operator view — your agents' heartbeats first, then machines and inbox.
@@ -8,14 +8,19 @@ import { lastBeatAt, periodOf, sortBeats, stateOf, stripOf, type BeatKind, type 
  * history cut-over; a second copy here would drift.
  */
 
-export type Indicator = "ok" | "running" | "stopped" | "late" | "failing" | "paused"
+export type Indicator = "ok" | "running" | "resting" | "stopped" | "late" | "failing" | "paused"
 export const indicatorOf = (s: BeatState): Indicator => (s === "silent" ? "stopped" : s)
+/** The indicator for a row, resting included: skipping by choice, and the platform will run it again soon. */
+export const indicatorFor = (r: HeartbeatRow, now: number): Indicator => (restOf(r, now) ? "resting" : indicatorOf(stateOf(r, now)))
 
 export type Tab = "attention" | "active" | "all"
 export const TABS: Tab[] = ["attention", "active", "all"]
 export const PER_PAGE = 6
 
-const needs = (s: BeatState) => s === "silent" || s === "late" || s === "failing"
+const needs = (r: HeartbeatRow, now: number) => {
+  const s = stateOf(r, now)
+  return (s === "silent" || s === "late" || s === "failing") && !restOf(r, now)
+}
 
 export type AgentRow = {
   jobId: number
@@ -53,6 +58,7 @@ export function shortAgo(iso: string | null | undefined, now: number): string {
 const WHY: Record<Indicator, string> = {
   ok: "Healthy",
   running: "Running now",
+  resting: "Resting by choice",
   stopped: "Not running",
   late: "Late — past its time and has not fired",
   failing: "Last run failed",
@@ -60,8 +66,14 @@ const WHY: Record<Indicator, string> = {
 }
 
 export function rowOf(r: HeartbeatRow, now: number): AgentRow {
-  const indicator = indicatorOf(stateOf(r, now))
-  const skip = indicator === "stopped" && r.lastSkip?.reason ? ` — skipped: ${r.lastSkip.reason}` : ""
+  const indicator = indicatorFor(r, now)
+  const rest = restOf(r, now)
+  const skip =
+    indicator === "resting" && rest
+      ? ` — skipped ${rest.skipped} in a row; runs again within ${rest.left} beat${rest.left === 1 ? "" : "s"}`
+      : indicator === "stopped" && r.lastSkip?.reason
+        ? ` — skipped: ${r.lastSkip.reason}`
+        : ""
   const at = lastBeatAt(r)
   return {
     jobId: r.jobId,
@@ -79,7 +91,7 @@ export function rowOf(r: HeartbeatRow, now: number): AgentRow {
 }
 
 export function tabRows(rows: readonly HeartbeatRow[], tab: Tab, now: number): HeartbeatRow[] {
-  if (tab === "attention") return sortBeats(rows, now).filter((r) => needs(stateOf(r, now)))
+  if (tab === "attention") return sortBeats(rows, now).filter((r) => needs(r, now))
   if (tab === "active") return rows.filter((r) => stateOf(r, now) !== "paused").sort((a, b) => b.runCount - a.runCount)
   return sortBeats(rows, now)
 }
@@ -100,6 +112,7 @@ export function pageOf<T>(all: readonly T[], page: number, per = PER_PAGE): Page
 export type Overview = {
   scheduled: number
   healthy: number
+  resting: number
   stopped: number
   failing: number
   paused: number
@@ -109,11 +122,12 @@ export type Overview = {
 
 /** "Today" is the viewer's local day, since that is the day they mean. */
 export function overviewOf(rows: readonly HeartbeatRow[], now: number, dayStart: number): Overview {
-  const s = rows.map((r) => indicatorOf(stateOf(r, now)))
+  const s = rows.map((r) => indicatorFor(r, now))
   const today = rows.flatMap((r) => r.runs).filter((x) => Date.parse(x.startedAt ?? x.completedAt ?? "") >= dayStart)
   return {
     scheduled: s.filter((x) => x !== "paused").length,
     healthy: s.filter((x) => x === "ok" || x === "running").length,
+    resting: s.filter((x) => x === "resting").length,
     stopped: s.filter((x) => x === "stopped" || x === "late").length,
     failing: s.filter((x) => x === "failing").length,
     paused: s.filter((x) => x === "paused").length,
