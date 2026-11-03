@@ -528,7 +528,11 @@ test("sharing: the access badge and picker, Shared with me, and a runs-on script
   await wait(() => host.querySelector('[data-action="hive-shared-via"]') !== null)
   expect(host.querySelector('[data-action="hive-shared-via"]')?.textContent).toBe("Shared through Deals board")
   expect(host.querySelector(".hsc-ed")?.textContent).toContain("Dana Ruiz")
-  ;(host.querySelector('[data-action="hive-shared-run"]') as HTMLButtonElement).click()
+  const sharedRun = host.querySelector('[data-action="hive-shared-run"]') as HTMLButtonElement
+  // the first run's dispatch has to have answered before Run is pressable again
+  await wait(() => !sharedRun.disabled)
+  expect(sharedRun.getAttribute("title")).toBe("Run on iris-hive-001")
+  sharedRun.click()
   await wait(() => calls.filter((c) => c.path.endsWith("/run")).length === 2)
   const shared = calls.filter((c) => c.path.endsWith("/run"))[1]
   expect(shared.path).toBe(`/iris/hive/scripts/${snap.sharing.shared[0].id}/run`)
