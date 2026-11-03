@@ -249,6 +249,30 @@ export function pageGateFlags(page: { requires_auth?: unknown; json_content?: an
   return { gated: requiresAuth || requireOtp, requiresAuth, requireOtp, which }
 }
 
+/**
+ * The gate a page is under, read from what the SERVER holds — never from what a command meant
+ * to send (#192471). fl-api forces requires_auth on whenever json_content.requireOtp is true, so a
+ * command's own flag can be overruled; and requires_auth without requireOtp is half a gate — a
+ * sign-in without a code, which the renderer then refuses, so the visitor loops. Name it.
+ */
+export function gateReport(
+  page: { requires_auth?: unknown; json_content?: any } | null | undefined,
+  slug = "<slug>",
+): { line: string; warning: string | null } {
+  if (!page) return { line: "could not read the page back — check: iris pages view " + slug, warning: null }
+  const g = pageGateFlags(page)
+  if (!g.gated) return { line: "off — public", warning: null }
+  if (g.requireOtp) return { line: "on — visitors sign in with a code", warning: null }
+  return {
+    line: "half — requires_auth without requireOtp",
+    warning:
+      `This page asks for a sign-in WITHOUT a code, and the page gate refuses that session — visitors loop.\n` +
+      `Pick one:\n` +
+      `  iris pages ungate ${slug}                       # public\n` +
+      `  iris pages set ${slug} requireOtp true          # sign in with a code`,
+  }
+}
+
 export function setNestedValue(obj: any, path: string, value: unknown): void {
   const parts = normalizePathIndexes(path).split(".")
   let cur: any = obj
@@ -808,9 +832,11 @@ export const SetCmd = cmd({
       // and changed no rendered content. Re-read and compare rather than trusting the 200.
       let landed: unknown = undefined
       let readBack = false
+      let freshPage: any = null
       try {
         const fresh = await getBySlug(args.slug, true)
         if (fresh) {
+          freshPage = fresh
           landed = getNestedValue(fresh.json_content ?? {}, args.path)
           readBack = true
         }
@@ -829,6 +855,12 @@ export const SetCmd = cmd({
       sp.stop(success(`Updated ${args.path}`))
       if (!readBack) {
         prompts.log.warn(`Could not read the page back to confirm. Check: iris pages get ${args.slug} ${args.path}`)
+      }
+      // Clearing requireOtp does not clear requires_auth — the server only ever forces the column
+      // ON. What is left is half a gate (#192471); say so instead of "Updated".
+      if (freshPage && isGateAffectingPath(String(args.path))) {
+        const gate = gateReport(freshPage, String(args.slug))
+        if (gate.warning) prompts.log.warn(gate.warning)
       }
       await purgeIfGatePath(String(args.path), String(args.slug))
     } catch (err) {
@@ -5549,7 +5581,10 @@ export function resolveGate(
   }
   // Both flags, as the live page holds them: requires_auth without requireOtp is the
   // frictionless capture form, and a republish is not the place to change which modal shows.
-  return { requiresAuth: !!live.requires_auth, requireOtp: !!live.json_content?.requireOtp, kept: true }
+  // requireOtp alone still gates: fl-api forces requires_auth on from it, so asking for false
+  // next to it is a request the server overrides (#192471).
+  const requireOtp = !!live.json_content?.requireOtp
+  return { requiresAuth: !!live.requires_auth || requireOtp, requireOtp, kept: true }
 }
 
 /**
@@ -5750,12 +5785,15 @@ const PublishHtmlCmd = cmd({
       // serving. A status line that can be wrong is worse than none — it is the same
       // "cannot tell broken from not-measured" failure these commands were written to kill,
       // reproduced inside the fix for it. Measured on cli-publish-html-selftest.
-      const after = await getBySlug(slug, false)
+      const after = await getBySlug(slug, true)
       const liveNow = after?.status === "published"
       sp.stop(success(liveNow ? "Published" : "Uploaded (draft)"))
       const keptKeys = Object.keys(jsonContent).filter((k) => !PUBLISHER_KEYS.includes(k))
       if (keptKeys.length) printKV("Kept", keptKeys.join(", "))
-      printKV("Gate", requiresAuth ? "on — visitors sign in" : "off — public")
+      // The gate the server now holds, not the flag this command sent (#192471).
+      const gate = gateReport(after, slug)
+      printKV("Gate", gate.line)
+      if (gate.warning) prompts.log.warn(gate.warning)
 
       if (!shouldPublish && liveNow) {
         prompts.log.warn("--no-publish skips publishing; it does NOT unpublish.")
