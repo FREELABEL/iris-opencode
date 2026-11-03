@@ -163,3 +163,132 @@ test("readTask marks an awaiting_approval run held and carries Gate's verdict", 
   expect(t?.gate).toMatchObject({ reasons: ["hardware"], hardware: ["bluetooth"] })
   expect(readTask({ id: 8, status: "running" })?.gate).toBeNull()
 })
+
+// #191674 — sharing: who can open a script, scripts shared with me, and runs the hub routes.
+describe("sharing (#191674)", () => {
+  const H = () => import("@/iris/hive-scripts")
+  const UUID = "7e9a1c3b-5d7f-4a1b-8c3d-5e7f9a1b3c5d"
+  /** A fake hub: records every call; `answer` decides POST /api/v6/nodes/tasks and the access calls. */
+  const withHub = async (answer: (u: string, body: any) => Response | undefined, fn: (calls: { url: string; method: string; body?: any }[]) => Promise<void>) => {
+    process.env.IRIS_USER_ID = "193"
+    const calls: { url: string; method: string; body?: any }[] = []
+    const real = globalThis.fetch
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ url: u, method: init?.method ?? "GET", body })
+      const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } })
+      const a = answer(u, body)
+      if (a) return a
+      if (u.includes("/api/v6/nodes/?")) return json({ nodes: [{ id: "01a1-hive", name: "iris-hive-001", connection_status: "online" }] })
+      if (/\/api\/v1\/scripts\/mambo-status$/.test(u)) return json({ data: { slug: "mambo-status", script_content: "echo hi\n", runtime: "bash" } })
+      if (u.endsWith("/api/v6/nodes/tasks")) return json({ task: { id: "t-1", status: "pending", node_id: "01a0-mac", node_name: "Alexs-MacBook-Pro-11711" } }, 201)
+      return json({ message: "nope" }, 404)
+    }) as any
+    try {
+      await fn(calls)
+    } finally {
+      globalThis.fetch = real
+      delete process.env.IRIS_USER_ID
+    }
+  }
+  const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } })
+  const task = (calls: { url: string; body?: any }[]) => calls.find((c) => c.url.endsWith("/api/v6/nodes/tasks"))!.body
+
+  test("readShared keeps what a member needs and drops a row it could not run", async () => {
+    const { readShared } = await H()
+    const s = readShared({ id: UUID, slug: "lead-dedupe", version: 6, visibility: "project", author_name: "Dana Ruiz", bloq_ids: [7, "12", 7, null], runs_on: { kind: "node", node: "studio-mac" } })!
+    expect(s).toMatchObject({ id: UUID, author: "Dana Ruiz", version: 6, visibility: "project", bloqIds: [7, 12], runsOn: { kind: "node", node: "studio-mac" } })
+    expect(readShared({ slug: "no-id" })).toBeNull()
+  })
+  test("runs_on and visibility read as the hub wrote them; anything else is null / private", async () => {
+    const { readRunsOn, readVisibility } = await H()
+    expect(readRunsOn({ kind: "capability", capability: "gpu" })).toEqual({ kind: "capability", capability: "gpu" })
+    expect(readRunsOn({ kind: "any" })).toEqual({ kind: "any" })
+    expect(readRunsOn("studio-mac")).toBeNull()
+    expect(readRunsOn({ kind: "node" })).toBeNull()
+    expect(readVisibility("PUBLIC")).toBe("private")
+    expect(readVisibility("unlisted")).toBe("unlisted")
+  })
+  test("a refusal is the hub's sentence; a 404 says not found or not shared", async () => {
+    const { refusal } = await H()
+    expect(refusal(422, JSON.stringify({ message: "'lead-dedupe' runs only on studio-mac, and that machine is not one you can reach." }))).toBe(
+      "'lead-dedupe' runs only on studio-mac, and that machine is not one you can reach.",
+    )
+    expect(refusal(422, JSON.stringify({ error: "This script has manifest errors and cannot be published.", errors: ["unknown directive 'reqires'"] }))).toBe(
+      "This script has manifest errors and cannot be published. unknown directive 'reqires'",
+    )
+    expect(refusal(404, JSON.stringify({ message: "No such script" }))).toBe("Not found, or not shared with you.")
+    expect(refusal(500, "boom")).toBe("iris-api 500 — boom")
+  })
+  test("access steps: a team needs a board, refused before any call", async () => {
+    const { accessStepOf, accessRequest } = await H()
+    expect(accessStepOf({ action: "publish", visibility: "project", bloqIds: [] })).toEqual({ error: "Pick at least one board to share it with." })
+    expect(accessStepOf({ action: "share" })).toEqual({ error: "Pick a board." })
+    expect(accessRequest("x", { action: "publish", visibility: "project", bloqIds: [7] })).toEqual({ path: "/api/v1/scripts/x/publish", body: { visibility: "project", bloq_ids: [7] } })
+    expect(accessRequest("x", { action: "publish", visibility: "public" })).toEqual({ path: "/api/v1/scripts/x/publish", body: { visibility: "public" } })
+    expect(accessRequest("x", { action: "unpublish" })).toEqual({ path: "/api/v1/scripts/x/unpublish" })
+    expect(accessRequest("x", { action: "unshare", bloqId: 12 })).toEqual({ path: "/api/v1/scripts/x/unshare", body: { bloq_id: 12 } })
+  })
+  test("changeAccess: one hub call; the answer is the script's access as the hub has it", async () => {
+    const { changeAccess } = await H()
+    await withHub(
+      (u) => (u.endsWith("/share") ? json({ data: { visibility: "project", bloq_ids: [12, 40], version: 4 } }) : undefined),
+      async (calls) => {
+        expect(await changeAccess("mambo-status", { action: "share", bloqId: 40 })).toEqual({ ok: true, visibility: "project", bloqIds: [12, 40], version: 4 })
+        expect(calls.map((c) => [c.method, c.url.replace(/^https?:\/\/[^/]+/, ""), c.body])).toEqual([["POST", "/api/v1/scripts/mambo-status/share", { bloq_id: 40 }]])
+      },
+    )
+    await withHub(() => undefined, async (calls) => {
+      expect(await changeAccess("x", { action: "publish", visibility: "project" })).toMatchObject({ ok: false })
+      expect(calls).toEqual([])
+    })
+    await withHub(
+      (u) => (u.endsWith("/publish") ? json({ message: "Not a board you own or belong to: 99" }, 422) : undefined),
+      async () => {
+        expect(await changeAccess("x", { action: "publish", visibility: "project", bloqIds: [99] })).toEqual({ ok: false, reason: "Not a board you own or belong to: 99" })
+      },
+    )
+  })
+  test("a runs-on script is sent with NO computer — the hub routes it — and still pins my hash", async () => {
+    const { runScript, scriptDigest } = await H()
+    await withHub(() => undefined, async (calls) => {
+      const r = await runScript("mambo-status", undefined, 60)
+      expect(r).toMatchObject({ ok: true, taskId: "t-1", nodeName: "Alexs-MacBook-Pro-11711", nodeId: "01a0-mac" })
+      expect(calls.some((c) => c.url.includes("/api/v6/nodes/?"))).toBe(false)
+      const t = task(calls)
+      expect("node_id" in t).toBe(false)
+      expect(t.config).toEqual({ script_ref: "mambo-status", script_slug: "mambo-status", script_sha256: scriptDigest("echo hi\n") })
+    })
+  })
+  test("an older version or a shared script goes as its ref, unhashed — the hub pins it", async () => {
+    const { runScript } = await H()
+    await withHub(() => undefined, async (calls) => {
+      await runScript("mambo-status@2", "iris-hive-001")
+      const t = task(calls)
+      expect(t.node_id).toBe("01a1-hive")
+      expect(t.prompt).toBe("mambo-status@2")
+      expect(t.config).toEqual({ script_ref: "mambo-status@2" })
+    })
+    await withHub(() => undefined, async (calls) => {
+      await runScript(`${UUID}@3`, undefined)
+      expect(calls.filter((c) => c.url.includes("/api/v1/scripts/"))).toEqual([])
+      expect(task(calls).config).toEqual({ script_ref: `${UUID}@3` })
+    })
+  })
+  test("a refused run shows the hub's sentence; a missing one says so plainly", async () => {
+    const { runScript } = await H()
+    await withHub(
+      (u) => (u.endsWith("/api/v6/nodes/tasks") ? json({ error: "refused", message: "'studio-render' runs only on studio-mac, and that machine is not one you can reach." }, 422) : undefined),
+      async () => {
+        expect(await runScript(UUID, undefined)).toEqual({ ok: false, reason: "'studio-render' runs only on studio-mac, and that machine is not one you can reach." })
+      },
+    )
+    await withHub(
+      (u) => (u.endsWith("/api/v6/nodes/tasks") ? json({ message: "No query results" }, 404) : undefined),
+      async () => {
+        expect((await runScript(UUID, undefined)).reason).toBe("Not found, or not shared with you.")
+      },
+    )
+  })
+})

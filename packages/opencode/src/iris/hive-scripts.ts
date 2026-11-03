@@ -32,7 +32,14 @@ export type ScriptDoctor = {
   runnable_now?: boolean
 }
 
+/** `# iris: runs-on=` as the hub parsed it (ScriptManifest). The hub routes a script that has one. */
+export type RunsOn = { kind: "node"; node: string } | { kind: "any" } | { kind: "capability"; capability: string }
+/** Who can open a script. Anything unrecognised is PRIVATE, as on the hub (Visibility::normalize). */
+export type Visibility = "private" | "project" | "unlisted" | "public"
+
 export type ScriptSummary = {
+  /** The hub's uuid — a member runs a shared script by it. Never shown. */
+  id?: string
   slug: string
   name?: string
   description?: string
@@ -41,6 +48,27 @@ export type ScriptSummary = {
   lastExecutedAt: string | null
   doctor: ScriptDoctor | null
   tags: string[]
+  visibility: Visibility
+  /** The latest saved version. A run may pin an older one (`slug@N`). */
+  version: number | null
+  /** The boards it is shared with (#191674). Not the `project:<id>` tag, which only sorts. */
+  bloqIds: number[]
+  runsOn: RunsOn | null
+}
+
+/** A script another account shared with a board I am on (`GET /api/v1/scripts?shared=1`). */
+export type SharedScript = {
+  id: string
+  slug: string
+  name?: string
+  description?: string
+  runtime?: string
+  version: number | null
+  visibility: Visibility
+  author?: string
+  bloqIds: number[]
+  runsOn: RunsOn | null
+  updatedAt?: string
 }
 
 export type ScriptSource = {
@@ -131,6 +159,73 @@ export function readSource(d: any): ScriptSource | null {
     visibility: str(d.visibility),
     tags: tagsOf(d.tags),
   }
+}
+
+export function readVisibility(v: unknown): Visibility {
+  return v === "project" || v === "unlisted" || v === "public" ? v : "private"
+}
+
+export function readRunsOn(v: any): RunsOn | null {
+  if (!v || typeof v !== "object") return null
+  if (v.kind === "any") return { kind: "any" }
+  if (v.kind === "node" && str(v.node)) return { kind: "node", node: v.node }
+  if (v.kind === "capability" && str(v.capability)) return { kind: "capability", capability: v.capability }
+  return null
+}
+
+const bloqIdsOf = (v: unknown): number[] =>
+  Array.isArray(v) ? [...new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : []
+const versionOf = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null)
+
+/** One row of `?shared=1`. A row with no uuid cannot be run (a slug names a script in ONE account). */
+export function readShared(r: any): SharedScript | null {
+  if (!r || typeof r !== "object" || !str(r.id) || typeof r.slug !== "string") return null
+  return {
+    id: r.id,
+    slug: r.slug,
+    name: str(r.name),
+    description: str(r.description),
+    runtime: str(r.runtime),
+    version: versionOf(r.version),
+    visibility: readVisibility(r.visibility),
+    author: str(r.author_name),
+    bloqIds: bloqIdsOf(r.bloq_ids),
+    runsOn: readRunsOn(r.runs_on),
+    updatedAt: str(r.updated_at),
+  }
+}
+
+/**
+ * A refusal in plain words. The hub's 422 is a sentence written for the person (not shared with
+ * you, version gone, no machine for its runs-on) — shown as-is. A 404 on a ref is either.
+ */
+export function refusal(status: number, raw: string): string {
+  let body: any
+  try {
+    body = JSON.parse(raw)
+  } catch {}
+  const said = str(body?.message) ?? str(body?.error)
+  if (status === 404) return "Not found, or not shared with you."
+  if (status === 422 && said) {
+    const list = Array.isArray(body?.errors) ? body.errors.map((e: unknown) => (typeof e === "string" ? e : JSON.stringify(e))) : []
+    return list.length ? `${said} ${list.join("; ")}` : said
+  }
+  return said ?? `iris-api ${status}${raw ? ` — ${raw.slice(0, 200)}` : ""}`
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * What a run ref names — `slug`, `slug@3`, `<uuid>`, `<uuid>@3` — as `parseScriptRef` on main.
+ * Only a plain slug of mine is hashed here; for the rest the hub resolves the ref, pins the version
+ * and signs its hash, and decides whether the caller may run it.
+ */
+export function parseRef(ref: string): { ref: string; base: string; version: string | null; uuid: boolean; plainSlug: boolean } {
+  const at = ref.lastIndexOf("@")
+  const base = at > 0 ? ref.slice(0, at) : ref
+  const version = at > 0 ? ref.slice(at + 1) : null
+  const uuid = UUID_RE.test(base)
+  return { ref, base, version, uuid, plainSlug: !uuid && version === null }
 }
 
 /** The hub stores tags as JSON that may be null, an array, or (old rows) a comma string. */
@@ -242,6 +337,7 @@ export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[];
     const rows: any[] = ((await res.json()) as any)?.data ?? []
     const doctors = await pool(rows, 8, (r) => cachedDoctor(String(r.slug)))
     const scripts: ScriptSummary[] = rows.map((r, i) => ({
+      id: str(r.id),
       slug: String(r.slug),
       name: str(r.name),
       description: str(r.description),
@@ -250,11 +346,79 @@ export async function fetchScripts(): Promise<Result<{ scripts: ScriptSummary[];
       lastExecutedAt: nul(r.last_executed_at),
       doctor: doctors[i],
       tags: tagsOf(r.tags),
+      visibility: readVisibility(r.visibility),
+      version: versionOf(r.version),
+      bloqIds: bloqIdsOf(r.bloq_ids),
+      runsOn: readRunsOn(r.runs_on),
     }))
     scripts.sort((a, b) => a.slug.localeCompare(b.slug))
     return { measured: true, data: { scripts, account } }
   } catch (e) {
     return { measured: false, reason: errText(e), data: { scripts: [] } }
+  }
+}
+
+/** Scripts OTHER accounts shared with boards I am on (#191674) — `iris scripts list --shared`. */
+export async function fetchSharedScripts(): Promise<Result<{ scripts: SharedScript[] }>> {
+  if (!(await resolveUserId())) return { measured: false, reason: notSignedIn(), data: { scripts: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/scripts?shared=1`, IRIS_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { scripts: [] } }
+    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    const scripts = rows.map(readShared).filter((s): s is SharedScript => s !== null)
+    return { measured: true, data: { scripts } }
+  } catch (e) {
+    return { measured: false, reason: errText(e), data: { scripts: [] } }
+  }
+}
+
+export type AccessStep =
+  | { action: "publish"; visibility: Exclude<Visibility, "private">; bloqIds?: number[] }
+  | { action: "unpublish" }
+  | { action: "share" | "unshare"; bloqId: number }
+/** The route's flat payload. */
+export type AccessStepPayload = {
+  readonly action: "publish" | "unpublish" | "share" | "unshare"
+  readonly visibility?: "project" | "unlisted" | "public"
+  readonly bloqIds?: readonly number[]
+  readonly bloqId?: number
+}
+
+/** The payload as one step, or the reason it is not one — refused before any hub call. */
+export function accessStepOf(p: AccessStepPayload): AccessStep | { error: string } {
+  if (p.action === "unpublish") return { action: "unpublish" }
+  if (p.action === "share" || p.action === "unshare") {
+    const id = Number(p.bloqId)
+    return Number.isInteger(id) && id > 0 ? { action: p.action, bloqId: id } : { error: "Pick a board." }
+  }
+  if (!p.visibility) return { error: "Say who should see it." }
+  const ids = bloqIdsOf(p.bloqIds ?? [])
+  if (p.visibility === "project" && !ids.length) return { error: "Pick at least one board to share it with." }
+  return { action: "publish", visibility: p.visibility, ...(ids.length ? { bloqIds: ids } : {}) }
+}
+export type AccessResult = { ok: boolean; reason?: string; visibility?: Visibility; bloqIds?: number[]; version?: number | null }
+
+/** The hub call for one access step — `iris scripts publish | unpublish | share | unshare`. */
+export function accessRequest(slug: string, step: AccessStep): { path: string; body?: Record<string, unknown> } {
+  const base = `/api/v1/scripts/${encodeURIComponent(slug)}/${step.action}`
+  if (step.action === "publish") return { path: base, body: { visibility: step.visibility, ...(step.bloqIds?.length ? { bloq_ids: step.bloqIds } : {}) } }
+  if (step.action === "unpublish") return { path: base }
+  return { path: base, body: { bloq_id: step.bloqId } }
+}
+
+/** Change who can open one of my scripts. The answer is the script's access as the hub now has it. */
+export async function changeAccess(slug: string, payload: AccessStepPayload): Promise<AccessResult> {
+  const step = accessStepOf(payload)
+  if ("error" in step) return { ok: false, reason: step.error }
+  if (!(await resolveUserId())) return { ok: false, reason: notSignedIn() }
+  try {
+    const req = accessRequest(slug, step)
+    const res = await irisFetch(req.path, IRIS_API, { method: "POST", ...(req.body ? { body: JSON.stringify(req.body) } : {}) })
+    if (!res.ok) return { ok: false, reason: refusal(res.status, await res.text().catch(() => "")) }
+    const d = ((await res.json().catch(() => ({}))) as any)?.data ?? {}
+    return { ok: true, visibility: readVisibility(d.visibility), bloqIds: bloqIdsOf(d.bloq_ids), version: versionOf(d.version) }
+  } catch (e) {
+    return { ok: false, reason: errText(e) }
   }
 }
 
@@ -447,55 +611,64 @@ export function clampTimeout(v: unknown): number {
   return Math.max(30, Math.min(3600, Number(v) || 120))
 }
 
-/** `iris scripts run <slug> --node <node>`: dispatch, return the task id. The caller polls. */
-export async function runScript(slug: string, node: string, timeout?: number, args?: Record<string, string>): Promise<RunResult> {
+/**
+ * `iris scripts run <ref> [--node <node>]`: dispatch, return the task id. The caller polls.
+ *
+ * `ref` is `slug`, `slug@N`, `<uuid>` or `<uuid>@N` (#191674), sent unchanged as `script_ref`.
+ * `node` is optional: a script that declares `# iris: runs-on=` is routed by the hub, which
+ * parsed that header — no node is sent, and a refusal (422) comes back as the hub's sentence.
+ */
+export async function runScript(ref: string, node: string | undefined, timeout?: number, args?: Record<string, string>): Promise<RunResult> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
   try {
-    const nr = await irisFetch(`/api/v6/nodes/?user_id=${userId}`, IRIS_API)
-    if (!nr.ok) return { ok: false, reason: `could not list computers: iris-api ${nr.status}` }
-    const nodes: any[] = ((await nr.json()) as any)?.nodes ?? []
-    // An online registration wins over an offline one with the same name.
-    const ranked = [...nodes].sort((a, b) => Number(b.connection_status === "online") - Number(a.connection_status === "online"))
-    const target = pickNode(
-      ranked.map((n) => ({ id: String(n.id), name: String(n.name ?? ""), status: String(n.connection_status ?? "unknown") })),
-      node,
-    )
-    if (!target) return { ok: false, reason: `No computer matching "${node}"` }
-    if (target.status !== "online") return { ok: false, reason: `${target.name} is ${target.status} — cannot dispatch` }
+    const parsed = parseRef(ref)
+    let target: { id: string; name: string; status: string } | undefined
+    if (node) {
+      const nr = await irisFetch(`/api/v6/nodes/?user_id=${userId}`, IRIS_API)
+      if (!nr.ok) return { ok: false, reason: `could not list computers: iris-api ${nr.status}` }
+      const nodes: any[] = ((await nr.json()) as any)?.nodes ?? []
+      // An online registration wins over an offline one with the same name.
+      const ranked = [...nodes].sort((a, b) => Number(b.connection_status === "online") - Number(a.connection_status === "online"))
+      target = pickNode(
+        ranked.map((n) => ({ id: String(n.id), name: String(n.name ?? ""), status: String(n.connection_status ?? "unknown") })),
+        node,
+      )
+      if (!target) return { ok: false, reason: `No computer matching "${node}"` }
+      if (target.status !== "online") return { ok: false, reason: `${target.name} is ${target.status} — cannot dispatch` }
+    }
 
-    // Pin the content hash, as the CLI does. Unresolvable = an UNVERIFIED run, reported as such.
-    const src = (await fetchScript(slug)).data.script
-    const digest = src?.sha256 ?? null
+    // Pin the content hash, as the CLI does — only for a plain slug of mine. `slug@3` or a shared
+    // script names content we did not fetch: the hub pins that version and signs its hash.
+    const digest = parsed.plainSlug ? ((await fetchScript(ref)).data.script?.sha256 ?? null) : null
     const timeoutSeconds = clampTimeout(timeout)
     const res = await irisFetch(`/api/v6/nodes/tasks`, IRIS_API, {
       method: "POST",
       body: JSON.stringify({
         user_id: userId,
-        title: `iris scripts run: ${slug}`,
+        title: `iris scripts run: ${ref}`,
         type: "user_script",
-        node_id: target.id,
-        prompt: slug,
+        ...(target ? { node_id: target.id } : {}),
+        prompt: ref,
         // #189589: the run's settings. The hub checks them against the script's declarations,
         // carries them in the signed task, and the node hands them over as IRIS_ARG_<NAME>.
-        config: { script_slug: slug, ...(digest ? { script_sha256: digest } : {}), ...(args && Object.keys(args).length ? { args } : {}) },
+        config: {
+          script_ref: ref,
+          ...(parsed.plainSlug ? { script_slug: ref } : {}),
+          ...(digest ? { script_sha256: digest } : {}),
+          ...(args && Object.keys(args).length ? { args } : {}),
+        },
         timeout_seconds: timeoutSeconds,
       }),
     })
-    if (!res.ok) {
-      // The hub answers a refused run with a sentence ({error, message}); show that, not raw JSON.
-      const raw = await res.text().catch(() => "")
-      let said: string | undefined
-      try {
-        said = (JSON.parse(raw) as any)?.message
-      } catch {}
-      return { ok: false, reason: said ? String(said) : `Dispatch failed: ${res.status} ${raw.slice(0, 300)}` }
-    }
+    // The hub answers a refused run with a sentence ({error, message}); show that, not raw JSON.
+    if (!res.ok) return { ok: false, reason: refusal(res.status, await res.text().catch(() => "")) }
     const created = (await res.json()) as any
     const taskId = created?.task?.id
     if (!taskId) return { ok: false, reason: "the hub accepted the dispatch but returned no task id" }
-    forgetDoctor(slug)
-    return { ok: true, taskId: String(taskId), nodeId: target.id, nodeName: target.name, sha256: digest, timeoutSeconds }
+    if (parsed.plainSlug) forgetDoctor(ref)
+    const nodeName = target?.name ?? str(created?.task?.node_name) ?? str(created?.task?.node?.name)
+    return { ok: true, taskId: String(taskId), nodeId: target?.id ?? (created?.task?.node_id != null ? String(created.task.node_id) : undefined), nodeName, sha256: digest, timeoutSeconds }
   } catch (e) {
     return { ok: false, reason: errText(e) }
   }

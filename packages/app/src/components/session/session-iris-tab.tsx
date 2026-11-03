@@ -4139,6 +4139,7 @@ export function SessionIrisTab() {
               doFetch={doFetch}
               bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
               bloqName={activeBloq() != null ? activeBloqName() : undefined}
+              boards={settled(bloqs)?.bloqs}
             />
           </Match>
           <Match when={pane() === "agent-live"}>

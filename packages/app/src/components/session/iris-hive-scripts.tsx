@@ -64,6 +64,21 @@ import {
   type TaskView,
   highlightLine,
   langOf,
+  ACCESS_CHOICES,
+  ACCESS_WORDS,
+  accessLabel,
+  planAccess,
+  readAccess,
+  routing,
+  runRef,
+  sharedVia,
+  shareLink,
+  versionChoices,
+  versionWord,
+  type Access,
+  type AccessStep,
+  type Board,
+  type SharedScript,
 } from "./iris-hive-scripts-model"
 
 /**
@@ -109,8 +124,11 @@ type MarketSourcePayload = {
     | null
 }
 type InstallPayload = SavePayload & { assetsLeft?: number }
+type SharedPayload = { measured: boolean; reason?: string | null; scripts: SharedScript[] }
+type AccessPayload = { ok: boolean; reason?: string; visibility?: string; bloqIds?: number[]; version?: number | null }
 
 type RunState = {
+  /** Which script the run belongs to: my slug, or `shared:<id>` for a shared one. */
   slug: string
   computerId: string
   computerName: string
@@ -157,7 +175,14 @@ const remembered = () => {
  * `bloqId` / `bloqName` are the board the Iris tab is on — the Project view lists the scripts that
  * board has claimed.
  */
-export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; bloqId?: number; bloqName?: string }) {
+export function IrisHiveScripts(props: {
+  doFetch: Fetch
+  now?: () => number
+  bloqId?: number
+  bloqName?: string
+  /** The boards I am on — the same list the Iris tab's board picker reads. Sharing picks from it. */
+  boards?: Board[]
+}) {
   const now = () => props.now?.() ?? Date.now()
   const getJson = async <T,>(path: string, fallback: T, init?: RequestInit): Promise<T> => {
     try {
@@ -182,6 +207,16 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const [hive, { refetch: refetchHive }] = createResource(() =>
     getJson<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
   )
+
+  // Scripts other accounts shared with my boards (#191674). It must never suspend the list it sits under.
+  const [shared, { refetch: refetchShared }] = createResource(() =>
+    getJson<SharedPayload>("/iris/hive/shared-scripts", { measured: false, scripts: [] }),
+  )
+  // Read only once resolved — `.latest` before the first value suspends the nearest boundary.
+  const sharedNow = () => (shared.state === "ready" || shared.state === "refreshing" ? shared.latest : undefined)
+  const sharedRows = createMemo(() => (sharedNow()?.measured ? (sharedNow()!.scripts ?? []) : []))
+  const [sharedId, setSharedId] = createSignal<string | undefined>()
+  const sharedSel = createMemo(() => (sharedId() ? sharedRows().find((x) => x.id === sharedId()) : undefined))
 
   const scripts = createMemo(() => list.latest?.scripts ?? [])
   const nodes = createMemo(() => hive.latest?.nodes ?? [])
@@ -221,6 +256,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const [creating, setCreating] = createSignal<string | undefined>()
   const choose = (s: string, transition = true) => {
     const apply = () => {
+      setSharedId(undefined)
       setCreating(undefined)
       setSlug(s)
     }
@@ -243,7 +279,10 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     if (first) setSlug(first.slug)
   })
   const current = createMemo(() => scripts().find((s) => s.slug === slug()))
-  const doctor = createMemo<Doctor | null>(() => current()?.doctor ?? null)
+  // A shared script has no doctor of mine to ask: the hub decides when it is sent.
+  const doctor = createMemo<Doctor | null>(() => (sharedSel() ? null : (current()?.doctor ?? null)))
+  // Shared with me is part of All; another view closes it.
+  createEffect(on(view, (v) => v !== "all" && setSharedId(undefined), { defer: true }))
   const listed = createMemo(() =>
     scriptsInView(scripts(), view(), tag(), { showTests: showTests(), open: current() ? slug() : undefined }),
   )
@@ -355,7 +394,14 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   // ── mode, runs ───────────────────────────────────────────────────────────────────────────────
   const [mode, setMode] = createSignal<"edit" | "run">("edit")
   const [runs, setRuns] = createSignal<Record<string, RunState>>({})
-  const run = createMemo(() => runs()[name()])
+  const runKey = () => (sharedSel() ? `shared:${sharedSel()!.id}` : name())
+  const run = createMemo(() => runs()[runKey()])
+  // `runs-on=<machine>`: the Hive routes it — nothing to pick, no computer sent.
+  const route = createMemo(() => routing(sharedSel() ? sharedSel()!.runsOn : current()?.runsOn))
+  const latest = () => (sharedSel() ? sharedSel()!.version : (current()?.version ?? null))
+  // The version the next run pins, per script. Unset = the latest.
+  const [versionPicks, setVersionPicks] = createSignal<Record<string, number | null>>({})
+  const versionPick = () => versionPicks()[runKey()] ?? null
   const putRun = (r: RunState) => setRuns((all) => ({ ...all, [r.slug]: r }))
   const [tick, setTick] = createSignal(0)
   onMount(() => {
@@ -400,6 +446,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     try {
       await Promise.all([
         refetchList(),
+        refetchShared(),
         refetchHive(),
         !creating() && slug() ? refetchSource() : null,
         marketOpened() ? refetchMarket() : null,
@@ -536,39 +583,110 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
   const valueOf = (a: { name: string; default?: string }) => valuesFor()[a.name] ?? a.default ?? ""
 
   const runOn = async (target: Computer | undefined, extra?: Record<string, string>) => {
-    const s = name()
-    if (!s || !target) return
-    if (dirty() && !(await save())) return
-    const values = { ...valuesFor(), ...(extra ?? {}) }
-    const missing = missingRequired(header().args, values)
+    const sh = sharedSel()
+    const key = runKey()
+    const r = route()
+    if (!key || (!r.routed && !target)) return
+    if (!sh && dirty() && !(await save())) return
+    // A shared script's header is its author's; it declares no settings I can see.
+    const declared = sh ? [] : header().args
+    const values = sh ? {} : { ...valuesFor(), ...(extra ?? {}) }
+    const missing = missingRequired(declared, values)
+    // Routed: the card for that machine, when it is one of mine, is the one marked.
+    const where = r.routed
+      ? { id: computers().find((c) => c.names.includes(r.node))?.id ?? "", name: r.node }
+      : { id: target!.id, name: target!.name }
     setMode("run")
     if (missing.length) {
-      putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, reason: `Fill in ${missing.join(", ")} first — the script requires ${missing.length === 1 ? "it" : "them"}.` })
+      putRun({ slug: key, computerId: where.id, computerName: where.name, task: null, reason: `Fill in ${missing.join(", ")} first — the script requires ${missing.length === 1 ? "it" : "them"}.` })
       return
     }
-    const args = runArgs(header().args, values)
+    const args = runArgs(declared, values)
+    const ref = sh ? runRef({ slug: sh.slug, id: sh.id, shared: true }, versionPick(), sh.version) : runRef({ slug: key }, versionPick(), latest())
     setBusy("run")
-    putRun({ slug: s, computerId: target.id, computerName: target.name, task: null })
-    const r = await post<RunPayload>(
-      `/iris/hive/scripts/${encodeURIComponent(s)}/run`,
-      { node: target.id, timeout: timeoutSec(), ...(Object.keys(args).length ? { args } : {}) },
+    putRun({ slug: key, computerId: where.id, computerName: where.name, task: null })
+    const res = await post<RunPayload>(
+      `/iris/hive/scripts/${encodeURIComponent(ref)}/run`,
+      {
+        ...(r.routed ? {} : { node: target!.id }),
+        // A shared script's timeout is its header's, which I cannot read — the sidecar's default.
+        ...(sh ? {} : { timeout: timeoutSec() }),
+        ...(Object.keys(args).length ? { args } : {}),
+      },
       { ok: false },
     )
     setBusy(undefined)
-    if (!r.ok || !r.taskId) {
-      putRun({ slug: s, computerId: target.id, computerName: target.name, task: null, reason: r.reason ?? "Dispatch failed" })
+    if (!res.ok || !res.taskId) {
+      putRun({ slug: key, computerId: where.id, computerName: where.name, task: null, reason: res.reason ?? "Dispatch failed" })
       return
     }
-    putRun({ slug: s, computerId: target.id, computerName: r.nodeName ?? target.name, taskId: r.taskId, task: null })
+    putRun({ slug: key, computerId: where.id, computerName: res.nodeName ?? where.name, taskId: res.taskId, task: null })
   }
 
   const ready = createMemo(() => readiness(doctor(), onlineNames()))
-  const canRun = () => !!picked() && computerVerdict(picked()!, doctor()).can !== false && busy() === undefined
+  const canRun = () => {
+    if (busy() !== undefined) return false
+    if (route().routed) return true
+    return !!picked() && computerVerdict(picked()!, doctor()).can !== false
+  }
   const runTitle = () => {
+    const r = route()
+    if (r.routed) return `${r.label} — the Hive sends it there${dirty() && !sharedSel() ? " (saves first)" : ""}`
     if (!picked()) return ready().state === "blocked" ? (ready().fix ?? ready().label) : "No computer is online"
     const v = computerVerdict(picked()!, doctor())
     if (v.can === false) return `${picked()!.name} can't run it — ${v.why ?? ""}`
     return `Run on ${picked()!.name}${dirty() ? " (saves first — a computer runs the saved version)" : ""}`
+  }
+
+  // ── who can open it (#191674) ────────────────────────────────────────────────────────────────
+  const [accessOpen, setAccessOpen] = createSignal(false)
+  const [accessWant, setAccessWant] = createSignal<{ visibility: Access; bloqIds: number[] }>({ visibility: "private", bloqIds: [] })
+  const [accessConfirm, setAccessConfirm] = createSignal(false)
+  const [accessBusy, setAccessBusy] = createSignal(false)
+  const [accessError, setAccessError] = createSignal<string | undefined>()
+  const access = () => accessLabel(current()?.visibility, current()?.bloqIds, props.boards)
+  const openAccess = () => {
+    const c = current()
+    if (!c) return
+    setAccessWant({ visibility: readAccess(c.visibility), bloqIds: [...(c.bloqIds ?? [])] })
+    setAccessConfirm(false)
+    setAccessError(undefined)
+    setAccessOpen(true)
+  }
+  createEffect(on([slug, sharedId], () => setAccessOpen(false), { defer: true }))
+  const toggleBoard = (id: number, on: boolean) =>
+    setAccessWant((w) => ({ ...w, bloqIds: on ? [...new Set([...w.bloqIds, id])] : w.bloqIds.filter((b) => b !== id) }))
+  const applyAccess = async () => {
+    const c = current()
+    if (!c || accessBusy()) return
+    const plan = planAccess(c, accessWant())
+    if ("error" in plan) return setAccessError(plan.error)
+    if (plan.confirm && !accessConfirm()) return setAccessConfirm(true)
+    setAccessBusy(true)
+    setAccessError(undefined)
+    // One hub call per step, in order; the first refusal stops the rest and is shown as said.
+    const failed = await plan.steps.reduce<Promise<string | undefined>>(
+      async (prev, step: AccessStep) =>
+        (await prev) ??
+        (async () => {
+          const r = await post<AccessPayload>(`/iris/hive/scripts/${encodeURIComponent(c.slug)}/access`, step, { ok: false })
+          return r.ok ? undefined : (r.reason ?? "The change was not saved.")
+        })(),
+      Promise.resolve(undefined),
+    )
+    if (plan.steps.length) await refetchList()
+    setAccessBusy(false)
+    setAccessConfirm(false)
+    if (failed) return setAccessError(failed)
+    setAccessOpen(false)
+  }
+  const [linkCopied, setLinkCopied] = createSignal(false)
+  const copyLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 1500)
+    } catch {}
   }
 
   // ── ⌘K ───────────────────────────────────────────────────────────────────────────────────────
@@ -676,6 +794,177 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
     else return
     e.preventDefault()
   }
+
+  // The version the next run pins: latest by default. Only shown when there is more than one.
+  const versionPicker = () => (
+    <Show when={latest() != null}>
+      <Show
+        when={versionChoices(latest()).length > 1}
+        fallback={
+          <span class="hsc-chip hsc-num" title="The saved version">
+            {versionWord(null, latest())}
+          </span>
+        }
+      >
+        <label class="hsc-chip hsc-version" title="Which saved version the next run uses">
+          <select
+            class="hsc-num"
+            data-action="hive-version"
+            value={String(versionPick() ?? "")}
+            onChange={(e) => {
+              const v = e.currentTarget.value
+              const k = runKey()
+              setVersionPicks((all) => ({ ...all, [k]: v ? Number(v) : null }))
+            }}
+          >
+            <For each={versionChoices(latest())}>
+              {(n, i) => <option value={i() === 0 ? "" : String(n)}>{i() === 0 ? `Latest (v${n})` : `v${n}`}</option>}
+            </For>
+          </select>
+        </label>
+      </Show>
+    </Show>
+  )
+  const runsOnChip = () => (
+    <Show when={route().routed}>
+      <span class="hsc-chip" data-action="hive-runs-on" title="The script names its computer; the Hive sends every run there">
+        <Ic name="server" />
+        {(route() as { label: string }).label}
+      </span>
+    </Show>
+  )
+
+  // A shared script's limit is in its author's header, which I cannot read: the sidecar's default.
+  const runTimeout = () => (sharedSel() ? 120 : timeoutSec())
+
+  // The run console — the same for my script and for a shared one.
+  const consoleView = () => (
+    <div class="hsc-console" data-state={run()?.task?.terminal ? "done" : run() ? "live" : "idle"} data-full={fullOutput() ? "" : undefined}>
+      <div class="hsc-chead">
+        <span
+          class="hsc-rstat"
+          data-ok={run()?.task?.terminal ? String(taskSucceeded(run()!.task)) : run()?.reason ? "false" : undefined}
+        >
+          <i />
+          <b>{run()?.reason ? "Not sent" : taskStatusWord(run()?.task)}</b>
+        </span>
+        {/* A script's settings (#189589): edit them here for the next run. A setting
+            with choices is a dropdown; a required one is marked until it has a value. */}
+        <For each={sharedSel() ? [] : header().args}>
+          {(a) => (
+            <label class="hsc-setting" data-required={a.required && !valueOf(a) ? "" : undefined} title={a.required ? `${a.name} is required` : `Sent to the script as IRIS_ARG_${a.name.toUpperCase()}`}>
+              <span>{a.name}</span>
+              <Show
+                when={a.choices}
+                fallback={
+                  <input
+                    class="hsc-mono"
+                    data-action="hive-setting"
+                    value={valueOf(a)}
+                    placeholder={a.required ? "required" : "—"}
+                    onInput={(e) => setArgValue(a.name, e.currentTarget.value)}
+                    size={Math.max(6, Math.min(24, valueOf(a).length + 1))}
+                  />
+                }
+              >
+                <select class="hsc-mono" data-action="hive-setting" value={valueOf(a)} onChange={(e) => setArgValue(a.name, e.currentTarget.value)}>
+                  <For each={a.choices}>{(c) => <option value={c}>{c}</option>}</For>
+                </select>
+              </Show>
+            </label>
+          )}
+        </For>
+        <span class="hsc-spacer" />
+        {/* Stop (#189589 follow-up): any run of yours that has not finished, including one
+            Gate is holding. The hub cancels it and tells the computer to end it. */}
+        <Show when={run()?.taskId && run()?.task && !run()!.task!.terminal}>
+          <button
+            type="button"
+            class="hsc-run hsc-run--stop"
+            data-action="hive-stop"
+            disabled={deciding()}
+            onClick={() => void decide("cancel")}
+            title="Stop this run on the computer"
+          >
+            <Ic name="stop" /> {deciding() ? "Stopping…" : "Stop"}
+          </button>
+        </Show>
+        <button
+          type="button"
+          class="hsc-ib"
+          data-action="hive-output-copy"
+          disabled={!outputText()}
+          title={copied() ? "Copied" : "Copy the output"}
+          aria-label={copied() ? "Copied" : "Copy the output"}
+          onClick={() => void copyOutput()}
+        >
+          <Show when={copied()} fallback={<Ic name="copy" />}>
+            <Ic name="check" />
+          </Show>
+        </button>
+        <button
+          type="button"
+          class="hsc-ib"
+          data-action="hive-output-full"
+          aria-pressed={fullOutput()}
+          title={fullOutput() ? "Exit full screen (Esc)" : "Full screen — long lines stay on one line"}
+          onClick={() => setFullOutput((v) => !v)}
+        >
+          <Ic name={fullOutput() ? "collapse" : "expand"} />
+        </button>
+        <span class="hsc-num hsc-clock" title="Since it was queued">
+          {elapsed().toFixed(1)} s
+        </span>
+      </div>
+      <div class="hsc-fbar" title={`Time used of the ${runTimeout()} s limit`}>
+        <i style={{ width: `${Math.min(100, (elapsed() / runTimeout()) * 100).toFixed(1)}%` }} />
+      </div>
+      <div class="hsc-term hsc-mono" aria-live="polite">
+        <Show when={run()} fallback={<div class="hsc-dim">Press Run to send {sharedSel()?.slug ?? name()} to {route().routed ? (route() as { node: string }).node : (picked()?.name ?? "a computer")}.</div>}>
+          <Show when={run()!.reason}>
+            <div class="hsc-err">{run()!.reason}</div>
+          </Show>
+
+          <Show when={run()!.task?.held}>
+            <div class="hsc-gate-held" data-action="hive-gate-held">
+              <div class="hsc-gate-title">Held by Constellation Gate — not sent</div>
+              <div>{run()!.task!.gate?.explanation || "This run needs your approval before it can start."}</div>
+              <Show when={run()!.task!.gate?.score != null && run()!.task!.gate?.reasons.includes("flagged")}>
+                <div class="hsc-dim">risk {run()!.task!.gate!.score!.toFixed(2)}</div>
+              </Show>
+              <div class="hsc-gate-actions">
+                <button type="button" class="hsc-run" disabled={deciding()} onClick={() => void decide("approve")}>
+                  {deciding() ? "Sending…" : "Approve and run"}
+                </button>
+                <button type="button" class="hsc-run hsc-run--ghost" disabled={deciding()} onClick={() => void decide("reject")}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          </Show>
+          <Show when={run()!.task && !run()!.task!.terminal && !run()!.task!.held}>
+            <div class="hsc-dim">Output arrives when the run finishes.</div>
+          </Show>
+          <For each={(run()!.task?.stdout ?? "").split("\n").filter(Boolean)}>{(l) => <div>{l}</div>}</For>
+          <For each={(run()!.task?.stderr ?? "").split("\n").filter(Boolean)}>
+            {(l) => <div class="hsc-err">{l}</div>}
+          </For>
+          <Show when={run()!.task?.terminal}>
+            <div class="hsc-dim hsc-num">
+              {run()!.task!.exitCode != null
+                ? `exit ${run()!.task!.exitCode}${run()!.task!.exitCodeSource === "error_text" ? " (inferred)" : ""}`
+                : run()!.task!.status}
+              {" · "}
+              {elapsed().toFixed(0)} s · {run()!.computerName}
+            </div>
+            <Show when={run()!.task!.error}>
+              <div class="hsc-err">{run()!.task!.error}</div>
+            </Show>
+          </Show>
+        </Show>
+      </div>
+    </div>
+  )
 
   return (
     <div class="hsc-wrap" ref={rootEl}>
@@ -835,9 +1124,9 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                 return (
                   <li
                     role="option"
-                    aria-selected={s.slug === slug() && !creating()}
+                    aria-selected={s.slug === slug() && !creating() && !sharedSel()}
                     classList={{
-                      on: s.slug === slug() && !creating(),
+                      on: s.slug === slug() && !creating() && !sharedSel(),
                       bl: r().state === "blocked",
                       unk: r().state === "unknown",
                     }}
@@ -927,6 +1216,35 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
             >
               {showTests() ? "hide tests" : `+${tests().length} tests`}
             </button>
+          </Show>
+          {/* Shared with me (#191674): other people's scripts, through a board I am on. */}
+          <Show when={view() === "all" && sharedNow()?.measured}>
+            <div class="hsc-shhead" data-component="hive-shared">
+              <Ic name="share" />
+              <b>Shared with me</b>
+              <span class="hsc-num hsc-muted">{sharedRows().length}</span>
+            </div>
+            <Show when={sharedRows().length === 0}>
+              <p class="hsc-muted hsc-pad hsc-shempty">Nobody has shared a script with your boards yet.</p>
+            </Show>
+            <ul class="hsc-ilist hsc-shlist" role="listbox" aria-label="Shared with me">
+              <For each={sharedRows().filter((x) => matchesQuery(x, query()))}>
+                {(x) => (
+                  <li
+                    role="option"
+                    aria-selected={x.id === sharedId()}
+                    classList={{ on: x.id === sharedId() }}
+                    title={`${x.name ?? x.slug}${x.author ? ` — by ${x.author}` : ""}, through ${sharedVia(x, props.boards)}`}
+                    tabIndex={0}
+                    onClick={() => setSharedId(x.id)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setSharedId(x.id)}
+                  >
+                    <span class="hsc-mono">{x.slug}</span>
+                    <span class="hsc-by">{x.author ?? ""}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
           </Show>
         </Suspense>
         </Show>
@@ -1060,10 +1378,43 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
             </Show>
           </Suspense>
         </Show>
+        <Show when={view() !== "market" && sharedSel()}>
+          {(sh) => (
+            <>
+              <div class="hsc-edbar">
+                <span class="hsc-file hsc-mono">{fileName(sh().slug, sh().runtime)}</span>
+                <Show when={sh().author}>
+                  <span class="hsc-chip" title={`Shared by ${sh().author}`}>
+                    <Ic name="share" />
+                    {sh().author}
+                  </span>
+                </Show>
+                <span class="hsc-spacer" />
+                <button class="hsc-run" type="button" data-action="hive-shared-run" title={runTitle()} disabled={!canRun()} onClick={() => void runOn(picked())}>
+                  <Ic name="play" />
+                  Run
+                </button>
+              </div>
+              <div class="hsc-sharebar">
+                <span class="hsc-chip" data-action="hive-shared-via" title="You can run it because you are on this board">
+                  <Ic name="share" />
+                  Shared through {sharedVia(sh(), props.boards)}
+                </span>
+                {versionPicker()}
+                {runsOnChip()}
+              </div>
+              <Show when={sh().description}>
+                <p class="hsc-mdesc">{sh().description}</p>
+              </Show>
+              <p class="hsc-muted hsc-pad">You can run it on your computers. Its source stays with {sh().author ?? "its author"}.</p>
+              {consoleView()}
+            </>
+          )}
+        </Show>
         <Show
-          when={view() !== "market" && name()}
+          when={view() !== "market" && !sharedSel() && name()}
           fallback={
-            <Show when={view() !== "market"}>
+            <Show when={view() !== "market" && !sharedSel()}>
               <p class="hsc-muted hsc-pad">Pick a script, or press + to write one.</p>
             </Show>
           }
@@ -1118,6 +1469,94 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
               Run
             </button>
           </div>
+          <Show when={current() && !creating()}>
+            <div class="hsc-sharebar">
+              <button
+                type="button"
+                class="hsc-chip hsc-access"
+                data-action="hive-access"
+                data-access={readAccess(current()!.visibility)}
+                aria-expanded={accessOpen()}
+                title={`${access().long} Click to change who can see it.`}
+                onClick={() => (accessOpen() ? setAccessOpen(false) : openAccess())}
+              >
+                <Ic name={access().icon} />
+                {access().short}
+                <Ic name="chevron-down" />
+              </button>
+              {versionPicker()}
+              {runsOnChip()}
+            </div>
+            <Show when={accessOpen()}>
+              <div class="hsc-accessp" role="group" aria-label="Who can see this script" data-action="hive-access-panel">
+                <For each={ACCESS_CHOICES}>
+                  {(a) => (
+                    <label class="hsc-achoice" data-choice={a}>
+                      <input
+                        type="radio"
+                        name="hsc-access"
+                        checked={accessWant().visibility === a}
+                        onChange={() => {
+                          setAccessConfirm(false)
+                          setAccessError(undefined)
+                          setAccessWant((w) => ({ ...w, visibility: a }))
+                        }}
+                      />
+                      <span>
+                        <b>{ACCESS_WORDS[a].label}</b>
+                        <small>{ACCESS_WORDS[a].hint}</small>
+                      </span>
+                    </label>
+                  )}
+                </For>
+                <Show when={accessWant().visibility === "project"}>
+                  <div class="hsc-boards" role="group" aria-label="Boards">
+                    <Show when={(props.boards ?? []).length} fallback={<p class="hsc-muted">You are not on any boards yet.</p>}>
+                      <For each={props.boards}>
+                        {(b) => (
+                          <label class="hsc-board">
+                            <input
+                              type="checkbox"
+                              data-board={b.id}
+                              checked={accessWant().bloqIds.includes(b.id)}
+                              onChange={(e) => toggleBoard(b.id, e.currentTarget.checked)}
+                            />
+                            {b.name}
+                          </label>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={accessConfirm()}>
+                  <p class="hsc-warn" data-action="hive-access-confirm">
+                    This lists {current()!.slug} in the public gallery. Anyone can read its source and run it, and a copy someone
+                    takes cannot be taken back.
+                  </p>
+                </Show>
+                <Show when={accessError()}>
+                  <p class="hsc-warn" data-action="hive-access-error">{accessError()}</p>
+                </Show>
+                <div class="hsc-aactions">
+                  <Show when={shareLink(current()!.visibility, current()!.slug)}>
+                    {(url) => (
+                      <button type="button" class="hsc-run hsc-run--ghost" title={url()} onClick={() => void copyLink(url())}>
+                        <Ic name={linkCopied() ? "check" : "link"} />
+                        {linkCopied() ? "Copied" : "Copy link"}
+                      </button>
+                    )}
+                  </Show>
+                  <span class="hsc-spacer" />
+                  <button type="button" class="hsc-run hsc-run--ghost" onClick={() => setAccessOpen(false)}>
+                    Cancel
+                  </button>
+                  <button type="button" class="hsc-run" data-action="hive-access-save" disabled={accessBusy()} onClick={() => void applyAccess()}>
+                    {accessBusy() ? "Saving…" : accessConfirm() ? "Make it public" : "Save"}
+                  </button>
+                </div>
+              </div>
+            </Show>
+          </Show>
           <Show when={note()}>
             <p class="hsc-warn">{note()}</p>
           </Show>
@@ -1189,131 +1628,7 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                   </For>
                 </ol>
                 <CodeView value={text()} headerLines={header().lines} runtime={runtime()} />
-                <div class="hsc-console" data-state={run()?.task?.terminal ? "done" : run() ? "live" : "idle"} data-full={fullOutput() ? "" : undefined}>
-                  <div class="hsc-chead">
-                    <span
-                      class="hsc-rstat"
-                      data-ok={run()?.task?.terminal ? String(taskSucceeded(run()!.task)) : run()?.reason ? "false" : undefined}
-                    >
-                      <i />
-                      <b>{run()?.reason ? "Not sent" : taskStatusWord(run()?.task)}</b>
-                    </span>
-                    {/* A script's settings (#189589): edit them here for the next run. A setting
-                        with choices is a dropdown; a required one is marked until it has a value. */}
-                    <For each={header().args}>
-                      {(a) => (
-                        <label class="hsc-setting" data-required={a.required && !valueOf(a) ? "" : undefined} title={a.required ? `${a.name} is required` : `Sent to the script as IRIS_ARG_${a.name.toUpperCase()}`}>
-                          <span>{a.name}</span>
-                          <Show
-                            when={a.choices}
-                            fallback={
-                              <input
-                                class="hsc-mono"
-                                data-action="hive-setting"
-                                value={valueOf(a)}
-                                placeholder={a.required ? "required" : "—"}
-                                onInput={(e) => setArgValue(a.name, e.currentTarget.value)}
-                                size={Math.max(6, Math.min(24, valueOf(a).length + 1))}
-                              />
-                            }
-                          >
-                            <select class="hsc-mono" data-action="hive-setting" value={valueOf(a)} onChange={(e) => setArgValue(a.name, e.currentTarget.value)}>
-                              <For each={a.choices}>{(c) => <option value={c}>{c}</option>}</For>
-                            </select>
-                          </Show>
-                        </label>
-                      )}
-                    </For>
-                    <span class="hsc-spacer" />
-                    {/* Stop (#189589 follow-up): any run of yours that has not finished, including one
-                        Gate is holding. The hub cancels it and tells the computer to end it. */}
-                    <Show when={run()?.taskId && run()?.task && !run()!.task!.terminal}>
-                      <button
-                        type="button"
-                        class="hsc-run hsc-run--stop"
-                        data-action="hive-stop"
-                        disabled={deciding()}
-                        onClick={() => void decide("cancel")}
-                        title="Stop this run on the computer"
-                      >
-                        <Ic name="stop" /> {deciding() ? "Stopping…" : "Stop"}
-                      </button>
-                    </Show>
-                    <button
-                      type="button"
-                      class="hsc-ib"
-                      data-action="hive-output-copy"
-                      disabled={!outputText()}
-                      title={copied() ? "Copied" : "Copy the output"}
-                      aria-label={copied() ? "Copied" : "Copy the output"}
-                      onClick={() => void copyOutput()}
-                    >
-                      <Show when={copied()} fallback={<Ic name="copy" />}>
-                        <Ic name="check" />
-                      </Show>
-                    </button>
-                    <button
-                      type="button"
-                      class="hsc-ib"
-                      data-action="hive-output-full"
-                      aria-pressed={fullOutput()}
-                      title={fullOutput() ? "Exit full screen (Esc)" : "Full screen — long lines stay on one line"}
-                      onClick={() => setFullOutput((v) => !v)}
-                    >
-                      <Ic name={fullOutput() ? "collapse" : "expand"} />
-                    </button>
-                    <span class="hsc-num hsc-clock" title="Since it was queued">
-                      {elapsed().toFixed(1)} s
-                    </span>
-                  </div>
-                  <div class="hsc-fbar" title={`Time used of the ${timeoutSec()} s limit`}>
-                    <i style={{ width: `${Math.min(100, (elapsed() / timeoutSec()) * 100).toFixed(1)}%` }} />
-                  </div>
-                  <div class="hsc-term hsc-mono" aria-live="polite">
-                    <Show when={run()} fallback={<div class="hsc-dim">Press Run to send {name()} to {picked()?.name ?? "a computer"}.</div>}>
-                      <Show when={run()!.reason}>
-                        <div class="hsc-err">{run()!.reason}</div>
-                      </Show>
-
-                      <Show when={run()!.task?.held}>
-                        <div class="hsc-gate-held" data-action="hive-gate-held">
-                          <div class="hsc-gate-title">Held by Constellation Gate — not sent</div>
-                          <div>{run()!.task!.gate?.explanation || "This run needs your approval before it can start."}</div>
-                          <Show when={run()!.task!.gate?.score != null && run()!.task!.gate?.reasons.includes("flagged")}>
-                            <div class="hsc-dim">risk {run()!.task!.gate!.score!.toFixed(2)}</div>
-                          </Show>
-                          <div class="hsc-gate-actions">
-                            <button type="button" class="hsc-run" disabled={deciding()} onClick={() => void decide("approve")}>
-                              {deciding() ? "Sending…" : "Approve and run"}
-                            </button>
-                            <button type="button" class="hsc-run hsc-run--ghost" disabled={deciding()} onClick={() => void decide("reject")}>
-                              Reject
-                            </button>
-                          </div>
-                        </div>
-                      </Show>
-                      <Show when={run()!.task && !run()!.task!.terminal && !run()!.task!.held}>
-                        <div class="hsc-dim">Output arrives when the run finishes.</div>
-                      </Show>
-                      <For each={(run()!.task?.stdout ?? "").split("\n").filter(Boolean)}>{(l) => <div>{l}</div>}</For>
-                      <For each={(run()!.task?.stderr ?? "").split("\n").filter(Boolean)}>
-                        {(l) => <div class="hsc-err">{l}</div>}
-                      </For>
-                      <Show when={run()!.task?.terminal}>
-                        <div class="hsc-dim hsc-num">
-                          {run()!.task!.exitCode != null
-                            ? `exit ${run()!.task!.exitCode}${run()!.task!.exitCodeSource === "error_text" ? " (inferred)" : ""}`
-                            : run()!.task!.status}
-                          {" · "}
-                          {elapsed().toFixed(0)} s · {run()!.computerName}
-                        </div>
-                        <Show when={run()!.task!.error}>
-                          <div class="hsc-err">{run()!.task!.error}</div>
-                        </Show>
-                      </Show>
-                    </Show>
-                  </div>
-                </div>
+                {consoleView()}
               </Match>
             </Switch>
           </Suspense>
@@ -1326,6 +1641,11 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
           <Ic name="server" />
           {mode() === "run" && run() ? "Sent to" : "Run on"}
         </h5>
+        <Show when={view() !== "market" && route().routed}>
+          <p class="hsc-route" data-action="hive-routed">
+            {(route() as { label: string }).label}. It picks its own computer — nothing to choose.
+          </p>
+        </Show>
         <Suspense fallback={<p class="hsc-muted">Reading…</p>}>
           <Show when={hive() && !hive()!.measured}>
             <p class="hsc-warn" title={hive()!.reason ?? undefined}>
@@ -1345,8 +1665,20 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
             {(c) => {
               const v = () => computerVerdict(c, doctor())
               const isRun = () => mode() === "run" && run()?.computerId !== undefined && c.ids.includes(run()!.computerId)
+              const routedHere = () => {
+                const r = route()
+                return r.routed && c.names.includes(r.node)
+              }
               const sel = () =>
-                view() === "market" ? false : isRun() ? true : mode() === "edit" || !run() ? picked()?.id === c.id : false
+                view() === "market"
+                  ? false
+                  : isRun()
+                    ? true
+                    : route().routed
+                      ? routedHere()
+                      : mode() === "edit" || !run()
+                        ? picked()?.id === c.id
+                        : false
               const d = diskOf(c)
               return (
                 <div
@@ -1355,8 +1687,8 @@ export function IrisHiveScripts(props: { doFetch: Fetch; now?: () => number; blo
                   role="button"
                   tabIndex={0}
                   aria-pressed={sel()}
-                  onClick={() => v().can !== false && setPickedId(c.id)}
-                  onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && v().can !== false && setPickedId(c.id)}
+                  onClick={() => !route().routed && v().can !== false && setPickedId(c.id)}
+                  onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && !route().routed && v().can !== false && setPickedId(c.id)}
                 >
                   <div class="hsc-ccl">
                     <i class="hsc-dot hsc-dot--on" />
