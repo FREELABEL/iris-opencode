@@ -9,6 +9,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "I just installed iris", "how do I sign in", "auth not working", "where's my .env" | `iris-login.md` |
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
+| "share a script", "hive script", "iris scripts", "share with my team", "scripts shared with me", "run a teammate's script", "runs-on", "publish a script", "script marketplace", "unshare" | `hive-script-sharing.md` |
 | "model gateway", "openrouter alternative", "ai gateway", "failover", "my ai spend", "ollama", "my own gpu", "local models", "serve my models", "hive/<model>" | `iris-model-gateway.md` |
 | "run claude code from iris", "codex", "gemini cli", "switch agents", "ACP", "agent client protocol", "keep a session open", "steer an agent from my phone", "message a running agent" | `run-other-coding-agents.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
