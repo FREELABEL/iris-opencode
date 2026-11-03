@@ -288,6 +288,23 @@ const ScriptDoctorSchema = Schema.Struct({
   blocked: Schema.Array(DoctorRowSchema),
   runnable_now: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "IrisScriptDoctor" })
+const ScriptVisibility = Schema.Literals(["private", "project", "unlisted", "public"])
+const ScriptAccessFields = {
+  id: Schema.optional(Schema.String),
+  visibility: described(ScriptVisibility, "Who can open it. Unrecognised = private, as on the hub."),
+  version: Schema.NullOr(Schema.Number),
+  bloqIds: described(Schema.Array(Schema.Number), "Boards it is shared with (#191674) — not the project: tag."),
+  runsOn: described(
+    Schema.NullOr(
+      Schema.Union([
+        Schema.Struct({ kind: Schema.Literal("node"), node: Schema.String }),
+        Schema.Struct({ kind: Schema.Literal("any") }),
+        Schema.Struct({ kind: Schema.Literal("capability"), capability: Schema.String }),
+      ]),
+    ),
+    "`# iris: runs-on=` as the hub parsed it. Set = the hub routes the run; no computer is picked.",
+  ),
+}
 const ScriptsResponse = Schema.Struct({
   account: Schema.optional(Schema.NullOr(Schema.Number)),
   ...Measured,
@@ -301,9 +318,32 @@ const ScriptsResponse = Schema.Struct({
       lastExecutedAt: described(Schema.NullOr(Schema.String), "Never written by the hub today — do not show as 'last run'."),
       doctor: described(Schema.NullOr(ScriptDoctorSchema), "NULL = the doctor could not be asked, not 'can run'."),
       tags: described(Schema.Array(Schema.String), "`project:<board id>` puts a script in that board's Project view."),
+      ...ScriptAccessFields,
     }).annotate({ identifier: "IrisScriptSummary" }),
   ),
 }).annotate({ identifier: "IrisScriptsResponse" })
+const SharedScriptsResponse = Schema.Struct({
+  ...Measured,
+  scripts: Schema.Array(
+    Schema.Struct({
+      ...ScriptAccessFields,
+      id: described(Schema.String, "Run it by this — a slug names a script within ONE account."),
+      slug: Schema.String,
+      name: Schema.optional(Schema.String),
+      description: Schema.optional(Schema.String),
+      runtime: Schema.optional(Schema.String),
+      author: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisSharedScript" }),
+  ),
+}).annotate({ identifier: "IrisSharedScriptsResponse" })
+const ScriptAccessResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: described(Schema.optional(Schema.String), "The hub's own sentence for a refusal (422)."),
+  visibility: Schema.optional(ScriptVisibility),
+  bloqIds: Schema.optional(Schema.Array(Schema.Number)),
+  version: Schema.optional(Schema.NullOr(Schema.Number)),
+}).annotate({ identifier: "IrisScriptAccessResponse" })
 const ScriptSourceResponse = Schema.Struct({
   ...Measured,
   script: Schema.NullOr(
@@ -1629,6 +1669,8 @@ export const IrisPaths = {
   hiveScriptSave: `${root}/hive/scripts/:slug/save`,
   hiveScriptRun: `${root}/hive/scripts/:slug/run`,
   hiveScriptTags: `${root}/hive/scripts/:slug/tags`,
+  hiveScriptAccess: `${root}/hive/scripts/:slug/access`,
+  hiveSharedScripts: `${root}/hive/shared-scripts`,
   hiveMarket: `${root}/hive/market`,
   hiveMarketScript: `${root}/hive/market/:slug`,
   hiveMarketInstall: `${root}/hive/market/:slug/install`,
@@ -3668,6 +3710,30 @@ export const IrisApi = HttpApi.make("iris").add(
           description: "Replaces the tags. Same content, so the hub records no new version.",
         }),
       ),
+      HttpApiEndpoint.get("hiveSharedScripts", IrisPaths.hiveSharedScripts, {
+        success: described(SharedScriptsResponse, "Scripts other accounts shared with boards you are on"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveSharedScripts",
+          summary: "List Hive scripts shared with you (iris scripts list --shared)",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveScriptAccess", IrisPaths.hiveScriptAccess, {
+        params: { slug: Schema.String },
+        payload: Schema.Struct({
+          action: Schema.Literals(["publish", "unpublish", "share", "unshare"]),
+          visibility: described(Schema.optional(Schema.Literals(["project", "unlisted", "public"])), "publish only."),
+          bloqIds: described(Schema.optional(Schema.Array(Schema.Number)), "publish only — required for project."),
+          bloqId: described(Schema.optional(Schema.Number), "share / unshare only."),
+        }),
+        success: described(ScriptAccessResponse, "The script's access as the hub now has it"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveScriptAccess",
+          summary: "Change who can open a Hive script (iris scripts publish | unpublish | share | unshare)",
+          description: "#191674. One hub call per request. A project script needs at least one board; the last board out makes it private.",
+        }),
+      ),
       HttpApiEndpoint.get("hiveMarket", IrisPaths.hiveMarket, {
         query: { q: Schema.optional(Schema.String) },
         success: described(MarketResponse, "The public script directory"),
@@ -3690,7 +3756,7 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.post("hiveScriptRun", IrisPaths.hiveScriptRun, {
         params: { slug: Schema.String },
         payload: Schema.Struct({
-          node: described(Schema.String, "Node id or name, resolved as the CLI does."),
+          node: described(Schema.optional(Schema.String), "Node id or name, resolved as the CLI does. Omit for a script with runs-on: the hub routes it."),
           timeout: Schema.optional(Schema.Finite),
           args: Schema.optional(described(Schema.Record(Schema.String, Schema.String), "Values for the script's declared settings (# iris: arg=). The hub checks them; the node passes them as IRIS_ARG_<NAME>.")),
         }),

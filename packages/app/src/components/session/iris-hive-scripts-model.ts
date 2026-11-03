@@ -36,9 +36,38 @@ export type ScriptRow = {
   /** NULL on every script today (the field is never written) — never shown as "last run". */
   lastExecutedAt?: string | null
   doctor?: Doctor | null
-  /** `project:<board id>` puts it in that board's Project view. */
+  /** `project:<board id>` puts it in that board's Project view. A sorting TAG — not who can see it. */
   tags?: string[]
+  /** The hub's uuid. Never shown. */
+  id?: string
+  /** Who can open it (#191674). Optional: an older sidecar does not send it, and absent reads as private. */
+  visibility?: string
+  /** The latest saved version. */
+  version?: number | null
+  /** The boards it is shared with — the access scope, unlike the `project:` tag. */
+  bloqIds?: number[]
+  runsOn?: RunsOn | null
 }
+
+/** `# iris: runs-on=` as the hub parsed it. */
+export type RunsOn = { kind: "node"; node: string } | { kind: "any" } | { kind: "capability"; capability: string }
+
+/** A script another account shared with a board I am on. Run by `id`, which is never shown. */
+export type SharedScript = {
+  id: string
+  slug: string
+  name?: string
+  description?: string
+  runtime?: string
+  version: number | null
+  visibility?: string
+  author?: string
+  bloqIds: number[]
+  runsOn: RunsOn | null
+  updatedAt?: string
+}
+
+export type Board = { id: number; name: string }
 
 export type HiveNodeRow = {
   id: string
@@ -691,4 +720,146 @@ export function runArgs(declared: ScriptHeader["args"], values: Record<string, s
 /** Required settings with no value — Run says which, instead of sending a run the hub will refuse. */
 export function missingRequired(declared: ScriptHeader["args"], values: Record<string, string>): string[] {
   return declared.filter((a) => a.required && !(values[a.name] ?? "").trim() && !a.default).map((a) => a.name)
+}
+
+// ── who can open it (#191674) ────────────────────────────────────────────────────────────────────
+//
+// The hub's words are private · project · unlisted · public. None of them is shown: a person picks
+// "Only me", "My team", "Anyone with the link" or "Public gallery". The `project:<id>` TAG above is
+// a different thing — it files a script under a board's Project view and grants nobody anything.
+
+export type Access = "private" | "project" | "unlisted" | "public"
+export const ACCESS_CHOICES: readonly Access[] = ["private", "project", "unlisted", "public"]
+
+/** Anything unrecognised is private — the hub's rule; the failure worth avoiding is a typo reading as public. */
+export function readAccess(v: unknown): Access {
+  return v === "project" || v === "unlisted" || v === "public" ? v : "private"
+}
+
+/** The boards' names, in the order given; a board I cannot see is "a board you're not on". */
+export function boardNames(ids: readonly number[] | undefined, boards: readonly Board[] | undefined): string[] {
+  return (ids ?? []).map((id) => boards?.find((b) => b.id === id)?.name ?? "a board you're not on")
+}
+
+function nameList(names: string[]): string {
+  if (names.length <= 2) return names.join(" and ")
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
+}
+
+/** What the badge says, what its tooltip says, and its icon. */
+export function accessLabel(
+  visibility: unknown,
+  bloqIds: readonly number[] | undefined,
+  boards: readonly Board[] | undefined,
+): { short: string; long: string; icon: "lock" | "share" | "link" | "globe" } {
+  const v = readAccess(visibility)
+  if (v === "public") return { short: "Public gallery", long: "In the public gallery — anyone can read the source and run it.", icon: "globe" }
+  if (v === "unlisted") return { short: "Anyone with the link", long: "Anyone with the link can read and run it. It appears in no listing.", icon: "link" }
+  if (v === "project") {
+    const names = boardNames(bloqIds, boards)
+    if (!names.length) return { short: "My team", long: "Shared with a board, but with none right now.", icon: "share" }
+    return { short: `My team: ${nameList(names)}`, long: `Members of ${nameList(names)} can see and run it.`, icon: "share" }
+  }
+  return { short: "Only me", long: "Only you can see and run it.", icon: "lock" }
+}
+
+/** The words for each choice in the access picker. */
+export const ACCESS_WORDS: Record<Access, { label: string; hint: string }> = {
+  private: { label: "Only me", hint: "Nobody else can see or run it." },
+  project: { label: "My team", hint: "Members of the boards you pick can see and run it." },
+  unlisted: { label: "Anyone with the link", hint: "Not listed anywhere — only people you send the link to." },
+  public: { label: "Public gallery", hint: "Listed in the public gallery. Anyone can read the source and run it." },
+}
+
+/** One hub call. `publish` widens (and passes the checks), `unpublish` makes it private. */
+export type AccessStep =
+  | { action: "publish"; visibility: Exclude<Access, "private">; bloqIds?: number[] }
+  | { action: "unpublish" }
+  | { action: "share" | "unshare"; bloqId: number }
+
+/**
+ * The hub calls that take a script from `cur` to `want`, and whether the person must confirm.
+ *
+ * - Making it PUBLIC asks first: it lists the script in the gallery and shows its source, and a
+ *   copy taken cannot be recalled. Narrowing never asks.
+ * - "My team" needs at least one board (the hub refuses an audience of nobody, so this does too,
+ *   before any call). Boards are shared BEFORE others are unshared: taking the last board out of a
+ *   team script makes it private on the hub, and a swap must not pass through that.
+ * - Leaving a team for another scope keeps the boards; going to "Only me" is one unpublish.
+ */
+export function planAccess(
+  cur: { visibility?: unknown; bloqIds?: readonly number[] },
+  want: { visibility: Access; bloqIds?: readonly number[] },
+): { steps: AccessStep[]; confirm: boolean } | { error: string } {
+  const from = readAccess(cur.visibility)
+  const had = [...new Set(cur.bloqIds ?? [])]
+  const to = want.visibility
+  if (to === "private") return { steps: from === "private" ? [] : [{ action: "unpublish" }], confirm: false }
+  if (to === "project") {
+    const ids = [...new Set(want.bloqIds ?? [])]
+    if (!ids.length) return { error: "Pick at least one board to share it with." }
+    const add = ids.filter((id) => !had.includes(id))
+    const drop = had.filter((id) => !ids.includes(id))
+    const unshare = drop.map((bloqId): AccessStep => ({ action: "unshare", bloqId }))
+    if (from !== "project") return { steps: [{ action: "publish", visibility: "project", bloqIds: ids }, ...unshare], confirm: false }
+    return { steps: [...add.map((bloqId): AccessStep => ({ action: "share", bloqId })), ...unshare], confirm: false }
+  }
+  return { steps: from === to ? [] : [{ action: "publish", visibility: to }], confirm: to === "public" && from !== "public" }
+}
+
+/** Taking this board away leaves a team script with no board — the hub then makes it private. */
+export function unshareMakesPrivate(cur: { visibility?: unknown; bloqIds?: readonly number[] }, bloqId: number): boolean {
+  return readAccess(cur.visibility) === "project" && (cur.bloqIds ?? []).every((id) => id === bloqId)
+}
+
+/** Where a link to it points, for "Anyone with the link" and "Public gallery". A team script has none. */
+export function shareLink(visibility: unknown, slug: string): string | null {
+  const v = readAccess(visibility)
+  return v === "unlisted" || v === "public" ? `https://heyiris.io/api/v1/public/scripts/${encodeURIComponent(slug)}` : null
+}
+
+/** The boards a shared script reached me through: the ones in its audience that I am on. */
+export function sharedVia(s: Pick<SharedScript, "bloqIds">, boards: readonly Board[] | undefined): string {
+  const mine = (boards ?? []).filter((b) => s.bloqIds.includes(b.id)).map((b) => b.name)
+  return mine.length ? nameList(mine) : "a board you're on"
+}
+
+// ── where it runs, which version ─────────────────────────────────────────────────────────────────
+
+/**
+ * Who picks the computer. A script that declares `runs-on=<machine>` is routed by the hub — the
+ * person picks nothing and the run sends no computer (sending one that differs is refused).
+ * `any` / `capability:` still take a pick, as today.
+ */
+export function routing(runsOn: RunsOn | null | undefined): { routed: true; node: string; label: string } | { routed: false } {
+  if (runsOn?.kind === "node") return { routed: true, node: runsOn.node, label: `Runs on ${runsOn.node}` }
+  return { routed: false }
+}
+
+/** The versions a run may pick: latest first, at most `max`. Empty when the version is unknown. */
+export function versionChoices(latest: number | null | undefined, max = 20): number[] {
+  if (!latest || latest < 1 || !Number.isInteger(latest)) return []
+  return Array.from({ length: Math.min(max, latest) }, (_, i) => latest - i)
+}
+
+/**
+ * What the run names. My script at its latest version is its plain slug (so the sidecar can pin
+ * the content hash it read); an older version is `slug@N`. A shared script is always its id —
+ * a slug names a script in ONE account, and mine may share it — `id@N` for an older version.
+ */
+export function runRef(
+  s: { slug: string; id?: string; shared?: boolean },
+  pick: number | null | undefined,
+  latest: number | null | undefined,
+): string {
+  const base = s.shared && s.id ? s.id : s.slug
+  const older = pick != null && pick !== latest
+  return older ? `${base}@${pick}` : base
+}
+
+/** "v3", or "v2 of 3" for an older pick. */
+export function versionWord(pick: number | null | undefined, latest: number | null | undefined): string {
+  if (latest == null) return ""
+  if (pick == null || pick === latest) return `v${latest}`
+  return `v${pick} of ${latest}`
 }

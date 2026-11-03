@@ -48,7 +48,7 @@ const MARKET = [
   { slug: "deal-scenarios", name: "Deal Scenarios", author: "FREELABEL", version: 2, requires: [] },
   { slug: "csv-tidy", name: "CSV Tidy", author: "FREELABEL", version: 2, requires: [] },
 ]
-function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {}) {
+function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[]; sharing?: boolean } = {}) {
   const calls: { path: string; method: string; body?: any }[] = []
   let polled = 0
   const doFetch = async (path: string, init?: RequestInit) => {
@@ -57,10 +57,18 @@ function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {
     if (path === "/iris/hive/scripts")
       return json({
         measured: true,
-        scripts: opts.empty ? [] : snap.scripts.map((s: any) => ({ ...s, tags: (opts.tagged ?? []).includes(s.slug) ? ["ops", "project:7"] : ["ops"] })),
+        scripts: opts.empty
+          ? []
+          : snap.scripts.map((s: any) => ({
+              ...s,
+              tags: (opts.tagged ?? []).includes(s.slug) ? ["ops", "project:7"] : ["ops"],
+              ...(opts.sharing ? ((snap.sharing.mine as any)[s.slug] ?? {}) : {}),
+            })),
         account: opts.empty ? 2945 : 193,
       })
     if (path === "/iris/hive/market") return json({ measured: true, scripts: MARKET })
+    if (path === "/iris/hive/shared-scripts" && opts.sharing) return json({ measured: true, scripts: snap.sharing.shared })
+    if (path.endsWith("/access")) return json({ ok: true, visibility: "project", bloqIds: [12, 40] })
     if (path.endsWith("/install")) return json({ ok: true, sha256: "z", assetsLeft: 1 })
     if (path.endsWith("/tags")) return json({ ok: true, sha256: "x" })
     if (path.startsWith("/iris/hive/market/"))
@@ -83,7 +91,17 @@ function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {
   }
   const host = document.createElement("div")
   document.body.append(host)
-  const dispose = render(() => createComponent(IrisHiveScripts, { doFetch, now: () => NOW, bloqId: opts.bloqId, bloqName: opts.bloqId ? "Deals board" : undefined }), host)
+  const dispose = render(
+    () =>
+      createComponent(IrisHiveScripts, {
+        doFetch,
+        now: () => NOW,
+        bloqId: opts.bloqId,
+        bloqName: opts.bloqId ? "Deals board" : undefined,
+        boards: opts.sharing ? snap.sharing.boards : undefined,
+      }),
+    host,
+  )
   return { host, calls, dispose }
 }
 
@@ -445,4 +463,83 @@ test("the output has a copy button next to full screen, and it copies the run's 
   expect(copied).toContain(host.querySelector(".hsc-term div:not(.hsc-dim)")?.textContent ?? "")
   dispose()
   host.remove()
+})
+
+// #191674 — who can see a script, scripts shared with me, and a run the Hive routes itself.
+test("sharing: the access badge and picker, Shared with me, and a runs-on script sends no computer", async () => {
+  localStorage.removeItem("iris.hive.scripts.view")
+  localStorage.setItem("iris.hive.scripts.slug", "mambo-status")
+  const { host, calls, dispose } = mount({ sharing: true })
+  await wait(() => host.querySelector('[data-action="hive-access"]') !== null && host.querySelectorAll(".hsc-cc").length > 0)
+  const text = () => host.textContent ?? ""
+
+  // the badge speaks plainly; version and where it runs are beside it
+  expect(host.querySelector('[data-action="hive-access"]')?.textContent).toBe("My team: Mambo crew")
+  expect(host.querySelector('[data-action="hive-runs-on"]')?.textContent).toBe("Runs on Alexs-MacBook-Pro-11711")
+  expect([...host.querySelectorAll('[data-action="hive-version"] option')].map((o) => o.textContent)).toEqual(["Latest (v4)", "v3", "v2", "v1"])
+  expect(host.querySelector('[data-action="hive-routed"]')?.textContent).toContain("nothing to choose")
+  // no hub word, no board number, no uuid anywhere on screen
+  expect(text()).not.toMatch(/unlisted|bloq|visibility|0b6f8a52|7e9a1c3b/i)
+
+  // the picker: swap Mambo crew for Ops — shares Ops first, then unshares Mambo crew
+  ;(host.querySelector('[data-action="hive-access"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-action="hive-access-panel"]') !== null)
+  const box = (id: number) => host.querySelector(`[data-board="${id}"]`) as HTMLInputElement
+  expect(box(12).checked).toBe(true)
+  box(40).click()
+  box(12).click()
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/access")).length === 2)
+  expect(calls.filter((c) => c.path.endsWith("/access")).map((c) => c.body)).toEqual([
+    { action: "share", bloqId: 40 },
+    { action: "unshare", bloqId: 12 },
+  ])
+
+  // public asks first, and nothing is sent until it is confirmed
+  await wait(() => host.querySelector('[data-action="hive-access-panel"]') === null)
+  ;(host.querySelector('[data-action="hive-access"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-choice="public"] input') !== null)
+  ;(host.querySelector('[data-choice="public"] input') as HTMLInputElement).click()
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-action="hive-access-confirm"]') !== null)
+  expect(host.querySelector('[data-action="hive-access-confirm"]')?.textContent).toContain("public gallery")
+  expect(calls.filter((c) => c.path.endsWith("/access")).length).toBe(2)
+  expect(host.querySelector('[data-action="hive-access-save"]')?.textContent).toBe("Make it public")
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/access")).length === 3)
+  expect(calls.filter((c) => c.path.endsWith("/access"))[2].body).toEqual({ action: "publish", visibility: "public" })
+
+  // Run: no computer to pick, none sent; an older version pins @N
+  const version = host.querySelector('[data-action="hive-version"]') as HTMLSelectElement
+  version.value = "2"
+  version.dispatchEvent(new Event("change", { bubbles: true }))
+  const runBtn = [...host.querySelectorAll(".hsc-edbar .hsc-run")].find((b) => b.textContent?.includes("Run")) as HTMLButtonElement
+  expect(runBtn.disabled).toBe(false)
+  runBtn.click()
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  const run = calls.find((c) => c.path.endsWith("/run"))!
+  expect(run.path).toBe("/iris/hive/scripts/mambo-status%402/run")
+  expect("node" in run.body).toBe(false)
+
+  // Shared with me: author, the board it came through, run by id — the id never shown
+  const sharedRows = () => [...host.querySelectorAll(".hsc-shlist li")]
+  expect(sharedRows().map((l) => l.querySelector(".hsc-mono")?.textContent)).toEqual(["lead-dedupe", "studio-render"])
+  ;(sharedRows()[0] as HTMLElement).click()
+  await wait(() => host.querySelector('[data-action="hive-shared-via"]') !== null)
+  expect(host.querySelector('[data-action="hive-shared-via"]')?.textContent).toBe("Shared through Deals board")
+  expect(host.querySelector(".hsc-ed")?.textContent).toContain("Dana Ruiz")
+  const sharedRun = host.querySelector('[data-action="hive-shared-run"]') as HTMLButtonElement
+  // the first run's dispatch has to have answered before Run is pressable again
+  await wait(() => !sharedRun.disabled)
+  expect(sharedRun.getAttribute("title")).toBe("Run on iris-hive-001")
+  sharedRun.click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/run")).length === 2)
+  const shared = calls.filter((c) => c.path.endsWith("/run"))[1]
+  expect(shared.path).toBe(`/iris/hive/scripts/${snap.sharing.shared[0].id}/run`)
+  // a shared script with no runs-on goes to the computer picked, as today
+  expect(typeof shared.body.node).toBe("string")
+  expect(text()).not.toMatch(/7e9a1c3b|0b6f8a52/)
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.slug")
 })
