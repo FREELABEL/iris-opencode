@@ -34,14 +34,38 @@ Check the dates it flags against the source. A date marked `computed` is a promp
 limitation period, not an authority. Note the case's lead id, which is the case id; the next steps use it, shown here
 as `123`.
 
+## Before your first case: load the parties you already know
+
+A conflicts check can only find people and companies it has on file. Cases synced from Clio bring
+their parties, including cases Clio closed years ago. Anyone else, from an old system or a
+spreadsheet, goes in once as a CSV:
+
+```csv
+external_id,case_ref,name,role,counsel,carrier,notes
+HIST-0001,HIST-2019-014,Jane Roe,client,,,Closed 2021
+HIST-0002,HIST-2019-014,Northgate Freight LLC,adverse,Pat Lowe,Brazos Mutual,
+```
+
+```bash
+iris atlas:datasets import parties.csv --schema lex-party --bloq <your firm board> --dry-run
+iris atlas:datasets import parties.csv --schema lex-party --bloq <your firm board>
+```
+
+`external_id` must be unique and stable. Re-running the same file updates rows instead of adding
+them again. `role` is `client`, `adverse`, `adverse_counsel`, `carrier`, `witness`, `provider`, `related` or `other`.
+
 ## 2. Check for conflicts
 
 ```bash
 iris lexicon conflicts "Jane Roe" --also "Acme Insurance" --lead 123 --record yes
 ```
 
-This surfaces candidates from your records. A clean sweep says nothing surfaced in what was
-searched. It does not clear the conflict.
+This surfaces candidates from your records. Names are matched as names, so "Roe, Jane",
+"J. Roe" and "Jane Rowe" all reach "Jane Roe", and a party's counsel and insurer are checked too.
+Each candidate is marked PROBABLE or POSSIBLE with the reason. It leans toward showing too much:
+a false alarm costs a minute, a miss can cost the case.
+
+A clean sweep says nothing surfaced in what was searched. It does not clear the conflict.
 
 ## 3. Record the attorney's clearance
 
