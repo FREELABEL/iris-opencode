@@ -59,7 +59,7 @@ export const rpc = {
     const auth = LocalAuth.prepareListener({ hostname: input.hostname })
     server = await Server.listen(input)
     if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: input.hostname, credentials: auth.credentials })
-    return { url: server.url.toString() }
+    return { url: server.url.toString(), headers: ServerAuth.headers() }
   },
   async checkUpgrade(input: { directory: string }) {
     await InstanceRuntime.load({ directory: input.directory })
