@@ -1406,7 +1406,7 @@ export function IrisHiveScripts(props: {
               <Show when={sh().description}>
                 <p class="hsc-mdesc">{sh().description}</p>
               </Show>
-              <p class="hsc-muted hsc-pad">You can run it on your computers. Its source stays with {sh().author ?? "its author"}.</p>
+              <p class="hsc-muted hsc-pad">You can run it on your computers. Running it sends its code to the computer that runs it, so only run scripts from people you trust.</p>
               {consoleView()}
             </>
           )}
