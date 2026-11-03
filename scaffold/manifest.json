@@ -495,6 +495,12 @@
       "purpose": "Send a message or a work item to another person's agent inbox, and read your own. Covers the two halves people conflate — `hive accept` grants trust, `hive connect` makes the machine reachable — plus handoffs, the single-use invite code, and least-privilege access on org-owned machines."
     },
     {
+      "src": "how-to/hive-script-sharing.md",
+      "dest": "how-to/hive-script-sharing.md",
+      "managed": true,
+      "purpose": "Share a Hive script with a board: push it, share or publish it (project / unlisted / public), and teammates find it with `iris scripts list --shared` and run it by slug. Covers `# iris: runs-on=`, versions and `@N`, author/slug when two people share the same slug, unshare/unpublish (which do not un-send), and what members can see — running sends the source to their machine."
+    },
+    {
       "src": "how-to/integration-tenancy.md",
       "dest": "how-to/integration-tenancy.md",
       "managed": true,
