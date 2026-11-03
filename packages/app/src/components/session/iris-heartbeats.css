@@ -121,3 +121,8 @@
 .hbt-tools li[data-ok]::before { content: "✓ "; color: var(--hsc-sage); }
 .hbt-outs { display: flex; flex-wrap: wrap; gap: 10px; }
 .hbt-outs a { color: var(--hsc-jade); }
+
+/* #192251: with "resting" the summary has four counts; keep each on one line and let the row wrap
+   rather than run under the search box. Scoped to Heartbeats; Machines shares .hmc-sum. */
+.hbt .hmc-sum { flex-wrap: wrap; row-gap: 4px; }
+.hbt .hmc-sum > span { white-space: nowrap; }
