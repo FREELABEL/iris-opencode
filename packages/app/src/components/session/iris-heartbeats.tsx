@@ -22,6 +22,7 @@ import {
   modeOf,
   previewOf,
   problemsOf,
+  restOf,
   sortBeats,
   stateOf,
   stripOf,
@@ -349,6 +350,11 @@ export function IrisHeartbeats(props: {
                   <b class="hsc-num">{summary().attention}</b> need{summary().attention === 1 ? "s" : ""} attention
                 </span>
               </Show>
+              <Show when={summary().resting}>
+                <span class="hsc-muted" title="Skipping by choice; each runs again within a few beats">
+                  <b class="hsc-num">{summary().resting}</b> resting
+                </span>
+              </Show>
               <Show when={summary().paused}>
                 <span class="hsc-muted">
                   <b class="hsc-num">{summary().paused}</b> paused
@@ -394,7 +400,7 @@ export function IrisHeartbeats(props: {
                     class="hbt-row"
                     role="option"
                     tabindex="0"
-                    data-state={st()}
+                    data-state={restOf(r, now()) ? "paused" : st()}
                     aria-selected={open()?.jobId === r.jobId}
                     onClick={() => setOpenId(r.jobId)}
                     onKeyDown={(e) => {
@@ -404,12 +410,12 @@ export function IrisHeartbeats(props: {
                       }
                     }}
                   >
-                    <i class="hbt-dot" data-state={st()} aria-hidden="true" />
+                    <i class="hbt-dot" data-state={restOf(r, now()) ? "paused" : st()} aria-hidden="true" />
                     <div class="hbt-who">
                       <span class="hbt-name" title={r.agentName}>
                         {r.agentName}
                       </span>
-                      <span class="hbt-line" data-state={st()}>
+                      <span class="hbt-line" data-state={restOf(r, now()) ? "paused" : st()}>
                         {lineOf(r, now())}
                       </span>
                     </div>
@@ -433,10 +439,10 @@ export function IrisHeartbeats(props: {
             return (
               <aside class="hmc-detail" aria-label={r().agentName}>
                 <h3 class="hmc-dname">
-                  <i class="hbt-dot" data-state={st()} aria-hidden="true" />
+                  <i class="hbt-dot" data-state={restOf(r(), now()) ? "paused" : st()} aria-hidden="true" />
                   <span title={r().agentName}>{r().agentName}</span>
-                  <span class="hbt-badge" data-state={st()}>
-                    {STATE_WORD[st()]}
+                  <span class="hbt-badge" data-state={restOf(r(), now()) ? "paused" : st()}>
+                    {restOf(r(), now()) ? "Resting" : STATE_WORD[st()]}
                   </span>
                 </h3>
                 <p class="hmc-spec">

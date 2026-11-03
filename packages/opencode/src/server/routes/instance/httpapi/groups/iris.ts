@@ -458,6 +458,26 @@ const HeartbeatRow = Schema.Struct({
     Schema.Struct({ at: Schema.NullOr(Schema.String), reason: Schema.NullOr(Schema.String), kind: Schema.NullOr(Schema.String) }),
   ),
   runs: Schema.Array(HeartbeatRunRow),
+  // #192251: the engine read these all along and the schema dropped them, so the panel inferred
+  // skips that fl-api had MEASURED, and Home could not tell a resting agent from a stuck one.
+  wakes: described(
+    Schema.optional(
+      Schema.NullOr(
+        Schema.Array(
+          Schema.Struct({
+            at: Schema.NullOr(Schema.String),
+            dueAt: Schema.NullOr(Schema.String),
+            outcome: Schema.String,
+            kind: Schema.NullOr(Schema.String),
+            reason: Schema.NullOr(Schema.String),
+            heldUntil: Schema.NullOr(Schema.String),
+          }),
+        ),
+      ),
+    ),
+    "fl-api's wake ledger: held and skipped wakes, measured. Null = not read.",
+  ),
+  ledgerSince: Schema.optional(Schema.NullOr(Schema.String)),
   runsMeasured: described(Schema.Boolean, "False: the run history could not be read. Empty runs then mean NOT READ, not never ran."),
 }).annotate({ identifier: "IrisHeartbeat" })
 const HeartbeatsResponse = Schema.Struct({
