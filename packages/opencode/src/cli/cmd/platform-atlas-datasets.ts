@@ -9,6 +9,7 @@ import { firstArray } from "../../util/array"
 import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
 import { DatasetPullCommand, DatasetPushCommand, DatasetSyncCommand, DatasetStatusCommand, DatasetResolveCommand } from "./platform-atlas-dataset-sync"
 import { DRAFT_SYSTEM_PROMPT, checkFields, fieldsForCreate, normalizeDraft, parseModelJson } from "./atlas-schema-draft"
+import { DatasetPublicSubmitGroup } from "./platform-atlas-public-submit"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -1945,7 +1946,7 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup)
+     .command(FeedsGroup).command(DatasetHooksGroup).command(DatasetPublicSubmitGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup)
      // #189972 — a local copy kept in step: pull merges, push names its base revision
      .command(DatasetPullCommand).command(DatasetPushCommand).command(DatasetSyncCommand).command(DatasetStatusCommand).command(DatasetResolveCommand).demandCommand(),
   async handler() {},
