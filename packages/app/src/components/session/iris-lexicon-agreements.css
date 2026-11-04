@@ -11,7 +11,8 @@
 .iris-lex-meta { color: var(--text-weak); font-size: 12px; }
 .iris-lex-spacer { flex: 1; }
 .iris-lex-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
-.iris-lex-btn:hover:not(:disabled) { background: var(--background-element); }
+.iris-lex-btn:not([data-primary]):hover:not(:disabled) { background: var(--background-element); }
+.iris-lex-btn[data-primary]:hover:not(:disabled) { opacity: 0.88; }
 .iris-lex-btn:disabled { opacity: 0.45; cursor: default; }
 .iris-lex-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: 500; }
 .iris-lex .iris-lex-btn[data-tone="bad"]:not([data-primary]) { color: var(--text-critical-base, #ef4444); }
@@ -56,7 +57,7 @@
 .iris-lex-doc summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-strong); }
 .iris-lex-doc ol { padding-left: 18px; line-height: 1.55; }
 .iris-lex-doc-pre { color: var(--text-weak); }
-.iris-lex-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 16px; padding: 12px 0 14px; border-top: 1px solid var(--border-weaker-base); position: sticky; bottom: -20px; background: var(--background-base); }
+.iris-lex-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 16px; padding: 12px 0 14px; border-top: 1px solid var(--border-weaker-base); position: sticky; bottom: -20px; background: var(--background-stronger, var(--background-base)); }
 .iris-lex-empty { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px; color: var(--text-weak); font-size: 13px; text-align: center; }
 .iris-lex-form .iris-lex-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 .iris-lex-grid label, .iris-lex-reason { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-weak); }
