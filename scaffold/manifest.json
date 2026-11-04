@@ -663,6 +663,18 @@
       "purpose": "Watch an agent's live step and tool calls (CLI and Desktop Agents > Live), take over and hand back with an instruction, pause/resume/stop in every lane."
     },
     {
+      "src": "how-to/public-form-to-private-dataset.md",
+      "dest": "how-to/public-form-to-private-dataset.md",
+      "managed": true,
+      "purpose": "Let a public form add records to a private dataset: iris datasets public-submit enable/test/show/disable, honeypot, server reference, form page public and staff page gated."
+    },
+    {
+      "src": "how-to/personal-sign-in-links.md",
+      "dest": "how-to/personal-sign-in-links.md",
+      "managed": true,
+      "purpose": "Let one named person open a gated page without the emailed code: iris pages access-link, single use, expiry, list and revoke, never grants a role."
+    },
+    {
       "src": "how-to/dataset-webhooks.md",
       "dest": "how-to/dataset-webhooks.md",
       "managed": true,
