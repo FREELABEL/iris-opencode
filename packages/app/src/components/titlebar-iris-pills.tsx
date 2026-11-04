@@ -20,6 +20,7 @@ import { useTitlebarRightMount } from "./titlebar"
 import { useCommand } from "@/context/command"
 import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
+import { warmHomeDashboard } from "@/pages/home/home-dashboard-data"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
@@ -257,6 +258,11 @@ export function TitlebarIrisPills() {
   })
   const [inbox] = createResource<InboxState | undefined, Key>(inboxKey, poll<InboxState>("/iris/inbox?perPage=1"))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
+  // Home opens from a warm copy (#192222): on this poll, keep one at most five minutes old.
+  createEffect(() => {
+    const k = key()
+    if (k) warmHomeDashboard(k[0], platform.fetch ?? globalThis.fetch)
+  })
 
   // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
   // happens mid-session, not only when someone buys. /iris/plan peeks — it never consumes the

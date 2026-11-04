@@ -1,6 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, on, onCleanup, type JSX } from "solid-js"
 import { useIrisPanelScope } from "@/context/iris-panel-scope"
-import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { DragDropProvider as DndKitProvider, PointerSensor } from "@dnd-kit/solid"
@@ -36,7 +35,6 @@ import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import {
-  SessionIrisTab,
   IRIS_SURFACE_CHOICES,
   useRequestIrisSurface,
   irisStripTabs,
@@ -76,6 +74,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
+import { IrisPanelBody, IrisScopeChip } from "@/components/iris-panel"
 import { needsAttention, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
@@ -342,33 +341,8 @@ export function SessionSidePanel(props: {
    * pinned, and a chip inside it would scroll away exactly when the panel is busiest.
    */
   const ScopeChip = () => (
-    <Show when={activeTab() === "iris" && panelScope.chip()}>
-      {(chip) => (
-        <div class="iris-scopechip" data-testid="iris-scope-chip" data-scope={chip().scope}>
-          <Show
-            when={chip().pick}
-            fallback={
-              <span class="iris-scopechip__body" title={`Scope: ${chip().label}`}>
-                <span class="iris-scopechip__name">{chip().label}</span>
-              </span>
-            }
-          >
-            {(pick) => (
-              <button
-                type="button"
-                class="iris-scopechip__body"
-                title={`Project: ${chip().label} — change`}
-                onClick={() => pick()()}
-              >
-                <span class="iris-scopechip__name">{chip().label}</span>
-                <span class="iris-scopechip__chev" aria-hidden="true">
-                  ▾
-                </span>
-              </button>
-            )}
-          </Show>
-        </div>
-      )}
+    <Show when={activeTab() === "iris"}>
+      <IrisScopeChip />
     </Show>
   )
 
@@ -751,9 +725,7 @@ export function SessionSidePanel(props: {
                               inert={!irisVisible() || undefined}
                             >
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                                <IrisPanelBoundary label="The IRIS panel">
-                                  <SessionIrisTab />
-                                </IrisPanelBoundary>
+                                <IrisPanelBody />
                               </div>
                             </div>
                           </Show>
@@ -1030,9 +1002,7 @@ export function SessionSidePanel(props: {
                             inert={!irisVisible() || undefined}
                           >
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                              <IrisPanelBoundary label="The IRIS panel">
-                                <SessionIrisTab />
-                              </IrisPanelBoundary>
+                              <IrisPanelBody />
                             </div>
                           </div>
                         </Show>

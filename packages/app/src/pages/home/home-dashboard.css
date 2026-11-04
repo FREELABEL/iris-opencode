@@ -6,7 +6,7 @@
   --ihd-grad: linear-gradient(90deg, #d946ef, #3b82f6, #22d3ee);
   --ihd-btn: linear-gradient(90deg, #9333ea, #2563eb);
   --ihd-line: var(--v2-border-border-base);
-  --ihd-card: var(--v2-background-bg-layer-01);
+  --ihd-card: transparent;
   --ihd-ink: var(--v2-text-text-base);
   --ihd-mute: var(--v2-text-text-muted);
   --ihd-faint: var(--v2-text-text-faint);

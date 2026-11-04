@@ -1,6 +1,13 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
+import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
+import { Button } from "@opencode-ai/ui/button"
+import { Icon } from "@opencode-ai/ui/icon"
+import { Portal } from "solid-js/web"
+import { useTitlebarRightMount } from "@/components/titlebar"
 import { useTabs } from "@/context/tabs"
+import { IrisPanel } from "@/components/iris-panel"
+import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { createHomeController } from "./home/home-controller"
 import { createHomeProjectsController } from "./home/home-projects-controller"
 import { HomeUtilityNav } from "./home/home-projects-view"
@@ -111,52 +118,116 @@ export function NewHome() {
   const sessions = createHomeSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
+  // The IRIS panel opens beside Home (#192535) instead of in whichever chat was last open.
+  // Open and width are remembered, so Home comes back the way you left it.
+  const PANEL_KEY = "iris.home.panel"
+  const saved = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(PANEL_KEY) ?? "{}") as { open?: boolean; width?: number }
+    } catch {
+      return {}
+    }
+  })()
+  const [panelOpen, setPanelOpen] = createSignal(saved.open === true)
+  const [panelWidth, setPanelWidth] = createSignal(typeof saved.width === "number" ? saved.width : 520)
+  createEffect(() => {
+    const value = JSON.stringify({ open: panelOpen(), width: panelWidth() })
+    try {
+      localStorage.setItem(PANEL_KEY, value)
+    } catch {}
+  })
+  const titlebarRight = useTitlebarRightMount()
+  createEffect(() => {
+    if (!irisPanelOpenRequest()) return
+    untrack(() => setPanelOpen(true))
+    clearIrisPanelOpen()
+  })
   return (
-    <div
-      class={`
-        m-2 min-h-0 flex-1 self-stretch overflow-hidden rounded-[10px]
-        bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
-      `}
-    >
-      <ScrollView
-        class="h-full [container-type:size]"
-        thumbContainer={scroll.viewport.thumbTrack}
-        thumbHoverTarget={scroll.viewport.hoverTarget}
-        viewportRef={scroll.viewport.setViewport}
-        onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
-        onWheel={scroll.viewport.containOuterWheel}
+    <div class="flex min-h-0 min-w-0 flex-1 self-stretch">
+      <div
+        class={`
+          m-2 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
+          bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
+        `}
       >
-        <Show when={showFirstRun()}>
-          <HomeFirstRun onStart={startFirstSession} onDone={() => setFirstRun(false)} />
-        </Show>
-        <Show when={!showFirstRun()}>
-          <HomeDashboard
-            class="mx-auto w-full max-w-[1080px] px-3 pt-5 pb-2 lg:px-6"
-            onSettings={projects.utility.settings}
-            onNewChat={() => {
-              const conn = home.server.focused()
-              const project = home.project.newSession()
-              if (conn && project) home.project.openProjectNewSession(conn, project.worktree)
-            }}
-          />
-        </Show>
-        <div
-          classList={{ hidden: showFirstRun() }}
-          class={`
-            mx-auto grid min-h-full w-full max-w-[1080px] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 px-3
-            lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6
-          `}
+        <ScrollView
+          class="h-full [container-type:size]"
+          thumbContainer={scroll.viewport.thumbTrack}
+          thumbHoverTarget={scroll.viewport.hoverTarget}
+          viewportRef={scroll.viewport.setViewport}
+          onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
+          onWheel={scroll.viewport.containOuterWheel}
         >
-          <HomeProjects projects={projects} scroll={scroll} />
-          <HomeSessions sessions={sessions} search={search} scroll={scroll} />
-          <HomeUtilityNav
-            class="flex lg:hidden"
-            onOpenSettings={projects.utility.settings}
-            onOpenHelp={projects.utility.help}
-            language={projects.copy.language}
+          <Show when={showFirstRun()}>
+            <HomeFirstRun onStart={startFirstSession} onDone={() => setFirstRun(false)} />
+          </Show>
+          <Show when={!showFirstRun()}>
+            <HomeDashboard
+              class="mx-auto w-full max-w-[1080px] px-3 pt-5 pb-2 lg:px-6"
+              onSettings={projects.utility.settings}
+              onNewChat={() => {
+                const conn = home.server.focused()
+                const project = home.project.newSession()
+                if (conn && project) home.project.openProjectNewSession(conn, project.worktree)
+              }}
+            />
+          </Show>
+          <div
+            classList={{ hidden: showFirstRun() }}
+            class={`
+              mx-auto grid w-full max-w-[1080px] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 px-3
+              lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6
+            `}
+          >
+            <HomeProjects projects={projects} scroll={scroll} />
+            <HomeSessions sessions={sessions} search={search} scroll={scroll} />
+            <HomeUtilityNav
+              class="flex lg:hidden"
+              onOpenSettings={projects.utility.settings}
+              onOpenHelp={projects.utility.help}
+              language={projects.copy.language}
+            />
+          </div>
+        </ScrollView>
+      </div>
+      <Show when={panelOpen()}>
+        <div class="relative flex min-h-0 shrink-0" style={{ width: `${panelWidth()}px` }}>
+          <ResizeHandle
+            direction="horizontal"
+            edge="start"
+            size={panelWidth()}
+            min={360}
+            max={Math.max(360, Math.round(window.innerWidth * 0.65))}
+            onResize={setPanelWidth}
           />
+          <aside
+            aria-label="IRIS"
+            class={`
+              m-2 ml-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
+              bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
+            `}
+          >
+            <IrisPanel onClose={() => setPanelOpen(false)} />
+          </aside>
         </div>
-      </ScrollView>
+      </Show>
+      {/* The same toggle, in the same place, as a chat's side panel (session-header). */}
+      <Show when={titlebarRight()}>
+        {(mount) => (
+          <Portal mount={mount()}>
+            <Button
+              variant="ghost"
+              class="titlebar-icon w-8 h-6 p-0 box-border"
+              onClick={() => setPanelOpen((open) => !open)}
+              aria-label="Toggle the IRIS panel"
+              aria-expanded={panelOpen()}
+              title="IRIS panel"
+            >
+              <Icon size="small" name={panelOpen() ? "review-active" : "review"} />
+            </Button>
+          </Portal>
+        )}
+      </Show>
     </div>
   )
 }

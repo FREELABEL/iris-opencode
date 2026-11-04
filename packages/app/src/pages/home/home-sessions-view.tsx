@@ -102,14 +102,22 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
           </Show>
         </Suspense>
       </div>
-      <div class="pointer-events-none sticky top-[var(--hs-head)] z-40 h-0 -mr-3">
-        <div
-          ref={props.onSetThumbTrack}
-          data-component="home-session-scroll-track"
-          class="relative ml-auto h-[calc(100cqh-var(--hs-head))] w-3"
-        />
-      </div>
-      <div class="-mr-3 min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]">
+      {/* A window-high track overflows into the scroll height, so on Home (dashboard above) the page keeps
+          ScrollView's own thumb and only the drawer docks it beside the list. */}
+      <Show when={props.compact}>
+        <div class="pointer-events-none sticky top-[var(--hs-head)] z-40 h-0 -mr-3">
+          <div
+            ref={props.onSetThumbTrack}
+            data-component="home-session-scroll-track"
+            class="relative ml-auto h-[calc(100cqh-var(--hs-head))] w-3"
+          />
+        </div>
+      </Show>
+      <div
+        class="-mr-3"
+        // Fill the drawer; on Home the dashboard sits above, so the list is only as tall as it is.
+        classList={{ "min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]": !!props.compact }}
+      >
         <Suspense
           fallback={
             <div class="pt-3">

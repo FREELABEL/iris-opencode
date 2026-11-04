@@ -1,7 +1,6 @@
-import { For, Show, createMemo, createResource, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
-import { useTabs } from "@/context/tabs"
 import { openIrisPanel } from "@/components/session/iris-nav"
 import type { HeartbeatRow } from "@/components/session/iris-heartbeats-model"
 import { todayOf, type AgentsPayload, type HivePayload, type InboxPayload } from "./home-today-model"
@@ -17,6 +16,8 @@ import {
   type Indicator,
   type Tab,
 } from "./home-dashboard-model"
+import { sayingFor } from "./home-sayings"
+import { fetchHomeDashboard, homeDashboard, homeDashboardKey } from "./home-dashboard-data"
 import "./home-dashboard.css"
 
 /**
@@ -25,8 +26,6 @@ import "./home-dashboard.css"
  * tooltip, so the screen carries numbers rather than sentences.
  */
 
-type BeatsPayload = { measured: boolean; reason?: string | null; heartbeats: HeartbeatRow[] }
-type BloqsPayload = { measured: boolean; total?: number; bloqs: unknown[] }
 
 const PATHS: Record<string, string> = {
   clock: "M8 1.8a6.2 6.2 0 1 0 0 12.4A6.2 6.2 0 0 0 8 1.8zM8 4.6V8l2.3 1.5",
@@ -89,40 +88,23 @@ const TAB_LABEL: Record<Tab, string> = { attention: "Needs attention", active: "
 export function HomeDashboard(props: { class?: string; onNewChat?: () => void; onSettings?: () => void }) {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
-  const tabs = useTabs()
-  // Open Agents › Heartbeats in the panel of the chat you were last in (the panel lives in a chat).
-  const openHeartbeats = () => {
-    if (!tabs.store.length) return
-    openIrisPanel({ surface: "agents", sub: "heartbeats" })
-    tabs.toggleHome({ home: true })
-  }
-  const get = async <T,>(path: string, fallback: T): Promise<T> => {
-    try {
-      const res = await (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}${path}`, {
-        headers: { Accept: "application/json" },
-      })
-      if (!res.ok) return { ...fallback, reason: `engine ${res.status}` }
-      return (await res.json()) as T
-    } catch (e) {
-      return { ...fallback, reason: e instanceof Error ? e.message : String(e) }
-    }
-  }
-  const [data, { refetch }] = createResource(async () => {
-    const [hive, agents, inbox, bloqs, beats] = await Promise.all([
-      get<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
-      get<AgentsPayload>("/iris/agents-mine", { measured: false, agents: [] }),
-      get<InboxPayload>("/iris/inbox?perPage=1", { measured: false, unread: null }),
-      get<BloqsPayload>("/iris/bloqs?perPage=1", { measured: false, bloqs: [] }),
-      get<BeatsPayload>("/iris/heartbeats", { measured: false, heartbeats: [] }),
-    ])
-    return { hive, agents, inbox, bloqs, beats, at: Date.now() }
-  })
+  // Opens beside Home (#192535): no chat is chosen, and none is needed.
+  const openHeartbeats = () => openIrisPanel({ surface: "agents", sub: "heartbeats" })
+  const key = () => homeDashboardKey(serverSDK().url)
+  const fetcher = () => fetchHomeDashboard(serverSDK().url, platform.fetch ?? globalThis.fetch)
+  // The last good copy first — it outlives this page — and the fresh read lands behind it.
+  const [data, setData] = createSignal(homeDashboard.read(key(), fetcher))
+  onCleanup(homeDashboard.subscribe((k, value) => k === key() && setData(() => value)))
   const [now, setNow] = createSignal(Date.now())
   const timer = setInterval(() => {
     setNow(Date.now())
-    void refetch()
+    void homeDashboard.load(key(), fetcher).catch(() => {})
   }, 60_000)
   onCleanup(() => clearInterval(timer))
+  const user = createMemo(() => {
+    const list = data()?.accounts.accounts ?? []
+    return (list.find((a) => a.active) ?? list[0])?.id
+  })
 
   const [tab, setTab] = createSignal<Tab>("attention")
   const [page, setPage] = createSignal(1)
@@ -131,9 +113,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     setPage(1)
   }
 
-  const beats = () => data.latest?.beats.heartbeats ?? []
+  const beats = () => data()?.beats.heartbeats ?? []
   const tiles = createMemo(() => {
-    const d = data.latest
+    const d = data()
     return d ? todayOf(d.hive, d.agents, d.inbox) : []
   })
   const tile = (k: string) => tiles().find((t) => t.key === k)
@@ -143,17 +125,17 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     return overviewOf(beats(), now(), day.getTime())
   })
   const rows = createMemo(() => pageOf(tabRows(beats(), tab(), now()), page()))
-  const hive = () => data.latest?.hive
+  const hive = () => data()?.hive
   const online = () => hive()?.nodes.filter((n) => n.online) ?? []
   const freeSlots = () => online().reduce((s, n) => s + Math.max(0, (n.maxConcurrent ?? 0) - (n.activeTasks ?? 0)), 0)
   const models = () => new Set(online().flatMap((n) => n.modelsServing ?? [])).size
   const projects = () => {
-    const b = data.latest?.bloqs
+    const b = data()?.bloqs
     return b?.measured ? String(b.total ?? b.bloqs.length) : "—"
   }
 
   return (
-    <Show when={data.latest && (data.latest!.beats.measured || tiles().some((t) => t.measured))}>
+    <Show when={data() && (data()!.beats.measured || tiles().some((t) => t.measured))}>
       <div class={`ihd ${props.class ?? ""}`}>
         <div class="ihd-hello">
           <div>
@@ -162,7 +144,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
             <h1 class="ihd-h1">
               {greetingOf(new Date(now()).getHours())},<br />
-              <span class="ihd-grad">here's your operation.</span>
+              <span class="ihd-grad">{sayingFor(user(), new Date(now()))}</span>
             </h1>
             <div class="ihd-status">
               <Show when={ov().stopped}>
@@ -177,10 +159,10 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                   {online().length}/{hive()!.nodes.length} online
                 </span>
               </Show>
-              <Show when={data.latest?.inbox.measured && data.latest!.inbox.unread != null}>
+              <Show when={data()?.inbox.measured && data()!.inbox.unread != null}>
                 <span class="ihd-i" title="Unread in your Hive inbox">
                   <Icon name="mail" />
-                  {data.latest!.inbox.unread}
+                  {data()!.inbox.unread}
                 </span>
               </Show>
             </div>
@@ -238,7 +220,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </Show>
             <Mark a="var(--ihd-em)" b="var(--ihd-am)" shape="square" />
-            <div class="ihd-n">{data.latest?.beats.measured ? beats().length : "—"}</div>
+            <div class="ihd-n">{data()?.beats.measured ? beats().length : "—"}</div>
             <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
               Heartbeats
             </div>
@@ -272,7 +254,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
           <div class="ihd-stat" title={tile("inbox")?.detail}>
             <Mark a="var(--ihd-am)" b="var(--ihd-fu)" shape="square" />
-            <div class="ihd-n">{data.latest?.inbox.measured && data.latest!.inbox.unread != null ? data.latest!.inbox.unread : "—"}</div>
+            <div class="ihd-n">{data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}</div>
             <div class="ihd-label" style={{ color: "var(--ihd-am)" }}>
               Hive inbox
             </div>
@@ -285,7 +267,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
         </div>
 
-        <Show when={data.latest?.beats.measured}>
+        <Show when={data()?.beats.measured}>
           <section class="ihd-card" aria-label="Your agents">
             <div class="ihd-ah">
               <h2>Your agents</h2>
@@ -364,7 +346,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                     <div
                       class="ihd-tr"
                       data-indicator={a().indicator}
-                      title={tabs.store.length ? `${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)` : a().why}
+                      title={`${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)`}
                       role="button"
                       tabIndex={0}
                       onClick={openHeartbeats}

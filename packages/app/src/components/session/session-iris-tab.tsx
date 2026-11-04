@@ -72,7 +72,6 @@ import {
 } from "./iris-nav-layout"
 import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
 import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
-import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisHiveScripts } from "./iris-hive-scripts"
@@ -1259,7 +1258,6 @@ export function SessionIrisTab() {
   const dialog = useDialog()
   const language = useLanguage()
   const serverSDK = useServerSDK()
-  const sessionLayout = useSessionLayout()
   const platform = usePlatform()
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
@@ -1307,7 +1305,7 @@ export function SessionIrisTab() {
     }
   })()
   const sessionFiles = createMemo(() => {
-    const id = sessionLayout.params.id
+    const id = navParams.id
     if (!id || !dirSync) return []
     try {
       return promotedFiles((dirSync().data.message[id] ?? []) as any[])
@@ -1317,7 +1315,7 @@ export function SessionIrisTab() {
   })
   // Atlas › Artifacts (#187717): the session's Atlas notes, from its tool parts.
   const sessionNotes = createMemo(() => {
-    const id = sessionLayout.params.id
+    const id = navParams.id
     if (!id || !dirSync) return []
     try {
       const data = dirSync().data
@@ -3134,6 +3132,7 @@ export function SessionIrisTab() {
     chipScope.setChip({
       scope,
       label: scopeChipLabel(scope, project && hasBoards && activeBloq() ? activeBloqName() : undefined),
+      id: project && hasBoards ? (activeBloq() ?? undefined) : undefined,
       pick: project && hasBoards ? openBoardPicker : undefined,
     })
   })
@@ -4149,7 +4148,7 @@ export function SessionIrisTab() {
               session, not the board, and must render with no board chosen. */}
           <Match when={pane() === "atlas-artifacts"}>
             <IrisAtlasArtifacts
-              sessionId={sessionLayout.params.id}
+              sessionId={navParams.id}
               doFetch={doFetch}
               notes={sessionNotes}
               openExternal={(url) => platform.openExternal(url)}
@@ -4161,7 +4160,7 @@ export function SessionIrisTab() {
           <Match when={pane() === "artifacts"}>
             <IrisArtifacts
               doFetch={doFetch}
-              sessionId={sessionLayout.params.id}
+              sessionId={navParams.id}
               projectParam={projectParam()}
               project={projectDir()}
               bloqId={activeBloq()}
