@@ -28,6 +28,7 @@ describe("leads model", () => {
     expect(displayName({ id: 7 })).toBe("Lead #7")
     expect(initials({ id: 1, name: "Fast Friends Beer Co." })).toBe("FF")
     expect(initials({ id: 1, name: "---" })).toBe("?")
+    expect(initials({ id: 1, name: "@socialmediamaby" })).toBe("S")
   })
 
   test("zero value is not a value, an unknown status stays grey, and system notes aren't follow-ups", () => {

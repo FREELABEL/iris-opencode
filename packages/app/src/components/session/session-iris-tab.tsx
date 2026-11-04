@@ -53,6 +53,7 @@ import {
   openingSurface,
   panelScope,
   pinnedByChoice,
+  resolveSurfaceAlias,
   scopeChipLabel,
   visibleTabs,
 } from "./iris-panel-nav"
@@ -65,13 +66,14 @@ import {
   isNavItemVisible,
   legacyNavLayout,
   mergeNavLayout,
+  migrateNavLayout,
   parseNavLayout,
   setNavItemVisible,
   visibleNavItems,
   type NavLayout,
 } from "./iris-nav-layout"
 import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
-import { heldPayload, holdPayload, setSurfaceSync, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
+import { heldPayload, holdPayload, setSurfaceSync, surfaceCount, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
@@ -82,11 +84,11 @@ import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
-import { IrisReachrReview } from "./iris-reachr-review"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
-import { IrisLeads } from "./iris-leads"
+import { IrisReachrReview } from "./iris-reachr-review"
+import { IrisLeadsTab } from "./iris-leads-tab"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_ASSIGNED,
@@ -651,10 +653,10 @@ function normalizeGraphScope(v: unknown): GraphScope {
 const SURFACES = [
   { id: "atlas", label: "Atlas", path: (b: number) => `/iris/atlas/${b}` },
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
+  // #192544: Leads and Outreach are one tab. Approving outreach is an action on leads, so Reachr's
+  // queue is Leads › Needs approval. The `outreach` id (#192483) is an alias now (SURFACE_ALIASES),
+  // so old links, pins and stored panels still land there.
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
-  // #192483: Reachr Review promoted out of Leads — approving outreach is a job of its own, and a
-  // sub-tab two clicks deep is where it went unseen. Same pane as Leads › Outreach, which stays.
-  { id: "outreach", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
   // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
   { id: "marketing", label: "Marketing", path: () => `` },
   /*
@@ -708,6 +710,8 @@ interface SubView {
   slug?: string
   /** Open that page signed in as the IRIS user — no emailed code (#192482). The page must load iris-sdk 1.0.7+. */
   signIn?: true
+  /** A number the view's tab carries, from the surface store (#192544: Needs approval's in-review count). */
+  countOf?: string
 }
 
 /**
@@ -816,11 +820,11 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   // A pickup route (#189286): two ways in, one shape. There is deliberately no account route —
   // people in IRIS have contacts, not accounts. Both panes draw and fetch for themselves.
-  // ELON's leads experience (#190553), with the outreach review queue beside it (#191990). Both panes
-  // fetch for themselves, because their search and paging happen on the server.
+  // Elon's BloqLeadsTab (#190553, #192544), and Reachr's approval queue beside it (#191990) — the
+  // Outreach tab folded in. Both panes fetch for themselves (their search and paging are the server's).
   leads: [
     { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
-    { id: "review", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+    { id: "review", label: "Needs approval", pane: "reachr", path: () => `/iris/reachr`, countOf: "leads" },
   ],
   // Each a pinned Genesis page (#192480). The native Ads panel (#192320) replaces these when it lands.
   marketing: [
@@ -1017,7 +1021,8 @@ export function cellText(v: unknown): string {
 
 /** A persisted surface from an older build must not render a blank panel. */
 export function normalizeSurface(value: unknown): SurfaceId {
-  return SURFACES.some((s) => s.id === value) ? (value as SurfaceId) : "atlas"
+  const id = typeof value === "string" ? resolveSurfaceAlias(value).surface : value
+  return SURFACES.some((s) => s.id === id) ? (id as SurfaceId) : "atlas"
 }
 
 /**
@@ -1111,7 +1116,6 @@ const PANEL_HINTS: Record<string, string> = {
   "agents/rooms": "Group chats with several agents (@mention them)",
   "agents/live": "What an agent is doing right now — take over or hand back",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
-  leads: "Leads and contacts in the CRM",
   pages: "Genesis — web pages, sites, drafts and brand kits",
   "pages/pages": "Published and draft Genesis pages",
   "pages/sites": "Sites: pages under shared navigation, with a form inbox",
@@ -1126,9 +1130,9 @@ const PANEL_HINTS: Record<string, string> = {
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
   "pulse/contact": "Recent activity of one contact",
+  leads: "Leads — what needs approval, who replied, leads by stage; open one to work it",
   "leads/all": "Search, follow up on and manage leads",
-  "leads/review": "Review exact messages, approve some, hold others, and schedule the send",
-  outreach: "Outreach waiting for approval — review exact messages, approve or hold, schedule the send",
+  "leads/review": "Needs approval: review exact messages, approve some, hold others, and schedule the send",
   marketing: "Ads review — FREELABEL, Hive and X ads, with scores and notes",
   "marketing/freelabel-ads": "Review FREELABEL's ads: read each one, score it, leave a note",
   "marketing/hive-ads": "Hive's ads, searchable by angle, product or a phrase",
@@ -1195,7 +1199,8 @@ const persistLayout = (layout: NavLayout) => {
  */
 function savedNavLayout(): NavLayout | null {
   const saved = parseNavLayout(storage(NAV_LAYOUT_KEY))
-  if (saved) return saved
+  // Saved while Outreach was its own tab (#192483): it is Leads now, kept where they had it (#192544).
+  if (saved) return migrateNavLayout(saved)
   const legacy = legacyNavLayout(storage(LEGACY_PINS_KEY), storage(LEGACY_FILES_KEY), NAV_DEFAULT)
   if (legacy) persistLayout(mergeNavLayout(NAV_DEFAULT, legacy))
   return legacy
@@ -1221,6 +1226,16 @@ const irisPinnedSig = () =>
 windowIrisPanelScope.setSurface(
   normalizeSurface(openingSurface(normalizeSurface(storage(LAST_SURFACE_KEY) ?? irisPinnedSig()[0]), pinsRawSig())),
 )
+// Last on Outreach (#192483): that is Leads › Needs approval now (#192544). Rewritten once, so the
+// stored panel opens there this launch and on Leads, where the person leaves it, after.
+if (storage(LAST_SURFACE_KEY) === "outreach") {
+  try {
+    const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
+    const subs = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}
+    localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify({ ...subs, leads: "review" }))
+    localStorage.setItem(LAST_SURFACE_KEY, "leads")
+  } catch {}
+}
 /** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
@@ -1284,7 +1299,11 @@ export type { IrisScopeChip } from "@/context/iris-panel-scope"
 export function useRequestIrisSurface() {
   // Bound to the panel it is called under: the request goes to THIS column's IRIS tab (#191484).
   const scope = useIrisPanelScope()
-  return (surface: string, sub?: string) => scope.request({ surface: normalizeSurface(surface), sub })
+  return (surface: string, sub?: string) => {
+    // A retired id (Outreach, #192544) asks for the view that replaced it.
+    const to = resolveSurfaceAlias(surface, sub)
+    scope.request({ surface: normalizeSurface(to.surface), sub: to.sub })
+  }
 }
 
 /** The product a panel shows, for the code around it (the strip, the agent's panel report). */
@@ -1517,8 +1536,8 @@ export function SessionIrisTab() {
   const resolved = createMemo(() => resolvePane(surface(), subviews()[surface()]))
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
-  // #192483: the Outreach tab's in-review count, for the strip.
-  watchOutreachBadge({ doFetch, shown: () => irisPinnedSig().includes("outreach"), paneOpen: () => pane() === "reachr" })
+  // #192483, #192544: the Leads tab's in-review count, for the strip. The console counts for itself.
+  watchOutreachBadge({ doFetch, shown: () => irisPinnedSig().includes("leads"), paneOpen: () => pane() === "leads-crm" || pane() === "reachr" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
@@ -3078,9 +3097,10 @@ export function SessionIrisTab() {
     if (req.session ? req.session !== navParams.id : !navFocused()) return
     untrack(() => {
       if (req.bloqId && req.bloqId > 0) choose(req.bloqId)
-      const known = SURFACES.some((x) => x.id === req.surface)
-      if (known) chooseSurface(req.surface as SurfaceId)
-      if (req.sub) chooseSub(req.sub, known ? (req.surface as SurfaceId) : surface())
+      const to = resolveSurfaceAlias(req.surface ?? "", req.sub)
+      const known = SURFACES.some((x) => x.id === to.surface)
+      if (known) chooseSurface(to.surface as SurfaceId)
+      if (to.sub) chooseSub(to.sub, known ? (to.surface as SurfaceId) : surface())
       // A notification about a card, clicked: the board first, then the card itself (#189799).
       if (req.itemId && req.itemId > 0) {
         const id = req.itemId
@@ -3223,6 +3243,9 @@ export function SessionIrisTab() {
                     onClick={() => chooseSub(sv.id)}
                   >
                     {sv.label}
+                    <Show when={sv.countOf ? surfaceCount(sv.countOf) : undefined}>
+                      {(n) => <span class="iris-subnav__count">{n() > 99 ? "99+" : n()}</span>}
+                    </Show>
                   </button>
                 )}
               </For>
@@ -4166,7 +4189,7 @@ export function SessionIrisTab() {
             <IrisHeartbeats doFetch={doFetch} />
           </Match>
           <Match when={pane() === "leads-crm"}>
-            <IrisLeads doFetch={doFetch} bloqId={activeBloq() != null ? Number(activeBloq()) : undefined} />
+            <IrisLeadsTab doFetch={doFetch} bloqId={activeBloq() != null ? Number(activeBloq()) : undefined} onNeedsApproval={() => chooseSub("review", "leads")} />
           </Match>
           <Match when={pane() === "reachr"}>
             <IrisReachrReview doFetch={doFetch} />

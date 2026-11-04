@@ -1,17 +1,9 @@
 /* Desktop Leads (#190553). ELON's information in the panel's own type and tokens. No accent edges. */
 .iris-ld { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text-base); }
-.iris-ld-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); }
-.iris-ld-bar input, .iris-ld-bar select, .iris-ld-input { background: transparent; color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
-.iris-ld-bar input { flex: 1; min-width: 150px; }
-.iris-ld-list { flex: 1; min-height: 0; overflow-y: auto; }
-.iris-ld-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; width: 100%; text-align: start; background: none; border: 0; border-bottom: 1px solid var(--border-weaker-base); padding: 9px 10px; cursor: pointer; color: inherit; align-items: start; }
-.iris-ld-row:hover { background: var(--background-element); }
+.iris-ld-input { background: transparent; color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
 .iris-ld-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--background-element); color: var(--text-strong); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; flex-shrink: 0; }
-.iris-ld-name { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iris-ld-sub { font-size: 12px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .iris-ld-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; align-items: center; }
 .iris-ld-chip { font-size: 11px; color: var(--text-weak); border: 1px solid var(--border-weak-base); border-radius: 999px; padding: 0 7px; white-space: nowrap; line-height: 17px; }
-.iris-ld-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .iris-ld-pill { font-size: 11px; border-radius: 999px; padding: 0 8px; line-height: 18px; white-space: nowrap; color: var(--pill); background: color-mix(in srgb, var(--pill) 14%, transparent); }
 .iris-ld-when { font-size: 11px; color: var(--text-weak); white-space: nowrap; }
 .iris-ld-btn { border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
@@ -46,3 +38,6 @@
 .iris-ld-message strong { font-weight: 500; color: var(--text-strong); font-size: 13px; }
 .iris-ld-message p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-base); }
 .iris-ld-score { font-size: 28px; font-weight: 500; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+
+.iris-ld-addmore { background: none; border: 1px dashed var(--border-weak-base); border-radius: 6px; padding: 3px 8px; color: var(--text-weak); font-size: 12px; cursor: pointer; text-align: start; }
+.iris-ld-addmore:hover { color: var(--text-strong); border-color: var(--border-base, var(--border-weak-base)); }

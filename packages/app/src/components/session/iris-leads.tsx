@@ -1,58 +1,41 @@
-import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js"
+import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import "./iris-leads.css"
-import { IrisPager } from "./iris-pager"
-import { envelopeOf, pageSummary } from "./use-paged-surface"
 import {
   agoLine,
   displayName,
   humanDate,
   initials,
   isDone,
-  listQuery,
-  moneyLine,
-  noteCount,
   peopleNotes,
-  readList,
   statusColor,
   systemNotes,
-  urgencyOf,
   type LeadNote,
   type LeadRow,
   type LeadTask,
 } from "./iris-leads-model"
 
 /**
- * Desktop Leads (#190553, epic #190552): the experience people already know from ELON's
- * BloqLeadsTab and LeadSidePanel, against the same fl-api endpoints. Search, status and sort happen
- * on the server, so a lead past the first page can be found and the total is real.
+ * Desktop Leads (#190553, epic #190552): one lead, the way ELON's LeadSidePanel shows it, against the
+ * same fl-api endpoints. It slides in over the Leads tab's table (#192544, iris-leads-tab.tsx).
  */
-type Fetch = (path: string, init?: RequestInit) => Promise<Response>
-type Answer = { measured: boolean; reason?: string; data: any }
-type Op = { op: string; leadId?: number; taskId?: number; query?: Record<string, string>; body?: unknown }
+export type Fetch = (path: string, init?: RequestInit) => Promise<Response>
+export type Answer = { measured: boolean; reason?: string; data: any }
+export type Op = { op: string; leadId?: number; taskId?: number; query?: Record<string, string>; body?: unknown }
 
 const STATUSES = ["Prospected", "New", "Contacted", "Qualified", "Proposal", "Negotiation", "Won", "Lost", "On Hold", "Inactive"]
-const SORTS = [
-  { id: "updated_at", label: "Last updated" },
-  { id: "created_at", label: "Newest" },
-  { id: "nickname", label: "Name" },
-]
-const PER_PAGE = 50
 const TABS = ["Details", "Notes", "Tasks", "Outreach", "Pulse"] as const
 type Tab = (typeof TABS)[number]
 
-export function IrisLeads(props: { doFetch: Fetch; bloqId?: number }) {
-  const call = async (op: Op): Promise<Answer> => {
-    const res = await props.doFetch("/iris/leads-api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(op) })
-    return (await res.json().catch(() => ({ measured: false, reason: `HTTP ${res.status}`, data: null }))) as Answer
+/** Every leads read and write goes through the engine's one leads route, as ELON's do through fl-api. */
+export function leadsCall(doFetch: Fetch) {
+  return async (op: Op): Promise<Answer> => {
+    try {
+      const res = await doFetch("/iris/leads-api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(op) })
+      return (await res.json().catch(() => ({ measured: false, reason: `HTTP ${res.status}`, data: null }))) as Answer
+    } catch (e: any) {
+      return { measured: false, reason: String(e?.message ?? e), data: null }
+    }
   }
-  const [open, setOpen] = createSignal<LeadRow>()
-  return (
-    <div class="iris-ld" data-slot="iris-leads">
-      <Show when={open()} fallback={<LeadList call={call} bloqId={props.bloqId} onOpen={setOpen} />}>
-        {(lead) => <LeadDetail call={call} row={lead()} onBack={() => setOpen(undefined)} />}
-      </Show>
-    </div>
-  )
 }
 
 function StatusPill(props: { status?: string | null }) {
@@ -63,106 +46,7 @@ function StatusPill(props: { status?: string | null }) {
   )
 }
 
-function LeadList(props: { call: (o: Op) => Promise<Answer>; bloqId?: number; onOpen: (l: LeadRow) => void }) {
-  const [input, setInput] = createSignal("")
-  const [search, setSearch] = createSignal("")
-  const [status, setStatus] = createSignal("")
-  const [sort, setSort] = createSignal("updated_at")
-  const [rows, setRows] = createSignal<LeadRow[]>([])
-  const [page, setPage] = createSignal(1)
-  const [total, setTotal] = createSignal(0)
-  const [lastPage, setLastPage] = createSignal(1)
-  let list: HTMLDivElement | undefined
-  const [loading, setLoading] = createSignal(false)
-  const [error, setError] = createSignal<string>()
-
-  let timer: ReturnType<typeof setTimeout> | undefined
-  onCleanup(() => timer && clearTimeout(timer))
-  const onSearch = (v: string) => {
-    setInput(v)
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => setSearch(v), 300)
-  }
-
-  // A later answer always wins: a slow first search must not overwrite the newer one.
-  let latest = 0
-  async function load(p: number) {
-    const mine = ++latest
-    setLoading(true)
-    setError(undefined)
-    const r = await props.call({
-      op: "list",
-      query: listQuery({ bloqId: props.bloqId, search: search(), status: status(), sort: sort(), order: sort() === "nickname" ? "asc" : "desc", page: p }),
-    }).catch((e) => ({ measured: false, reason: String(e?.message ?? e), data: null }) as Answer)
-    if (mine !== latest) return
-    setLoading(false)
-    if (!r.measured) return setError(r.reason ?? "Couldn't read leads")
-    const found = readList(r.data)
-    setRows(found.rows)
-    setTotal(found.total)
-    setLastPage(found.lastPage)
-    setPage(p)
-    if (list) list.scrollTop = 0
-  }
-  createEffect(on([search, status, sort, () => props.bloqId], () => void load(1)))
-
-  return (
-    <>
-      <div class="iris-ld-bar">
-        <input type="search" placeholder="Search name, email, company…" aria-label="Search leads" value={input()} onInput={(e) => onSearch(e.currentTarget.value)} />
-        <select aria-label="Status" value={status()} onChange={(e) => setStatus(e.currentTarget.value)}>
-          <option value="">All statuses</option>
-          <For each={STATUSES}>{(s) => <option value={s}>{s}</option>}</For>
-        </select>
-        <select aria-label="Sort" value={sort()} onChange={(e) => setSort(e.currentTarget.value)}>
-          <For each={SORTS}>{(s) => <option value={s.id}>{s.label}</option>}</For>
-        </select>
-      </div>
-      <Show when={error()}><div class="iris-ld-error" role="alert">{error()}</div></Show>
-      <div class="iris-ld-list" ref={list}>
-        <For each={rows()} fallback={<div class="iris-ld-empty">{loading() ? "Loading…" : "No leads match"}</div>}>
-          {(l) => {
-            const urgency = urgencyOf(l.updated_at)
-            return (
-              <button type="button" class="iris-ld-row" data-slot="iris-lead-row" onClick={() => props.onOpen(l)}>
-                <span class="iris-ld-avatar">{initials(l)}</span>
-                <span style={{ "min-width": 0 }}>
-                  <div class="iris-ld-name">{displayName(l)}</div>
-                  <div class="iris-ld-sub">{[l.email, l.phone].filter(Boolean).join(" · ") || l.company || "No contact details"}</div>
-                  <div class="iris-ld-chips">
-                    <Show when={l.has_replied}><span class="iris-ld-chip">Replied</span></Show>
-                    <Show when={l.has_user_account}><span class="iris-ld-chip">User</span></Show>
-                    <Show when={(l.outreach_total_count ?? 0) > 0}><span class="iris-ld-chip">Outreach {l.outreach_completed_count ?? 0}/{l.outreach_total_count}</span></Show>
-                    <Show when={noteCount(l) > 0}><span class="iris-ld-chip">{noteCount(l)} notes</span></Show>
-                    <Show when={(l.tasks_count ?? 0) > 0}><span class="iris-ld-chip">{l.tasks_count} tasks</span></Show>
-                    <For each={(l.tags ?? []).slice(0, 3)}>{(t) => <span class="iris-ld-chip">{t.name}</span>}</For>
-                  </div>
-                </span>
-                <span class="iris-ld-right">
-                  <StatusPill status={l.status} />
-                  <Show when={urgency}>{(u) => <span class="iris-ld-pill" style={{ "--pill": u().color }}>{u().label}</span>}</Show>
-                  <span class="iris-ld-when">{agoLine(l.updated_at)}</span>
-                  <Show when={moneyLine(l.price_bid)}><span class="iris-ld-when">{moneyLine(l.price_bid)}</span></Show>
-                </span>
-              </button>
-            )
-          }}
-        </For>
-      </div>
-      <IrisPager
-        class="px-3 py-2"
-        summary={error() ? null : pageSummary({ shown: (page() - 1) * PER_PAGE + rows().length, env: envelopeOf({ page: page(), perPage: PER_PAGE, total: total(), lastPage: lastPage() }), noun: "leads" })}
-        loading={loading()}
-        hasMore={page() < lastPage()}
-        hasPrevious={page() > 1}
-        onPrevious={() => load(page() - 1)}
-        onNext={() => load(page() + 1)}
-      />
-    </>
-  )
-}
-
-function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadRow; onBack: () => void }) {
+export function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadRow; onBack: () => void; onSaved?: () => void; hideBack?: boolean }) {
   const id = props.row.id
   const [tab, setTab] = createSignal<Tab>("Details")
   const [error, setError] = createSignal<string>()
@@ -183,6 +67,7 @@ function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadRow; onB
       return false
     }
     await refetch()
+    props.onSaved?.()
     return true
   }
 
@@ -194,7 +79,9 @@ function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadRow; onB
   return (
     <>
       <div class="iris-ld-head">
-        <button type="button" class="iris-ld-back" onClick={props.onBack}>← Leads</button>
+        <Show when={!props.hideBack}>
+          <button type="button" class="iris-ld-back" onClick={props.onBack}>← Leads</button>
+        </Show>
         <div class="iris-ld-title">
           <span class="iris-ld-avatar">{initials(current())}</span>
           <h3>{displayName(current())}</h3>
@@ -240,11 +127,16 @@ const EDITABLE: { key: keyof LeadRow; label: string }[] = [
 function DetailsTab(props: { lead: LeadRow; onSave: (body: Record<string, unknown>) => Promise<boolean> }) {
   const [edits, setEdits] = createSignal<Record<string, string>>({})
   const [busy, setBusy] = createSignal(false)
+  const [addingDetails, setAddingDetails] = createSignal(false)
   const dirty = () => Object.keys(edits()).length > 0
+  // What is known leads; empty fields wait behind one "Add" line instead of a stack of blank inputs.
+  const filled = (f: (typeof EDITABLE)[number]) => f.key in edits() || String(props.lead[f.key] ?? "").trim() !== ""
+  const shown = () => EDITABLE.filter((f) => addingDetails() || filled(f))
+  const empty = () => EDITABLE.filter((f) => !filled(f))
   return (
     <>
       <dl class="iris-ld-fields">
-        <For each={EDITABLE}>
+        <For each={shown()}>
           {(f) => (
             <>
               <dt>{f.label}</dt>
@@ -254,6 +146,14 @@ function DetailsTab(props: { lead: LeadRow; onSave: (body: Record<string, unknow
             </>
           )}
         </For>
+        <Show when={!addingDetails() && empty().length > 0}>
+          <dt>Missing</dt>
+          <dd>
+            <button type="button" class="iris-ld-addmore" onClick={() => setAddingDetails(true)}>
+              + Add {empty().map((f) => f.label.toLowerCase()).join(", ")}
+            </button>
+          </dd>
+        </Show>
         <Show when={props.lead.source}><dt>Source</dt><dd>{props.lead.source}</dd></Show>
         <Show when={(props.lead.tags ?? []).length > 0}>
           <dt>Tags</dt>
