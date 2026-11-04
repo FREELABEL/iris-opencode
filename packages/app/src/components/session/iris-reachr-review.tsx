@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import "./iris-reachr-review.css"
+import { setSurfaceCount } from "./iris-surface-store"
 import {
   bucketOf,
   canApprove,
@@ -9,6 +10,7 @@ import {
   cleanForBulk,
   failureLine,
   FILTERS,
+  inReviewCount,
   matchesFilter,
   nextId,
   paceLine,
@@ -49,6 +51,12 @@ export function IrisReachrReview(props: { doFetch: Fetch }) {
 
   const [batches, { refetch: refetchBatches }] = createResource(() => read<ReviewBatch[]>("/iris/reachr/batches"))
   const [batch, { refetch: refetchBatch }] = createResource(batchId, (id) => read<ReviewBatch>(`/iris/reachr/batches/${id}`))
+
+  // The Outreach tab's badge follows what this pane last read — so approving here counts it down.
+  createEffect(() => {
+    const b = batches.latest
+    if (b?.measured) setSurfaceCount("outreach", inReviewCount(b.data))
+  })
 
   createEffect(() => {
     const first = batches()?.data?.[0]

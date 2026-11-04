@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { canApprove, canEdit, canHold, canRelease, cleanForBulk, failureLine, matchesFilter, nextId, paceLine, tally, type ReviewMessage } from "./iris-reachr-review-model"
+import { canApprove, canEdit, canHold, canRelease, cleanForBulk, failureLine, inReviewCount, matchesFilter, nextId, paceLine, tally, type ReviewMessage } from "./iris-reachr-review-model"
 
 const msg = (id: number, status: string): ReviewMessage => ({
   id, status, lead_id: 1, lead_name: null, to_email: null, to_name: null, group: null, subject: null, body: null,
@@ -49,5 +49,21 @@ describe("reachr review model", () => {
     expect(nextId(list, 1, -1)).toBe(1)
     expect(nextId(list, 99, 1)).toBe(1)
     expect(nextId([], 1, 1)).toBeUndefined()
+  })
+})
+
+describe("the Outreach tab's badge (#192483)", () => {
+  test("counts what the In review filter shows, across every batch", () => {
+    const batches: { counts: Record<string, number> }[] = [
+      { counts: { pending_approval: 3, approved: 2, sent: 9 } },
+      { counts: { draft: 1, held: 4 } },
+      { counts: {} },
+    ]
+    expect(inReviewCount(batches)).toBe(4)
+  })
+  test("no batches is 0; nothing to count from is unknown, not 0", () => {
+    expect(inReviewCount([])).toBe(0)
+    expect(inReviewCount(null)).toBeUndefined()
+    expect(inReviewCount(undefined)).toBeUndefined()
   })
 })

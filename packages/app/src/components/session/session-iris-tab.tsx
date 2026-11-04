@@ -83,6 +83,8 @@ import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { IrisReachrReview } from "./iris-reachr-review"
+import { watchOutreachBadge } from "./iris-outreach-badge"
+import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisLeads } from "./iris-leads"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
@@ -649,6 +651,11 @@ const SURFACES = [
   { id: "atlas", label: "Atlas", path: (b: number) => `/iris/atlas/${b}` },
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
+  // #192483: Reachr Review promoted out of Leads — approving outreach is a job of its own, and a
+  // sub-tab two clicks deep is where it went unseen. Same pane as Leads › Outreach, which stays.
+  { id: "outreach", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+  // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
+  { id: "marketing", label: "Marketing", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -678,7 +685,7 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
 
 interface SubView {
   id: string
@@ -690,6 +697,8 @@ interface SubView {
   default?: true
   /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
   empty?: string
+  /** A pinned Genesis page (#192480): `pane: "page"` frames freelabel.net/p/<slug>. Config, not code. */
+  slug?: string
 }
 
 /**
@@ -803,6 +812,12 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   leads: [
     { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
     { id: "review", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+  ],
+  // Each a pinned Genesis page (#192480). The native Ads panel (#192320) replaces these when it lands.
+  marketing: [
+    { id: "freelabel-ads", label: "FREELABEL ads", pane: "page", slug: "freelabel-ads-review", path: () => `` },
+    { id: "hive-ads", label: "Hive ads", pane: "page", slug: "hive-ads-review", path: () => `` },
+    { id: "x-ads", label: "X ads", pane: "page", slug: "x-ads-board", path: () => `` },
   ],
   pulse: [
     { id: "topic", label: "Topic", pane: "pulse-topic", path: () => `/iris/pulse/topic`, default: true },
@@ -1000,13 +1015,16 @@ export function normalizeSurface(value: unknown): SurfaceId {
 export function resolvePane(
   surface: SurfaceId,
   sub: string | undefined,
-): { sub?: SubView; pane: string; path: (b: number) => string } {
+): { sub?: SubView; pane: string; path: (b: number) => string; slug?: string } {
   const list = SUBVIEWS[surface]
   if (list?.length) {
     const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
-    return { sub: chosen, pane: chosen.pane, path: chosen.path }
+    return { sub: chosen, pane: chosen.pane, path: chosen.path, slug: chosen.slug }
   }
-  return { pane: surface, path: SURFACES.find((s) => s.id === surface)!.path }
+  // A surface with no sub-views may name its renderer (Outreach draws the `reachr` pane), and a
+  // pinned page its slug.
+  const s = SURFACES.find((x) => x.id === surface)! as (typeof SURFACES)[number] & { pane?: string; slug?: string }
+  return { pane: s.pane ?? surface, path: s.path, slug: s.slug }
 }
 
 /**
@@ -1094,6 +1112,11 @@ const PANEL_HINTS: Record<string, string> = {
   "pulse/contact": "Recent activity of one contact",
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Review exact messages, approve some, hold others, and schedule the send",
+  outreach: "Outreach waiting for approval — review exact messages, approve or hold, schedule the send",
+  marketing: "Ads review — FREELABEL, Hive and X ads, with scores and notes",
+  "marketing/freelabel-ads": "Review FREELABEL's ads: read each one, score it, leave a note",
+  "marketing/hive-ads": "Hive's ads, searchable by angle, product or a phrase",
+  "marketing/x-ads": "The X ads board: what is running, trend, creative, spend",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
   "playbooks/project": "Playbooks this project uses",
@@ -1476,6 +1499,8 @@ export function SessionIrisTab() {
   const resolved = createMemo(() => resolvePane(surface(), subviews()[surface()]))
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
+  // #192483: the Outreach tab's in-review count, for the strip.
+  watchOutreachBadge({ doFetch, shown: () => irisPinnedSig().includes("outreach"), paneOpen: () => pane() === "reachr" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
@@ -4127,6 +4152,17 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "reachr"}>
             <IrisReachrReview doFetch={doFetch} />
+          </Match>
+          {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug. */}
+          <Match when={pane() === "page" && resolved().slug}>
+            {(slug) => (
+              <IrisPinnedPage
+                slug={slug()}
+                label={resolved().sub?.label ?? paneLabel()}
+                doFetch={doFetch}
+                openExternal={(url) => platform.openExternal(url)}
+              />
+            )}
           </Match>
           <Match when={pane() === "pulse-topic"}>
             <IrisPulseTopic doFetch={doFetch} project={projectDir()} />

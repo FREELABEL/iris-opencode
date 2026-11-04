@@ -1129,8 +1129,22 @@ pub fn run() {
                       .map(|m| m.size().to_logical(m.scale_factor()))
                       .unwrap_or(LogicalSize::new(1920, 1080));
 
+                  // #192481: a target=_blank link or window.open — each ad's "live post" link in a
+                  // pinned Marketing page — lands here. With no handler wry returns no webview and
+                  // WKWebView drops the click without a word. Web links go to the system browser;
+                  // the app never opens a second webview window.
+                  let opener_app = app.clone();
                   let mut window_builder =
                       WebviewWindow::builder(&app, "main", WebviewUrl::App("/".into()))
+                          .on_new_window(move |url, _features| {
+                              if matches!(url.scheme(), "http" | "https") {
+                                  use tauri_plugin_opener::OpenerExt;
+                                  if let Err(e) = opener_app.opener().open_url(url.as_str(), None::<&str>) {
+                                      eprintln!("could not open {url} in the browser: {e}");
+                                  }
+                              }
+                              tauri::webview::NewWindowResponse::Deny
+                          })
                           .title("IRIS")
                           .inner_size(size.width as f64, size.height as f64)
                           .decorations(true)

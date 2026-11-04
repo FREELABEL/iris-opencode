@@ -3022,6 +3022,21 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 @media (prefers-reduced-motion: reduce) { .iris-sync[data-state="checking"] .iris-sync__dot { animation: none; } }
 /* A product tab showing something that is not current (offline, or the server refused). */
 .iris-tabdot { width: 6px; height: 6px; border-radius: 50%; background: var(--icon-warning-base, var(--text-strong)); flex-shrink: 0; }
+/* A product's count (#192483): a tinted pill in Reachr's emerald, never a bar. */
+.iris-tabcount {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #10b981 18%, transparent);
+  color: #10b981;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 .iris-notify {
   display: flex;
   flex-direction: column;

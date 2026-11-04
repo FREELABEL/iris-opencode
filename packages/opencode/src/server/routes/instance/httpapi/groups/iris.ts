@@ -3042,6 +3042,9 @@ export const IrisApi = HttpApi.make("iris").add(
             ),
             url: Schema.NullOr(Schema.String),
             reason: Schema.optional(Schema.String),
+            status: Schema.optional(
+              described(Schema.Number, "The page's final HTTP status, when it answered. A 404 frames fine, so the caller decides."),
+            ),
           }).annotate({ identifier: "IrisFrameCheck" }),
           "Whether a page can be shown in a frame inside the app",
         ),
