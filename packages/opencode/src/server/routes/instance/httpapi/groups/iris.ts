@@ -1795,6 +1795,7 @@ export const IrisPaths = {
   checkout: `${root}/checkout`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
+  pageSignIn: `${root}/page-signin`,
   panel: `${root}/panel`,
   panelState: `${root}/panel/state`,
   panelCommand: `${root}/panel/command`,
@@ -3139,6 +3140,28 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Can a page be framed",
           description:
             "A refused cross-origin frame fires load like a working one, and the deciding headers are invisible to the page — so the side panel's Browser tab asks the sidecar (#187864).",
+        }),
+      ),
+      HttpApiEndpoint.post("pageSignIn", IrisPaths.pageSignIn, {
+        payload: Schema.Struct({ slug: described(Schema.String, "The Genesis page to open signed in, e.g. lexicon-console.") }),
+        success: described(
+          Schema.Struct({
+            measured: described(Schema.Boolean, "False when no signed address could be made; the panel frames the plain page and `reason` says why."),
+            reason: Schema.optional(Schema.String),
+            url: described(
+              Schema.NullOr(Schema.String),
+              "https://freelabel.net/p/<slug>#atlas_code=<one-time code>. Single use, ~90 s, bound to this person and this page. Never cache it.",
+            ),
+            expiresIn: described(Schema.NullOr(Schema.Number), "Seconds the code stays spendable."),
+          }).annotate({ identifier: "IrisPageSignIn" }),
+          "A one-time signed address for a pinned page",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageSignIn",
+          summary: "Open a pinned Genesis page signed in",
+          description:
+            "A framed page cannot keep its sign-in cookie (WKWebView refuses third-party cookies; WebView2 refuses SameSite=Lax), so the sidecar asks fl-iris-api for a one-time code with the person's own token and the page's SDK trades it for a session held in memory (#192482). Mints on every call.",
         }),
       ),
       HttpApiEndpoint.get("panel", IrisPaths.panel, {

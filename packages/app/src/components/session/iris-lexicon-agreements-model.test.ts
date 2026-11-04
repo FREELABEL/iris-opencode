@@ -120,6 +120,7 @@ describe("lexicon agreements model (#192484)", () => {
     const r = resolvePane("lexicon", undefined)
     expect(r.sub?.id).toBe("agreements")
     expect(r.pane).toBe("lexicon-agreements")
-    expect(IRIS_PANEL_CATALOG.find((s) => s.id === "lexicon")?.subs.map((s) => s.id)).toEqual(["agreements"])
+    // Console (#192482) sits beside Agreements; Agreements stays the landing view.
+    expect(IRIS_PANEL_CATALOG.find((s) => s.id === "lexicon")?.subs.map((s) => s.id)).toEqual(["agreements", "console"])
   })
 })

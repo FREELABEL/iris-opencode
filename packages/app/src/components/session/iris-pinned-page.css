@@ -98,3 +98,14 @@
   gap: 6px;
   margin-top: 4px;
 }
+
+/* Whether the page was opened signed in (#192482). Text colour only — no edge bar. */
+.iris-pinned__signin {
+  flex: none;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--icon-success-active, var(--text-weak));
+}
+.iris-pinned__signin--off {
+  color: var(--text-weaker);
+}

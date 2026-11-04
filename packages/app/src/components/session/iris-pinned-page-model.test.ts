@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pageVerdict, pinnedPageUrl } from "./iris-pinned-page-model"
+import { pageSessionState, pageVerdict, pinnedPageUrl, signedFrameUrl } from "./iris-pinned-page-model"
 
 describe("a pinned Genesis page (#192480)", () => {
   test("the slug becomes a freelabel.net/p/ address", () => {
@@ -23,5 +23,44 @@ describe("a pinned Genesis page (#192480)", () => {
     expect(pageVerdict("x", {})).toEqual({ show: true })
     // An older sidecar answers without a status.
     expect(pageVerdict("x", { state: "embeddable" })).toEqual({ show: true })
+  })
+})
+
+describe("a pinned page opened signed in (#192482)", () => {
+  const CODE = "A".repeat(20) + "b_-" + "C".repeat(20)
+  test("the sidecar's address for this page is framed as signed in", () => {
+    const url = `https://freelabel.net/p/lexicon-console#atlas_code=${CODE}`
+    expect(signedFrameUrl("lexicon-console", { measured: true, url, expiresIn: 90 })).toEqual({ url, signed: true })
+  })
+  test("no answer, a refusal, another page or another origin frame the plain page with its own gate", () => {
+    const plain = "https://freelabel.net/p/lexicon-console"
+    expect(signedFrameUrl("lexicon-console", undefined)).toMatchObject({ url: plain, signed: false })
+    expect(signedFrameUrl("lexicon-console", { measured: false, reason: "not signed in to IRIS", url: null })).toEqual({
+      url: plain,
+      signed: false,
+      reason: "not signed in to IRIS",
+    })
+    for (const url of [
+      `https://freelabel.net/p/other-page#atlas_code=${CODE}`,
+      `https://evil.example/p/lexicon-console#atlas_code=${CODE}`,
+      `https://freelabel.net/p/lexicon-console?atlas_code=${CODE}`,
+      `https://freelabel.net/p/lexicon-console#atlas_code=${CODE}&x=<script>`,
+    ])
+      expect(signedFrameUrl("lexicon-console", { measured: true, url })).toMatchObject({ url: plain, signed: false })
+  })
+  test("only this tab's frame, on the page's origin, may report its sign-in", () => {
+    const frame = {}
+    const msg = (o: Partial<{ origin: string; source: unknown; data: unknown }>) => ({
+      origin: "https://freelabel.net",
+      source: frame,
+      data: { type: "iris:page-session", state: "refused", slug: "lexicon-console" },
+      ...o,
+    })
+    expect(pageSessionState(msg({}), frame, "lexicon-console")).toBe("refused")
+    expect(pageSessionState(msg({ origin: "https://evil.example" }), frame, "lexicon-console")).toBeNull()
+    expect(pageSessionState(msg({ source: {} }), frame, "lexicon-console")).toBeNull()
+    expect(pageSessionState(msg({ data: { type: "iris:page-session", state: "refused", slug: "x-ads-board" } }), frame, "lexicon-console")).toBeNull()
+    expect(pageSessionState(msg({ data: { type: "other", state: "refused", slug: "lexicon-console" } }), frame, "lexicon-console")).toBeNull()
+    expect(pageSessionState(msg({}), undefined, "lexicon-console")).toBeNull()
   })
 })

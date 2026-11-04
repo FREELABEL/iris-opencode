@@ -63,3 +63,43 @@ export function pageVerdict(slug: string, a: FrameCheckAnswer): PageVerdict {
     }
   return { show: true }
 }
+
+/**
+ * SIGNED IN (#192482). A pinned page with `signIn` is framed at an address the sidecar mints:
+ * /p/<slug>#atlas_code=<one-time code>, which the page's SDK (iris-sdk 1.0.7) trades for a session
+ * held in memory — the page's cookie cannot live in a frame from the app's origin (WKWebView refuses
+ * every third-party cookie; WebView2 refuses SameSite=Lax). The sidecar's answer, as POST
+ * /iris/page-signin returns it.
+ */
+export type PageSignInAnswer = { measured?: boolean; reason?: string; url?: string | null; expiresIn?: number | null } | undefined
+
+/**
+ * The address to frame, and whether it carries a sign-in. Only an address for THIS page on THIS
+ * origin is ever used; anything else — no answer, a refusal, a different page — frames the plain
+ * page, which shows its own sign-in gate. A failed sign-in never blocks the page.
+ */
+export function signedFrameUrl(slug: string, a: PageSignInAnswer): { url: string; signed: boolean; reason?: string } {
+  const plain = pinnedPageUrl(slug)
+  const url = a?.url
+  if (a?.measured && typeof url === "string" && url.startsWith(`${plain}#atlas_code=`) && /^[A-Za-z0-9_-]{43}$/.test(url.slice(plain.length + 12)))
+    return { url, signed: true }
+  return { url: plain, signed: false, reason: a?.reason ?? "IRIS could not sign you in to this page" }
+}
+
+/** A sign-in a frame refused (the code was spent or expired before it loaded) is retried this many times per reload. */
+export const SIGNIN_RETRIES = 1
+
+/**
+ * The page's own report about its sign-in, or null. Accepted only from the page's origin AND the
+ * frame this tab owns — another frame, or another page, saying "refused" must not make us mint.
+ */
+export function pageSessionState(
+  e: { origin: string; data: unknown; source: unknown },
+  frame: unknown,
+  slug: string,
+): "exchanging" | "signed_in" | "refused" | null {
+  if (e.origin !== PAGE_ORIGIN || !frame || e.source !== frame) return null
+  const d = e.data as { type?: unknown; state?: unknown; slug?: unknown } | null
+  if (!d || d.type !== "iris:page-session" || d.slug !== slug.trim().toLowerCase()) return null
+  return d.state === "exchanging" || d.state === "signed_in" || d.state === "refused" ? d.state : null
+}
