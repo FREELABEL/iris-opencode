@@ -29,9 +29,10 @@ export const LEGACY_FILES_KEY = "iris.panel.files"
  */
 export const DEFAULT_NAV_LAYOUT: NavLayout = {
   version: 2,
-  // Outreach (#192483) is shown: it is where approvals wait, and a hidden tab is the problem it
-  // fixes. After the file tree, so for a saved layout it lands after what the person arranged.
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "playbooks", "hive", "integrations", "mcp"],
+  // Outreach (#192483) and Marketing (#192481) are shown: approvals and ads review wait there, and
+  // a hidden tab is the problem they fix. After the file tree, so for a saved layout they land
+  // after what the person arranged.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "marketing", "leads", "playbooks", "hive", "integrations", "mcp"],
   hidden: [FILES_ITEM, "leads", "playbooks", "hive", "integrations", "mcp"],
 }
 

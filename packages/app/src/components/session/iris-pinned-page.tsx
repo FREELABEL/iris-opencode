@@ -3,6 +3,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import {
+  PAGE_ALLOW,
   PAGE_LOAD_TIMEOUT_MS,
   PAGE_SANDBOX,
   pageVerdict,
@@ -110,6 +111,7 @@ export function IrisPinnedPage(props: {
                 classList={{ "iris-pinned__frame--loading": phase().at === "loading" }}
                 title={props.label}
                 sandbox={PAGE_SANDBOX}
+                allow={PAGE_ALLOW}
                 referrerpolicy="strict-origin-when-cross-origin"
                 data-testid="pinned-page-frame"
                 onLoad={() => {

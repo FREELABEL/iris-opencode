@@ -375,3 +375,20 @@ describe("Playbooks › All", () => {
     expect(playbookSources({})).toBe("")
   })
 })
+
+describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
+  test("Outreach is a product that draws the reachr pane; Leads › Outreach still does too (#192483)", () => {
+    expect(normalizeSurface("outreach")).toBe("outreach")
+    expect(resolvePane("outreach", undefined).pane).toBe("reachr")
+    expect(resolvePane("leads", "review").pane).toBe("reachr")
+  })
+  test("Marketing's sub-tabs are pinned Genesis pages, by slug (#192480, #192481)", () => {
+    expect(SUBVIEWS.marketing!.map((s) => [s.label, s.pane, s.slug])).toEqual([
+      ["FREELABEL ads", "page", "freelabel-ads-review"],
+      ["Hive ads", "page", "hive-ads-review"],
+      ["X ads", "page", "x-ads-board"],
+    ])
+    expect(resolvePane("marketing", "x-ads")).toMatchObject({ pane: "page", slug: "x-ads-board" })
+    expect(resolvePane("marketing", undefined).slug).toBe("freelabel-ads-review")
+  })
+})

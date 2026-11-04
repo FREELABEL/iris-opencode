@@ -15,10 +15,23 @@ export const PAGE_LOAD_TIMEOUT_MS = 20_000
 
 /**
  * The sandbox for pinned pages: the Genesis preview's rule — scripts + same-origin, so the page's
- * own scripts and storage work in its own origin. Not granted: top navigation (a page cannot
- * replace the app).
+ * own scripts and storage work in its own origin — plus what S2's click-through of the Marketing
+ * pages found missing (#192481, every control clicked once inside the frame):
+ * - allow-popups + allow-popups-to-escape-sandbox: the ads pages link each ad to its live post with
+ *   target=_blank (hive-ads-review has ~155). Without it Chromium logs "Blocked opening … in a new
+ *   window" and the click does nothing. Escaping the sandbox means the opened post is a normal page.
+ * Not granted: top navigation (a page cannot replace the app), forms (no page submits a <form>;
+ * scores and notes are fetch calls, which work), downloads, modals.
  */
-export const PAGE_SANDBOX = "allow-scripts allow-same-origin"
+export const PAGE_SANDBOX = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+
+/**
+ * Permissions delegated to the frame (an `allow` attribute, not a sandbox flag). clipboard-write:
+ * freelabel-ads-review's template "Copy" buttons call navigator.clipboard.writeText, which a
+ * cross-origin frame may only do when the embedder delegates it — without it the button reads
+ * "Select it" and Chromium logs a permissions-policy violation.
+ */
+export const PAGE_ALLOW = "clipboard-write"
 
 export function pinnedPageUrl(slug: string): string {
   return `${PAGE_ORIGIN}/p/${encodeURIComponent(slug.trim())}`

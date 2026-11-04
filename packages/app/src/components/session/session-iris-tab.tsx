@@ -654,6 +654,8 @@ const SURFACES = [
   // #192483: Reachr Review promoted out of Leads — approving outreach is a job of its own, and a
   // sub-tab two clicks deep is where it went unseen. Same pane as Leads › Outreach, which stays.
   { id: "outreach", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+  // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
+  { id: "marketing", label: "Marketing", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -810,6 +812,12 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   leads: [
     { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
     { id: "review", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
+  ],
+  // Each a pinned Genesis page (#192480). The native Ads panel (#192320) replaces these when it lands.
+  marketing: [
+    { id: "freelabel-ads", label: "FREELABEL ads", pane: "page", slug: "freelabel-ads-review", path: () => `` },
+    { id: "hive-ads", label: "Hive ads", pane: "page", slug: "hive-ads-review", path: () => `` },
+    { id: "x-ads", label: "X ads", pane: "page", slug: "x-ads-board", path: () => `` },
   ],
   pulse: [
     { id: "topic", label: "Topic", pane: "pulse-topic", path: () => `/iris/pulse/topic`, default: true },
@@ -1105,6 +1113,10 @@ const PANEL_HINTS: Record<string, string> = {
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Review exact messages, approve some, hold others, and schedule the send",
   outreach: "Outreach waiting for approval — review exact messages, approve or hold, schedule the send",
+  marketing: "Ads review — FREELABEL, Hive and X ads, with scores and notes",
+  "marketing/freelabel-ads": "Review FREELABEL's ads: read each one, score it, leave a note",
+  "marketing/hive-ads": "Hive's ads, searchable by angle, product or a phrase",
+  "marketing/x-ads": "The X ads board: what is running, trend, creative, spend",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
   "playbooks/project": "Playbooks this project uses",
