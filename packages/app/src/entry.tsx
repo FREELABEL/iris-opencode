@@ -158,8 +158,9 @@ if (root instanceof HTMLElement) {
     clearAuthToken()
     if (auth) {
       // The IRIS panels call /iris with a bare fetch, as in the desktop window — see engine-auth.ts.
-      const port = Number(new URL(getCurrentUrl()).port)
-      if (port) globalThis.fetch = withEngineAuth(globalThis.fetch.bind(globalThis), engineOrigins(port), basicAuthorization(auth))
+      const engine = new URL(getCurrentUrl())
+      const origins = engineOrigins(Number(engine.port)).add(engine.origin)
+      globalThis.fetch = withEngineAuth(globalThis.fetch.bind(globalThis), origins, basicAuthorization(auth))
     }
     const server: ServerConnection.Http = {
       type: "http",
