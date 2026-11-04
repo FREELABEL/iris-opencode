@@ -4,7 +4,7 @@
  */
 
 /** Products that belong to the account or machine, not to a project. */
-export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp"])
+export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "outreach"])
 
 /** The pinned product ids from storage — unknown ids dropped, duplicates removed, never empty. */
 export function readPinnedIds<T extends string>(raw: string | null, valid: readonly string[], fallback: T[]): T[] {

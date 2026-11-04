@@ -83,6 +83,7 @@ import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { IrisReachrReview } from "./iris-reachr-review"
+import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisLeads } from "./iris-leads"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
@@ -649,6 +650,9 @@ const SURFACES = [
   { id: "atlas", label: "Atlas", path: (b: number) => `/iris/atlas/${b}` },
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
+  // #192483: Reachr Review promoted out of Leads — approving outreach is a job of its own, and a
+  // sub-tab two clicks deep is where it went unseen. Same pane as Leads › Outreach, which stays.
+  { id: "outreach", label: "Outreach", pane: "reachr", path: () => `/iris/reachr` },
   /*
    * GENESIS, not "Pages".
    *
@@ -1006,7 +1010,9 @@ export function resolvePane(
     const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
     return { sub: chosen, pane: chosen.pane, path: chosen.path }
   }
-  return { pane: surface, path: SURFACES.find((s) => s.id === surface)!.path }
+  // A surface with no sub-views may name its renderer (Outreach draws the `reachr` pane).
+  const s = SURFACES.find((x) => x.id === surface)!
+  return { pane: "pane" in s ? s.pane : surface, path: s.path }
 }
 
 /**
@@ -1094,6 +1100,7 @@ const PANEL_HINTS: Record<string, string> = {
   "pulse/contact": "Recent activity of one contact",
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Review exact messages, approve some, hold others, and schedule the send",
+  outreach: "Outreach waiting for approval — review exact messages, approve or hold, schedule the send",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
   "playbooks/project": "Playbooks this project uses",
@@ -1476,6 +1483,8 @@ export function SessionIrisTab() {
   const resolved = createMemo(() => resolvePane(surface(), subviews()[surface()]))
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
+  // #192483: the Outreach tab's in-review count, for the strip.
+  watchOutreachBadge({ doFetch, shown: () => irisPinnedSig().includes("outreach"), paneOpen: () => pane() === "reachr" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
