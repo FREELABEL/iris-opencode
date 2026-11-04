@@ -1567,6 +1567,87 @@ const ReachrResponse = Schema.Struct({
   data: Schema.Unknown,
 }).annotate({ identifier: "IrisReachrResponse" })
 
+/*
+ * Lexicon › Agreements (#192484). EVERY FIELD THE PANEL READS IS DECLARED. Schema strips what it was
+ * not told about, silently — the lesson of PR #459. src/iris/agreements.ts builds exactly these
+ * names and coerces their types, and test/server/httpapi-iris-agreements.test.ts proves each one
+ * survives the route. Add a field there, here and to the test together.
+ */
+const NullStr = Schema.NullOr(Schema.String)
+const AgreementPartyLink = Schema.Struct({
+  role: Schema.String,
+  name: NullStr,
+  status: Schema.String,
+  url: described(NullStr, "A BEARER signing link: anyone holding it can sign for this party."),
+}).annotate({ identifier: "IrisAgreementPartyLink" })
+const AgreementRow = Schema.Struct({
+  id: Schema.Finite,
+  type: Schema.String,
+  kind: NullStr,
+  counterparty: Schema.String,
+  org: NullStr,
+  email: NullStr,
+  disclosingParty: NullStr,
+  status: described(Schema.String, "draft | sent | opened | partially_signed | executed | declined | expired | revoked"),
+  tier: Schema.String,
+  subjectRef: NullStr,
+  issuedAt: NullStr,
+  executedAt: NullStr,
+  expiryDate: NullStr,
+  revokedAt: NullStr,
+  documentHash: NullStr,
+  signingUrl: NullStr,
+  partyLinks: Schema.Array(AgreementPartyLink),
+  live: Schema.Boolean,
+  partiesTotal: Schema.Finite,
+  partiesSigned: Schema.Finite,
+  waitingOn: NullStr,
+  waitingDays: described(Schema.NullOr(Schema.Finite), "Computed by fl-api, never here."),
+  expiringSoon: Schema.Boolean,
+  raisedByCaller: Schema.Boolean,
+}).annotate({ identifier: "IrisAgreement" })
+const AgreementSummary = Schema.Struct({
+  total: Schema.Finite,
+  awaiting: Schema.Finite,
+  executed: Schema.Finite,
+  expiringSoon: Schema.Finite,
+  revoked: Schema.Finite,
+}).annotate({ identifier: "IrisAgreementSummary" })
+const AgreementsResponse = Schema.Struct({
+  ...Measured,
+  summary: AgreementSummary,
+  agreements: Schema.Array(AgreementRow),
+}).annotate({ identifier: "IrisAgreementsResponse" })
+const AgreementDocument = Schema.Struct({
+  kind: NullStr,
+  title: NullStr,
+  reference: NullStr,
+  parties: Schema.Array(Schema.Struct({ role: Schema.String, name: NullStr, meta: NullStr })),
+  preamble: NullStr,
+  clauses: Schema.Array(Schema.Struct({ heading: NullStr, body: Schema.String })),
+  endNote: NullStr,
+  signatures: Schema.Array(Schema.Struct({ role: Schema.String, name: NullStr, method: NullStr, signedAt: NullStr })),
+  recordNote: NullStr,
+  integrityNote: NullStr,
+}).annotate({ identifier: "IrisAgreementDocument" })
+const AgreementDetailResponse = Schema.Struct({
+  ...Measured,
+  agreement: Schema.NullOr(AgreementRow),
+  document: Schema.NullOr(AgreementDocument),
+  seal: Schema.NullOr(
+    Schema.Struct({
+      status: described(Schema.String, "intact | mismatch | unsealed — stated, never just the hash"),
+      detail: NullStr,
+      chain: NullStr,
+    }),
+  ),
+  trail: Schema.Array(Schema.Struct({ seq: Schema.NullOr(Schema.Finite), action: Schema.String, ip: NullStr, at: NullStr })),
+}).annotate({ identifier: "IrisAgreementDetailResponse" })
+const AgreementActionResponse = Schema.Struct({
+  ...Measured,
+  agreement: Schema.NullOr(AgreementRow),
+}).annotate({ identifier: "IrisAgreementActionResponse" })
+
 export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
@@ -1629,6 +1710,10 @@ export const IrisPaths = {
   reachrBatches: `${root}/reachr/batches`,
   reachrBatch: `${root}/reachr/batches/:batchID`,
   reachrAction: `${root}/reachr/action`,
+  agreements: `${root}/agreements`,
+  agreement: `${root}/agreements/:agreementID`,
+  agreementIssue: `${root}/agreements/:agreementID/issue`,
+  agreementRevoke: `${root}/agreements/:agreementID/revoke`,
   leadsApi: `${root}/leads-api`,
   pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
@@ -3505,6 +3590,60 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.reachrAction",
           summary: "Decide on a batch or message",
           description: "Approving records a decision and sends nothing. There is deliberately no send action here: a message only leaves through a schedule.",
+        }),
+      ),
+      HttpApiEndpoint.get("agreements", IrisPaths.agreements, {
+        query: Schema.Struct({
+          case: described(Schema.optional(Schema.String), "A case id (the lead id) or synced case ref. Absent = every case."),
+          status: Schema.optional(Schema.String),
+          type: Schema.optional(Schema.String),
+        }),
+        success: described(AgreementsResponse, "Agreements filed against cases"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agreements", summary: "List case agreements (iris lexicon agreements list)" })),
+      HttpApiEndpoint.get("agreement", IrisPaths.agreement, {
+        params: { agreementID: Schema.NumberFromString },
+        success: described(AgreementDetailResponse, "One agreement: the document, its seal and its audit trail"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.agreement", summary: "Read an agreement (iris agreements show)" })),
+      HttpApiEndpoint.post("agreementRaise", IrisPaths.agreements, {
+        payload: Schema.Struct({
+          case: Schema.String,
+          type: Schema.String,
+          name: Schema.String,
+          firm: Schema.String,
+          email: Schema.optional(Schema.String),
+          org: Schema.optional(Schema.String),
+          template: Schema.optional(Schema.String),
+          body: Schema.optional(Schema.String),
+          term: Schema.optional(Schema.String),
+          expires: Schema.optional(Schema.String),
+        }),
+        success: described(AgreementActionResponse, "The draft fl-api raised"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agreementRaise",
+          summary: "Raise an agreement on a case, as a draft",
+          description: "Never issues: nothing reaches the counterparty until /issue is called for it.",
+        }),
+      ),
+      HttpApiEndpoint.post("agreementIssue", IrisPaths.agreementIssue, {
+        params: { agreementID: Schema.NumberFromString },
+        success: described(AgreementActionResponse, "Issued — the signing link was emailed"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agreementIssue",
+          summary: "Email the signing link (also re-sends)",
+          description: "OUTWARD-FACING: the counterparty receives an email. The panel confirms by name first.",
+        }),
+      ),
+      HttpApiEndpoint.post("agreementRevoke", IrisPaths.agreementRevoke, {
+        params: { agreementID: Schema.NumberFromString },
+        payload: Schema.Struct({ reason: described(Schema.String, "Recorded on the audit chain. Required.") }),
+        success: described(AgreementActionResponse, "Revoked — the access it authorised is closed"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agreementRevoke",
+          summary: "Revoke an agreement",
+          description: "OUTWARD-FACING: withdraws access the counterparty was relying on, from the next gate call.",
         }),
       ),
       HttpApiEndpoint.get("pulseContacts", IrisPaths.pulseContacts, {
