@@ -2007,19 +2007,30 @@ export interface Page {
   category?: string
 }
 
-export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages: Page[] }>> {
+/**
+ * A bloq's pages, or with `all` every page on the account — searched by iris-api (`search`), since
+ * 50 rows of an account are not the account and a filter over them would miss most matches.
+ */
+export async function fetchPages(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ pages: Page[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { pages: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  }
 
   try {
     // owner_type/owner_id is a NARROWING filter, which is the point: this used to be fetched
     // per-user and rendered under a project header, so the list could never change when you
     // switched project.
     const res = await irisFetch(
-      `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
+      opts.all
+        ? `/api/v1/pages?user_id=${userId}&per_page=50${opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""}`
+        : `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
       IRIS_API,
     )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { pages: [] } }

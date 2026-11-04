@@ -54,6 +54,14 @@ const SearchQuery = Schema.Struct({
   ),
 })
 
+const PagesQuery = Schema.Struct({
+  ...SearchQuery.fields,
+  scope: described(
+    Schema.optional(Schema.Literals(["project", "all"])),
+    '"all": every page on the account, searched by iris-api. Default: this bloq\'s pages.',
+  ),
+})
+
 const Measured = {
   measured: described(Schema.Boolean, "False means NOT MEASURED. Do not render the data as an empty result."),
   reason: Schema.optional(
@@ -2295,7 +2303,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("pages", IrisPaths.pages, {
-        query: SearchQuery,
+        query: PagesQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(PagesResponse, "Pages owned by this bloq"),
       }).annotateMerge(

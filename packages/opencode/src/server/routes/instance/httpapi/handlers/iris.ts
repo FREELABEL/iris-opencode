@@ -342,8 +342,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const pages = Effect.fn("IrisHttpApi.pages")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string } }) =>
-        Effect.promise(() => fetchPages(ctx.params.bloqID)).pipe(
+      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string; scope?: "project" | "all" } }) =>
+        Effect.promise(() => fetchPages(ctx.params.bloqID, { all: ctx.query.scope === "all", q: ctx.query.q })).pipe(
           Effect.map((r) => {
             const rows = filterRows(r.data.pages, ctx.query.q, (p) => [p.title, p.slug, p.status, p.category])
             const { items, meta } = pageOf(r, rows, ctx.query)

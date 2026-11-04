@@ -1487,8 +1487,10 @@ export function SessionIrisTab() {
    * that the crash needs a remembered board to reach the `page()` call at all.
    */
   const [page, setPage] = createSignal(1)
+  // Genesis › Pages: this project's pages, or every page on the account (2026-11-04).
+  const [pagesScope, setPagesScope] = createSignal<"project" | "all">("project")
 
-  type SurfaceKey = readonly [string, NonNullable<ReturnType<typeof activeBloq>>, SurfaceId, string, number, string]
+  type SurfaceKey = readonly [string, NonNullable<ReturnType<typeof activeBloq>>, SurfaceId, string, number, string, string]
   // Typed explicitly: left to inference, the fetcher's `info` argument made the resource's own
   // value type circular and every reader of data() saw {}.
   const [data, { refetch: refetchSurface }] = createResource<SurfacePayload, SurfaceKey>(
@@ -1498,21 +1500,21 @@ export function SessionIrisTab() {
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied()] as SurfaceKey) : undefined
+      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), pagesScope()] as SurfaceKey) : undefined
     },
-    async ([b, id, surf, sub, pageNo, q], info): Promise<SurfacePayload> => {
+    async ([b, id, surf, sub, pageNo, q, scope], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
       /*
        * BACK TO A VIEW YOU HAD: draw what we held, at once (#190231 phase 2). The effect below
        * (`__held`) refreshes it straight away; the chip says "Checking…" until it lands. Page 1
        * only — "Load more" is a choice made on that visit, not something to replay.
        */
-      const heldKey = `${b}|${id}|${surf}|${sub}|${q}`
+      const heldKey = `${b}|${id}|${surf}|${sub}|${q}|${scope}`
       if (!info.refetching && pageNo === 1) {
         const h = heldPayload<SurfacePayload>(heldKey)
         if (h) return { ...h, __held: true, __pane: which } as SurfacePayload
       }
-      const url = path(id)
+      const url = which === "pages" && scope === "all" ? `${path(id)}?scope=all` : path(id)
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
       // the rows already on screen would leave the footer counting a set it never searched.
@@ -3219,6 +3221,25 @@ export function SessionIrisTab() {
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
+          <Show when={pane() === "pages"}>
+            <div class="iris-scope-toggle" role="tablist" aria-label="Which pages">
+              <For each={[["all", "All"], ["project", "This project"]] as const}>
+                {([value, label]) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={pagesScope() === value}
+                    onClick={() => {
+                      setPagesScope(value)
+                      setPage(1)
+                    }}
+                  >
+                    {label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
           <Show when={applied()}>
             <button
               type="button"
