@@ -1,4 +1,5 @@
-// The window's side of the engine password (#190647).
+// The window's side of the engine password (#190647). Shared by the desktop window and the
+// browser entry (entry.tsx), which needs the same wrap when it is opened with ?auth_token= (#185797).
 //
 // lib.rs now starts the engine with a per-launch OPENCODE_SERVER_PASSWORD and hands it to this
 // window through the `engine_credentials` command. The sidecar connection carries it as

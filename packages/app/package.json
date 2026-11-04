@@ -9,6 +9,7 @@
     "./i18n/desktop-native": "./src/i18n/desktop-native.ts",
     "./polyfills": "./src/polyfills.ts",
     "./updater": "./src/updater.ts",
+    "./engine-auth": "./src/utils/engine-auth.ts",
     "./wsl/types": "./src/wsl/types.ts",
     "./vite": "./vite.js",
     "./index.css": "./src/index.css"

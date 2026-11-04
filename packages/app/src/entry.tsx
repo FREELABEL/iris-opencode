@@ -11,6 +11,7 @@ import { createBrowserDraftStore } from "@/utils/draft-store"
 import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { authFromToken } from "@/utils/server"
+import { basicAuthorization, engineOrigins, withEngineAuth } from "@/utils/engine-auth"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
 
@@ -155,6 +156,11 @@ if (root instanceof HTMLElement) {
   void loadInitialLocale().then((locale) => {
     const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
     clearAuthToken()
+    if (auth) {
+      // The IRIS panels call /iris with a bare fetch, as in the desktop window — see engine-auth.ts.
+      const port = Number(new URL(getCurrentUrl()).port)
+      if (port) globalThis.fetch = withEngineAuth(globalThis.fetch.bind(globalThis), engineOrigins(port), basicAuthorization(auth))
+    }
     const server: ServerConnection.Http = {
       type: "http",
       authToken: !!auth,
