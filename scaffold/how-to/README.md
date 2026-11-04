@@ -25,6 +25,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
 | "desktop offline", "atlas offline", "boards load slow", "Offline · copy from", "Updating… pill", "sync chip", "Checking…", "Synced · ago", "Couldn't update", "warning dot on tab", "local copy of boards", "turn off the cache", "patient data on disk", "includePhi" | `desktop-atlas-offline-copy.md` |
 | "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
+| "public form", "intake form", "referral form", "form submissions", "collect submissions", "let anyone submit", "write-only", "public submit", "form to dataset", "lead capture form" | `public-form-to-private-dataset.md` |
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
 | "diary", "daily diary", "log my day", "publish my notes", "sync daily-diary", "journal", "what did I do" | `diary.md` |
