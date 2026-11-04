@@ -84,6 +84,14 @@ const PLUG: Shape[] = [
   ["path", { d: "M15 8V2" }],
   ["path", { d: "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" }],
 ]
+// Lexicon (#192484) — lucide "scale", as the site's Solutions menu draws it.
+const SCALE: Shape[] = [
+  ["path", { d: "m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "M7 21h10" }],
+  ["path", { d: "M12 3v18" }],
+  ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
+]
 
 /** Surface id → glyph and colour. Colours are Tailwind's, as the site uses them. */
 export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
@@ -98,6 +106,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
+  lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
 }
 
 export function IrisProductIcon(props: { id: string; size?: number }) {

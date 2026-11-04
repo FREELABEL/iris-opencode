@@ -85,6 +85,7 @@ import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
+import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisLeads } from "./iris-leads"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
@@ -677,6 +678,9 @@ const SURFACES = [
   // Pulse (#189286) — heyiris.io/p/pulse-panel-directions. Account-wide like Hive: a topic or a
   // contact is not a board's, so the path ignores the argument.
   { id: "pulse", label: "Pulse", path: (_b: number) => `/iris/pulse` },
+  // Lexicon (#192484, epic #192479) — legal cases' agreements, native. Account-wide: an agreement is
+  // filed against a case, not a board.
+  { id: "lexicon", label: "Lexicon", path: (_b: number) => `/iris/agreements` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
   { id: "integrations", label: "Integrations", path: (b: number) => `/iris/integrations/${b}` },
 ] as const
@@ -686,6 +690,9 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
 const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
+// Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
+// edits to that list do not collide.
+SELF_PANES.add("lexicon-agreements")
 
 interface SubView {
   id: string
@@ -835,6 +842,11 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // THE OTHER HALF OF HIVE. The tab showed your own machines only; a peer connection — the
     // person whose agents can carry your work — had no surface at all.
     { id: "peers", label: "Peers", pane: "peers", path: () => `/iris/hive/peers` },
+  ],
+  lexicon: [
+    { id: "agreements", label: "Agreements", pane: "lexicon-agreements", path: () => `/iris/agreements`, default: true },
+    // TODO(#192482): a "Console" sub-tab framing the lexicon-console Genesis page (pane "page",
+    // slug "lexicon-console") once its OTP sign-in works inside the frame — see the spike on #192482.
   ],
 }
 
@@ -1126,6 +1138,8 @@ const PANEL_HINTS: Record<string, string> = {
   "integrations/organization": "Accounts shared across the organization",
   "integrations/user": "The user's personal connected accounts",
   "integrations/add": "Connect a new account (Gmail, Slack, …)",
+  lexicon: "Lexicon — legal cases: engagement letters, fee agreements and releases out for signature",
+  "lexicon/agreements": "Agreements on a case: what is awaiting signature, executed or revoked — raise, issue, revoke",
 }
 
 export const IRIS_PANEL_CATALOG: readonly {
@@ -4163,6 +4177,9 @@ export function SessionIrisTab() {
                 openExternal={(url) => platform.openExternal(url)}
               />
             )}
+          </Match>
+          <Match when={pane() === "lexicon-agreements"}>
+            <IrisLexiconAgreements doFetch={doFetch} />
           </Match>
           <Match when={pane() === "pulse-topic"}>
             <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
