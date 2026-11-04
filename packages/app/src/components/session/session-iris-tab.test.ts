@@ -377,10 +377,15 @@ describe("Playbooks › All", () => {
 })
 
 describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
-  test("Outreach is a product that draws the reachr pane; Leads › Outreach still does too (#192483)", () => {
-    expect(normalizeSurface("outreach")).toBe("outreach")
-    expect(resolvePane("outreach", undefined).pane).toBe("reachr")
+  test("Outreach is part of Leads now: the old id is Leads, whose Needs approval draws Reachr (#192544)", () => {
+    expect(normalizeSurface("outreach")).toBe("leads")
+    expect(resolvePane("leads", undefined).pane).toBe("leads-crm")
+    // Leads › Outreach kept its id (`review`), so a stored or deep-linked sub-view still lands on the queue.
     expect(resolvePane("leads", "review").pane).toBe("reachr")
+    expect(SUBVIEWS.leads!.map((s) => [s.id, s.label])).toEqual([
+      ["all", "Leads"],
+      ["review", "Needs approval"],
+    ])
   })
   test("Marketing's sub-tabs are pinned Genesis pages, by slug (#192480, #192481)", () => {
     expect(SUBVIEWS.marketing!.map((s) => [s.label, s.pane, s.slug])).toEqual([

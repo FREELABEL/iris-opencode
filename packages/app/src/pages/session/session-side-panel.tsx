@@ -330,7 +330,7 @@ export function SessionSidePanel(props: {
             <Show when={needsAttention(surfaceSync(id))}>
               <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
             </Show>
-            {/* A count the product keeps for its tab — Outreach's messages in review (#192483). */}
+            {/* A count the product keeps for its tab — Leads' messages in review (#192483, #192544). */}
             <Show when={surfaceCount(id)}>
               {(n) => (
                 <span class="iris-tabcount" data-testid={`iris-tabcount-${id}`} title={`${n()} in review`}>

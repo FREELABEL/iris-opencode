@@ -1,9 +1,11 @@
 /* Reachr Review (#191990). One accent for what needs a person; everything else stays on the neutral ramp. */
 .iris-rr { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text-base); container-type: inline-size; }
-.iris-rr-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: wrap; }
-.iris-rr-head select { max-width: 240px; background: transparent; color: var(--text-strong); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 4px 6px; font-size: 13px; font-weight: 500; }
-.iris-rr-meta { color: var(--text-weak); font-size: 12px; }
-.iris-rr-spacer { flex: 1; }
+/* One line at panel width (#192544): the batch picker gives way with an ellipsis, the actions stay together. */
+.iris-rr-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: nowrap; min-width: 0; }
+.iris-rr-head select { flex: 0 1 220px; min-width: 96px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; color: var(--text-strong); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 4px 6px; font-size: 13px; font-weight: 500; }
+.iris-rr-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-weak); font-size: 12px; }
+.iris-rr-head .iris-rr-btn { flex: none; }
+.iris-rr-spacer { flex: 1 0 0; }
 .iris-rr-btn { border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .iris-rr-btn:hover:not(:disabled) { background: var(--background-element); }
 .iris-rr-btn:disabled { opacity: 0.45; cursor: default; }
@@ -46,6 +48,7 @@
 .iris-rr-schedule input[type="number"] { width: 52px; }
 .iris-rr-empty { padding: 28px 16px; color: var(--text-weak); font-size: 13px; text-align: center; }
 @container (max-width: 560px) {
+  .iris-rr-head { flex-wrap: wrap; }
   .iris-rr-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 38%) 1fr; }
   .iris-rr-list { border-right: 0; border-bottom: 1px solid var(--border-weak-base); }
 }

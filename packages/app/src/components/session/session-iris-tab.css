@@ -320,6 +320,22 @@
   color: var(--text-base);
 }
 
+/* A view's count (#192544: Leads › Needs approval) — the strip's tinted pill, smaller. Never a bar. */
+.iris-subnav__count {
+  display: inline-block;
+  margin-left: 5px;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: color-mix(in srgb, #10b981 18%, transparent);
+  color: color-mix(in srgb, #10b981 78%, var(--text-strong));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .iris-subnav__item--active {
   color: var(--text-strong);
   border-bottom-color: var(--text-interactive-base);
@@ -2158,7 +2174,8 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 /* The scope chip on the side panel's product row (#187130 option C). It must not read as a tab or
    as a property of the product beside it: a hairline before it, muted type, no underline, no tab
    shape. It truncates before the tabs do — the tabs are navigation, the chip is context. */
-.iris-scopechip { flex: 0 1 auto; min-width: 3.5rem; max-width: 42%; display: flex; align-items: center; align-self: stretch; padding-inline-start: 8px; margin-inline-start: 2px; border-inline-start: 1px solid var(--border-weaker-base); }
+/* Capped (#192544): a long board name took the width the product tabs need, and "Marketing" was cut to "Mark". */
+.iris-scopechip { flex: 0 1 auto; min-width: 3.5rem; max-width: min(42%, 12rem); display: flex; align-items: center; align-self: stretch; padding-inline-start: 8px; margin-inline-start: 2px; border-inline-start: 1px solid var(--border-weaker-base); }
 .iris-scopechip__body { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 2px 6px; border-radius: 6px; font-size: 11px; line-height: 16px; color: var(--text-weak); white-space: nowrap; }
 .iris-scopechip__name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 button.iris-scopechip__body { cursor: pointer; }
