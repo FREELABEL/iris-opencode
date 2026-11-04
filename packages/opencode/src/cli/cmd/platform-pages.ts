@@ -14,6 +14,7 @@ import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
 import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd } from "./platform-pages-edge"
+import { AccessLinkCmd, AccessLinkListCmd, AccessLinkRevokeCmd } from "./platform-pages-access-link"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 import { firstArray } from "../../util/array"
 // GLD-01/02. Local file provenance and the three-way merge live in their own dependency-free
@@ -5888,6 +5889,9 @@ export const PlatformPagesCommand = productCommand({
       .command(withAccessFooter(ShareCmd))
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
+      .command(AccessLinkCmd)
+      .command(AccessLinkListCmd)
+      .command(AccessLinkRevokeCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
       .command(CheckPublicCmd)
