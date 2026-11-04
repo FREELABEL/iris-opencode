@@ -1,0 +1,77 @@
+/* Lexicon › Agreements (#192484). The Reachr Review layout; state is text colour and tint, never an edge bar. */
+.iris-lex { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text-base); container-type: inline-size; }
+.iris-lex [data-tone="good"] { color: var(--text-success-base, #10b981); }
+.iris-lex [data-tone="warn"] { color: var(--text-warning-base, #f59e0b); }
+.iris-lex [data-tone="bad"] { color: var(--text-critical-base, #ef4444); }
+.iris-lex-ic { display: inline-flex; flex-shrink: 0; }
+.iris-lex-spin { width: 14px; }
+.iris-lex-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: wrap; }
+.iris-lex-search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 2px 4px 2px 8px; color: var(--text-weak); min-width: 0; flex: 0 1 240px; }
+.iris-lex-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: 13px; padding: 3px 0; }
+.iris-lex-meta { color: var(--text-weak); font-size: 12px; }
+.iris-lex-spacer { flex: 1; }
+.iris-lex-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.iris-lex-btn:hover:not(:disabled) { background: var(--background-element); }
+.iris-lex-btn:disabled { opacity: 0.45; cursor: default; }
+.iris-lex-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: 500; }
+.iris-lex .iris-lex-btn[data-tone="bad"]:not([data-primary]) { color: var(--text-critical-base, #ef4444); }
+.iris-lex .iris-lex-btn[data-primary][data-tone="bad"] { background: var(--text-critical-base, #ef4444); border-color: var(--text-critical-base, #ef4444); color: #fff; }
+.iris-lex-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--text-weak); cursor: pointer; }
+.iris-lex-icon-btn:hover:not(:disabled) { background: var(--background-element); color: var(--text-strong); }
+.iris-lex-callout { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; padding: 7px 10px; border-radius: 6px; margin: 8px 12px 0; background: var(--background-element); }
+.iris-lex-detail .iris-lex-callout, .iris-lex-dialog .iris-lex-callout { margin: 0 0 10px; }
+.iris-lex-callout[data-tone="good"] { background: color-mix(in srgb, var(--text-success-base, #10b981) 10%, transparent); }
+.iris-lex-callout[data-tone="warn"] { background: color-mix(in srgb, var(--text-warning-base, #f59e0b) 10%, transparent); }
+.iris-lex-callout[data-tone="bad"] { background: color-mix(in srgb, var(--text-critical-base, #ef4444) 10%, transparent); }
+.iris-lex-filters { display: flex; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; }
+.iris-lex-filter { background: none; border: 0; color: var(--text-weak); font-size: 12px; padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.iris-lex-filter[aria-pressed="true"] { background: var(--background-element); color: var(--text-strong); }
+.iris-lex-filter span { font-variant-numeric: tabular-nums; opacity: 0.65; margin-left: 4px; }
+.iris-lex-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 36%) 1fr; }
+.iris-lex-list { overflow-y: auto; border-right: 1px solid var(--border-weaker-base); }
+.iris-lex-row { display: block; width: 100%; text-align: start; background: none; border: 0; border-bottom: 1px solid var(--border-weaker-base); padding: 8px 12px; cursor: pointer; color: inherit; }
+.iris-lex-row:hover, .iris-lex-row[aria-selected="true"] { background: var(--background-element); }
+.iris-lex-row-top { display: flex; align-items: baseline; gap: 6px; }
+.iris-lex-row-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-lex-row-sub { font-size: 12px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.iris-lex-state { font-size: 11px; color: var(--text-weak); white-space: nowrap; }
+.iris-lex-detail { overflow-y: auto; padding: 14px 16px 20px; min-width: 0; }
+.iris-lex-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.iris-lex-name { font-size: 15px; font-weight: 500; color: var(--text-strong); }
+.iris-lex-sub { font-size: 12px; color: var(--text-weak); margin-top: 2px; }
+.iris-lex-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--background-element); color: var(--text-weak); white-space: nowrap; }
+.iris-lex-pill[data-tone="good"] { background: color-mix(in srgb, var(--text-success-base, #10b981) 12%, transparent); }
+.iris-lex-pill[data-tone="warn"] { background: color-mix(in srgb, var(--text-warning-base, #f59e0b) 12%, transparent); }
+.iris-lex-pill[data-tone="bad"] { background: color-mix(in srgb, var(--text-critical-base, #ef4444) 12%, transparent); }
+.iris-lex-fields { display: grid; grid-template-columns: 64px 1fr; gap: 4px 10px; font-size: 12px; margin: 0 0 12px; }
+.iris-lex-fields dt { color: var(--text-weak); }
+.iris-lex-fields dd { margin: 0; color: var(--text-base); overflow-wrap: anywhere; }
+.iris-lex-section { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-weak); margin: 14px 0 6px; }
+.iris-lex-parties, .iris-lex-recipients, .iris-lex-trail { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.iris-lex-parties li, .iris-lex-recipients li { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.iris-lex-party-name { color: var(--text-strong); }
+.iris-lex-weak { color: var(--text-weak); font-size: 12px; }
+.iris-lex-trail li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border-weaker-base); }
+.iris-lex-doc { margin-top: 12px; font-size: 12px; border: 1px solid var(--border-weaker-base); border-radius: 6px; padding: 6px 10px; }
+.iris-lex-doc summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-strong); }
+.iris-lex-doc ol { padding-left: 18px; line-height: 1.55; }
+.iris-lex-doc-pre { color: var(--text-weak); }
+.iris-lex-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 16px; padding: 12px 0 14px; border-top: 1px solid var(--border-weaker-base); position: sticky; bottom: -20px; background: var(--background-base); }
+.iris-lex-empty { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px; color: var(--text-weak); font-size: 13px; text-align: center; }
+.iris-lex-form .iris-lex-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.iris-lex-grid label, .iris-lex-reason { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-weak); }
+.iris-lex-wide { grid-column: 1 / -1; }
+.iris-lex-grid input, .iris-lex-grid select, .iris-lex-grid textarea, .iris-lex-reason textarea { background: var(--background-element); color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; }
+.iris-lex-grid textarea { min-height: 140px; resize: vertical; line-height: 1.5; }
+.iris-lex-reason textarea { min-height: 64px; resize: vertical; margin-bottom: 4px; }
+.iris-lex-scrim { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--background-base) 70%, transparent); backdrop-filter: blur(2px); }
+.iris-lex-dialog { width: min(420px, 100%); background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 10px; padding: 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
+.iris-lex-dialog-icon { display: inline-flex; padding: 8px; border-radius: 999px; background: var(--background-element); color: var(--text-strong); margin-bottom: 10px; }
+.iris-lex-dialog-icon[data-tone="bad"] { background: color-mix(in srgb, var(--text-critical-base, #ef4444) 12%, transparent); }
+.iris-lex-dialog .iris-lex-recipients { margin: 10px 0 12px; padding: 6px 10px; border-radius: 6px; background: var(--background-element); }
+.iris-lex-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+@container (max-width: 560px) {
+  .iris-lex-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 38%) 1fr; }
+  .iris-lex-list { border-right: 0; border-bottom: 1px solid var(--border-weak-base); }
+  .iris-lex-form .iris-lex-grid { grid-template-columns: 1fr; }
+}
