@@ -391,4 +391,10 @@ describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
     expect(resolvePane("marketing", "x-ads")).toMatchObject({ pane: "page", slug: "x-ads-board" })
     expect(resolvePane("marketing", undefined).slug).toBe("freelabel-ads-review")
   })
+  test("Lexicon › Console is the lexicon-console page, opened signed in; Agreements stays the landing view (#192482)", () => {
+    expect(resolvePane("lexicon", "console")).toMatchObject({ pane: "page", slug: "lexicon-console", sub: { signIn: true } })
+    expect(resolvePane("lexicon", undefined).pane).toBe("lexicon-agreements")
+    // The Marketing pages are not signed in: a code is minted only where a tab asks for one.
+    expect(SUBVIEWS.marketing!.some((s) => s.signIn)).toBe(false)
+  })
 })

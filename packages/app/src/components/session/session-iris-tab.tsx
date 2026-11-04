@@ -706,6 +706,8 @@ interface SubView {
   empty?: string
   /** A pinned Genesis page (#192480): `pane: "page"` frames freelabel.net/p/<slug>. Config, not code. */
   slug?: string
+  /** Open that page signed in as the IRIS user — no emailed code (#192482). The page must load iris-sdk 1.0.7+. */
+  signIn?: true
 }
 
 /**
@@ -845,8 +847,10 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
   lexicon: [
     { id: "agreements", label: "Agreements", pane: "lexicon-agreements", path: () => `/iris/agreements`, default: true },
-    // TODO(#192482): a "Console" sub-tab framing the lexicon-console Genesis page (pane "page",
-    // slug "lexicon-console") once its OTP sign-in works inside the frame — see the spike on #192482.
+    // The lexicon-console Genesis page, signed in (#192482). Its emailed-code sign-in cannot work in
+    // a frame (the cookie is third-party here), so the sidecar mints a one-time code and the page's
+    // SDK trades it for a session held in memory. Needs fl-iris-api's page codes live first.
+    { id: "console", label: "Console", pane: "page", slug: "lexicon-console", signIn: true, path: () => `` },
   ],
 }
 
@@ -4172,6 +4176,7 @@ export function SessionIrisTab() {
             {(slug) => (
               <IrisPinnedPage
                 slug={slug()}
+                signIn={resolved().sub?.signIn === true}
                 label={resolved().sub?.label ?? paneLabel()}
                 doFetch={doFetch}
                 openExternal={(url) => platform.openExternal(url)}

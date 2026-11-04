@@ -6,9 +6,13 @@ import {
   PAGE_ALLOW,
   PAGE_LOAD_TIMEOUT_MS,
   PAGE_SANDBOX,
+  pageSessionState,
   pageVerdict,
   pinnedPageUrl,
+  signedFrameUrl,
+  SIGNIN_RETRIES,
   type FrameCheckAnswer,
+  type PageSignInAnswer,
   type PageVerdict,
 } from "./iris-pinned-page-model"
 import "./iris-pinned-page.css"
@@ -28,12 +32,57 @@ export function IrisPinnedPage(props: {
   label: string
   doFetch: (path: string, init?: RequestInit) => Promise<Response>
   openExternal: (url: string) => void
+  /**
+   * Open the page signed in as the IRIS user (#192482): the sidecar mints a one-time code and the
+   * frame loads /p/<slug>#atlas_code=<code>. A fresh code on every load and reload; one automatic
+   * retry when the page reports the code refused (spent or expired before it loaded).
+   */
+  signIn?: boolean
 }) {
+  // The plain address — what the bar shows and "Open in browser" opens. Never the signed one.
   const url = () => pinnedPageUrl(props.slug)
   const [phase, setPhase] = createSignal<Phase>({ at: "checking" })
   const [reloadKey, setReloadKey] = createSignal(0)
+  // What the frame loads, and a key that changes whenever a fresh code is minted.
+  const [frameSrc, setFrameSrc] = createSignal(url())
+  const [mintKey, setMintKey] = createSignal(0)
+  const [signIn, setSignIn] = createSignal<{ state: "off" | "pending" | "signed_in" | "failed"; reason?: string }>({ state: "off" })
+  let frameEl: HTMLIFrameElement | undefined
+  let retries = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   onCleanup(() => clearTimeout(timer))
+
+  // Never logged and never cached: each call is a new single-use code.
+  const mint = (slug: string) =>
+    props
+      .doFetch(`/iris/page-signin`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+      })
+      .then((r) => (r.ok ? (r.json() as Promise<PageSignInAnswer>) : undefined))
+      .catch(() => undefined)
+      .then((a) => signedFrameUrl(slug, a))
+
+  // The page tells us how its sign-in went. A refused code (it expired while the frame loaded, or
+  // was spent) gets one fresh code per reload; past that the page's own gate is what shows.
+  const onMessage = (e: MessageEvent) => {
+    if (!props.signIn) return
+    const state = pageSessionState(e, frameEl?.contentWindow, props.slug)
+    if (state === "signed_in") setSignIn({ state: "signed_in" })
+    if (state !== "refused") return
+    if (retries >= SIGNIN_RETRIES) return setSignIn({ state: "failed", reason: "the page refused the sign-in" })
+    retries++
+    const slug = props.slug
+    mint(slug).then((m) => {
+      if (slug !== props.slug) return
+      setSignIn(m.signed ? { state: "pending" } : { state: "failed", reason: m.reason })
+      setFrameSrc(m.url)
+      setMintKey((k) => k + 1)
+    })
+  }
+  window.addEventListener("message", onMessage)
+  onCleanup(() => window.removeEventListener("message", onMessage))
 
   createEffect(
     on([() => props.slug, reloadKey], ([slug, key]) => {
@@ -44,10 +93,22 @@ export function IrisPinnedPage(props: {
         .doFetch(`/iris/frame-check?${q}`, { headers: { Accept: "application/json" } })
         .then((r) => (r.ok ? (r.json() as Promise<FrameCheckAnswer>) : undefined))
         .catch(() => undefined)
-        .then((answer) => {
+        .then(async (answer) => {
           if (slug !== props.slug || key !== reloadKey()) return // a later reload won the race
           const v = pageVerdict(slug, answer)
           if (!v.show) return setPhase({ at: "error", ...v })
+          retries = 0
+          if (props.signIn) {
+            setSignIn({ state: "pending" })
+            const m = await mint(slug)
+            if (slug !== props.slug || key !== reloadKey()) return
+            setSignIn(m.signed ? { state: "pending" } : { state: "failed", reason: m.reason })
+            setFrameSrc(m.url)
+          } else {
+            setSignIn({ state: "off" })
+            setFrameSrc(pinnedPageUrl(slug))
+          }
+          setMintKey((k) => k + 1)
           setPhase({ at: "loading" })
           timer = setTimeout(() => {
             if (phase().at === "loading")
@@ -66,11 +127,31 @@ export function IrisPinnedPage(props: {
   const framed = () => phase().at === "loading" || phase().at === "ready"
 
   return (
-    <div class="iris-pinned" data-component="iris-pinned-page" data-slug={props.slug} data-phase={phase().at}>
+    <div
+      class="iris-pinned"
+      data-component="iris-pinned-page"
+      data-slug={props.slug}
+      data-phase={phase().at}
+      data-signin={signIn().state}
+    >
       <div class="iris-pinned__bar">
         <span class="iris-pinned__where" title={url()}>
           freelabel.net/p/<b>{props.slug}</b>
         </span>
+        <Show when={signIn().state === "signed_in"}>
+          <span class="iris-pinned__signin" data-slot="pinned-signed-in" title="Signed in with your IRIS account — no emailed code">
+            signed in
+          </span>
+        </Show>
+        <Show when={signIn().state === "failed"}>
+          <span
+            class="iris-pinned__signin iris-pinned__signin--off"
+            data-slot="pinned-signin-failed"
+            title={`Not signed in automatically: ${signIn().reason ?? "unknown"}. The page's own sign-in still works.`}
+          >
+            not signed in
+          </span>
+        </Show>
         <IconButton icon="arrow-undo-down" variant="ghost" class="h-6 w-6" onClick={reload} aria-label="Reload" title="Reload" />
         <IconButton
           icon="square-arrow-top-right"
@@ -104,9 +185,10 @@ export function IrisPinnedPage(props: {
             )}
           </Match>
           <Match when={framed()}>
-            <Show when={`${props.slug}#${reloadKey()}`} keyed>
+            <Show when={`${props.slug}#${reloadKey()}#${mintKey()}`} keyed>
               <iframe
-                src={url()}
+                ref={frameEl}
+                src={frameSrc()}
                 class="iris-preview iris-pinned__frame"
                 classList={{ "iris-pinned__frame--loading": phase().at === "loading" }}
                 title={props.label}
