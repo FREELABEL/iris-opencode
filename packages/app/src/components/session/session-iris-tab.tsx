@@ -84,6 +84,7 @@ import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { watchOutreachBadge } from "./iris-outreach-badge"
+import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisLeads } from "./iris-leads"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
@@ -682,7 +683,7 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox"])
+const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
 
 interface SubView {
   id: string
@@ -694,6 +695,8 @@ interface SubView {
   default?: true
   /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
   empty?: string
+  /** A pinned Genesis page (#192480): `pane: "page"` frames freelabel.net/p/<slug>. Config, not code. */
+  slug?: string
 }
 
 /**
@@ -1004,15 +1007,16 @@ export function normalizeSurface(value: unknown): SurfaceId {
 export function resolvePane(
   surface: SurfaceId,
   sub: string | undefined,
-): { sub?: SubView; pane: string; path: (b: number) => string } {
+): { sub?: SubView; pane: string; path: (b: number) => string; slug?: string } {
   const list = SUBVIEWS[surface]
   if (list?.length) {
     const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
-    return { sub: chosen, pane: chosen.pane, path: chosen.path }
+    return { sub: chosen, pane: chosen.pane, path: chosen.path, slug: chosen.slug }
   }
-  // A surface with no sub-views may name its renderer (Outreach draws the `reachr` pane).
-  const s = SURFACES.find((x) => x.id === surface)!
-  return { pane: "pane" in s ? s.pane : surface, path: s.path }
+  // A surface with no sub-views may name its renderer (Outreach draws the `reachr` pane), and a
+  // pinned page its slug.
+  const s = SURFACES.find((x) => x.id === surface)! as (typeof SURFACES)[number] & { pane?: string; slug?: string }
+  return { pane: s.pane ?? surface, path: s.path, slug: s.slug }
 }
 
 /**
@@ -4136,6 +4140,17 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "reachr"}>
             <IrisReachrReview doFetch={doFetch} />
+          </Match>
+          {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug. */}
+          <Match when={pane() === "page" && resolved().slug}>
+            {(slug) => (
+              <IrisPinnedPage
+                slug={slug()}
+                label={resolved().sub?.label ?? paneLabel()}
+                doFetch={doFetch}
+                openExternal={(url) => platform.openExternal(url)}
+              />
+            )}
           </Match>
           <Match when={pane() === "pulse-topic"}>
             <IrisPulseTopic doFetch={doFetch} project={projectDir()} />

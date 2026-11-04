@@ -1275,8 +1275,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         const url = frameTarget(ctx.query.url)
         if (!url) return { state: "invalid" as const, url: null }
         const probe = await probeFrame(url, ctx.query.origin)
-        if (probe.state === "embeddable") return { state: probe.state, url }
-        return { state: probe.state, url, reason: probe.reason }
+        if (probe.state === "embeddable") return { state: probe.state, url, status: probe.status }
+        return { state: probe.state, url, reason: probe.reason, ...(probe.state === "refused" ? { status: probe.status } : {}) }
       }),
     )
 
