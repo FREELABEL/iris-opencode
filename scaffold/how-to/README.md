@@ -20,6 +20,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "template", "starter template", "start from a template", "clone a page in my brand", "genesis-ui.com", "use this template", "make it my brand" | `genesis-starter-templates.md` |
 | "make my page a template", "brand tokens", "any brand can use it", "submit a template", "template gallery" | `genesis-make-a-template.md` |
 | "make it private", "don't publish it", "not visible", "share privately", "auth gate", "who can see this page", "unpublish", "lock it down" | `page-privacy.md` |
+| "sign-in link", "skip the code", "without the OTP", "no code", "magic link", "access link", "invite to a gated page", "let staff in", "login link", "send them a link to sign in" | `personal-sign-in-links.md` |
 | "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
 | "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
