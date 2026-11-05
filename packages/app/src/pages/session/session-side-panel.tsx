@@ -21,7 +21,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
-import { Mark } from "@opencode-ai/ui/logo"
+import { IrisMark } from "@/components/iris-mark"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
@@ -714,7 +714,7 @@ export function SessionSidePanel(props: {
                             <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                                 <div class="h-full px-6 pb-42 -mt-4 flex flex-col items-center justify-center text-center gap-6">
-                                  <Mark class="w-14 opacity-10" />
+                                  <IrisMark class="size-14 rounded-[12px] opacity-10" />
                                   <div class="text-14-regular text-text-weak max-w-56">
                                     {language.t("session.files.selectToOpen")}
                                   </div>
@@ -991,7 +991,7 @@ export function SessionSidePanel(props: {
                           <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                               <div class="h-full px-6 pb-42 -mt-4 flex flex-col items-center justify-center text-center gap-6">
-                                <Mark class="w-14 opacity-10" />
+                                <IrisMark class="size-14 rounded-[12px] opacity-10" />
                                 <div class="text-14-regular text-text-weak max-w-56">
                                   {language.t("session.files.selectToOpen")}
                                 </div>
