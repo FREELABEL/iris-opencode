@@ -264,7 +264,8 @@ const QueueCommand = cmd({
       return
     }
     if (!(await handleApiError(res, "Read queue"))) { process.exitCode = 1; if (!isJson) prompts.outro("Done"); return }
-    let rows: any[] = ((await res.json().catch(() => ({}))) as any)?.data ?? []
+    const got = ((await res.json().catch(() => ({}))) as any)?.data
+    let rows: any[] = Array.isArray(got) ? got : []
     if (args.status) rows = rows.filter((r) => String(r.review_status ?? r.stage_name ?? "").toLowerCase() === String(args.status).toLowerCase())
     if (isJson) { await writeJson(rows); return }
     if (!rows.length) { prompts.outro("Nothing in the queue"); return }
