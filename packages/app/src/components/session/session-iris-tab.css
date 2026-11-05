@@ -2181,6 +2181,11 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 button.iris-scopechip__body { cursor: pointer; }
 button.iris-scopechip__body:hover { color: var(--text-strong); background: var(--background-element); }
 .iris-scopechip__chev { flex-shrink: 0; opacity: .7; }
+.iris-scope-toggle { display: inline-flex; flex-shrink: 0; gap: 2px; margin-left: 8px; }
+.iris-scope-toggle button { font-size: 12px; padding: 3px 8px; border-radius: 6px; opacity: .7; }
+.iris-scope-toggle button:hover { opacity: 1; }
+.iris-scope-toggle button[aria-selected="true"] { opacity: 1; color: var(--text-strong); background: var(--background-element); }
+.iris-scopechip__id { flex-shrink: 0; font-family: var(--font-family-mono, ui-monospace, monospace); font-size: .92em; opacity: .5; }
 @keyframes iris-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
 /* One-line artifact toolbar: ‹ All ▾ │ title · author  …  Save · Publish. The publish component
    joins the row (display: contents); its form wraps onto a full-width line underneath. */

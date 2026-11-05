@@ -6,7 +6,7 @@
   --ihd-grad: linear-gradient(90deg, #d946ef, #3b82f6, #22d3ee);
   --ihd-btn: linear-gradient(90deg, #9333ea, #2563eb);
   --ihd-line: var(--v2-border-border-base);
-  --ihd-card: var(--v2-background-bg-layer-01);
+  --ihd-card: transparent;
   --ihd-ink: var(--v2-text-text-base);
   --ihd-mute: var(--v2-text-text-muted);
   --ihd-faint: var(--v2-text-text-faint);
@@ -78,3 +78,20 @@
 .ihd-legend svg { width: 13px; height: 13px; }
 .ihd-empty { color: var(--ihd-mute); font-size: 12.5px; padding: 14px 4px; }
 .ihd-tr[role="button"] { cursor: pointer; } .ihd-tr[role="button"]:hover { background: color-mix(in srgb, var(--ihd-line) 35%, transparent); }
+/* The card's views (#192535): Activity | Agents | Inbox. */
+.ihd-views { display: flex; gap: 2px; margin: -2px 0 10px; border-bottom: 1px solid var(--ihd-line); }
+.ihd-view { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--ihd-mute); padding: 6px 10px 8px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.ihd-view:hover { color: var(--ihd-ink); }
+.ihd-view[aria-selected="true"] { color: var(--ihd-ink); border-bottom-color: var(--ihd-ink); }
+.ihd-view span { font: 500 11px/1 var(--ihd-mono); color: var(--ihd-mute); }
+.ihd-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ihd-bad); display: inline-block; }
+.ihd-sum { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 10px; font-size: 12.5px; color: var(--ihd-mute); }
+.ihd-sum b { font: 500 12.5px var(--ihd-mono); color: var(--ihd-ink); }
+.ihd-sum [data-tone="bad"], .ihd-sum [data-tone="bad"] b { color: var(--ihd-bad); }
+.ihd-sum [data-tone="warn"], .ihd-sum [data-tone="warn"] b { color: var(--ihd-am); }
+.ihd-fr { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 64px 44px; gap: 12px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--ihd-line); font-size: 13px; cursor: pointer; border-radius: 6px; }
+.ihd-fr:hover { background: color-mix(in srgb, var(--ihd-line) 35%, transparent); }
+.ihd-fr[data-unread] .ihd-name { color: var(--ihd-ink); }
+.ihd-fr:not([data-unread]) .ihd-name { color: var(--ihd-ink); }
+.ihd-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ihd-age { text-align: right; font-family: var(--ihd-mono); }

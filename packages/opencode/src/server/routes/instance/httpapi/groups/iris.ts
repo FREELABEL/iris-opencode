@@ -54,6 +54,14 @@ const SearchQuery = Schema.Struct({
   ),
 })
 
+const PagesQuery = Schema.Struct({
+  ...SearchQuery.fields,
+  scope: described(
+    Schema.optional(Schema.Literals(["project", "all"])),
+    '"all": every page on the account, searched by iris-api. Default: this bloq\'s pages.',
+  ),
+})
+
 const Measured = {
   measured: described(Schema.Boolean, "False means NOT MEASURED. Do not render the data as an empty result."),
   reason: Schema.optional(
@@ -641,6 +649,25 @@ const InboxResponse = Schema.Struct({
     "Unread first, then newest first.",
   ),
 }).annotate({ identifier: "IrisInboxResponse" })
+
+const RecentResponse = Schema.Struct({
+  ...Measured,
+  ...Paged,
+  items: described(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        title: Schema.String,
+        bloqId: Schema.Finite,
+        bloqName: Schema.optional(Schema.String),
+        listName: Schema.optional(Schema.String),
+        createdAt: Schema.optional(Schema.String),
+        updatedAt: Schema.optional(Schema.String),
+      }).annotate({ identifier: "IrisRecentItem" }),
+    ),
+    "Newest first, across every board the account can see.",
+  ),
+}).annotate({ identifier: "IrisRecentResponse" })
 
 const InboxMessageResponse = Schema.Struct({
   ...Measured,
@@ -1651,6 +1678,7 @@ const AgreementActionResponse = Schema.Struct({
 export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
+  recent: `${root}/recent`,
   inbox: `${root}/inbox`,
   inboxMessage: `${root}/inbox/:index`,
   inboxRead: `${root}/inbox/:index/read`,
@@ -2040,6 +2068,17 @@ export const IrisApi = HttpApi.make("iris").add(
             "Every bloq on the account, for a project picker. The desktop app has no bloq concept of its own and six platform surfaces are bloq-scoped, so without this a caller has to hardcode an id.",
         }),
       ),
+      HttpApiEndpoint.get("recent", IrisPaths.recent, {
+        query: PageQuery,
+        success: described(RecentResponse, "Recently created or edited board items"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.recent",
+          summary: "Recent board items",
+          description:
+            "The account's most recently created or edited board items, newest first, across every board (Home › Activity). iris-api's Atlas search with an empty query.",
+        }),
+      ),
       HttpApiEndpoint.get("inbox", IrisPaths.inbox, {
         query: PageQuery,
         success: described(InboxResponse, "Hive inbox state, and the messages themselves"),
@@ -2381,7 +2420,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("pages", IrisPaths.pages, {
-        query: SearchQuery,
+        query: PagesQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(PagesResponse, "Pages owned by this bloq"),
       }).annotateMerge(

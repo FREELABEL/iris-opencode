@@ -10,7 +10,13 @@ import { createComponent, createContext, createRoot, createSignal, useContext, t
  * picking a project from one chip changed the other panel's project. A split column provides its
  * own; everything outside a split shares the window's, as before.
  */
-export type IrisScopeChip = { scope: "project" | "session" | "account"; label: string; pick?: () => void }
+export type IrisScopeChip = {
+  scope: "project" | "session" | "account"
+  label: string
+  /** The board behind a project scope, shown quietly after its name. */
+  id?: string | number
+  pick?: () => void
+}
 
 /**
  * THE PRODUCT ON SCREEN, and the way to ask for another (#191484). Also once per window: the

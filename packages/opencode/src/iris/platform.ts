@@ -2007,19 +2007,30 @@ export interface Page {
   category?: string
 }
 
-export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages: Page[] }>> {
+/**
+ * A bloq's pages, or with `all` every page on the account — searched by iris-api (`search`), since
+ * 50 rows of an account are not the account and a filter over them would miss most matches.
+ */
+export async function fetchPages(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ pages: Page[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { pages: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  }
 
   try {
     // owner_type/owner_id is a NARROWING filter, which is the point: this used to be fetched
     // per-user and rendered under a project header, so the list could never change when you
     // switched project.
     const res = await irisFetch(
-      `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
+      opts.all
+        ? `/api/v1/pages?user_id=${userId}&per_page=50${opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""}`
+        : `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
       IRIS_API,
     )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { pages: [] } }
@@ -2041,6 +2052,47 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
     return { measured: true, data: { pages } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { pages: [] } }
+  }
+}
+
+export type RecentItem = {
+  id: number
+  title: string
+  bloqId: number
+  bloqName?: string
+  listName?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * The account's most recently created or edited board items, newest first — Home › Activity
+ * (#192535). fl-api's content-items (what `iris search ""` falls back to) lists every board's items, newest first.
+ */
+export async function fetchRecentItems(): Promise<PlatformResult<{ items: RecentItem[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { items: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/content-items?search=&per_page=50`, FL_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { items: [] } }
+    const j = (await res.json()) as any
+    // { success, data: { items, search, pagination } }
+    const raw = j?.data?.items ?? j?.items ?? []
+    const rows = Array.isArray(raw) ? raw : []
+    const items: RecentItem[] = rows
+      .map((i: any) => ({
+        id: Number(i.id),
+        title: String(i.title || "Untitled"),
+        bloqId: Number(i.bloq_id),
+        bloqName: i.bloq_name ?? undefined,
+        listName: i.list_name ?? undefined,
+        createdAt: i.created_at ?? undefined,
+        updatedAt: i.updated_at ?? undefined,
+      }))
+      .filter((i: RecentItem) => Number.isFinite(i.id) && Number.isFinite(i.bloqId))
+    return { measured: true, data: { items } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { items: [] } }
   }
 }
 
