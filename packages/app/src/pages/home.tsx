@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { Show, createMemo, createSignal } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { useTabs } from "@/context/tabs"
 import { createHomeController } from "./home/home-controller"
@@ -13,69 +13,14 @@ import { HomeDashboard } from "./home/home-dashboard"
 import { HomeFirstRun, createSignedOut, firstRunPending } from "./home/home-first-run"
 import { ServerConnection } from "@/context/server"
 
-/**
- * Cold-boot routing runs ONCE per app load, not once per visit to "/".
- *
- * Module scope is deliberate. If this lived in component state it would re-fire every time
- * someone navigated back to Home, and clicking "Home" would bounce them straight out of it —
- * a landing page you cannot land on.
- */
-let bootRouted = false
-
 export function NewHome() {
   const tabs = useTabs()
   const home = createHomeController()
   const signedOut = createSignedOut()
-
-  // On launch, land where the user actually was — not on a list of everything.
-  //
-  // The desktop shell performs no initial navigation, so the SPA always came up at "/" even
-  // when tabs had been restored from disk. You would reopen the app with five sessions
-  // waiting and be shown an index of them instead of the one you were in.
-  //
-  // Three cases, and they do NOT all want the same answer:
-  //
-  //   tabs restored      -> the last-used tab. `toggleHome({home:true})` already resolves it
-  //                         from the persisted `tabs.recent` key; reusing it means focus
-  //                         restoration behaves identically here and in the titlebar.
-  //   no tabs, a project -> a fresh session in the most recently used project. This is the
-  //                         "open ready to type" behaviour, and the one worth having.
-  //   no tabs, no project-> STAY on Home. A session needs a directory to run in, so with no
-  //                         project there is nothing to open — the project picker IS the
-  //                         correct first screen for a brand-new install.
-  createEffect(() => {
-    if (bootRouted) return
-    // Signed out: stay on Home, where sign-in is. Wait for the answer rather than routing a
-    // signed-out person into a session that cannot authenticate.
-    const out = signedOut()
-    if (out === undefined) return
-    if (out) {
-      bootRouted = true
-      return
-    }
-    // Both stores are async-loaded; acting before they settle would read "no tabs" for a
-    // user who has plenty and strand them in a new draft on every launch.
-    if (!tabs.ready() || !tabs.recentReady()) return
-
-    if (tabs.store.length > 0) {
-      bootRouted = true
-      tabs.toggleHome({ home: true })
-      return
-    }
-
-    const conn = home.server.focused()
-    const project = home.project.newSession()
-    if (!conn || !project) return // no project yet — Home is right; try again if one appears
-    bootRouted = true
-    home.project.openProjectNewSession(conn, project.worktree)
-  })
-  // Leaving Home ends boot routing even if it never got to act (#192442). On a slow start the
-  // stores above settle after the person has already clicked into a tab; without this the
-  // flag stays false, and every later click on Home re-runs the boot redirect and bounces
-  // them straight back out — the exact bug module scope was meant to prevent.
-  onCleanup(() => {
-    bootRouted = true
-  })
+  // No launch redirect (#192535). Home used to jump to the last tab (or open a new chat) once the
+  // engine confirmed sign-in — on a slow machine that answer took ~10 s, so people were pulled out
+  // of Home mid-use. Restored tabs are already in the strip: picking up where you left off is one
+  // click on them. Nothing on this page navigates unless the person asks it to.
 
   // First run (D4/D5 #188245/#188243): a brand-new install — no tabs, no project, onboarding
   // neither finished nor skipped — gets "Connect your inbox → Here's what I see → Start" instead
@@ -95,10 +40,6 @@ export function NewHome() {
   const startFirstSession = (directory: string, prompt: string) => {
     const conn = home.server.focused()
     if (!conn) return
-    // Claim boot routing BEFORE the project exists. projects.open() writes the store, which
-    // re-runs the boot effect above synchronously; with bootRouted still false it found "no tabs,
-    // a project" and opened an empty session — the first of the two tabs onboarding left behind.
-    bootRouted = true
     setLaunching(true)
     const ctx = home.server.context(conn)
     ctx.projects.open(directory)
