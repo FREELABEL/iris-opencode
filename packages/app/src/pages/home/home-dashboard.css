@@ -104,5 +104,5 @@
 .ihd-sr { display: grid; grid-template-columns: 22px minmax(0, 1.8fr) 108px minmax(0, 0.9fr) 44px; gap: 10px; align-items: center; padding: 7px 6px; border-bottom: 1px solid var(--ihd-line); font-size: 13px; cursor: pointer; border-radius: 6px; }
 .ihd-sr:hover { background: color-mix(in srgb, var(--ihd-line) 35%, transparent); }
 .ihd-sr .ihd-name small { font: 11.5px var(--ihd-mono); color: var(--ihd-faint); margin-left: 8px; font-weight: 400; }
-@container (max-width: 560px) { .ihd-sr { grid-template-columns: 22px minmax(0, 1fr) 44px; } .ihd-sr .ihd-tool, .ihd-sr .ihd-where { display: none; } }
+@container (max-width: 560px) { .ihd-sr { grid-template-columns: 22px minmax(0, 1fr) minmax(0, 96px) 40px; } .ihd-sr .ihd-tool { display: none; } }
 .ihd-hidden { font-size: 12px; color: var(--ihd-faint); padding: 8px 6px 0; }

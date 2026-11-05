@@ -197,11 +197,16 @@ export function createSwrCache<T>(opts: {
 
 /** A reload draws Home from the last copy (counts and names, nothing sensitive), still within staleMs. */
 const STORED = "iris.home.dashboard:"
+const FRESH_MS = 60_000
 const localCopy = {
   load(key: string) {
     try {
       const raw = localStorage.getItem(STORED + key)
-      return raw ? (JSON.parse(raw) as { value: HomeDashboardData; at: number }) : undefined
+      if (!raw) return undefined
+      const entry = JSON.parse(raw) as { value: HomeDashboardData; at: number }
+      // The stored copy has no activity, inbox items or sessions (below), so it is never fresh: a
+      // reload within a minute of the last read sat on "Reading…" until the next 60 s tick (#192626).
+      return { ...entry, at: Math.min(entry.at, Date.now() - FRESH_MS - 1) }
     } catch {
       return undefined
     }
@@ -224,7 +229,7 @@ const localCopy = {
 }
 
 export const homeDashboard = createSwrCache<HomeDashboardData>({
-  freshMs: 60_000,
+  freshMs: FRESH_MS,
   staleMs: 10 * 60_000,
   merge: keepGoodParts,
   storage: localCopy,
