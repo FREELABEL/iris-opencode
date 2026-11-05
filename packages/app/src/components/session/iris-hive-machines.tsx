@@ -271,9 +271,10 @@ export function IrisHiveMachines(props: {
               </p>
             </Show>
             <ul class="hmc-cards" role="listbox" aria-label="Computers">
-              <For each={shown().rows.map((r) => r.computer)}>
-                {(c) => {
-                  const row = () => rowOf().get(c.id) as ComputerRow
+              <For each={shown().rows}>
+                {(r) => {
+                  const c = r.computer
+                  const row = (): ComputerRow => r
                   const st = () => statusOf(c, now())
                   const att = () => attentionOf(c, now()).filter((a) => a.level !== "info")
                   const d = () => diskOf(c)
@@ -299,8 +300,8 @@ export function IrisHiveMachines(props: {
                         </Show>
                       </div>
                       <div class="hmc-row hmc-reach-row">
-                        <span class="hmc-reach" data-kind={row()?.reach.kind} title={row()?.reach.detail}>
-                          {row()?.reach.label}
+                        <span class="hmc-reach" data-kind={row().reach.kind} title={row().reach.detail}>
+                          {row().reach.label}
                         </span>
                         <span class="hmc-faint hmc-online">{c.online ? "Online" : "Offline"}</span>
                       </div>
