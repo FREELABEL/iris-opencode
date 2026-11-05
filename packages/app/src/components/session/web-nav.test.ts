@@ -156,3 +156,72 @@ describe("sign-in pages open in the system browser (#188639)", () => {
     expect(click("https://heyiris.io/p/x")).toBe("panel")
   })
 })
+
+describe("a claimed chat link opens once (#192620)", () => {
+  const { claimLinkClick } = require("./web-nav")
+
+  // tauri-plugin-shell 2.x's injected script, as shipped: a <body> click listener that opens every
+  // target=_blank http(s) link and does NOT check defaultPrevented.
+  function mount(href: string) {
+    document.body.innerHTML = `<div id="chat"><p><a id="l" class="external-link" href="${href}" target="_blank"><code>x</code></a></p></div>`
+    const shellOpened: string[] = []
+    const openerOpened: string[] = []
+    const app: string[] = []
+    const onBody = (e: Event) => {
+      const a = (e.target as Element).closest("a") as HTMLAnchorElement | null
+      if (a && a.target === "_blank" && /^https?:/.test(a.href)) shellOpened.push(a.href)
+    }
+    const onWindow = (e: MouseEvent) => {
+      if (e.defaultPrevented) return
+      const a = (e.target as Element).closest("a") as HTMLAnchorElement | null
+      if (a && a.target === "_blank") openerOpened.push(a.href)
+    }
+    document.body.addEventListener("click", onBody)
+    window.addEventListener("click", onWindow)
+    const chat = document.getElementById("chat")!
+    chat.addEventListener("click", (e) => {
+      const c = claimLinkClick(e as MouseEvent, "http://tauri.localhost")
+      if (c) app.push(`${c.action}:${c.href}`)
+    }, true)
+    const cleanup = () => {
+      document.body.removeEventListener("click", onBody)
+      window.removeEventListener("click", onWindow)
+    }
+    return { shellOpened, openerOpened, app, cleanup }
+  }
+  const click = (init: MouseEventInit = {}) =>
+    document.querySelector("#l code")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...init }))
+
+  test("a Genesis link opens in the panel and nowhere else", () => {
+    const m = mount("https://heyiris.io/p/some-page")
+    click()
+    expect(m.app).toEqual(["panel:https://heyiris.io/p/some-page"])
+    expect(m.shellOpened).toEqual([])
+    expect(m.openerOpened).toEqual([])
+    m.cleanup()
+  })
+
+  test("an Atlas link too", () => {
+    const m = mount("https://heyiris.io/atlas?project=402&card=1")
+    click()
+    expect(m.app).toEqual(["panel:https://heyiris.io/atlas?project=402&card=1"])
+    expect(m.shellOpened).toEqual([])
+    m.cleanup()
+  })
+
+  test("Cmd-click goes to the browser once, not twice", () => {
+    const m = mount("https://example.com/")
+    click({ metaKey: true })
+    expect(m.app).toEqual(["system:https://example.com/"])
+    expect(m.shellOpened).toEqual([])
+    m.cleanup()
+  })
+
+  test("a click the app leaves alone (Shift) is not claimed", () => {
+    const m = mount("https://example.com/")
+    click({ shiftKey: true })
+    expect(m.app).toEqual([])
+    expect(m.shellOpened).toEqual(["https://example.com/"])
+    m.cleanup()
+  })
+})
