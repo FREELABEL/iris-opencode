@@ -48,11 +48,27 @@ export type PageVerdict =
  * Show the frame, or say why not. An unanswered check (an older sidecar, the sidecar offline) says
  * nothing about the page, so the frame is shown and the load timeout is the only guard left.
  */
+/** The desktop webview's origins: macOS and Linux load the app from tauri://localhost, Windows from http(s)://tauri.localhost. */
+const APP_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]
+
+/** Does a `frame-ancestors allows only …` reason list one of the app's own origins? */
+function allowsTheApp(reason: string | undefined): boolean {
+  const m = /^frame-ancestors allows only (.+)$/.exec(reason ?? "")
+  if (!m) return false
+  const sources = m[1].split(/\s+/)
+  return APP_ORIGINS.some((o) => sources.includes(o))
+}
+
 export function pageVerdict(slug: string, a: FrameCheckAnswer): PageVerdict {
   if (!a || !a.state) return { show: true }
   if (a.state === "unreachable")
     return { show: false, title: "Couldn't reach freelabel.net", detail: a.reason ?? "no connection" }
-  if (a.state === "refused")
+  // A refusal that names the app's own origins is a wrong guess about where the app runs, not a
+  // refusal: the sidecar judges by the `location.origin` it is handed, and 1.18.169 on macOS
+  // reported "frame-ancestors allows only 'self' tauri://localhost …" for lexicon-console, whose
+  // header lists tauri://localhost (2026-11-05). The webview enforces the header against its real
+  // origin, so the page is framed and the status check below still catches a missing page.
+  if (a.state === "refused" && !allowsTheApp(a.reason))
     return { show: false, title: "This page can't be shown inside IRIS", detail: a.reason ?? "the site refuses" }
   if (a.state === "invalid") return { show: false, title: "Not a page address", detail: slug }
   if (typeof a.status === "number" && a.status >= 400)
