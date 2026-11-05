@@ -1,6 +1,8 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import type { ResourceFetcherInfo } from "solid-js"
 import { callLine, control, fmtSeconds, stepLabel, verdict, type LiveRun } from "./iris-agent-live-model"
+import { IrisToolMap } from "./iris-tool-map"
+import { CALL_WINDOW } from "./iris-tool-map-model"
 
 /**
  * Agents › Live (#187921): is it stuck? A live view of an agent's run you can take over.
@@ -16,7 +18,7 @@ import { callLine, control, fmtSeconds, stepLabel, verdict, type LiveRun } from 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type LivePayload = { measured: boolean; reason?: string; run: LiveRun | null }
 type ControlPayload = { ok: boolean; reason?: string; message?: string }
-type BoardAgent = { id: number; name: string }
+type BoardAgent = { id: number; name: string; model?: string }
 
 const POLL_MS = 2_000
 const LIMIT = 10
@@ -67,13 +69,15 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
     key,
     async ([id]: readonly [number, number], info: ResourceFetcherInfo<LivePayload | undefined>) => {
       try {
-        return await json<LivePayload>(`/iris/agents/${id}/live?limit=${LIMIT}`)
+        return await json<LivePayload>(`/iris/agents/${id}/live?limit=${CALL_WINDOW}`)
       } catch {
         return info.value
       }
     },
   )
   const run = createMemo(() => live.latest?.run ?? null)
+  // The map counts every call iris-api keeps (CALL_WINDOW); the list below stays the newest LIMIT.
+  const recent = createMemo(() => run()?.toolCalls.slice(-LIMIT) ?? [])
   const v = createMemo(() => verdict(run()))
   const action = createMemo(() => control(run()))
 
@@ -102,14 +106,8 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
   return (
     <div class="iris-live" data-component="iris-agent-live">
       <div class="iris-live__bar">
-        <select
-          class="iris-live__picker"
-          value={agentId() ?? ""}
-          onChange={(e) => choose(Number(e.currentTarget.value) || undefined)}
-          aria-label="Agent to watch"
-        >
-          <For each={agents.latest?.agents ?? []}>{(a) => <option value={a.id}>{a.name}</option>}</For>
-        </select>
+        {/* The agent is picked on the map's chips (#192619). */}
+        <span />
         <Show when={action() === "take-over"}>
           <button class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={busy()} onClick={() => act("take-over")}>
             Take over
@@ -124,9 +122,13 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
 
       <Show when={props.bloqId !== undefined} fallback={<div class="iris-live__empty">Pick a board to see its agents.</div>}>
         <Show when={live.latest?.measured !== false} fallback={<div class="iris-live__error">Could not read the run — {live.latest?.reason}</div>}>
-          <div class={`iris-live__verdict iris-live__verdict--${v().tone}`} role="status">
-            {v().text}
-          </div>
+          <IrisToolMap doFetch={props.doFetch} agents={agents.latest?.agents ?? []} agentId={agentId()} onPick={choose} run={run()} />
+
+          <Show when={v().tone === "warn" || v().tone === "paused"}>
+            <div class={`iris-live__verdict iris-live__verdict--${v().tone}`} role="status">
+              {v().text}
+            </div>
+          </Show>
 
           <Show when={run()}>
             {(r) => (
@@ -156,10 +158,10 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
             <div class="iris-live__note">{note()}</div>
           </Show>
 
-          <Show when={(run()?.toolCalls.length ?? 0) > 0}>
-            <div class="iris-live__heading">Last {run()!.toolCalls.length} tool calls (newest last)</div>
+          <Show when={recent().length > 0}>
+            <div class="iris-live__heading">Last {recent().length} tool calls (newest last)</div>
             <ol class="iris-live__calls">
-              <For each={run()!.toolCalls}>
+              <For each={recent()}>
                 {(c) => (
                   <li class={`iris-live__call iris-live__call--${c.status}`} title={c.error ?? ""}>
                     <span class="iris-live__step">#{c.iteration}</span> {callLine(c)}
