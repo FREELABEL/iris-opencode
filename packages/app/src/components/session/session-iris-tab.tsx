@@ -85,6 +85,7 @@ import { IrisAgentEditor } from "./iris-agent-editor"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
+import { IrisMarketing } from "./iris-marketing"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisLeadsTab } from "./iris-leads-tab"
@@ -4227,12 +4228,7 @@ export function SessionIrisTab() {
           </Match>
           {/* Marketing (#192624): the account's own pins. Nothing pinned → this, never someone else's pages. */}
           <Match when={pane() === "marketing-pins"}>
-            <div class="iris-pinned__note" data-slot="marketing-empty">
-              <div class="iris-pinned__title">Pin your review pages here</div>
-              <div class="iris-pinned__reason">
-                Marketing shows the Genesis pages you pin from your own account. Nothing is pinned to this account yet.
-              </div>
-            </div>
+            <IrisMarketing doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
           </Match>
           <Match when={pane() === "lexicon-agreements"}>
             <IrisLexiconAgreements doFetch={doFetch} />
