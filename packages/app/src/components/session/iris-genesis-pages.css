@@ -1,0 +1,128 @@
+/*
+ * Genesis › Pages (#192632). Built on iris-panel-ui.css; only what is particular to pages is here —
+ * the card with its live look, the device stage and the side card. Brand colours appear only as a
+ * brand's own swatches and logo; the chrome stays on the panel's tokens. No edge bars: a chosen card
+ * is tinted and ringed all round.
+ */
+.iris-gp { --gp-card-r: 8px; }
+.iris-gp-grow { flex: 1 1 auto; min-width: 0; }
+.iris-gp-strong { color: var(--text-strong); font-weight: 500; }
+.iris-gp-muted { font-size: 11.5px; color: var(--text-weak); }
+.iris-gp-muted code { font-size: 11px; }
+.iris-gp-banner { margin: 8px 10px 0; }
+.iris-gp-x { width: 20px; height: 20px; margin: -2px -4px -2px 0; }
+.iris-gp-filters .iris-ui-tab { gap: 5px; }
+
+/* ── brand marks and swatches ── */
+.iris-gp-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; border-radius: 4px; overflow: hidden; background: var(--background-element); color: var(--text-base); font-size: 9.5px; font-weight: 600; }
+.iris-gp-mark img { width: 100%; height: 100%; object-fit: contain; }
+/* A logo drawn white-on-transparent vanishes on a light tile: the mark always sits on ink. */
+.iris-gp-mark[data-size="lg"] { width: 34px; height: 34px; border-radius: 8px; font-size: 14px; background: color-mix(in srgb, var(--text-strong) 88%, var(--background-base)); color: var(--background-base); padding: 5px; box-sizing: border-box; }
+.iris-gp-swatches { display: inline-flex; flex: none; }
+.iris-gp-swatches > span { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--background-base), inset 0 0 0 1px color-mix(in srgb, var(--text-strong) 18%, transparent); }
+.iris-gp-swatches > span + span { margin-left: -3px; }
+.iris-gp-brandpick { position: relative; flex: none; }
+.iris-gp-brandpick > .iris-ui-tab { gap: 6px; }
+.iris-gp-brandmenu { right: 0; top: calc(100% + 4px); width: 260px; }
+
+/* ── the list: cards or rows ── */
+.iris-gp-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.iris-gp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; padding: 12px; transition: opacity 0.15s; }
+.iris-gp-cards[data-busy] { opacity: 0.6; }
+.iris-gp-card { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-weaker-base); border-radius: var(--gp-card-r); background: var(--background-base); cursor: pointer; outline: none; transition: border-color 0.12s, background 0.12s, box-shadow 0.12s; }
+.iris-gp-card:hover { border-color: var(--border-weak-base); background: var(--ui-hover); }
+.iris-gp-card:focus-visible, .iris-gp-card[aria-selected="true"]:focus { border-color: var(--border-strong-base, var(--text-weak)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-strong) 14%, transparent); }
+.iris-gp-thumbwrap { position: relative; }
+.iris-gp-thumb { position: relative; aspect-ratio: 16 / 10; overflow: hidden; border-radius: calc(var(--gp-card-r) - 1px) calc(var(--gp-card-r) - 1px) 0 0; background: var(--background-element); }
+.iris-gp-thumb > img, .iris-gp-thumb > iframe { position: absolute; top: 0; left: 0; border: 0; }
+.iris-gp-thumb > img { width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+.iris-gp-thumb > iframe { width: 1280px; height: 800px; transform-origin: 0 0; pointer-events: none; background: #fff; }
+.iris-gp-ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-weaker); }
+.iris-gp-ph .iris-ui-svg { width: 26px; height: 26px; stroke-width: 1.4; }
+.iris-gp-quick { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--background-base) 88%, transparent); box-shadow: 0 2px 8px rgb(0 0 0 / 0.18); opacity: 0; transform: translateY(-2px); transition: opacity 0.12s, transform 0.12s; }
+.iris-gp-card:hover .iris-gp-quick, .iris-gp-card:focus-within .iris-gp-quick { opacity: 1; transform: none; }
+.iris-gp-quick .iris-ui-icon { width: 24px; height: 24px; }
+.iris-gp-meta { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
+.iris-gp-name { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-slug { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-chips { display: flex; align-items: center; gap: 4px; margin-top: 3px; min-width: 0; }
+.iris-gp-when { margin-left: auto; font-size: 11px; color: var(--text-weak); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.iris-gp-brand { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); font-size: 11.5px; color: var(--text-base); min-width: 0; }
+.iris-gp-brandname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-brand[data-by="slug"] .iris-gp-brandname { color: var(--text-weak); }
+
+/* List view: the same card, laid out as a row. */
+.iris-gp[data-view="list"] .iris-gp-cards { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; }
+.iris-gp[data-view="list"] .iris-gp-card { flex-direction: row; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid var(--border-weaker-base); border-radius: 0; padding: 6px 10px; }
+.iris-gp[data-view="list"] .iris-gp-card:focus-visible { box-shadow: none; background: var(--ui-sel); }
+.iris-gp[data-view="list"] .iris-gp-thumb { width: 72px; flex: none; border-radius: 5px; }
+.iris-gp[data-view="list"] .iris-gp-ph .iris-ui-svg { width: 16px; height: 16px; }
+.iris-gp[data-view="list"] .iris-gp-ph .iris-gp-mark[data-size="lg"] { width: 22px; height: 22px; padding: 3px; border-radius: 5px; }
+.iris-gp[data-view="list"] .iris-gp-quick { top: 50%; right: 8px; transform: translateY(-50%); }
+.iris-gp[data-view="list"] .iris-gp-thumbwrap { position: static; }
+.iris-gp[data-view="list"] .iris-gp-meta { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name chips" "slug brand"; gap: 1px 10px; padding: 0; align-items: center; }
+.iris-gp[data-view="list"] .iris-gp-name { grid-area: name; }
+.iris-gp[data-view="list"] .iris-gp-slug { grid-area: slug; }
+.iris-gp[data-view="list"] .iris-gp-chips { grid-area: chips; margin: 0; justify-content: flex-end; }
+.iris-gp[data-view="list"] .iris-gp-when { min-width: 82px; text-align: end; }
+.iris-gp[data-view="list"] .iris-gp-brand { grid-area: brand; margin: 0; padding: 0; border: 0; justify-content: flex-end; max-width: 220px; }
+
+.iris-gp-pager { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--border-weaker-base); font-size: 12px; color: var(--text-weak); }
+.iris-gp-range { font-variant-numeric: tabular-nums; }
+
+/* ── the open page ── */
+.iris-gp-detail { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.iris-gp-dhead { gap: 6px; }
+.iris-gp-dtitle { display: flex; flex-direction: column; min-width: 0; flex: 0 1 auto; }
+.iris-gp-dtitle h3 { margin: 0; font-size: 13.5px; font-weight: 500; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-vis { position: relative; flex: none; }
+.iris-gp-vismenu { right: 0; top: calc(100% + 4px); width: 280px; }
+.iris-gp-dbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 264px; }
+.iris-gp-dbody[data-tab="edit"], .iris-gp-dbody[data-tab="json"] { grid-template-columns: minmax(0, 1fr); }
+.iris-gp-stage { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--text-strong) 3%, var(--background-base)); }
+.iris-gp-stage > .iris-ui-empty { flex: 1; }
+.iris-gp-room { flex: 1; min-height: 0; display: flex; justify-content: center; padding: 12px; overflow: hidden; }
+.iris-gp-device { position: relative; flex: none; overflow: hidden; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px var(--border-weak-base), 0 8px 24px -12px rgb(0 0 0 / 0.35); }
+.iris-gp-room[data-device="phone"] .iris-gp-device, .iris-gp-room[data-device="tablet"] .iris-gp-device { border-radius: 14px; }
+.iris-gp-frame { display: block; border: 0; transform-origin: 0 0; background: #fff; }
+.iris-gp-loading { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; background: var(--background-base); }
+
+.iris-gp-side { min-height: 0; overflow-y: auto; border-left: 1px solid var(--border-weaker-base); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.iris-gp-sidebrand { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: var(--background-element); font-size: 12px; }
+.iris-gp-facts { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px 10px; margin: 0; font-size: 12px; }
+.iris-gp-facts dt { color: var(--text-weak); }
+.iris-gp-facts dd { margin: 0; color: var(--text-base); min-width: 0; overflow-wrap: anywhere; }
+.iris-gp-facts dd .iris-gp-muted { margin-top: 2px; }
+.iris-gp-copy { display: flex; align-items: center; gap: 6px; width: 100%; border: 1px solid var(--border-weaker-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 5px 8px; font-size: 11.5px; cursor: pointer; text-align: start; }
+.iris-gp-copy:hover { background: var(--ui-hover); color: var(--text-strong); }
+.iris-gp-copy .iris-gp-grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-cmd { font-family: var(--font-mono, ui-monospace, monospace); }
+
+.iris-gp-versions { padding: 6px 0; gap: 0; }
+.iris-gp-ver { display: flex; align-items: center; gap: 4px; padding: 0 8px 0 0; border-bottom: 1px solid var(--border-weaker-base); }
+.iris-gp-ver[aria-selected="true"] { background: var(--ui-sel); }
+.iris-gp-verbtn { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; border: 0; background: none; color: inherit; text-align: start; padding: 8px 12px; cursor: pointer; font: inherit; }
+.iris-gp-ver:hover { background: var(--ui-hover); }
+.iris-gp-vertop { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-strong); }
+.iris-gp-vertop b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.iris-gp-versub { font-size: 11.5px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-gp-versions > .iris-gp-muted { padding: 8px 12px; }
+
+.iris-gp-edit { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 12px; gap: 8px; }
+.iris-gp-editbar { display: flex; align-items: center; gap: 8px; }
+.iris-gp-editor, .iris-gp-json { flex: 1; min-height: 240px; margin: 0; box-sizing: border-box; width: 100%; resize: none; overflow: auto; background: var(--background-element); color: var(--text-base); border: 1px solid var(--border-weaker-base); border-radius: 6px; padding: 10px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; line-height: 1.5; white-space: pre; }
+.iris-gp-editor:focus { outline: none; border-color: var(--border-strong-base, var(--text-weak)); }
+
+/* A narrow panel: the side card goes under the preview; the toolbar wraps. */
+@container (max-width: 640px) {
+  .iris-gp-dbody { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(260px, 1fr) auto; }
+  .iris-gp-dbody[data-tab="versions"] { grid-template-rows: minmax(220px, 1fr) minmax(120px, 40%); }
+  .iris-gp-side { border-left: 0; border-top: 1px solid var(--border-weaker-base); max-height: 46cqh; }
+  .iris-gp-dhead { flex-wrap: wrap; }
+  .iris-gp-dhead .iris-ui-spacer { flex-basis: 100%; height: 0; }
+  .iris-gp[data-view="list"] .iris-gp-brand { display: none; }
+}
+@container (max-width: 420px) {
+  .iris-gp-cards { grid-template-columns: minmax(0, 1fr); }
+  .iris-ui-bar { flex-wrap: wrap; }
+}

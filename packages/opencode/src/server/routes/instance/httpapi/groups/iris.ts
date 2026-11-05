@@ -60,6 +60,10 @@ const PagesQuery = Schema.Struct({
     Schema.optional(Schema.Literals(["project", "all"])),
     '"all": every page on the account, searched by iris-api. Default: this bloq\'s pages.',
   ),
+  filter: described(
+    Schema.optional(Schema.Literals(["all", "published", "draft", "private"])),
+    "#192632. published/draft are filtered by the platform; private (unlisted, private or sign-in only) is a cached scan of the list.",
+  ),
 })
 
 const Measured = {
@@ -803,9 +807,86 @@ const PagesResponse = Schema.Struct({
       visibility: Schema.optional(Schema.String),
       requiresAuth: Schema.optional(Schema.Boolean),
       category: Schema.optional(Schema.String),
+      createdAt: Schema.optional(Schema.String),
+      description: described(Schema.optional(Schema.String), "The page's SEO description, unescaped."),
+      thumbnailUrl: described(Schema.optional(Schema.String), "The platform's own screenshot of the page. It can be stale or 404."),
+      ogImage: Schema.optional(Schema.String),
+      ownerType: described(Schema.optional(Schema.String), '"bloq" or "user" — with ownerId, which board owns it.'),
+      ownerId: Schema.optional(Schema.Finite),
+      siteId: Schema.optional(Schema.Finite),
     }).annotate({ identifier: "IrisPage" }),
   ),
+  counts: Schema.optional(
+    described(
+      Schema.Struct({
+        all: Schema.optional(Schema.Finite),
+        published: Schema.optional(Schema.Finite),
+        draft: Schema.optional(Schema.Finite),
+        private: described(Schema.optional(Schema.Finite), "Absent until the scan has run, or when it was capped."),
+      }),
+      "#192632. How many pages each filter holds, for the same scope and search. Absent = not counted.",
+    ),
+  ),
 }).annotate({ identifier: "IrisPagesResponse" })
+
+// Genesis › Pages, one page (#192632). Every field the panel reads is declared here: an undeclared one is stripped.
+const GenesisPageSchema = Schema.Struct({
+  id: Schema.Finite,
+  title: Schema.String,
+  slug: Schema.optional(Schema.String),
+  status: Schema.String,
+  url: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
+  version: Schema.optional(Schema.Finite),
+  publishedAt: Schema.optional(Schema.String),
+  visibility: Schema.optional(Schema.String),
+  requiresAuth: Schema.optional(Schema.Boolean),
+  category: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  thumbnailUrl: Schema.optional(Schema.String),
+  ogImage: Schema.optional(Schema.String),
+  ownerType: Schema.optional(Schema.String),
+  ownerId: Schema.optional(Schema.Finite),
+  siteId: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "IrisGenesisPage" })
+const PagePerson = Schema.Struct({ id: Schema.Finite, name: Schema.String })
+const PageInfoResponse = Schema.Struct({
+  ...Measured,
+  previewUrl: described(Schema.optional(Schema.String), "A tokenised draft preview the platform issues; it changes when the page is next saved."),
+  brandName: described(Schema.optional(Schema.String), "json_content.theme.branding.name — the brand the page itself names."),
+  renderMode: Schema.optional(Schema.String),
+  ownerName: Schema.optional(Schema.String),
+  creator: Schema.optional(PagePerson),
+  updater: Schema.optional(PagePerson),
+  page: Schema.optional(GenesisPageSchema),
+}).annotate({ identifier: "IrisPageInfo" })
+const PageVersionsResponse = Schema.Struct({
+  ...Measured,
+  versions: Schema.Array(
+    Schema.Struct({
+      version: Schema.Finite,
+      createdAt: Schema.optional(Schema.String),
+      byId: described(Schema.optional(Schema.Finite), "The user who made it; the list carries the id only."),
+      summary: Schema.optional(Schema.String),
+    }),
+  ),
+  total: Schema.optional(Schema.Finite),
+  hasMore: Schema.Boolean,
+}).annotate({ identifier: "IrisPageVersions" })
+const PageVersionResponse = Schema.Struct({
+  ...Measured,
+  version: Schema.Finite,
+  by: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
+  renderMode: Schema.optional(Schema.String),
+  html: described(Schema.optional(Schema.String), "A whole document for a sandboxed srcdoc frame. Absent with `reason` when it cannot be drawn."),
+}).annotate({ identifier: "IrisPageVersion" })
+const PageActionResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  page: described(Schema.optional(GenesisPageSchema), "The page as the platform holds it AFTER the action — read back, not assumed."),
+}).annotate({ identifier: "IrisPageActionResult" })
 
 const AuthResponse = Schema.Struct({
   signedIn: described(Schema.Boolean, "A credential exists somewhere we know to look."),
@@ -888,6 +969,7 @@ const BrandsResponse = Schema.Struct({
       swatches: described(Schema.Array(BrandSwatch), "Up to six drawable colours, in stored order"),
       logoUrl: Schema.optional(Schema.String),
       updatedAt: Schema.optional(Schema.String),
+      bloqId: described(Schema.optional(Schema.Finite), "#192632. The board the brand belongs to — how a page owned by that board finds its brand."),
     }).annotate({ identifier: "IrisBrandSummary" }),
   ),
 }).annotate({ identifier: "IrisBrandsResponse" })
@@ -1766,6 +1848,12 @@ export const IrisPaths = {
   graphBoard: `${root}/graph/:bloqID`,
   pageDoc: `${root}/page/:pageID`,
   pageSave: `${root}/page/:pageID/save`,
+  pageInfo: `${root}/page/:pageID/info`,
+  pageVersions: `${root}/page/:pageID/versions`,
+  pageVersion: `${root}/page/:pageID/versions/:version`,
+  pagePublish: `${root}/page/:pageID/publish`,
+  pageVisibility: `${root}/page/:pageID/visibility`,
+  pageRollback: `${root}/page/:pageID/rollback`,
   item: `${root}/item/:itemID`,
   itemSave: `${root}/item/:itemID/save`,
   itemMove: `${root}/item/:itemID/move`,
@@ -2726,6 +2814,71 @@ export const IrisApi = HttpApi.make("iris").add(
           description:
             "PINNED to the version it was read at. fl-api refuses the write if the page moved since, which is the whole difference between saving and clobbering — `iris pages push` has no divergence check (#183600) and has overwritten other people's work. A stale save comes back as a refusal naming the conflict, never as a success that quietly won.",
         }),
+      ),
+      HttpApiEndpoint.get("pageInfo", IrisPaths.pageInfo, {
+        params: { pageID: Schema.NumberFromString },
+        success: described(PageInfoResponse, "One page's facts for the detail's side card, without its document"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageInfo",
+          summary: "A page's facts",
+          description: "#192632. The draft preview address, the brand the page names, its owner board, who made and last changed it. json_content can be megabytes; it stays in the sidecar.",
+        }),
+      ),
+      HttpApiEndpoint.get("pageVersions", IrisPaths.pageVersions, {
+        params: { pageID: Schema.NumberFromString },
+        query: Schema.Struct({ page: Schema.optional(Schema.NumberFromString) }),
+        success: described(PageVersionsResponse, "A page's saved versions, newest first"),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.pageVersions", summary: "A page's versions", description: "#192632. `iris pages versions`." }),
+      ),
+      HttpApiEndpoint.get("pageVersion", IrisPaths.pageVersion, {
+        params: { pageID: Schema.NumberFromString, version: Schema.NumberFromString },
+        success: described(PageVersionResponse, "One past version, drawn as a document"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageVersion",
+          summary: "Draw a past version",
+          description: "#192632. A bespoke HTML page's own html+css; a component page through the platform's preview session, which refuses large pages. Never touches the live page.",
+        }),
+      ),
+      HttpApiEndpoint.post("pagePublish", IrisPaths.pagePublish, {
+        params: { pageID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          publish: described(Schema.Boolean, "true publishes, false unpublishes (back to draft)."),
+          confirm: described(Schema.optional(Schema.Boolean), "Required true to publish — the person said yes to it in a confirm."),
+        }),
+        success: described(PageActionResponse, "Whether it landed, and the page read back"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pagePublish",
+          summary: "Publish or unpublish a page",
+          description: "#192632. `iris pages publish|unpublish`. Publishing makes the page world-readable and is refused without `confirm: true`; unpublishing narrows and never asks.",
+        }),
+      ),
+      HttpApiEndpoint.post("pageVisibility", IrisPaths.pageVisibility, {
+        params: { pageID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          mode: Schema.Literals(["public", "unlisted", "private"]),
+          confirm: described(Schema.optional(Schema.Boolean), "Required true when the change widens who can reach the page."),
+        }),
+        success: described(PageActionResponse, "Whether it landed, and the page read back"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageVisibility",
+          summary: "Set how a page is listed",
+          description: "#192632. `iris pages visibility`. Widening is judged against the platform's current value and refused without `confirm: true`. Read back after the write: a dropped field is reported as not applied.",
+        }),
+      ),
+      HttpApiEndpoint.post("pageRollback", IrisPaths.pageRollback, {
+        params: { pageID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          version: Schema.Finite,
+          confirm: described(Schema.optional(Schema.Boolean), "Required true — a rollback replaces the page's content."),
+        }),
+        success: described(PageActionResponse, "Whether it landed, and the page read back"),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.pageRollback", summary: "Roll a page back", description: "#192632. `iris pages rollback`. Refused without `confirm: true`." }),
       ),
       HttpApiEndpoint.get("item", IrisPaths.item, {
         params: { itemID: Schema.NumberFromString },

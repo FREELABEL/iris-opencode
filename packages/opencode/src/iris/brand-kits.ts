@@ -26,6 +26,8 @@ export interface BrandSummary {
   swatches: { name: string; value: string }[]
   logoUrl?: string
   updatedAt?: string
+  /** The board the brand belongs to (#192632) — how a page owned by that board finds its brand. */
+  bloqId?: number
 }
 
 export interface BrandColor {
@@ -71,7 +73,33 @@ export function normalizeTokens(raw: unknown): Record<string, any> {
     const logo = typeof t.logo === "string" ? { url: t.logo } : t.logo
     if (logo && typeof logo === "object" && logo.url) t.logos = { primary: logo }
   }
+  // The IRIS kit keeps its marks under brand.logo as plain URLs — {primary, icon, social} (#192632).
+  // Read there too, or the brand that names IRIS shows a letter where its logo is.
+  const named = t.brand?.logo
+  if (!t.logos && named) {
+    const url = (v: unknown) => (typeof v === "string" && /^https?:\/\//.test(v) ? v : undefined)
+    const primary = typeof named === "string" ? url(named) : url(named.primary) ?? url(named.icon)
+    const icon = typeof named === "object" ? url(named.icon) : undefined
+    if (primary) t.logos = { primary: { url: primary }, ...(icon ? { icon: { url: icon } } : {}) }
+  }
   return t
+}
+
+/**
+ * Font stacks a kit files OUTSIDE typography — `fonts: {sans: {DEFAULT}}` or `font: {mono: "…"}`
+ * (the IRIS Desktop, Atlas, Genesis and Hive kits do, 2026-11-05). Read only when typography names
+ * no stack, so a kit that has both is not listed twice.
+ */
+function looseFonts(t: Record<string, any>): { role: string; family: string }[] {
+  for (const key of ["fonts", "font"]) {
+    const v = t[key]
+    if (!v || typeof v !== "object" || Array.isArray(v)) continue
+    const out = Object.entries(v)
+      .map(([role, x]) => ({ role, family: typeof x === "string" ? x : (x as any)?.DEFAULT ?? (x as any)?.default ?? (x as any)?.family }))
+      .filter((f): f is { role: string; family: string } => isFontStack(f.family))
+    if (out.length) return out
+  }
+  return []
 }
 
 /** A CSS colour we can draw: hex, rgb(a), hsl(a). Anything else is shown as text, never a swatch. */
@@ -111,8 +139,10 @@ function summaryOf(r: any): BrandSummary {
       .filter((c) => isDrawableColor(c.value))
       .slice(0, 6)
       .map((c) => ({ name: c.name, value: c.value })),
-    logoUrl: typeof tokens.logos?.primary?.url === "string" ? tokens.logos.primary.url : undefined,
+    // The small mark prefers the brand's icon: a "white transparent" primary disappears on a light row.
+    logoUrl: [tokens.logos?.icon?.url, tokens.logos?.primary?.url].find((u) => typeof u === "string"),
     updatedAt: typeof r.updated_at === "string" ? r.updated_at : undefined,
+    bloqId: typeof r.bloq_id === "number" ? r.bloq_id : undefined,
   }
 }
 
@@ -125,6 +155,7 @@ export function kitOf(brand: any, rawTokens: unknown): BrandKit {
     if (isFontStack(family)) fonts.push({ role, family })
     else if (family != null) typeScale.push({ role, value: String(family) })
   }
+  if (fonts.length === 0) fonts.push(...looseFonts(tokens))
   const m = tokens.motion && typeof tokens.motion === "object" ? tokens.motion : undefined
   const personas = Array.isArray(brand?.personas) ? brand.personas : []
   return {
