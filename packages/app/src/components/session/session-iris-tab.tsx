@@ -4218,11 +4218,15 @@ export function SessionIrisTab() {
           <Match when={pane() === "reachr"}>
             <IrisReachrReview doFetch={doFetch} />
           </Match>
-          {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug. */}
-          <Match when={pane() === "page" && resolved().slug}>
+          {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug.
+              KEYED (#192623): the page reads its slug inside promise callbacks (a frame check, a
+              sign-in mint). Unkeyed, that slug was an accessor into this Match, and a request that
+              landed after you switched tabs read it once the Match was false: "Stale read from
+              <Match>", thrown inside a promise. A keyed slug is a plain string; a new slug remounts. */}
+          <Match when={pane() === "page" && resolved().slug} keyed>
             {(slug) => (
               <IrisPinnedPage
-                slug={slug()}
+                slug={slug}
                 signIn={resolved().sub?.signIn === true}
                 label={resolved().sub?.label ?? paneLabel()}
                 doFetch={doFetch}
