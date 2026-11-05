@@ -1,3 +1,5 @@
+import type { JSX } from "solid-js"
+import { Portal } from "solid-js/web"
 import { irisSplitShare, setIrisSplitShare } from "@/components/iris-split"
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { IrisCardNotices } from "@/components/session/iris-card-notices"
@@ -42,7 +44,8 @@ import { showToast } from "@/utils/toast"
 import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
-import { usePaneFocused, useSessionParams } from "@/context/session-pane"
+import { usePaneFocused, useSessionPane, useSessionParams } from "@/context/session-pane"
+import { useIrisShell } from "@/components/iris-shell"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
@@ -483,6 +486,35 @@ export default function Page() {
     newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
+  // The only column on screen hands its right side to the shell (#192535), which owns the size
+  // and keeps the container across Home / new chat / chat. Split-view columns keep their own.
+  const shell = useIrisShell()
+  const sessionPane = useSessionPane()
+  const inShell = createMemo(() => !!shell && !sessionPane && isDesktop() && newSessionDesign())
+  createEffect(() => {
+    if (!shell) return
+    // Every chat page claims the right side, so Home's panel never shows beside a chat. A split
+    // column (or a phone-width page) claims it closed and keeps its own panel.
+    shell.claim(() => inShell() && desktopV2PanelLayout().visible)
+    if (!inShell()) return
+    // One open state for the shell: a chat follows it on the way in, so a panel open on Home is
+    // open here (and closed stays closed) ...
+    untrack(() => {
+      const panel = view().reviewPanel
+      if (shell.open() && !panel.opened()) panel.open("other")
+      if (!shell.open() && panel.opened()) panel.close()
+    })
+  })
+  // ... and opening or closing it here is what Home shows next.
+  createEffect(
+    on(
+      () => view().reviewPanel.opened(),
+      (opened) => {
+        if (untrack(inShell)) shell!.setOpen(opened)
+      },
+      { defer: true },
+    ),
+  )
   // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
   usePanelControl({ open: desktopSidePanelOpen })
 
@@ -545,7 +577,7 @@ export default function Page() {
     }),
   )
   const sessionPanelWidth = createMemo(() => {
-    if (!desktopSidePanelOpen()) return "100%"
+    if (inShell() || !desktopSidePanelOpen()) return "100%"
     if (desktopSessionResizeOpen()) return `${sessionPanelResizedWidth()}px`
     return `calc(100% - ${layout.fileTree.width()}px)`
   })
@@ -2405,7 +2437,7 @@ export default function Page() {
             </SessionPanelFrame>
           )}
 
-          <Show when={desktopSessionResizeOpen()}>
+          <Show when={desktopSessionResizeOpen() && !inShell()}>
             <div onPointerDown={() => size.start()}>
               <ResizeHandle
                 classList={{
@@ -2446,62 +2478,64 @@ export default function Page() {
           </Suspense>
         </Show>
         <Show when={newSessionDesign()}>
-          <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
-            <div class="min-w-0 h-full flex flex-1 flex-col">
-              <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
-                <div class="min-h-0 flex-1">
-                  <Suspense>
-                    <SessionSidePanel
-                      canReview={canReview}
-                      reviewFirst={reviewFirst}
-                      diffs={reviewDiffs}
-                      diffsReady={reviewReady}
-                      empty={reviewEmptyText}
-                      hasReview={hasReview}
-                      reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
-                      reviewCount={reviewCount}
-                      reviewPanel={reviewPanelV2}
-                      fileTreeOpened={reviewV2State.sidebarOpened}
-                      onToggleFileTree={reviewV2State.toggleSidebar}
-                      fileBrowserState={reviewV2State}
-                      activeDiff={activeReviewFile()}
-                      focusReviewDiff={focusReviewDiff}
-                      reviewSnap={ui.reviewSnap}
-                      size={size}
-                      stacked={desktopV2PanelLayout().stacked}
+          <ShellSlot when={inShell()}>
+            <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
+              <div class="min-w-0 h-full flex flex-1 flex-col">
+                <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
+                  <div class="min-h-0 flex-1">
+                    <Suspense>
+                      <SessionSidePanel
+                        canReview={canReview}
+                        reviewFirst={reviewFirst}
+                        diffs={reviewDiffs}
+                        diffsReady={reviewReady}
+                        empty={reviewEmptyText}
+                        hasReview={hasReview}
+                        reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
+                        reviewCount={reviewCount}
+                        reviewPanel={reviewPanelV2}
+                        fileTreeOpened={reviewV2State.sidebarOpened}
+                        onToggleFileTree={reviewV2State.toggleSidebar}
+                        fileBrowserState={reviewV2State}
+                        activeDiff={activeReviewFile()}
+                        focusReviewDiff={focusReviewDiff}
+                        reviewSnap={ui.reviewSnap}
+                        size={size}
+                        stacked={desktopV2PanelLayout().stacked}
+                      />
+                    </Suspense>
+                  </div>
+                </Show>
+                <Show when={desktopV2PanelLayout().stacked}>
+                  <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
+                    <ResizeHandle
+                      class="!relative !inset-auto !h-full !w-full !transform-none"
+                      direction="vertical"
+                      size={layout.terminal.height()}
+                      min={100}
+                      max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
+                      collapseThreshold={50}
+                      onResize={(height) => {
+                        size.touch()
+                        layout.terminal.resize(height)
+                      }}
+                      onCollapse={() => view().terminal.close()}
                     />
-                  </Suspense>
-                </div>
-              </Show>
-              <Show when={desktopV2PanelLayout().stacked}>
-                <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
-                  <ResizeHandle
-                    class="!relative !inset-auto !h-full !w-full !transform-none"
-                    direction="vertical"
-                    size={layout.terminal.height()}
-                    min={100}
-                    max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
-                    collapseThreshold={50}
-                    onResize={(height) => {
-                      size.touch()
-                      layout.terminal.resize(height)
+                  </div>
+                </Show>
+                <Show when={terminalOpen()}>
+                  <div
+                    classList={{
+                      "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
+                      "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
                     }}
-                    onCollapse={() => view().terminal.close()}
-                  />
-                </div>
-              </Show>
-              <Show when={terminalOpen()}>
-                <div
-                  classList={{
-                    "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
-                    "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
-                  }}
-                >
-                  <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
-                </div>
-              </Show>
-            </div>
-          </Show>
+                  >
+                    <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </ShellSlot>
         </Show>
       </div>
 
@@ -2509,5 +2543,20 @@ export default function Page() {
         <TerminalPanel />
       </Show>
     </SessionRouteFrame>
+  )
+}
+
+/** Its children in place, or portaled into the shell's right side while `when` holds. */
+function ShellSlot(props: { when: boolean; children: JSX.Element }) {
+  const shell = useIrisShell()
+  return (
+    <Show when={props.when && shell?.slot()} fallback={props.children}>
+      {(el) => (
+        // Portal wraps its children in a bare div; it must stretch like the slot it sits in.
+        <Portal mount={el()} ref={(wrap: HTMLDivElement) => (wrap.className = "flex min-h-0 min-w-0 flex-1")}>
+          {props.children}
+        </Portal>
+      )}
+    </Show>
   )
 }

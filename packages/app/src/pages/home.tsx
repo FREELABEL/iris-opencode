@@ -1,7 +1,6 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { useTabs } from "@/context/tabs"
-import { IrisPanelDock } from "@/components/iris-panel-dock"
 import { createHomeController } from "./home/home-controller"
 import { createHomeProjectsController } from "./home/home-projects-controller"
 import { HomeUtilityNav } from "./home/home-projects-view"
@@ -115,7 +114,7 @@ export function NewHome() {
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
   return (
-    <IrisPanelDock>
+    <div class="flex min-h-0 min-w-0 flex-1 self-stretch">
       <div
         class={`
           m-2 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
@@ -162,6 +161,6 @@ export function NewHome() {
           </div>
         </ScrollView>
       </div>
-    </IrisPanelDock>
+    </div>
   )
 }

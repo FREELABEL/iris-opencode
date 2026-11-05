@@ -1,3 +1,4 @@
+import { IrisShell } from "@/components/iris-shell"
 import "@/index.css"
 import * as Sentry from "@sentry/solid"
 import { I18nProvider } from "@opencode-ai/ui/context"
@@ -603,15 +604,15 @@ export function AppInterface(props: {
                 root={(routerProps) => (
                   <TabsProvider>
                     <SplitProvider>
-                    <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                          </Show>
-                        </ServerShell>
-                      </NotificationProvider>
-                    </PermissionProvider>
+                      <PermissionProvider>
+                        <NotificationProvider>
+                          <ServerShell>
+                            <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                              <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                            </Show>
+                          </ServerShell>
+                        </NotificationProvider>
+                      </PermissionProvider>
                     </SplitProvider>
                   </TabsProvider>
                 )}
@@ -650,11 +651,17 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
-        <Route path="/" component={NewHome} />
-        <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
-        <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+        {/* One shell, mounted once: only the left side changes between these (#192535). */}
+        <Route component={(routeProps) => <IrisShell>{routeProps.children}</IrisShell>}>
+          <Route path="/" component={NewHome} />
+          <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
+          <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+          <Route path="/new-session" component={DraftRoute} />
+        </Route>
       </Show>
-      <Route path="/new-session" component={DraftRoute} />
+      <Show when={!settings.general.newLayoutDesigns()}>
+        <Route path="/new-session" component={DraftRoute} />
+      </Show>
     </>
   )
 }
