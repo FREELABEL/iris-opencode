@@ -12,7 +12,7 @@ import { Store } from "@tauri-apps/plugin-store"
 
 import { UPDATER_ENABLED, createUpdaterPlatform, onUpdateModeChanged, runUpdater } from "./updater"
 import { opencodeGlobal } from "./opencode-global"
-import { basicAuthorization, engineOrigins, withEngineAuth, type EngineCredentials } from "./engine-auth"
+import { basicAuthorization, engineOrigins, withEngineAuth, type EngineCredentials } from "@opencode-ai/app/engine-auth"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { invoke } from "@tauri-apps/api/core"

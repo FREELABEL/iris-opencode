@@ -11,6 +11,7 @@ import { createBrowserDraftStore } from "@/utils/draft-store"
 import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { authFromToken } from "@/utils/server"
+import { basicAuthorization, engineOrigins, withEngineAuth } from "@/utils/engine-auth"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
 
@@ -111,6 +112,18 @@ const getDefaultUrl = () => {
   return getCurrentUrl()
 }
 
+// Kept for this tab, so a reload after the URL is cleaned still reaches a password-protected engine.
+const AUTH_TOKEN_KEY = "opencode.auth_token"
+const readAuthToken = () => {
+  const fromUrl = new URLSearchParams(location.search).get("auth_token")
+  try {
+    if (fromUrl) sessionStorage.setItem(AUTH_TOKEN_KEY, fromUrl)
+    return fromUrl ?? sessionStorage.getItem(AUTH_TOKEN_KEY)
+  } catch {
+    return fromUrl
+  }
+}
+
 const clearAuthToken = () => {
   const params = new URLSearchParams(location.search)
   if (!params.has("auth_token")) return
@@ -153,8 +166,14 @@ if (import.meta.env.VITE_SENTRY_DSN) {
 
 if (root instanceof HTMLElement) {
   void loadInitialLocale().then((locale) => {
-    const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
+    const auth = authFromToken(readAuthToken())
     clearAuthToken()
+    if (auth) {
+      // The IRIS panels call /iris with a bare fetch, as in the desktop window — see engine-auth.ts.
+      const engine = new URL(getCurrentUrl())
+      const origins = engineOrigins(Number(engine.port)).add(engine.origin)
+      globalThis.fetch = withEngineAuth(globalThis.fetch.bind(globalThis), origins, basicAuthorization(auth))
+    }
     const server: ServerConnection.Http = {
       type: "http",
       authToken: !!auth,
