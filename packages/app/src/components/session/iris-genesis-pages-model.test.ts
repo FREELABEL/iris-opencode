@@ -148,6 +148,10 @@ describe("thumbnails and the preview", () => {
     expect(thumbSources({ ...PAGE, requiresAuth: true })).toEqual([])
     expect(thumbSources({ ...PAGE, visibility: "private" })).toEqual([])
     expect(thumbSources({ ...PAGE, visibility: "unlisted" }).map((s) => s.kind)).toEqual(["frame"])
+    // A client's own domain may refuse a frame; only the platform's hosts are framed in a card.
+    expect(thumbSources({ ...PAGE, url: "https://cottonwoodcreekbrewery.com/p/cwc-events" })).toEqual([])
+    expect(thumbSources({ ...PAGE, url: "https://freelabel.net/p/x" }).map((s) => s.kind)).toEqual(["frame"])
+    expect(thumbSources({ ...PAGE, url: "https://evilheyiris.io/p/x" })).toEqual([])
   })
   test("a draft previews through its tokenised address; a published page through its own", () => {
     expect(previewAddress(PAGE, "https://x?preview=true")).toBe(PAGE.url)

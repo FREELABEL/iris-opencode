@@ -16,8 +16,10 @@
 /* ── brand marks and swatches ── */
 .iris-gp-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; border-radius: 4px; overflow: hidden; background: var(--background-element); color: var(--text-base); font-size: 9.5px; font-weight: 600; }
 .iris-gp-mark img { width: 100%; height: 100%; object-fit: contain; }
-/* A logo drawn white-on-transparent vanishes on a light tile: the mark always sits on ink. */
-.iris-gp-mark[data-size="lg"] { width: 34px; height: 34px; border-radius: 8px; font-size: 14px; background: color-mix(in srgb, var(--text-strong) 88%, var(--background-base)); color: var(--background-base); padding: 5px; box-sizing: border-box; }
+.iris-gp-mark[data-size="lg"] { width: 34px; height: 34px; border-radius: 8px; font-size: 14px; padding: 5px; box-sizing: border-box; }
+/* The IRIS kit's logo is white on transparent and has no light-ground variant: an image mark sits
+   on one fixed dark tile in both themes, so it reads the same everywhere. A letter stays on tokens. */
+.iris-gp-mark[data-size="lg"]:has(img) { background: #141414; }
 .iris-gp-swatches { display: inline-flex; flex: none; }
 .iris-gp-swatches > span { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--background-base), inset 0 0 0 1px color-mix(in srgb, var(--text-strong) 18%, transparent); }
 .iris-gp-swatches > span + span { margin-left: -3px; }
@@ -45,7 +47,8 @@
 .iris-gp-meta { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
 .iris-gp-name { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-gp-slug { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iris-gp-chips { display: flex; align-items: center; gap: 4px; margin-top: 3px; min-width: 0; }
+.iris-gp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; min-width: 0; }
+.iris-gp-chips > .iris-ui-chip { flex: none; }
 .iris-gp-when { margin-left: auto; font-size: 11px; color: var(--text-weak); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .iris-gp-brand { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); font-size: 11.5px; color: var(--text-base); min-width: 0; }
 .iris-gp-brandname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -89,7 +92,8 @@
 
 .iris-gp-side { min-height: 0; overflow-y: auto; border-left: 1px solid var(--border-weaker-base); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .iris-gp-sidebrand { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: var(--background-element); font-size: 12px; }
-.iris-gp-facts { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px 10px; margin: 0; font-size: 12px; }
+.iris-gp-facts { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 7px 10px; align-items: baseline; margin: 0; font-size: 12px; }
+.iris-gp-facts .iris-gp-wide { grid-column: 1 / -1; margin-top: -3px; }
 .iris-gp-facts dt { color: var(--text-weak); }
 .iris-gp-facts dd { margin: 0; color: var(--text-base); min-width: 0; overflow-wrap: anywhere; }
 .iris-gp-facts dd .iris-gp-muted { margin-top: 2px; }
@@ -126,3 +130,4 @@
   .iris-gp-cards { grid-template-columns: minmax(0, 1fr); }
   .iris-ui-bar { flex-wrap: wrap; }
 }
+.iris-gp-dhead > .iris-ui-chip { flex: none; }

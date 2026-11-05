@@ -117,6 +117,10 @@ export function IrisGenesisPages(props: {
     q: "",
     page: 1,
   })
+  // The board often arrives after the pane mounts: open on "This project" once it does, unless the
+  // person already chose a scope.
+  let scopeChosen = false
+  createEffect(on(() => props.bloqId, (id) => !scopeChosen && setSt({ scope: id != null ? "project" : "all", page: 1 }), { defer: true }))
   const setView = (v: "grid" | "list") => {
     setSt("view", v)
     try { localStorage.setItem(PAGES_VIEW_KEY, v) } catch {}
@@ -459,7 +463,7 @@ export function IrisGenesisPages(props: {
             <div class="iris-ui-seg" role="tablist" aria-label="Which pages">
               <For each={[["all", "All"], ["project", "This project"]] as const}>
                 {([v, label]) => (
-                  <button type="button" role="tab" aria-selected={st.scope === v} onClick={() => setSt({ scope: v, page: 1 })}>
+                  <button type="button" role="tab" aria-selected={st.scope === v} onClick={() => ((scopeChosen = true), setSt({ scope: v, page: 1 }))}>
                     {label}
                   </button>
                 )}
@@ -688,8 +692,8 @@ export function IrisGenesisPages(props: {
                   {([id, label]) => (
                     <button type="button" role="tab" class="iris-ui-tab" aria-selected={tab() === id} onClick={() => setTab(id)}>
                       {label}
-                      <Show when={id === "versions" && (versions()?.total ?? p().version) != null}>
-                        <span class="n">{versions()?.total ?? p().version}</span>
+                      <Show when={id === "versions" && versions()?.measured && versions()!.total != null}>
+                        <span class="n">{versions()!.total}</span>
                       </Show>
                     </button>
                   )}
@@ -1158,10 +1162,13 @@ function SideCard(props: {
             <span class="iris-gp-muted"> · showing its draft preview</span>
           </Show>
         </dd>
-        <dt>Who can read it</dt>
+        <dt>Access</dt>
         <dd>
           <VisChip page={p()} />
-          <div class="iris-gp-muted">{VISIBILITY[vis()].hint}{p().requiresAuth ? ", after signing in" : ""}.</div>
+        </dd>
+        <dd class="iris-gp-wide iris-gp-muted">
+          {VISIBILITY[vis()].hint}
+          {p().requiresAuth ? " — and they have to sign in first" : ""}.
         </dd>
         <Show when={p().version != null}>
           <dt>Version</dt>

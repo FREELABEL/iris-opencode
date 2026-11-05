@@ -238,8 +238,25 @@ export type ThumbSource = { kind: "image"; url: string } | { kind: "frame"; url:
 export function thumbSources(p: GenesisPage): ThumbSource[] {
   const out: ThumbSource[] = []
   for (const u of [p.thumbnailUrl, p.ogImage]) if (u && /^https?:\/\//.test(u) && !out.some((s) => s.url === u)) out.push({ kind: "image", url: u })
-  if (p.url && p.status === "published" && !p.requiresAuth && visibilityOf(p) !== "private") out.push({ kind: "frame", url: p.url })
+  if (p.url && framesInApp(p.url) && p.status === "published" && !p.requiresAuth && visibilityOf(p) !== "private") out.push({ kind: "frame", url: p.url })
   return out
+}
+
+/**
+ * The platform's own hosts send `frame-ancestors` naming the app (measured 2026-11-05). A client's
+ * own domain may not — cottonwoodcreekbrewery.com redirects to its root, which sends
+ * X-Frame-Options: sameorigin — and a refused frame draws the browser's error page in the card.
+ * The detail asks the sidecar first (frame-check); a card is too cheap to ask for, so it only frames
+ * these.
+ */
+const FRAMING_HOSTS = /^(?:[a-z0-9-]+\.)?(?:heyiris\.io|freelabel\.net)$/i
+export function framesInApp(url: string): boolean {
+  try {
+    const u = new URL(url)
+    return u.protocol === "https:" && FRAMING_HOSTS.test(u.hostname)
+  } catch {
+    return false
+  }
 }
 
 /** The detail preview's address: the live page, or a draft's tokenised preview, or nothing. */
