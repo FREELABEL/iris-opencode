@@ -3,7 +3,18 @@ import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import "./iris-tool-map.css"
 import { agentConfig, effectLabel, readCatalog, type Catalog, type Effect } from "./iris-agent-editor-model"
 import { fmtDuration, verdict, type LiveRun } from "./iris-agent-live-model"
-import { GEO, headerLine, layout, modelLabel, nodeBadge, nodeLine, providerOf, runPill, toolMap, type MapNode } from "./iris-tool-map-model"
+import {
+  GEO,
+  headerLine,
+  layout,
+  modelLabel,
+  nodeBadge,
+  nodeLine,
+  providerOf,
+  runPill,
+  toolMap,
+  type MapNode,
+} from "./iris-tool-map-model"
 
 /**
  * Agents › Live › Tool access (#192619): one agent's tools as a map — what this run has called
@@ -41,7 +52,14 @@ function Glyph(props: { effect: Effect; title: string }) {
   return (
     <span class="itm-icon" data-effect={props.effect} title={props.title}>
       <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-        <path d={EFFECT_PATH[props.effect]} fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" />
+        <path
+          d={EFFECT_PATH[props.effect]}
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linejoin="round"
+          stroke-linecap="round"
+        />
       </svg>
     </span>
   )
@@ -92,7 +110,9 @@ export function IrisToolMap(props: {
   onPick: (id: number) => void
   run: LiveRun | null
 }) {
-  const [catalogRes] = createResource(async () => readCatalog(await proxied(props.doFetch, "/iris/agent-editor/tool-catalog")))
+  const [catalogRes] = createResource(async () =>
+    readCatalog(await proxied(props.doFetch, "/iris/agent-editor/tool-catalog")),
+  )
   const [agentRes] = createResource(
     () => props.agentId,
     (id) => proxied(props.doFetch, `/iris/agent-editor/agent/${id}`),
@@ -122,91 +142,114 @@ export function IrisToolMap(props: {
   const pill = () => runPill(props.run)
 
   return (
-    <section class="itm" data-component="iris-tool-map" aria-label="Tool access">
-      <header class="itm-head">
-        <span class="itm-head__title">
-          <svg class="itm-head__mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="M1 8h4M11 8h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-            <circle cx="8" cy="8" r="2.6" fill="currentColor" />
-          </svg>
-          Tool access
-        </span>
-        <span class="itm-head__count">{headerLine(map())}</span>
-      </header>
+    <Show when={props.agents.length} fallback={<div class="itm itm--empty">No agents on this board yet.</div>}>
+      <section class="itm" data-component="iris-tool-map" aria-label="Tool access">
+        <header class="itm-head">
+          <span class="itm-head__title">
+            <svg class="itm-head__mark" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M1 8h4M11 8h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+              <circle cx="8" cy="8" r="2.6" fill="currentColor" />
+            </svg>
+            Tool access
+          </span>
+          <span class="itm-head__count">{headerLine(map())}</span>
+        </header>
 
-      <div class="itm-chips" role="tablist" aria-label="Agent">
-        <For each={props.agents}>
-          {(a) => (
-            <button
-              type="button"
-              role="tab"
-              class="itm-chip"
-              aria-selected={a.id === props.agentId}
-              onClick={() => props.onPick(a.id)}
+        <div class="itm-chips" role="tablist" aria-label="Agent">
+          <For each={props.agents}>
+            {(a) => (
+              <button
+                type="button"
+                role="tab"
+                class="itm-chip"
+                aria-selected={a.id === props.agentId}
+                onClick={() => props.onPick(a.id)}
+              >
+                <AgentIcon model={a.model} />
+                {a.name}
+              </button>
+            )}
+          </For>
+        </div>
+
+        <div class="itm-stage" ref={box}>
+          <div class="itm-canvas" style={{ width: `${geo().width}px`, height: `${geo().height}px` }}>
+            <svg class="itm-edges" width={geo().width} height={geo().height} aria-hidden="true">
+              <For each={geo().edgesLeft}>{(d) => <path d={d} class="itm-edge" data-kind="used" />}</For>
+              {/* Dashed first, so the trunk a solid edge shares with them reads solid. */}
+              <For each={geo().edgesRight}>
+                {(d, i) => (
+                  <Show when={map().right[i()]?.kind === "none"}>
+                    <path d={d} class="itm-edge" data-kind="none" />
+                  </Show>
+                )}
+              </For>
+              <For each={geo().edgesRight}>
+                {(d, i) => (
+                  <Show when={map().right[i()]?.kind !== "none"}>
+                    <path d={d} class="itm-edge" data-kind={map().right[i()]?.kind} />
+                  </Show>
+                )}
+              </For>
+              <Show when={map().left.length}>
+                <path class="itm-port" d={`M${geo().ports.left.x - 5},${geo().ports.left.y - 4} l4,4 l-4,4`} />
+              </Show>
+              <Show when={map().right.length}>
+                <path class="itm-port" d={`M${geo().ports.right.x + 1},${geo().ports.right.y - 4} l4,4 l-4,4`} />
+              </Show>
+            </svg>
+
+            <For each={map().left}>
+              {(n, i) => <Node node={n} x={geo().left[i()]!.x} y={geo().left[i()]!.y} catalog={catalog()} />}
+            </For>
+            <For each={map().right}>
+              {(n, i) => <Node node={n} x={geo().right[i()]!.x} y={geo().right[i()]!.y} catalog={catalog()} />}
+            </For>
+
+            <div
+              class="itm-card"
+              style={{
+                left: `${geo().card.x}px`,
+                top: `${geo().card.y}px`,
+                width: `${GEO.cardW}px`,
+                "min-height": `${GEO.cardH}px`,
+              }}
             >
-              <AgentIcon model={a.model} />
-              {a.name}
-            </button>
-          )}
-        </For>
-      </div>
-
-      <div class="itm-stage" ref={box}>
-        <div class="itm-canvas" style={{ width: `${geo().width}px`, height: `${geo().height}px` }}>
-          <svg class="itm-edges" width={geo().width} height={geo().height} aria-hidden="true">
-            <For each={geo().edgesLeft}>{(d) => <path d={d} class="itm-edge" data-kind="used" />}</For>
-            {/* Dashed first, so the trunk a solid edge shares with them reads solid. */}
-            <For each={geo().edgesRight}>{(d, i) => <Show when={map().right[i()]?.kind === "none"}><path d={d} class="itm-edge" data-kind="none" /></Show>}</For>
-            <For each={geo().edgesRight}>{(d, i) => <Show when={map().right[i()]?.kind !== "none"}><path d={d} class="itm-edge" data-kind={map().right[i()]?.kind} /></Show>}</For>
-            <Show when={map().left.length}>
-              <path class="itm-port" d={`M${geo().ports.left.x - 5},${geo().ports.left.y - 4} l4,4 l-4,4`} />
-            </Show>
-            <Show when={map().right.length}>
-              <path class="itm-port" d={`M${geo().ports.right.x + 1},${geo().ports.right.y - 4} l4,4 l-4,4`} />
-            </Show>
-          </svg>
-
-          <For each={map().left}>{(n, i) => <Node node={n} x={geo().left[i()]!.x} y={geo().left[i()]!.y} catalog={catalog()} />}</For>
-          <For each={map().right}>{(n, i) => <Node node={n} x={geo().right[i()]!.x} y={geo().right[i()]!.y} catalog={catalog()} />}</For>
-
-          <div
-            class="itm-card"
-            style={{ left: `${geo().card.x}px`, top: `${geo().card.y}px`, width: `${GEO.cardW}px`, "min-height": `${GEO.cardH}px` }}
-          >
-            <div class="itm-card__head">
-              <span class="itm-card__icon">
-                <AgentIcon model={model()} />
-              </span>
-              <span class="itm-card__who">
-                <span class="itm-card__name">{agent()?.name ?? "Agent"}</span>
-                <Show when={modelLabel(model())}>
-                  <span class="itm-card__model">{modelLabel(model())}</span>
-                </Show>
-              </span>
-              <span class="itm-pill" data-tone={pill().tone}>
-                <Show when={pill().tone === "run"}>
-                  <span class="itm-spin" aria-hidden="true" />
-                </Show>
-                {pill().text}
-              </span>
+              <div class="itm-card__head">
+                <span class="itm-card__icon">
+                  <AgentIcon model={model()} />
+                </span>
+                <span class="itm-card__who">
+                  <span class="itm-card__name">{agent()?.name ?? "Agent"}</span>
+                  <Show when={modelLabel(model())}>
+                    <span class="itm-card__model">{modelLabel(model())}</span>
+                  </Show>
+                </span>
+                <span class="itm-pill" data-tone={pill().tone}>
+                  <Show when={pill().tone === "run"}>
+                    <span class="itm-spin" aria-hidden="true" />
+                  </Show>
+                  {pill().text}
+                </span>
+              </div>
+              <p class="itm-card__task" data-tone={verdict(props.run).tone}>
+                {verdict(props.run).text}
+              </p>
             </div>
-            <p class="itm-card__task" data-tone={verdict(props.run).tone}>
-              {verdict(props.run).text}
-            </p>
           </div>
         </div>
-      </div>
 
-      <Show when={map().moreLeft || map().moreRight}>
-        <div class="itm-more">
-          <Show when={map().moreLeft}>
-            <span>+{map().moreLeft} more used</span>
-          </Show>
-          <Show when={map().moreRight}>
-            <span>+{map().moreRight} more on the right</span>
-          </Show>
-        </div>
-      </Show>
-    </section>
+        <Show when={map().moreLeft || map().moreRight}>
+          <div class="itm-more">
+            <Show when={map().moreLeft}>
+              <span>+{map().moreLeft} more used</span>
+            </Show>
+            <Show when={map().moreRight}>
+              <span>+{map().moreRight} more on the right</span>
+            </Show>
+          </div>
+        </Show>
+      </section>
+    </Show>
   )
 }

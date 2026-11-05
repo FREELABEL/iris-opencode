@@ -34,6 +34,7 @@
   line-height: 1.3;
   flex-shrink: 0;
 }
+.itm--empty { color: var(--itm-ink2); }
 .itm *, .itm *::before, .itm *::after { box-sizing: border-box; }
 
 .itm-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
