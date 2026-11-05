@@ -675,6 +675,12 @@
       "purpose": "Let one named person open a gated page without the emailed code: iris pages access-link, single use, expiry, list and revoke, never grants a role."
     },
     {
+      "src": "how-to/run-ad-campaigns.md",
+      "dest": "how-to/run-ad-campaigns.md",
+      "managed": true,
+      "purpose": "Run an ad campaign on your own board: iris campaigns setup/create/add-creative/approve/reject/request-changes/list; who decided when; approving never publishes."
+    },
+    {
       "src": "how-to/dataset-webhooks.md",
       "dest": "how-to/dataset-webhooks.md",
       "managed": true,
