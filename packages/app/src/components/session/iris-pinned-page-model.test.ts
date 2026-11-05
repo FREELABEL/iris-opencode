@@ -18,6 +18,17 @@ describe("a pinned Genesis page (#192480)", () => {
     expect(pageVerdict("x", { state: "refused", reason: "X-Frame-Options: DENY" })).toMatchObject({ show: false, detail: "X-Frame-Options: DENY" })
     expect(pageVerdict("x", { state: "unreachable", reason: "fetch failed" })).toMatchObject({ show: false, title: "Couldn't reach freelabel.net" })
   })
+  test("a refusal that lists the app's own origins is a wrong origin guess: show the page", () => {
+    // What 1.18.169 on macOS showed for lexicon-console on 2026-11-05.
+    const reason =
+      "frame-ancestors allows only 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://127.0.0.1:* http://localhost:*"
+    expect(pageVerdict("lexicon-console", { state: "refused", reason, status: 200 })).toEqual({ show: true })
+    // The status still decides a missing page.
+    expect(pageVerdict("nope", { state: "refused", reason, status: 404 })).toMatchObject({ show: false, title: "This page isn't published" })
+    // A site that really refuses the app is still refused.
+    expect(pageVerdict("x", { state: "refused", reason: "frame-ancestors allows only 'self' https://example.com" })).toMatchObject({ show: false })
+    expect(pageVerdict("x", { state: "refused", reason: "frame-ancestors 'none'" })).toMatchObject({ show: false })
+  })
   test("an unanswered check says nothing about the page: show it, the load timeout guards", () => {
     expect(pageVerdict("x", undefined)).toEqual({ show: true })
     expect(pageVerdict("x", {})).toEqual({ show: true })
