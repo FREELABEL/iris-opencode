@@ -1914,7 +1914,7 @@
       "describe": "let a public form add records to this dataset — write-only, nothing is read back",
       "aliases": [],
       "run": "iris atlas:datasets public-submit enable <slug>",
-      "haystack": "atlas:datasets public-submit enable on let a public form add records to this dataset — write-only, nothing is read back page published page slug the lane is addressed under collection lane name in the url, e.g. submissions require fields of which at least one must be filled (repeat or comma-separate) set field=value the server always writes (the sender cannot change it) alias sent_name=field — accept an older field name origin another site allowed to post (host name) ref-prefix letters in front of each reference, e.g. intake per-sender per-hour dry-run show what would be stored; change nothing"
+      "haystack": "atlas:datasets public-submit enable on let a public form add records to this dataset — write-only, nothing is read back page published page slug the lane is addressed under collection lane name in the url, e.g. submissions require fields of which at least one must be filled (repeat or comma-separate) set field=value the server always writes (the sender cannot change it) alias sent_name=field — accept an older field name origin another site allowed to post (host name) ref-prefix letters in front of each reference, e.g. intake per-sender per-hour notify email staff when a submission arrives (max 5;  notify-link page the alert links to (https://heyiris.io/p/…); defaults to the lane statuses review statuses staff may set (comma-separate;  dry-run show what would be stored; change nothing"
     },
     {
       "kind": "command",

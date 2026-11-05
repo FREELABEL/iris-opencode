@@ -57,6 +57,8 @@ function printLane(lane: LaneConfig, slug: string) {
   console.log(`  ${dim("Sites:")}       same host, heyiris.io${lane.origins?.length ? ", " + lane.origins.join(", ") : ""}`)
   console.log(`  ${dim("Limits:")}      ${Math.min(lane.per_sender ?? 5, MAX_PER_SENDER)} per sender / 10 min · ${Math.min(lane.per_hour ?? 200, MAX_PER_HOUR)} per hour`)
   console.log(`  ${dim("Reads back:")}  nothing — the dataset stays private; staff read it signed in`)
+  console.log(`  ${dim("Alerts:")}      ${lane.notify_emails?.length ? lane.notify_emails.join(", ") + (lane.notify_link ? ` → ${lane.notify_link}` : "") : "none"}`)
+  console.log(`  ${dim("Staff set:")}   ${lane.staff_update?.statuses?.length ? lane.staff_update.statuses.join(", ") : "any status"} · notes appended`)
 }
 
 /**
@@ -113,6 +115,9 @@ const EnableCommand = cmd({
       .option("ref-prefix", { type: "string", describe: "letters in front of each reference, e.g. INTAKE" })
       .option("per-sender", { type: "number", describe: `submissions per address per 10 minutes (max ${MAX_PER_SENDER})` })
       .option("per-hour", { type: "number", describe: `submissions per hour for the whole lane (max ${MAX_PER_HOUR})` })
+      .option("notify", { type: "array", string: true, describe: "email staff when a submission arrives (max 5; 'none' clears) — reference and link only, no sender data" })
+      .option("notify-link", { type: "string", describe: "page the alert links to (https://heyiris.io/p/…); defaults to the lane's page" })
+      .option("statuses", { type: "array", string: true, describe: "review statuses staff may set (comma-separate; 'any' clears)" })
       .option("dry-run", { type: "boolean", default: false, describe: "show what would be stored; change nothing" }),
   async handler(args) {
     UI.empty()
@@ -132,6 +137,9 @@ const EnableCommand = cmd({
       refPrefix: args["ref-prefix"] as string | undefined,
       perSender: args["per-sender"] as number | undefined,
       perHour: args["per-hour"] as number | undefined,
+      notify: args.notify as string[] | undefined,
+      notifyLink: args["notify-link"] as string | undefined,
+      statuses: args.statuses as string[] | undefined,
     }, fieldKeys(schema))
     for (const w of built.warnings) prompts.log.warn(w)
     if (!built.lane) {

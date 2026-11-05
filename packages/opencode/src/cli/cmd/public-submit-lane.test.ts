@@ -127,3 +127,24 @@ describe("working the queue (#192612)", () => {
     expect(reviewPayload({})).toBeNull()
   })
 })
+
+describe("alerts and staff settings (#192612)", () => {
+  const { buildLane } = require("./public-submit-lane")
+  const base = { enabled: true, page: "desk", collection: "submissions", require_any: ["name"] }
+
+  test("an unrelated change keeps the alert and statuses", () => {
+    const prev = { ...base, notify_emails: ["a@x.io"], notify_link: "https://heyiris.io/p/desk-v3", staff_update: { statuses: ["new", "hold"] } }
+    const { lane } = buildLane(prev, { perSender: 10 }, [])
+    expect(lane.notify_emails).toEqual(["a@x.io"])
+    expect(lane.notify_link).toBe("https://heyiris.io/p/desk-v3")
+    expect(lane.staff_update).toEqual({ statuses: ["new", "hold"] })
+  })
+
+  test("sets, clears and validates", () => {
+    expect(buildLane(base, { notify: ["A@x.io,b@y.io"], statuses: ["new,Hold"] }, []).lane).toMatchObject({ notify_emails: ["a@x.io", "b@y.io"], staff_update: { statuses: ["new", "hold"] } })
+    expect(buildLane({ ...base, notify_emails: ["a@x.io"] }, { notify: ["none"] }, []).lane.notify_emails).toBeUndefined()
+    expect(buildLane(base, { notify: ["not-an-email"] }, []).errors.join()).toContain("not an email")
+    expect(buildLane(base, { notifyLink: "https://evil.example/p/x" }, []).errors.join()).toContain("heyiris.io/p/")
+    expect(buildLane(base, { notify: ["a@x.io,b@x.io,c@x.io,d@x.io,e@x.io,f@x.io"] }, []).errors.join()).toContain("at most 5")
+  })
+})

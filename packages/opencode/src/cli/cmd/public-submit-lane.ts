@@ -20,6 +20,12 @@ export interface LaneConfig {
   ref_prefix?: string
   per_sender?: number
   per_hour?: number
+  /** Staff told by email when a submission arrives (max 5). The email carries a reference and a link, never the sender's words. */
+  notify_emails?: string[]
+  /** Where that email links (a heyiris.io/p/ page); defaults to the lane's page. */
+  notify_link?: string
+  /** What staff may change on a submission, and which statuses are allowed. */
+  staff_update?: { fields?: string[]; statuses?: string[] }
 }
 
 /** The ceilings fl-iris-api enforces whatever the settings say. Kept here so `show` tells the truth. */
@@ -40,7 +46,16 @@ export type LaneOptions = {
   refPrefix?: string
   perSender?: number
   perHour?: number
+  /** Emails to alert on a new submission; ["none"] clears the list. */
+  notify?: string[]
+  notifyLink?: string
+  /** Statuses staff may set (comma-separated or repeated); ["any"] clears the restriction. */
+  statuses?: string[]
 }
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const STATUS = /^[a-z][a-z0-9_-]{0,39}$/
+const MAX_NOTIFY = 5
 
 function pairs(list: string[] | undefined, label: string, errors: string[]): Record<string, string> {
   const out: Record<string, string> = {}
@@ -134,6 +149,31 @@ export function buildLane(
   if (refPrefix) lane.ref_prefix = refPrefix
   lane.per_sender = perSender
   lane.per_hour = perHour
+
+  // Alert + staff settings: kept as they were unless an option names them.
+  const split = (l: string[]) => l.flatMap((x) => String(x).split(",")).map((x) => x.trim()).filter(Boolean)
+  let notify = prev.notify_emails ?? []
+  if (opts.notify?.length) {
+    const asked = split(opts.notify)
+    notify = asked.length === 1 && asked[0].toLowerCase() === "none" ? [] : [...new Set(asked.map((e) => e.toLowerCase()))]
+    for (const e of notify) if (!EMAIL.test(e)) errors.push(`--notify '${e}' is not an email address`)
+    if (notify.length > MAX_NOTIFY) errors.push(`--notify takes at most ${MAX_NOTIFY} addresses`)
+  }
+  const notifyLink = (opts.notifyLink ?? prev.notify_link ?? "").trim()
+  if (notifyLink && !/^https:\/\/(www\.)?heyiris\.io\/p\//.test(notifyLink)) errors.push("--notify-link must be a https://heyiris.io/p/… page")
+  const staff = { ...(prev.staff_update ?? {}) }
+  if (opts.statuses?.length) {
+    const asked = split(opts.statuses).map((x) => x.toLowerCase())
+    if (asked.length === 1 && asked[0] === "any") delete staff.statuses
+    else {
+      for (const st of asked) if (!STATUS.test(st)) errors.push(`--statuses '${st}' must be lowercase letters, digits, - or _`)
+      staff.statuses = [...new Set(asked)]
+    }
+  }
+  if (errors.length) return { errors, warnings }
+  if (notify.length) lane.notify_emails = notify
+  if (notifyLink) lane.notify_link = notifyLink
+  if (Object.keys(staff).length) lane.staff_update = staff
   return { lane, errors, warnings }
 }
 
