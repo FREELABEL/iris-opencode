@@ -2650,6 +2650,43 @@ noLLMServer.instance(
   30_000,
 )
 
+// #192645: a PDF attached for a model that cannot take PDF input. It used to arrive as
+// "ERROR: Cannot read <file> (this model does not support pdf input)", and the agent then spent
+// its turns extracting the text itself. The engine now reads it and sends the text.
+it.instance("a PDF attached for a model without PDF input reaches it as its text, page by page", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "PDF",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const pdf = readFileSync(path.join(import.meta.dir, "../fixture/attachments/two-pages.pdf")).toString("base64")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [
+        { type: "text", text: "What was the first offer?" },
+        { type: "file", mime: "application/pdf", filename: "reduction.pdf", url: `data:application/pdf;base64,${pdf}` },
+      ],
+    })
+
+    yield* llm.text("ok")
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+
+    const body = JSON.stringify((yield* llm.hits)[0]?.body)
+    expect(body).toContain("# PDF — 2 pages")
+    expect(body).toContain("Round 1 offer 700.00")
+    expect(body).not.toContain("Cannot read")
+    expect(body).not.toContain("application/pdf")
+  }),
+)
+
 // The CSV/Excel path the Desktop composer takes: attachments arrive as data: URLs. A spreadsheet
 // used to reach the OpenAI-compatible SDK as a file part it cannot encode (the turn threw), and a
 // large CSV was inlined whole (the upstream 400'd, and so did every later turn).
