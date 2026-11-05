@@ -2274,7 +2274,6 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* Agents › Live (#187921) — is it stuck? */
 .iris-live { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; overflow-y: auto; }
 .iris-live__bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; flex-shrink: 0; }
-.iris-live__picker { font-size: 12px; min-width: 0; }
 .iris-live__verdict { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--background-element); color: var(--text-strong); }
 .iris-live__verdict--warn { border-inline-start: 3px solid var(--border-warning-base, #d4a017); }
 .iris-live__verdict--paused { border-inline-start: 3px solid var(--border-interactive-base, #3b82f6); }
