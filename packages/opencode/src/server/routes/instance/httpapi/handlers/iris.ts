@@ -324,9 +324,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const agents = Effect.fn("IrisHttpApi.agents")(
       (ctx: {
         params: { bloqID: number }
-        query: { page?: number; perPage?: number; q?: string; mode?: "all" | "scheduled" | "ondemand" }
+        query: { page?: number; perPage?: number; q?: string; mode?: "all" | "scheduled" | "ondemand"; scope?: "project" | "all" }
       }) =>
-        Effect.promise(() => fetchAgents(ctx.params.bloqID)).pipe(
+        Effect.promise(() => fetchAgents(ctx.params.bloqID, { all: ctx.query.scope === "all", q: ctx.query.q })).pipe(
           Effect.map((r) => {
             const mode = ctx.query.mode ?? "all"
             const all =

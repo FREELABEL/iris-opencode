@@ -694,6 +694,8 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
+/** Panes with an All / This project switch beside the search box; the server takes scope=all. */
+const SCOPED_PANES = new Set(["pages", "agents"])
 const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
@@ -1549,8 +1551,11 @@ export function SessionIrisTab() {
    * that the crash needs a remembered board to reach the `page()` call at all.
    */
   const [page, setPage] = createSignal(1)
-  // Genesis › Pages: this project's pages, or every page on the account (2026-11-04).
-  const [pagesScope, setPagesScope] = createSignal<"project" | "all">("project")
+  // Genesis › Pages and Agents: this project's rows, or every one on the account (2026-11-04,
+  // agents #192619). Held per pane, so choosing All for pages does not widen agents too.
+  const [scopes, setScopes] = createSignal<Record<string, "project" | "all">>({})
+  const scopeOf = (which: string) => scopes()[which] ?? "project"
+  const setScopeOf = (which: string, v: "project" | "all") => setScopes((m) => ({ ...m, [which]: v }))
 
   type SurfaceKey = readonly [string, NonNullable<ReturnType<typeof activeBloq>>, SurfaceId, string, number, string, string]
   // Typed explicitly: left to inference, the fetcher's `info` argument made the resource's own
@@ -1562,7 +1567,7 @@ export function SessionIrisTab() {
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), pagesScope()] as SurfaceKey) : undefined
+      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), scopeOf(resolved().pane)] as SurfaceKey) : undefined
     },
     async ([b, id, surf, sub, pageNo, q, scope], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
@@ -1576,7 +1581,8 @@ export function SessionIrisTab() {
         const h = heldPayload<SurfacePayload>(heldKey)
         if (h) return { ...h, __held: true, __pane: which } as SurfacePayload
       }
-      const url = which === "pages" && scope === "all" ? `${path(id)}?scope=all` : path(id)
+      const bare = path(id)
+      const url = SCOPED_PANES.has(which) && scope === "all" ? `${bare}${bare.includes("?") ? "&" : "?"}scope=all` : bare
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
       // the rows already on screen would leave the footer counting a set it never searched.
@@ -3130,7 +3136,9 @@ export function SessionIrisTab() {
       surface() !== "integrations" &&
       pane() !== "graph" &&
       pane() !== "catalog" &&
-      !SELF_PANES.has(pane()),
+      !SELF_PANES.has(pane()) &&
+      // "All" is the account, so "on this board" would be false (#192619).
+      !(SCOPED_PANES.has(pane()) && scopeOf(pane()) === "all"),
   )
 
   function choose(id: number) {
@@ -3287,16 +3295,16 @@ export function SessionIrisTab() {
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
-          <Show when={pane() === "pages"}>
-            <div class="iris-scope-toggle" role="tablist" aria-label="Which pages">
+          <Show when={SCOPED_PANES.has(pane())}>
+            <div class="iris-scope-toggle" role="tablist" aria-label={`Which ${pane()}`}>
               <For each={[["all", "All"], ["project", "This project"]] as const}>
                 {([value, label]) => (
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={pagesScope() === value}
+                    aria-selected={scopeOf(pane()) === value}
                     onClick={() => {
-                      setPagesScope(value)
+                      setScopeOf(pane(), value)
                       setPage(1)
                     }}
                   >

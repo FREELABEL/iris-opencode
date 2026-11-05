@@ -2397,6 +2397,10 @@ export const IrisApi = HttpApi.make("iris").add(
             Schema.optional(Schema.Literals(["all", "scheduled", "ondemand"])),
             "Narrowed SERVER-SIDE, before paging — so `total` counts the agents in this mode, not all of them. Filtering a page on the client would report the page's leftovers as the whole set.",
           ),
+          scope: described(
+            Schema.optional(Schema.Literals(["project", "all"])),
+            '"all": every agent the account can see, searched by fl-api. Default: this bloq\'s agents.',
+          ),
         }),
         params: { bloqID: Schema.NumberFromString },
         success: described(AgentsResponse, "Agents on this bloq, merged with their schedules"),

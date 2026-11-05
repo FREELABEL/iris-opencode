@@ -1844,17 +1844,31 @@ export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: nu
   }
 }
 
-export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
+/**
+ * A bloq's agents, or with `all` every agent the account can see (own, owned boards, shared) —
+ * searched by fl-api (`search`), since 50 rows of an account are not the account.
+ */
+export async function fetchAgents(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ agents: Agent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  }
 
   try {
+    // All reads fl-api's maximum (500), not 50: Scheduled / On demand narrow AFTER this fetch, so
+    // a 50-row slice of a 358-agent account would undercount both and call the rest absent.
+    const scope = opts.all ? "" : `bloq_id=${bloqId}&`
+    const rows = opts.all ? 500 : 50
+    const search = opts.all && opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""
     const [agentsRes, jobsRes] = await Promise.all([
-      irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/agents?${scope}per_page=${rows}${search}`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${scope}per_page=${rows}`),
     ])
     if (!agentsRes.ok) return { measured: false, reason: `fl-api ${agentsRes.status}`, data: { agents: [] } }
 
