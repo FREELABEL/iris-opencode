@@ -1,10 +1,16 @@
 import { For, Show } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Icon } from "@opencode-ai/ui/icon"
+import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
 import { useIrisPanelScope } from "@/context/iris-panel-scope"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
 import {
+  IRIS_SURFACE_CHOICES,
   SessionIrisTab,
+  irisPinned,
+  toggleIrisPin,
   irisStripTabs,
   useIrisActiveSurface,
   useRequestIrisSurface,
@@ -64,6 +70,30 @@ export function IrisScopeChip() {
   )
 }
 
+/**
+ * The products under the panel's "+" — pin one into the strip (pinning also opens it), the ✓ is
+ * whether it is there. One list for every host (#192535): the chat's "+" adds its own file items
+ * above it, Home and the new-chat page show it alone.
+ */
+export function IrisPinItems(props: { onOpen: (id: string) => void }) {
+  return (
+    <For each={IRIS_SURFACE_CHOICES}>
+      {(surface) => (
+        <MenuV2.Item
+          onSelect={() => {
+            if (toggleIrisPin(surface.id)) props.onOpen(surface.id)
+          }}
+        >
+          <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
+          <span class="inline-flex items-center gap-2">
+            <IrisProductIcon id={surface.id} />
+            {surface.label}
+          </span>
+        </MenuV2.Item>
+      )}
+    </For>
+  )
+}
 /** The panel for a host with no side-panel chrome of its own (Home): a row of the same surfaces, then the body. */
 export function IrisPanel(props: { onClose?: () => void }) {
   const active = useIrisActiveSurface()
@@ -85,6 +115,20 @@ export function IrisPanel(props: { onClose?: () => void }) {
             </button>
           )}
         </For>
+        <MenuV2 gutter={6} modal={false} placement="bottom-end">
+          <MenuV2.Trigger
+            as={IconButtonV2}
+            icon={<Icon name="plus-small" />}
+            variant="ghost-muted"
+            size="large"
+            aria-label="Add a tab"
+          />
+          <MenuV2.Portal>
+            <MenuV2.Content style={{ "min-width": "190px" }}>
+              <IrisPinItems onOpen={(id) => request(id as any)} />
+            </MenuV2.Content>
+          </MenuV2.Portal>
+        </MenuV2>
         <div class="ml-auto" />
         <IrisScopeChip />
         <Show when={props.onClose}>

@@ -1,13 +1,7 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
-import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
-import { Button } from "@opencode-ai/ui/button"
-import { Icon } from "@opencode-ai/ui/icon"
-import { Portal } from "solid-js/web"
-import { useTitlebarRightMount } from "@/components/titlebar"
 import { useTabs } from "@/context/tabs"
-import { IrisPanel } from "@/components/iris-panel"
-import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
+import { IrisPanelDock } from "@/components/iris-panel-dock"
 import { createHomeController } from "./home/home-controller"
 import { createHomeProjectsController } from "./home/home-projects-controller"
 import { HomeUtilityNav } from "./home/home-projects-view"
@@ -111,39 +105,17 @@ export function NewHome() {
     ctx.projects.open(directory)
     ctx.projects.touch(directory)
     // Released once the draft has navigated, so coming back to Home later shows Home.
-    void tabs.newDraft({ server: ServerConnection.key(conn), directory }, prompt, undefined, { send: true }).finally(() => setLaunching(false))
+    void tabs
+      .newDraft({ server: ServerConnection.key(conn), directory }, prompt, undefined, { send: true })
+      .finally(() => setLaunching(false))
   }
 
   const projects = createHomeProjectsController(home)
   const sessions = createHomeSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
-  // The IRIS panel opens beside Home (#192535) instead of in whichever chat was last open.
-  // Open and width are remembered, so Home comes back the way you left it.
-  const PANEL_KEY = "iris.home.panel"
-  const saved = (() => {
-    try {
-      return JSON.parse(localStorage.getItem(PANEL_KEY) ?? "{}") as { open?: boolean; width?: number }
-    } catch {
-      return {}
-    }
-  })()
-  const [panelOpen, setPanelOpen] = createSignal(saved.open === true)
-  const [panelWidth, setPanelWidth] = createSignal(typeof saved.width === "number" ? saved.width : 520)
-  createEffect(() => {
-    const value = JSON.stringify({ open: panelOpen(), width: panelWidth() })
-    try {
-      localStorage.setItem(PANEL_KEY, value)
-    } catch {}
-  })
-  const titlebarRight = useTitlebarRightMount()
-  createEffect(() => {
-    if (!irisPanelOpenRequest()) return
-    untrack(() => setPanelOpen(true))
-    clearIrisPanelOpen()
-  })
   return (
-    <div class="flex min-h-0 min-w-0 flex-1 self-stretch">
+    <IrisPanelDock>
       <div
         class={`
           m-2 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
@@ -190,44 +162,6 @@ export function NewHome() {
           </div>
         </ScrollView>
       </div>
-      <Show when={panelOpen()}>
-        <div class="relative flex min-h-0 shrink-0" style={{ width: `${panelWidth()}px` }}>
-          <ResizeHandle
-            direction="horizontal"
-            edge="start"
-            size={panelWidth()}
-            min={360}
-            max={Math.max(360, Math.round(window.innerWidth * 0.65))}
-            onResize={setPanelWidth}
-          />
-          <aside
-            aria-label="IRIS"
-            class={`
-              m-2 ml-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
-              bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
-            `}
-          >
-            <IrisPanel onClose={() => setPanelOpen(false)} />
-          </aside>
-        </div>
-      </Show>
-      {/* The same toggle, in the same place, as a chat's side panel (session-header). */}
-      <Show when={titlebarRight()}>
-        {(mount) => (
-          <Portal mount={mount()}>
-            <Button
-              variant="ghost"
-              class="titlebar-icon w-8 h-6 p-0 box-border"
-              onClick={() => setPanelOpen((open) => !open)}
-              aria-label="Toggle the IRIS panel"
-              aria-expanded={panelOpen()}
-              title="IRIS panel"
-            >
-              <Icon size="small" name={panelOpen() ? "review-active" : "review"} />
-            </Button>
-          </Portal>
-        )}
-      </Show>
-    </div>
+    </IrisPanelDock>
   )
 }
