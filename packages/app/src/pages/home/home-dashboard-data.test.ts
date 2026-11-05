@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createSwrCache, failedPart, keepGoodParts, type HomeDashboardData } from "./home-dashboard-data"
+import { agoOf, createSwrCache, failedPart, keepGoodParts, sliceOf, verbOf, type HomeDashboardData } from "./home-dashboard-data"
 
 const clock = () => {
   let t = 0
@@ -114,6 +114,7 @@ describe("keepGoodParts", () => {
     bloqs: { measured: true, total: n, bloqs: [] },
     beats: beatsFailed ? failedPart({ measured: false, heartbeats: [] }, "engine 502") : { measured: true, heartbeats: [] },
     accounts: { accounts: [{ id: n, active: true }] },
+    recent: { measured: true, items: [] },
     at: n,
   })
 
@@ -122,5 +123,27 @@ describe("keepGoodParts", () => {
     expect(merged.beats.measured).toBe(true)
     expect(merged.inbox.unread).toBe(2)
     expect(merged.at).toBe(2)
+  })
+})
+
+describe("Home tab helpers", () => {
+  test("sliceOf pages five at a time and clamps the page", () => {
+    const all = Array.from({ length: 12 }, (_, i) => i + 1)
+    expect(sliceOf(all, 1)).toMatchObject({ items: [1, 2, 3, 4, 5], page: 1, pages: 3, from: 1, to: 5, total: 12 })
+    expect(sliceOf(all, 3)).toMatchObject({ items: [11, 12], from: 11, to: 12 })
+    expect(sliceOf(all, 9).page).toBe(3)
+    expect(sliceOf([], 1)).toMatchObject({ items: [], pages: 1, from: 0, to: 0 })
+  })
+  test("agoOf speaks in the table's short form", () => {
+    const now = Date.parse("2026-11-05T12:00:00Z")
+    expect(agoOf("2026-11-05T11:59:40Z", now)).toBe("now")
+    expect(agoOf("2026-11-05T11:55:00Z", now)).toBe("5m")
+    expect(agoOf("2026-11-05T09:00:00Z", now)).toBe("3h")
+    expect(agoOf("2026-11-03T12:00:00Z", now)).toBe("2d")
+    expect(agoOf(undefined, now)).toBe("—")
+  })
+  test("verbOf: created unless touched more than two minutes later", () => {
+    expect(verbOf({ createdAt: "2026-11-05T01:00:00Z", updatedAt: "2026-11-05T01:01:00Z" })).toBe("created")
+    expect(verbOf({ createdAt: "2026-11-05T01:00:00Z", updatedAt: "2026-11-05T03:00:00Z" })).toBe("edited")
   })
 })

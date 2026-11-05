@@ -2055,6 +2055,47 @@ export async function fetchPages(
   }
 }
 
+export type RecentItem = {
+  id: number
+  title: string
+  bloqId: number
+  bloqName?: string
+  listName?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * The account's most recently created or edited board items, newest first — Home › Activity
+ * (#192535). fl-api's content-items (what `iris search ""` falls back to) lists every board's items, newest first.
+ */
+export async function fetchRecentItems(): Promise<PlatformResult<{ items: RecentItem[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { items: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/content-items?search=&per_page=50`, FL_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { items: [] } }
+    const j = (await res.json()) as any
+    // { success, data: { items, search, pagination } }
+    const raw = j?.data?.items ?? j?.items ?? []
+    const rows = Array.isArray(raw) ? raw : []
+    const items: RecentItem[] = rows
+      .map((i: any) => ({
+        id: Number(i.id),
+        title: String(i.title || "Untitled"),
+        bloqId: Number(i.bloq_id),
+        bloqName: i.bloq_name ?? undefined,
+        listName: i.list_name ?? undefined,
+        createdAt: i.created_at ?? undefined,
+        updatedAt: i.updated_at ?? undefined,
+      }))
+      .filter((i: RecentItem) => Number.isFinite(i.id) && Number.isFinite(i.bloqId))
+    return { measured: true, data: { items } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { items: [] } }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential detection
 // ─────────────────────────────────────────────────────────────────────────────

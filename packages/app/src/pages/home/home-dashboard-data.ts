@@ -11,10 +11,23 @@ import type { AgentsPayload, HivePayload, InboxPayload } from "./home-today-mode
 export type BeatsPayload = { measured: boolean; reason?: string | null; heartbeats: HeartbeatRow[] }
 export type AccountsPayload = { accounts: { id: number; active?: boolean }[] }
 export type BloqsPayload = { measured: boolean; total?: number; bloqs: unknown[] }
+export type RecentItem = {
+  id: number
+  title: string
+  bloqId: number
+  bloqName?: string
+  listName?: string
+  createdAt?: string
+  updatedAt?: string
+}
+export type RecentPayload = { measured: boolean; reason?: string; items: RecentItem[] }
+export type InboxItem = { index: number; read: boolean; type: string; from: string; receivedAt?: string; label: string; preview?: string }
+export type InboxList = InboxPayload & { items?: InboxItem[] }
 export type HomeDashboardData = {
   hive: HivePayload
   agents: AgentsPayload
-  inbox: InboxPayload
+  inbox: InboxList
+  recent: RecentPayload
   bloqs: BloqsPayload
   beats: BeatsPayload
   accounts: AccountsPayload
@@ -42,15 +55,16 @@ export async function fetchHomeDashboard(base: string, fetch: Fetch): Promise<Ho
       return failedPart(fallback, e instanceof Error ? e.message : String(e))
     }
   }
-  const [hive, agents, inbox, bloqs, beats, accounts] = await Promise.all([
+  const [hive, agents, inbox, bloqs, beats, accounts, recent] = await Promise.all([
     get<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
     get<AgentsPayload>("/iris/agents-mine", { measured: false, agents: [] }),
-    get<InboxPayload>("/iris/inbox?perPage=1", { measured: false, unread: null }),
+    get<InboxList>("/iris/inbox?perPage=25", { measured: false, unread: null }),
     get<BloqsPayload>("/iris/bloqs?perPage=1", { measured: false, bloqs: [] }),
     get<BeatsPayload>("/iris/heartbeats", { measured: false, heartbeats: [] }),
     get<AccountsPayload>("/iris/accounts", { accounts: [] }),
+    get<RecentPayload>("/iris/recent?perPage=50", { measured: false, items: [] }),
   ])
-  return { hive, agents, inbox, bloqs, beats, accounts, at: Date.now() }
+  return { hive, agents, inbox, bloqs, beats, accounts, recent, at: Date.now() }
 }
 
 export function keepGoodParts(prev: HomeDashboardData, next: HomeDashboardData): HomeDashboardData {
@@ -62,6 +76,7 @@ export function keepGoodParts(prev: HomeDashboardData, next: HomeDashboardData):
     bloqs: pick("bloqs"),
     beats: pick("beats"),
     accounts: pick("accounts"),
+    recent: pick("recent"),
     at: next.at,
   }
 }
@@ -142,7 +157,11 @@ const localCopy = {
   },
   save(key: string, entry: { value: HomeDashboardData; at: number }) {
     try {
-      localStorage.setItem(STORED + key, JSON.stringify(entry))
+      // Counts only: item titles and messages stay off disk — some boards hold patient data, and the
+      // Atlas offline copy keeps those off disk unless asked (includePhi). They refill on the next read.
+      const { recent, inbox } = entry.value
+      const value = { ...entry.value, recent: { ...recent, measured: false, items: [] }, inbox: { ...inbox, items: [] } }
+      localStorage.setItem(STORED + key, JSON.stringify({ ...entry, value }))
     } catch {}
   },
 }
@@ -158,4 +177,36 @@ export const homeDashboardKey = (base: string) => base.replace(/\/$/, "")
 /** Keep a copy at most five minutes old, so the first click on Home draws at once. */
 export function warmHomeDashboard(base: string, fetch: Fetch) {
   homeDashboard.warm(homeDashboardKey(base), () => fetchHomeDashboard(base, fetch), 5 * 60_000)
+}
+
+/** One page of a list held in full — Home's tabs show five rows and page through the rest. */
+export function sliceOf<T>(all: readonly T[], page: number, size = 5) {
+  const pages = Math.max(1, Math.ceil(all.length / size))
+  const p = Math.min(Math.max(1, page), pages)
+  return {
+    items: all.slice((p - 1) * size, p * size),
+    page: p,
+    pages,
+    total: all.length,
+    from: all.length ? (p - 1) * size + 1 : 0,
+    to: Math.min(p * size, all.length),
+  }
+}
+
+/** "now", "5m", "3h", "2d" — the same short form the agents table uses. */
+export function agoOf(iso: string | undefined, now: number): string {
+  const t = iso ? Date.parse(iso) : NaN
+  if (!Number.isFinite(t)) return "—"
+  const m = Math.max(0, Math.round((now - t) / 60_000))
+  if (m < 1) return "now"
+  if (m < 60) return `${m}m`
+  const h = Math.round(m / 60)
+  return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`
+}
+
+/** Created when nothing has touched it since (two minutes of slack); edited otherwise. */
+export function verbOf(item: { createdAt?: string; updatedAt?: string }): "created" | "edited" {
+  const c = item.createdAt ? Date.parse(item.createdAt) : NaN
+  const u = item.updatedAt ? Date.parse(item.updatedAt) : NaN
+  return Number.isFinite(c) && Number.isFinite(u) && u - c > 120_000 ? "edited" : "created"
 }
