@@ -35,12 +35,10 @@ import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import {
-  IRIS_SURFACE_CHOICES,
   useRequestIrisSurface,
   irisStripTabs,
   useIrisActiveSurface,
   irisPinned,
-  toggleIrisPin,
   irisFilesPinned,
   irisOpensOnAtlas,
   toggleIrisFilesPin,
@@ -74,7 +72,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
-import { IrisPanelBody, IrisScopeChip } from "@/components/iris-panel"
+import { IrisPanelBody, IrisPinItems, IrisScopeChip } from "@/components/iris-panel"
 import { needsAttention, surfaceCount, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
@@ -256,21 +254,7 @@ export function SessionSidePanel(props: {
       </MenuV2.Item>
       {/* PIN a product as a tab (#186509 nav). Pinning also opens it; unpinning only removes the
           tab. The ✓ is the state, so the menu answers "what is in my strip" at a glance. */}
-      <For each={IRIS_SURFACE_CHOICES}>
-        {(surface) => (
-          <MenuV2.Item
-            onSelect={() => {
-              if (toggleIrisPin(surface.id)) openIrisSurface(surface.id)
-            }}
-          >
-            <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
-            <span class="inline-flex items-center gap-2">
-              <IrisProductIcon id={surface.id} />
-              {surface.label}
-            </span>
-          </MenuV2.Item>
-        )}
-      </For>
+      <IrisPinItems onOpen={openIrisSurface} />
     </MenuV2.Content>
   )
 

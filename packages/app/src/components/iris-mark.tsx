@@ -8,13 +8,3 @@ import mark from "@/assets/iris-mark.png"
 export function IrisMark(props: { class?: string }) {
   return <img src={mark} alt="" draggable={false} class={props.class} />
 }
-
-/** The IRIS lockup — the mark beside the name in the brand sans at 500 (the kit has no bold, and no wordmark artwork yet). */
-export function IrisWordmark(props: { class?: string }) {
-  return (
-    <div class={`flex items-center justify-center gap-4 ${props.class ?? ""}`}>
-      <IrisMark class="size-12 rounded-[11px]" />
-      <span class="text-[56px] leading-none font-medium tracking-[-0.02em]">IRIS</span>
-    </div>
-  )
-}
