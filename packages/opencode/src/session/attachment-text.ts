@@ -279,6 +279,7 @@ function xlsxToText(zip: ReturnType<typeof readZip>) {
   const dates = dateStyles(zip.read("xl/styles.xml"))
 
   const sheets: string[] = []
+  const outline: string[] = []
   for (const match of workbook.matchAll(/<sheet\b([^>]*)\/?>/g)) {
     const name = attr(match[1]!, "name") ?? `Sheet${sheets.length + 1}`
     const rid = attr(match[1]!, "r:id") ?? attr(match[1]!, "id")
@@ -286,6 +287,7 @@ function xlsxToText(zip: ReturnType<typeof readZip>) {
     const path = (rid && rels.get(rid)) ?? `xl/worksheets/sheet${sheets.length + 1}.xml`
     const xml = zip.has(path) ? (zip.read(path) ?? "") : ""
     const lines: string[] = []
+    let columns = 0
     for (const row of xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)) {
       const cells: string[] = []
       let next = 0
@@ -316,14 +318,23 @@ function xlsxToText(zip: ReturnType<typeof readZip>) {
         next = col + 1
       }
       while (cells.length && cells[cells.length - 1] === "") cells.pop()
+      columns = Math.max(columns, cells.length)
       lines.push(cells.join(","))
     }
     while (lines.length && lines[lines.length - 1] === "") lines.pop()
     const label = `## Sheet "${name}"${state && state !== "visible" ? ` (${state})` : ""} — ${lines.length} row${lines.length === 1 ? "" : "s"}`
+    // #192645: the shape of the workbook up front, so the agent does not re-derive it from the rows
+    // — and so it survives when the rows are cut at the inline budget.
+    const header = lines.find((line) => line.replace(/,/g, "").trim() !== "")
+    outline.push(
+      `- "${name}"${state && state !== "visible" ? ` (${state})` : ""}: ${lines.length} row${lines.length === 1 ? "" : "s"} × ${columns} column${columns === 1 ? "" : "s"}` +
+        (header ? ` · first row: ${header.length > 300 ? header.slice(0, 300) + "…" : header}` : ""),
+    )
     sheets.push(lines.length ? `${label}\n${lines.join("\n")}` : `${label}\n(empty sheet)`)
   }
   if (sheets.length === 0) return "(this workbook has no sheets)"
-  return sheets.join("\n\n")
+  const summary = `# Workbook outline — ${sheets.length} sheet${sheets.length === 1 ? "" : "s"}\n${outline.join("\n")}`
+  return `${summary}\n\n${sheets.join("\n\n")}`
 }
 
 // ── docx ───────────────────────────────────────────────────────────────────────────────────────
