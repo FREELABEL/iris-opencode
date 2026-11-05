@@ -200,3 +200,12 @@
   font-size: 11px;
   color: var(--text-on-critical-base, var(--text-weak));
 }
+.iris-mkt__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.iris-mkt__empty-actions:empty {
+  display: none;
+}

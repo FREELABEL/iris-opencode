@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IrisPinnedPage } from "./iris-pinned-page"
@@ -37,6 +37,34 @@ type Account = { at: "checking" } | { at: "out"; reason?: string } | { at: "in";
 type PageRow = { id: number; title: string; slug?: string; status: string; visibility?: string; requiresAuth?: boolean }
 type PinCheck = { measured: boolean; allowed: boolean; reason?: string; page?: { slug: string; title: string; signIn: boolean } }
 
+/** The outcome of pinning a page by slug: the pin as stored, or why not. */
+export type PinResult = { ok: true; pin: MarketingPin } | { ok: false; reason: string }
+
+/**
+ * PIN A PAGE BY SLUG, programmatically — the picker's own path, exported so another flow can pin a
+ * page it just made (#192627: "Create your campaign board" pins /p/<board-slug>-campaigns). The
+ * engine decides (POST /iris/page-pin: the account's own pages only); nothing is stored unless it
+ * allows the page. Pure I/O: the caller stores the pin (IrisMarketing's `pin` does both).
+ */
+export async function checkPin(doFetch: Fetch, slug: string, label?: string): Promise<PinResult> {
+  const c = await doFetch(`/iris/page-pin`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  })
+    .then((r) => r.json() as Promise<PinCheck>)
+    .catch(() => ({ measured: false, allowed: false, reason: "IRIS isn't answering" }) as PinCheck)
+  if (!c.allowed || !c.page) return { ok: false, reason: c.reason ?? "this page can't be pinned" }
+  return { ok: true, pin: { slug: c.page.slug, label: label ?? c.page.title, ...(c.page.signIn ? { signIn: true } : {}) } }
+}
+
+/** What the empty state hands a slotted action (#192627), so it can pin what it creates. */
+export type MarketingEmptyActions = {
+  /** Check with the engine, then pin and open the page. Resolves with the outcome. */
+  pin: (slug: string, label?: string) => Promise<PinResult>
+  accountId: number
+}
+
 const read = (key: string | null): MarketingPins => {
   if (!key) return EMPTY_PINS
   try {
@@ -46,7 +74,15 @@ const read = (key: string | null): MarketingPins => {
   }
 }
 
-export function IrisMarketing(props: { doFetch: Fetch; openExternal: (url: string) => void }) {
+export function IrisMarketing(props: {
+  doFetch: Fetch
+  openExternal: (url: string) => void
+  /**
+   * More ways in, drawn in the empty state beside the picker's heading (#192627 drops "Create your
+   * campaign board" here). Given `pin` so it can pin the page it creates.
+   */
+  emptyActions?: (ctx: MarketingEmptyActions) => JSX.Element
+}) {
   const [account, setAccount] = createSignal<Account>({ at: "checking" })
   // Asked on every mount: switching accounts and coming back to Marketing shows the new account's pins.
   void props
@@ -82,6 +118,12 @@ export function IrisMarketing(props: { doFetch: Fetch; openExternal: (url: strin
     save(addPin(state(), pin))
     setPicking(false)
   }
+  const pinBySlug = async (slug: string, label?: string): Promise<PinResult> => {
+    if (!key()) return { ok: false, reason: "nobody is signed in" }
+    const r = await checkPin(props.doFetch, slug, label)
+    if (r.ok) pick(r.pin)
+    return r
+  }
 
   return (
     <div class="iris-mkt" data-component="iris-marketing" data-account={account().at} data-pins={state().pins.length}>
@@ -108,6 +150,10 @@ export function IrisMarketing(props: { doFetch: Fetch; openExternal: (url: strin
               <div class="iris-mkt__hint">
                 Pick one of your Genesis pages and it becomes a tab here. Only pages you own, or pages on a board you are a
                 member of, can be pinned.
+              </div>
+              {/* The slot for other ways in (#192627). Empty unless a caller passes emptyActions. */}
+              <div class="iris-mkt__empty-actions" data-slot="marketing-empty-actions">
+                {props.emptyActions?.({ pin: pinBySlug, accountId: (account() as { id: number }).id })}
               </div>
             </div>
             <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} />
@@ -287,19 +333,11 @@ function PagePicker(props: { doFetch: Fetch; pinned: Set<string>; onPick: (pin: 
     if (props.pinned.has(slug)) return props.onPick({ slug, label: p.title })
     setBusy(slug)
     setRefused(null)
-    props
-      .doFetch(`/iris/page-pin`, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ slug }),
-      })
-      .then((r) => r.json() as Promise<PinCheck>)
-      .catch(() => ({ measured: false, allowed: false, reason: "IRIS isn't answering" }) as PinCheck)
-      .then((c) => {
-        setBusy(null)
-        if (c.allowed && c.page) return props.onPick({ slug: c.page.slug, label: c.page.title, signIn: c.page.signIn })
-        setRefused({ slug, reason: c.reason ?? "this page can't be pinned" })
-      })
+    void checkPin(props.doFetch, slug).then((r) => {
+      setBusy(null)
+      if (r.ok) return props.onPick(r.pin)
+      setRefused({ slug, reason: r.reason })
+    })
   }
 
   return (
@@ -309,7 +347,7 @@ function PagePicker(props: { doFetch: Fetch; pinned: Set<string>; onPick: (pin: 
         <input
           ref={(el) => queueMicrotask(() => el.focus())}
           class="iris-mkt__picker-input"
-          type="search"
+          type="text"
           placeholder="Search your Genesis pages"
           aria-label="Search your Genesis pages"
           value={query()}
