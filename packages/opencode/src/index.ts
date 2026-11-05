@@ -121,6 +121,7 @@ import { HomeCommand } from "./cli/cmd/platform-home"
 import { BuzzCommand } from "./cli/cmd/platform-buzz"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
+import { PlatformOrgCommand } from "./cli/cmd/platform-org"
 import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
@@ -540,6 +541,7 @@ const cli = yargs(rawArgs)
   .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformAndroidCommand))
+  .command(reg(PlatformOrgCommand))
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformNextCommand)) // #187930: one next move
