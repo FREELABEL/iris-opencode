@@ -1,8 +1,11 @@
 import {
   Show,
+  Suspense,
+  lazy,
   createContext,
   createEffect,
   createSignal,
+  onMount,
   onCleanup,
   untrack,
   useContext,
@@ -14,7 +17,9 @@ import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { useTitlebarRightMount } from "@/components/titlebar"
-import { IrisPanel } from "@/components/iris-panel"
+// Its own chunk: the panel (Atlas, Genesis, agents, editors) is most of what Home used to parse.
+const irisPanel = () => import("@/components/iris-panel")
+const IrisPanel = lazy(() => irisPanel().then((m) => ({ default: m.IrisPanel })))
 import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { irisSplitShare, setIrisSplitShare } from "@/components/iris-split"
 /**
@@ -66,6 +71,26 @@ export function IrisShell(props: ParentProps) {
   // A list, not one slot: split-view columns each claim, and one closing must not release the rest.
   const [claims, setClaims] = createSignal<Accessor<boolean>[]>([])
   const claimed = () => claims().at(-1)
+  // The panel is the heaviest thing on screen (Atlas fetches, renders and polls). It mounts once
+  // the page on the left has had its turn — the first idle moment, 2 s at most — so it never
+  // competes with Home or the composer for the first paint. Once mounted it stays mounted.
+  const [settled, setSettled] = createSignal(false)
+  onMount(() => {
+    const done = () => {
+      setSettled(true)
+      // Fetch the chat page and the panel while nothing else is happening, so the first click on
+      // either is instant even though neither is in the bundle Home starts with.
+      void irisPanel().catch(() => {})
+      void import("@/pages/session").catch(() => {})
+    }
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(done, { timeout: 2000 })
+      onCleanup(() => cancelIdleCallback(id))
+    } else {
+      const id = setTimeout(done, 300)
+      onCleanup(() => clearTimeout(id))
+    }
+  })
   const visible = () => {
     const open = claimed()
     return open ? open() : panelOpen()
@@ -117,7 +142,8 @@ export function IrisShell(props: ParentProps) {
             onResize={(width) => setIrisSplitShare(1 - width / rowWidth())}
           />
           <div ref={setSlot} class="flex min-h-0 min-w-0 flex-1 py-2 pr-2" classList={{ hidden: !claimed() }} />
-          <Show when={!claimed()}>
+          {/* Closed means unmounted: a hidden panel kept fetching and polling Atlas behind Home. */}
+          <Show when={!claimed() && panelOpen()}>
             <aside
               aria-label="IRIS"
               class={`
@@ -125,7 +151,11 @@ export function IrisShell(props: ParentProps) {
                 bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
               `}
             >
-              <IrisPanel onClose={() => setPanelOpen(false)} />
+              <Show when={settled()}>
+                <Suspense>
+                  <IrisPanel onClose={() => setPanelOpen(false)} />
+                </Suspense>
+              </Show>
             </aside>
           </Show>
         </div>
