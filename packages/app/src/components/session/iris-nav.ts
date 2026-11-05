@@ -76,6 +76,15 @@ export function focusHiveNode(id: string | null) {
   setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
 }
 
+/** Home › On your machines (#192626): the session Hive › Sessions should open, kept until it has it. */
+const [hiveSessionFocus, setHiveSessionFocus] = createSignal<{ nodeId: string; sessionId: string; nonce: number } | null>(null)
+
+export const irisHiveSessionFocus = hiveSessionFocus
+
+export function focusHiveSession(f: { nodeId: string; sessionId: string } | null) {
+  setHiveSessionFocus(f ? { ...f, nonce: Date.now() + Math.random() } : null)
+}
+
 /**
  * OPEN THE SIDE PANEL from outside a session's layout (#189279) — the titlebar's Hive and Inbox
  * pills. The titlebar has no session context, so it cannot call tabs().open("iris") itself; it

@@ -1,5 +1,6 @@
 import type { HeartbeatRow } from "@/components/session/iris-heartbeats-model"
 import type { AgentsPayload, HivePayload, InboxPayload } from "./home-today-model"
+import type { FleetPayload } from "./home-fleet-model"
 
 /**
  * Home's data, read once and kept outside the page (#192222). The page unmounts every time you
@@ -39,6 +40,8 @@ export type HomeDashboardData = {
   bloqs: BloqsPayload
   beats: BeatsPayload
   accounts: AccountsPayload
+  /** Sessions on every machine you have (#192626) — Hive › Sessions' read. */
+  sessions: FleetPayload
   at: number
 }
 
@@ -81,6 +84,7 @@ export async function fetchHomeDashboard(
     beats: { measured: false, heartbeats: [] } as BeatsPayload,
     accounts: { accounts: [] } as AccountsPayload,
     recent: { measured: false, items: [] } as RecentPayload,
+    sessions: { measured: false, nodes: [] } as FleetPayload,
   }
   type Part = keyof typeof empty
   const parts = Object.fromEntries(
@@ -99,6 +103,7 @@ export async function fetchHomeDashboard(
     land("beats", "/iris/heartbeats"),
     land("accounts", "/iris/accounts"),
     land("recent", "/iris/recent?perPage=50"),
+    land("sessions", "/iris/hive/sessions"),
   ])
   return { ...parts, at: Date.now() }
 }
@@ -112,6 +117,7 @@ export function keepGoodParts(prev: HomeDashboardData, next: HomeDashboardData):
     beats: pick("beats"),
     accounts: pick("accounts"),
     recent: pick("recent"),
+    sessions: pick("sessions"),
     at: next.at,
   }
 }
@@ -204,11 +210,13 @@ const localCopy = {
     try {
       // Counts only: item titles and messages stay off disk — some boards hold patient data, and the
       // Atlas offline copy keeps those off disk unless asked (includePhi). They refill on the next read.
-      const { recent, inbox } = entry.value
+      // Session titles are a first prompt as often as not (#192626): off disk too.
+      const { recent, inbox, sessions } = entry.value
       const value = {
         ...entry.value,
         recent: { ...recent, measured: false, items: [] },
         inbox: { ...inbox, items: [] },
+        sessions: { ...sessions, measured: false, nodes: [] },
       }
       localStorage.setItem(STORED + key, JSON.stringify({ ...entry, value }))
     } catch {}
