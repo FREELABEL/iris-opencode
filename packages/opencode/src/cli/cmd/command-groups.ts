@@ -132,6 +132,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   copycat: "pages",
   reel: "pages",
   "editorial": "pages",
+  campaigns: "pages",
   remotion: "pages",
   release: "pages",
   "cloud:upload": "pages",
