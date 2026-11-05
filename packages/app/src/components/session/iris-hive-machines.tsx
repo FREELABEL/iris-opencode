@@ -4,7 +4,14 @@ import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import { ago, diskOf, SKILLS, skillsOf, type HiveNodeRow } from "./iris-hive-scripts-model"
 import {
+  ADD_COMPUTER_STEPS,
+  agentWords,
   attentionOf,
+  computerRows,
+  computerTotals,
+  filterComputers,
+  readComputersFilter,
+  shellWords,
   fleetSummary,
   gb,
   machinesOf,
@@ -15,8 +22,12 @@ import {
   aiOf,
   statusOf,
   type Computer,
+  type ComputerRow,
+  type ComputersFilter,
+  type HereRow,
   type HivePeerRow,
   type MachinesView,
+  type SessionsPayload,
 } from "./iris-hive-machines-model"
 import { focusHiveNode, requestIrisNav } from "./iris-nav"
 
@@ -29,6 +40,25 @@ type HivePayload = { measured: boolean; reason?: string | null; nodes: HiveNodeR
 type PeersPayload = { measured: boolean; reason?: string | null; peers: HivePeerRow[] }
 
 const VIEW_KEY = "iris.hive.machines.view"
+const FILTER_KEY = "iris.hive.computers.filter"
+const FILTERS: { id: ComputersFilter; label: string; title: string }[] = [
+  { id: "all", label: "All", title: "Every computer" },
+  { id: "agents", label: "Agents only", title: "Computers with AI agent sessions" },
+  { id: "shells", label: "Shells only", title: "Computers with shells Hive started" },
+]
+
+const readStore = (k: string) => {
+  try {
+    return localStorage.getItem(k)
+  } catch {
+    return null
+  }
+}
+const writeStore = (k: string, v: string) => {
+  try {
+    localStorage.setItem(k, v)
+  } catch {}
+}
 const MAP_W = 520
 const MAP_H = 380
 
@@ -57,30 +87,48 @@ export function IrisHiveMachines(props: {
     getJson<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
   )
   const [peerData] = createResource(() => getJson<PeersPayload>("/iris/hive/peers?perPage=100", { measured: false, peers: [] }))
+  // #192608: what runs on each computer (the `iris hive sessions` rows) and what this computer
+  // knows about itself (which record it is, its tailnet, the shells Hive started here).
+  const [sessionData, { refetch: refetchSessions }] = createResource(() =>
+    getJson<SessionsPayload>("/iris/hive/sessions", { measured: false, nodes: [] }),
+  )
+  const [hereData, { refetch: refetchHere }] = createResource(() =>
+    getJson<HereRow>("/iris/hive/here", { measured: false, nodeId: null, onTailnet: false, shells: { measured: false, workspaces: [] } }),
+  )
   // Heartbeats move; a minute is fine-grained enough for "online" and "last seen".
-  const timer = setInterval(() => void refetch(), 60_000)
+  const timer = setInterval(() => {
+    void refetch()
+    void refetchSessions()
+    void refetchHere()
+  }, 60_000)
   onCleanup(() => clearInterval(timer))
 
   const computers = createMemo(() => machinesOf(hive.latest?.nodes ?? []))
   const peers = createMemo(() => peerData.latest?.peers ?? [])
   const summary = createMemo(() => fleetSummary(computers(), now()))
+  const rows = createMemo(() => computerRows(computers(), sessionData.latest, hereData.latest, now()))
+  const rowOf = createMemo(() => new Map(rows().map((r) => [r.computer.id, r] as const)))
+  const totals = createMemo(() => computerTotals(rows()))
+  const [filter, setFilterRaw] = createSignal<ComputersFilter>(readComputersFilter(readStore(FILTER_KEY)))
+  const setFilter = (f: ComputersFilter) => {
+    setFilterRaw(f)
+    writeStore(FILTER_KEY, f)
+  }
+  const shown = createMemo(() => filterComputers(rows(), filter()))
+  const [adding, setAdding] = createSignal(false)
+  const [copiedStep, setCopiedStep] = createSignal<number | undefined>()
+  const copyStep = async (i: number, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedStep(i)
+      setTimeout(() => setCopiedStep(undefined), 1400)
+    } catch {}
+  }
 
-  const [view, setViewRaw] = createSignal<MachinesView>(
-    readMachinesView(
-      (() => {
-        try {
-          return localStorage.getItem(VIEW_KEY)
-        } catch {
-          return null
-        }
-      })(),
-    ),
-  )
+  const [view, setViewRaw] = createSignal<MachinesView>(readMachinesView(readStore(VIEW_KEY)))
   const setView = (v: MachinesView) => {
     setViewRaw(v)
-    try {
-      localStorage.setItem(VIEW_KEY, v)
-    } catch {}
+    writeStore(VIEW_KEY, v)
   }
 
   const [openId, setOpenId] = createSignal<string | undefined>()
@@ -125,21 +173,107 @@ export function IrisHiveMachines(props: {
                 <span>Map</span>
               </button>
             </div>
+            <button
+              type="button"
+              class="hmc-btn hmc-add-btn"
+              aria-expanded={adding()}
+              title="Bring another computer into Hive"
+              onClick={() => setAdding(!adding())}
+            >
+              <Ic name={adding() ? "close" : "plus"} />
+              <span>Add a computer</span>
+            </button>
           </header>
+
+          <Show when={adding()}>
+            <section class="hmc-add" aria-label="Add a computer">
+              <p class="hmc-add-lede">
+                Three steps from the secure-mesh playbook. The new computer joins your private network (Tailscale), then Hive.
+              </p>
+              <ol>
+                <For each={ADD_COMPUTER_STEPS}>
+                  {(step, i) => (
+                    <li>
+                      <div class="hmc-add-head">
+                        <b>{step.title}</b>
+                        <span class="hmc-faint">{step.where}</span>
+                      </div>
+                      <div class="hmc-add-cmd">
+                        <code class="hsc-mono">{step.command}</code>
+                        <button type="button" class="hmc-btn" title="Copy" onClick={() => void copyStep(i(), step.command)}>
+                          <Ic name={copiedStep() === i() ? "check" : "copy"} />
+                          <span>{copiedStep() === i() ? "Copied" : "Copy"}</span>
+                        </button>
+                      </div>
+                      <span class="hmc-add-why">{step.why}</span>
+                    </li>
+                  )}
+                </For>
+              </ol>
+            </section>
+          </Show>
+
+          <Show when={hive.latest?.measured && computers().length > 0}>
+            <div class="hmc-tools">
+              <p class="hmc-totals" aria-label="Totals across computers">
+                <span>
+                  <b class="hsc-num">
+                    {sessionData.latest?.measured ? `${totals().agentsFloor ? "≥" : ""}${totals().agents.toLocaleString("en-US")}` : "—"}
+                  </b>{" "}
+                  agent sessions
+                  <Show when={sessionData.latest?.measured && totals().agentMachines < totals().computers}>
+                    <span class="hmc-faint"> on {totals().agentMachines} of {totals().computers} computers that report them</span>
+                  </Show>
+                </span>
+                <span>
+                  <b class="hsc-num">{totals().shellMachines ? totals().shells.toLocaleString("en-US") : "—"}</b> shells
+                  <span class="hmc-faint">
+                    {totals().shellMachines ? " · this computer only, Hive-started only" : " · not counted"}
+                  </span>
+                </span>
+              </p>
+              <Show when={view() === "list"}>
+                <div class="hmc-seg hmc-filter" role="tablist" aria-label="Show">
+                  <For each={FILTERS}>
+                    {(f) => (
+                      <button type="button" role="tab" aria-selected={filter() === f.id} title={f.title} onClick={() => setFilter(f.id)}>
+                        {f.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          </Show>
 
           <Show when={hive.latest && !hive.latest.measured}>
             <p class="hsc-warn">Could not read your computers{hive.latest!.reason ? ` — ${hive.latest!.reason}` : ""}</p>
           </Show>
           <Show when={hive.latest?.measured && computers().length === 0}>
             <p class="hsc-muted hmc-empty">
-              No computers on this account yet. Run <code class="hsc-mono">iris hive connect</code> on one to add it.
+              No computers on this account yet. Use <b>Add a computer</b> above, or run{" "}
+              <code class="hsc-mono">iris hive connect</code> on one to add it.
             </p>
           </Show>
 
           <Show when={view() === "list"}>
+            <Show when={filter() !== "all" && shown().rows.length === 0 && computers().length > 0}>
+              <p class="hsc-muted hmc-empty hmc-filter-empty">
+                {filter() === "agents" ? "No computer has an agent session running right now." : "No shells Hive started on this computer right now."}
+              </p>
+            </Show>
+            <Show when={filter() !== "all" && shown().hiddenUnknown > 0}>
+              <p class="hmc-faint hmc-filter-note">
+                {shown().hiddenUnknown} computer{shown().hiddenUnknown === 1 ? "" : "s"} not shown — {filter() === "shells"
+                  ? "Hive counts shells only on the computer you are using"
+                  : "their sessions could not be counted"}
+                .
+              </p>
+            </Show>
             <ul class="hmc-cards" role="listbox" aria-label="Computers">
-              <For each={computers()}>
+              <For each={shown().rows.map((r) => r.computer)}>
                 {(c) => {
+                  const row = () => rowOf().get(c.id) as ComputerRow
                   const st = () => statusOf(c, now())
                   const att = () => attentionOf(c, now()).filter((a) => a.level !== "info")
                   const d = () => diskOf(c)
@@ -162,6 +296,36 @@ export function IrisHiveMachines(props: {
                           <span class="hsc-num hmc-x" title={`Registered ${c.regs} times — same computer`}>
                             ×{c.regs}
                           </span>
+                        </Show>
+                      </div>
+                      <div class="hmc-row hmc-reach-row">
+                        <span class="hmc-reach" data-kind={row()?.reach.kind} title={row()?.reach.detail}>
+                          {row()?.reach.label}
+                        </span>
+                        <span class="hmc-faint hmc-online">{c.online ? "Online" : "Offline"}</span>
+                      </div>
+                      <div class="hmc-counts">
+                        <Show when={filter() !== "shells"}>
+                          {(() => {
+                            const w = () => agentWords(row().agents, now())
+                            return (
+                              <span class="hmc-count" data-kind="agents" data-counted={w().counted ? "1" : undefined} title={w().note ?? undefined}>
+                                <Ic name="sparkle" />
+                                <span>{w().text}</span>
+                              </span>
+                            )
+                          })()}
+                        </Show>
+                        <Show when={filter() !== "agents"}>
+                          {(() => {
+                            const w = () => shellWords(row().shells)
+                            return (
+                              <span class="hmc-count" data-kind="shells" data-counted={w().counted ? "1" : undefined} title={w().note ?? undefined}>
+                                <Ic name="terminal" />
+                                <span>{w().text}</span>
+                              </span>
+                            )
+                          })()}
                         </Show>
                       </div>
                       <div class="hmc-row">
@@ -328,6 +492,39 @@ export function IrisHiveMachines(props: {
                     <dd class="hsc-num">{c().online ? "now" : ago(c().lastHeartbeat, now())}</dd>
                   </div>
                 </dl>
+                {(() => {
+                  const row = () => rowOf().get(c().id)
+                  const aw = () => (row() ? agentWords(row()!.agents, now()) : null)
+                  const sw = () => (row() ? shellWords(row()!.shells) : null)
+                  return (
+                    <Show when={row()}>
+                      <h4>How it's reached</h4>
+                      <p class="hmc-reach-detail">
+                        <span class="hmc-reach" data-kind={row()!.reach.kind}>
+                          {row()!.reach.label}
+                        </span>
+                        <span>{row()!.reach.detail}</span>
+                      </p>
+                      <h4>Running on it</h4>
+                      <dl class="hmc-stats hmc-running">
+                        <div>
+                          <dt>Agent sessions</dt>
+                          <dd class="hsc-num">{aw()!.text}</dd>
+                          <Show when={aw()!.note}>
+                            <dd class="hmc-note">{aw()!.note}</dd>
+                          </Show>
+                        </div>
+                        <div>
+                          <dt>Shells</dt>
+                          <dd class="hsc-num">{sw()!.text}</dd>
+                          <Show when={sw()!.note}>
+                            <dd class="hmc-note">{sw()!.note}</dd>
+                          </Show>
+                        </div>
+                      </dl>
+                    </Show>
+                  )
+                })()}
                 <Show when={att().length}>
                   <h4>Needs attention</h4>
                   <ul class="hmc-att-list">

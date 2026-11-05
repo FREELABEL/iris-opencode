@@ -634,6 +634,13 @@ export interface HiveNode {
   recentRestarts?: number
   transport?: string
   tailscaleIp?: string
+  /** When the node last advertised its tailnet address (#192608) — an old one is shown with its age. */
+  tailscaleIpAt?: string
+  /**
+   * The address IRIS last saw this node connect from — its internet connection, not a LAN address.
+   * Two machines with the same one share an internet connection (#192608, "This network").
+   */
+  lastIp?: string
   /** Undefined when the node never reported a GPU; `available: false` when it reported none (#192222). */
   gpu?: { available: boolean; name?: string; type?: string; vramGb?: number }
   /** Models a local server on the node has (Ollama, mesh-llm…). Installed is not serving. */
@@ -778,6 +785,8 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
         : undefined,
       transport: n.transport?.default_rail ?? undefined,
       tailscaleIp: n.tailscale_ip ?? undefined,
+      tailscaleIpAt: n.tailscale_ip_updated_at ?? undefined,
+      lastIp: typeof n.last_ip === "string" && n.last_ip ? n.last_ip : undefined,
       hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,
       ...nodeAiOf(n),
     }))

@@ -31,6 +31,8 @@
 .ihd-mk i { border-radius: 50%; display: block; }
 .ihd-n { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .ihd-stat .ihd-label { margin-top: 4px; }
+.ihd-stat[data-link] { cursor: pointer; }
+.ihd-stat[data-link]:hover { border-color: color-mix(in srgb, var(--ihd-cy) 45%, var(--ihd-line)); }
 .ihd-meta { display: flex; gap: 10px; margin-top: 3px; }
 .ihd-flag { position: absolute; top: 10px; right: 10px; }
 .ihd-card { margin-top: 16px; border: 1px solid var(--ihd-line); border-radius: 12px; background: var(--ihd-card); padding: 12px 12px 8px; }

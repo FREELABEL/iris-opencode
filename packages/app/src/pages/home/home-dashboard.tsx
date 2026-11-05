@@ -96,6 +96,12 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     openIrisPanel({ surface: "agents", sub: "heartbeats" })
     tabs.toggleHome({ home: true })
   }
+  // #192608: the Machines tile opens Hive › Machines — the one Computers view — not a second copy here.
+  const openComputers = () => {
+    if (!tabs.store.length) return
+    openIrisPanel({ surface: "hive", sub: "machines" })
+    tabs.toggleHome({ home: true })
+  }
   const get = async <T,>(path: string, fallback: T): Promise<T> => {
     try {
       const res = await (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}${path}`, {
@@ -253,7 +259,15 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </div>
           </div>
-          <div class="ihd-stat" title={tile("machines")?.detail}>
+          <div
+            class="ihd-stat"
+            data-link={tabs.store.length ? "1" : undefined}
+            title={tabs.store.length ? `${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines` : tile("machines")?.detail}
+            role="button"
+            tabIndex={0}
+            onClick={openComputers}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openComputers()}
+          >
             <Mark a="var(--ihd-cy)" b="var(--ihd-bl)" shape="square" />
             <div class="ihd-n">{hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}</div>
             <div class="ihd-label" style={{ color: "var(--ihd-cy)" }}>
