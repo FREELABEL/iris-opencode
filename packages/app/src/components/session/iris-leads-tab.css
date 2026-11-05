@@ -1,0 +1,131 @@
+/*
+ * The Leads tab (#192544): Elon's BloqLeadsTab layout in the IRIS panel's own language — its tokens,
+ * 12–13px type, hairlines, neutral ramp. Reachr's emerald marks only what waits for a person. Tones
+ * are mixed with the panel's text colour so they read in dark and light. The open row is tinted;
+ * nothing gets a bar down one edge.
+ */
+.iris-lt {
+  --lt-hue: #10b981;
+  --lt-accent: color-mix(in srgb, var(--lt-hue) 74%, var(--text-strong));
+  --lt-wash: color-mix(in srgb, var(--lt-hue) 12%, transparent);
+  --lt-hover: color-mix(in srgb, var(--text-strong) 5%, transparent);
+  --lt-sel: color-mix(in srgb, var(--text-strong) 8%, transparent);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-base);
+  container-type: inline-size;
+}
+.iris-lt [data-tone="new"] { --tone: color-mix(in srgb, #3b82f6 72%, var(--text-strong)); }
+.iris-lt [data-tone="warm"] { --tone: color-mix(in srgb, #f59e0b 70%, var(--text-strong)); }
+.iris-lt [data-tone="good"] { --tone: color-mix(in srgb, #10b981 72%, var(--text-strong)); }
+.iris-lt [data-tone="bad"] { --tone: color-mix(in srgb, #ef4444 72%, var(--text-strong)); }
+.iris-lt [data-tone="idle"] { --tone: var(--text-weak); }
+.iris-lt-ico { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── header bar: one line ── */
+.iris-lt-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: nowrap; min-width: 0; }
+.iris-lt-search { position: relative; flex: 1 1 auto; min-width: 120px; }
+.iris-lt-search input { width: 100%; box-sizing: border-box; background: transparent; color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 4px 26px 4px 8px; font-size: 12px; }
+.iris-lt-search input:focus { outline: none; border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-lt-search kbd { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font: inherit; font-size: 10px; color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: 4px; padding: 0 4px; line-height: 14px; pointer-events: none; }
+.iris-lt-search input:focus + kbd, .iris-lt-search input:not(:placeholder-shown) + kbd { display: none; }
+.iris-lt-btn { display: inline-flex; align-items: center; gap: 5px; flex: none; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 9px; font-size: 12px; line-height: 16px; cursor: pointer; white-space: nowrap; }
+.iris-lt-btn:hover:not(:disabled) { background: var(--lt-hover); color: var(--text-strong); }
+.iris-lt-btn:disabled { opacity: 0.5; cursor: default; }
+.iris-lt-btn[aria-pressed="true"] { background: var(--lt-sel); color: var(--text-strong); }
+select.iris-lt-btn { max-width: 210px; text-overflow: ellipsis; }
+.iris-lt-iconbtn { padding: 4px 6px; }
+.iris-lt-iconbtn[data-busy] .iris-lt-ico { animation: iris-lt-spin 0.9s linear infinite; }
+@keyframes iris-lt-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .iris-lt-iconbtn[data-busy] .iris-lt-ico { animation: none; } }
+.iris-lt-n { min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--lt-sel); font-size: 10px; line-height: 14px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* ── body: stats column | table ── */
+.iris-lt-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 208px minmax(0, 1fr); }
+.iris-lt[data-stats="closed"] .iris-lt-body { grid-template-columns: minmax(0, 1fr); }
+.iris-lt-stats { min-height: 0; overflow-y: auto; border-right: 1px solid var(--border-weaker-base); padding: 10px 0 16px; }
+.iris-lt-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px; }
+.iris-lt-kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 7px 9px 8px; border: 1px solid var(--border-weaker-base); border-radius: 8px; background: transparent; color: inherit; text-align: start; font: inherit; }
+.iris-lt-kpi:not(:disabled) { cursor: pointer; }
+.iris-lt-kpi:not(:disabled):hover { background: var(--lt-hover); }
+.iris-lt-kpi .lbl { font-size: 10.5px; color: var(--text-weak); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.iris-lt-kpi b { font-size: 16px; font-weight: 500; color: var(--text-strong); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.iris-lt-kpi .sub { font-size: 10.5px; color: var(--text-weak); }
+.iris-lt-kpi[data-hot] { border-color: color-mix(in srgb, var(--lt-hue) 45%, transparent); background: var(--lt-wash); }
+.iris-lt-kpi[data-hot] b, .iris-lt-kpi[data-hot] .lbl { color: var(--lt-accent); }
+.iris-lt-approval { display: flex; flex-direction: column; gap: 2px; width: calc(100% - 20px); margin: 10px 10px 0; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--lt-wash); color: inherit; text-align: start; font: inherit; cursor: pointer; }
+.iris-lt-approval:hover { background: color-mix(in srgb, var(--lt-hue) 20%, transparent); }
+.iris-lt-approval b { font-size: 12px; font-weight: 500; color: var(--lt-accent); }
+.iris-lt-approval span { font-size: 11px; color: var(--text-weak); }
+.iris-lt-grp { font-size: 11px; color: var(--text-weak); padding: 14px 14px 4px; }
+.iris-lt-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 14px; border: 0; background: none; color: var(--text-base); text-align: start; font: inherit; font-size: 12.5px; cursor: pointer; }
+.iris-lt-row:hover { background: var(--lt-hover); color: var(--text-strong); }
+/* A filter narrowing the table: named in the strong text colour and a filled dot, untinted. */
+.iris-lt-row[data-on] { color: var(--text-strong); font-weight: 500; }
+.iris-lt-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-lt-row .ct { flex: none; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; }
+.iris-lt-row[data-on] .ct { color: var(--text-strong); }
+.iris-lt-row .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; box-sizing: border-box; border: 1.5px solid var(--tone, var(--text-weak)); }
+.iris-lt-row[data-on] .dot { background: var(--tone, var(--text-strong)); }
+.iris-lt-row[data-band="fresh"], .iris-lt .band[data-band="fresh"] { --tone: color-mix(in srgb, #10b981 72%, var(--text-strong)); }
+.iris-lt-row[data-band="follow"], .iris-lt .band[data-band="follow"] { --tone: color-mix(in srgb, #f59e0b 70%, var(--text-strong)); }
+.iris-lt-row[data-band="urgent"], .iris-lt .band[data-band="urgent"] { --tone: color-mix(in srgb, #f97316 72%, var(--text-strong)); }
+.iris-lt-row[data-band="critical"], .iris-lt .band[data-band="critical"] { --tone: color-mix(in srgb, #ef4444 72%, var(--text-strong)); }
+
+/* ── table side ── */
+.iris-lt-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.iris-lt-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; padding: 8px 12px 10px; border-bottom: 1px solid var(--border-weaker-base); font-size: 12px; }
+.iris-lt-filters label { display: flex; flex-direction: column; gap: 3px; }
+.iris-lt-filters label > span { font-size: 10.5px; color: var(--text-weak); }
+.iris-lt-filters select { background: transparent; color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 3px 6px; font-size: 12px; max-width: 170px; }
+.iris-lt-filters .iris-lt-check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 4px; }
+.iris-lt-filters .iris-lt-check > span { font-size: 12px; color: var(--text-base); }
+.iris-lt-link { border: 0; background: none; color: var(--text-weak); font-size: 12px; cursor: pointer; padding: 0 0 4px; text-decoration: underline; text-underline-offset: 2px; }
+.iris-lt-note, .iris-lt-err { padding: 6px 12px; font-size: 12px; color: var(--text-weak); border-bottom: 1px solid var(--border-weaker-base); }
+.iris-lt-err { color: var(--text-critical-base, #ef4444); }
+.iris-lt-scroll { flex: 1; min-height: 0; overflow: auto; }
+.iris-lt-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12.5px; }
+.iris-lt-table thead th { position: sticky; top: 0; z-index: 1; background: var(--background-base); text-align: start; font-weight: 400; font-size: 11px; color: var(--text-weak); padding: 7px 8px; border-bottom: 1px solid var(--border-weaker-base); white-space: nowrap; }
+.iris-lt-table td { padding: 8px 8px; border-bottom: 1px solid var(--border-weaker-base); vertical-align: top; min-width: 0; }
+.iris-lt-table .cb { width: 30px; padding-left: 12px; padding-right: 0; }
+.iris-lt-table .when { width: 104px; }
+.iris-lt-table .st { width: 132px; }
+.iris-lt-table .val { width: 64px; text-align: end; padding-right: 12px; font-variant-numeric: tabular-nums; }
+.iris-lt-table tbody tr { cursor: pointer; }
+.iris-lt-table tbody tr:hover { background: var(--lt-hover); }
+.iris-lt-table tbody tr[aria-current] { background: var(--lt-sel); }
+.iris-lt-table tbody tr[aria-current] .nm { color: var(--text-strong); font-weight: 500; }
+.iris-lt-table input[type="checkbox"] { margin: 2px 0 0; cursor: pointer; }
+.iris-lt-table .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.iris-lt-av { width: 22px; height: 22px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 600; color: var(--text-strong); background: var(--lt-sel); }
+.iris-lt-table .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
+.iris-lt-table .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; color: var(--text-weak); font-size: 11px; min-width: 0; }
+.iris-lt-table .name .meta { padding-left: 30px; }
+.iris-lt-table .tag { border: 1px solid var(--border-weaker-base); border-radius: 999px; padding: 0 6px; line-height: 15px; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.iris-lt-table .tag[data-tone] { color: var(--tone); border-color: transparent; background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.iris-lt-table .more { font-size: 10.5px; }
+.iris-lt-table .when > div { color: var(--text-base); white-space: nowrap; }
+.iris-lt-table .band { display: inline-block; margin-top: 3px; font-size: 10.5px; color: var(--tone); }
+.iris-lt-table .pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.iris-lt-table .none { color: var(--text-weak); }
+.iris-lt-empty { text-align: center; color: var(--text-weak); padding: 32px 16px !important; cursor: default; }
+.iris-lt-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px 14px; font-size: 11.5px; color: var(--text-weak); }
+
+/* ── the lead's panel, over the table ── */
+.iris-lt-side { position: absolute; inset: 0 0 0 auto; width: min(460px, 100%); display: flex; flex-direction: column; background: var(--background-base); border-left: 1px solid var(--border-weaker-base); box-shadow: -12px 0 28px -18px rgb(0 0 0 / 0.45); z-index: 3; }
+.iris-lt-side > .iris-ld { flex: 1; min-height: 0; }
+.iris-lt-side .iris-ld-head { padding-top: 12px; padding-right: 40px; }
+.iris-lt-close { position: absolute; top: 9px; right: 9px; z-index: 1; display: inline-flex; padding: 5px; border: 0; border-radius: 6px; background: none; color: var(--text-weak); cursor: pointer; }
+.iris-lt-close:hover { background: var(--lt-hover); color: var(--text-strong); }
+.iris-lt-side .iris-ld-avatar { background: var(--lt-sel); }
+.iris-lt-side .iris-ld-title select { margin-left: 0; }
+
+/* A narrow panel: the stats column goes, its toggle brings it back above the table. */
+@container (max-width: 560px) {
+  .iris-lt-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .iris-lt-stats { max-height: 42cqh; border-right: 0; border-bottom: 1px solid var(--border-weaker-base); }
+  .iris-lt-table .st { width: 108px; }
+  .iris-lt-table .val { display: none; }
+}

@@ -34,9 +34,11 @@ export const displayName = (l: LeadRow) => l.nickname || l.name || l.company || 
 export const initials = (l: LeadRow) =>
   displayName(l)
     .split(/\s+/)
-    .filter((w) => /^[\p{L}\p{N}]/u.test(w))
+    // "@socialmediamaby" is S, not "?": the first letter or digit of each word, past any @ or #.
+    .map((w) => w.match(/[\p{L}\p{N}]/u)?.[0])
+    .filter((c): c is string => !!c)
     .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
+    .map((c) => c.toUpperCase())
     .join("") || "?"
 
 const STATUS_COLOR: [RegExp, string][] = [

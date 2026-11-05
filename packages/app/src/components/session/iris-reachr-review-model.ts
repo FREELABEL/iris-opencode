@@ -73,6 +73,19 @@ export function tally(messages: ReviewMessage[]): Record<ReviewFilter, number> {
   return out
 }
 
+/**
+ * The Outreach tab's badge (#192483): messages waiting in the "In review" filter, across every
+ * batch. From the batch list's per-status `counts` (fl-api groups the batch's messages by status),
+ * so the strip needs no second request per batch. `undefined` when there is nothing to count from.
+ */
+export function inReviewCount(batches: Pick<ReviewBatch, "counts">[] | null | undefined): number | undefined {
+  if (!Array.isArray(batches)) return undefined
+  let n = 0
+  for (const b of batches)
+    for (const [status, count] of Object.entries(b.counts ?? {})) if (bucketOf(status) === "review") n += Number(count) || 0
+  return n
+}
+
 /** Only these words can still change. Sent, sending and declined are history. */
 export const canEdit = (m: ReviewMessage) => ["pending_approval", "approved", "scheduled", "held", "failed"].includes(m.status)
 export const canApprove = (m: ReviewMessage) => m.status === "pending_approval"

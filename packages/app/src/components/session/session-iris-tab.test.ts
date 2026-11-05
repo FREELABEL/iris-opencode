@@ -375,3 +375,31 @@ describe("Playbooks › All", () => {
     expect(playbookSources({})).toBe("")
   })
 })
+
+describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
+  test("Outreach is part of Leads now: the old id is Leads, whose Needs approval draws Reachr (#192544)", () => {
+    expect(normalizeSurface("outreach")).toBe("leads")
+    expect(resolvePane("leads", undefined).pane).toBe("leads-crm")
+    // Leads › Outreach kept its id (`review`), so a stored or deep-linked sub-view still lands on the queue.
+    expect(resolvePane("leads", "review").pane).toBe("reachr")
+    expect(SUBVIEWS.leads!.map((s) => [s.id, s.label])).toEqual([
+      ["all", "Leads"],
+      ["review", "Needs approval"],
+    ])
+  })
+  test("Marketing's sub-tabs are pinned Genesis pages, by slug (#192480, #192481)", () => {
+    expect(SUBVIEWS.marketing!.map((s) => [s.label, s.pane, s.slug])).toEqual([
+      ["FREELABEL ads", "page", "freelabel-ads-review"],
+      ["Hive ads", "page", "hive-ads-review"],
+      ["X ads", "page", "x-ads-board"],
+    ])
+    expect(resolvePane("marketing", "x-ads")).toMatchObject({ pane: "page", slug: "x-ads-board" })
+    expect(resolvePane("marketing", undefined).slug).toBe("freelabel-ads-review")
+  })
+  test("Lexicon › Console is the lexicon-console page, opened signed in; Agreements stays the landing view (#192482)", () => {
+    expect(resolvePane("lexicon", "console")).toMatchObject({ pane: "page", slug: "lexicon-console", sub: { signIn: true } })
+    expect(resolvePane("lexicon", undefined).pane).toBe("lexicon-agreements")
+    // The Marketing pages are not signed in: a code is minted only where a tab asks for one.
+    expect(SUBVIEWS.marketing!.some((s) => s.signIn)).toBe(false)
+  })
+})

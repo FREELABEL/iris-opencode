@@ -4,7 +4,21 @@
  */
 
 /** Products that belong to the account or machine, not to a project. */
-export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp"])
+export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon"])
+
+/**
+ * Product ids that were retired into another product (#192544). Outreach (#192483) is Leads'
+ * "Needs approval" now: a stored surface, a deep link or an agent asking for `outreach` lands there.
+ */
+export const SURFACE_ALIASES: Record<string, { surface: string; sub: string }> = {
+  outreach: { surface: "leads", sub: "review" },
+}
+
+/** The product and view an id means today. A sub-view asked for explicitly is kept. */
+export function resolveSurfaceAlias(surface: string, sub?: string): { surface: string; sub?: string } {
+  const a = SURFACE_ALIASES[surface]
+  return a ? { surface: a.surface, sub: sub ?? a.sub } : { surface, sub }
+}
 
 /** The pinned product ids from storage — unknown ids dropped, duplicates removed, never empty. */
 export function readPinnedIds<T extends string>(raw: string | null, valid: readonly string[], fallback: T[]): T[] {
