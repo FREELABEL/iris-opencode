@@ -13,6 +13,40 @@ import { createSignal } from "solid-js"
  * click there is the whole mechanism; nothing in the plugin has to change.
  */
 
+/**
+ * Claim a chat-link click for the app: decide what it does and, when the app handles it, make
+ * sure NOTHING ELSE does (#192620).
+ *
+ * preventDefault alone is not enough on desktop. tauri-plugin-shell injects its own script — a
+ * `click` listener on <body> that hands every `<a target="_blank">` http(s) link to the OS and,
+ * unlike tauri-plugin-opener's, never checks `defaultPrevented`. So a chat link opened in the
+ * side panel ALSO opened in the default browser, and a Cmd-click opened two browser tabs.
+ * Stopping propagation from the capture listener on the chat list means the click never reaches
+ * <body> or `window`, so neither plugin script sees it.
+ */
+export function claimLinkClick(
+  event: MouseEvent,
+  appOrigin: string,
+): { action: "panel" | "system"; href: string } | undefined {
+  const anchor = event
+    .composedPath()
+    .find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement && !!node.href)
+  if (!anchor) return undefined
+  const action = linkAction({
+    href: anchor.href,
+    button: event.button,
+    meta: event.metaKey,
+    ctrl: event.ctrlKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
+    appOrigin,
+  })
+  if (action === "default") return undefined
+  event.preventDefault()
+  event.stopPropagation()
+  return { action, href: anchor.href }
+}
+
 /** The side-panel tab id. A named panel tab like "context" and "iris" — never a file. */
 export const WEB_TAB = "web"
 
