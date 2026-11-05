@@ -184,3 +184,24 @@ export function readProbe(status: number, body: any): { live: boolean; message: 
   if (status === 201) return { live: true, message: "Lane answered 201 but returned a record id — the probe may have been SAVED. Check the dataset." }
   return { live: false, message: `Unexpected answer: HTTP ${status}${body?.error ? ` — ${body.error}` : ""}` }
 }
+
+// ── Working the queue (#192612) ─────────────────────────────────────────────────────────────
+
+/** One line per queue row: reference, when, status, assignee, and who it is about. */
+export function queueLine(r: Record<string, any>): string {
+  const name = [r.first_name, r.last_name].filter(Boolean).join(" ") || r.patient_name || r.name || "—"
+  const when = String(r.submitted_at ?? r.created_at ?? r.last_activity ?? "").slice(0, 10) || "—"
+  const ref = r.submission_ref ?? r.case_id ?? `#${r.id}`
+  const status = r.review_status ?? r.stage_name ?? "—"
+  return [String(r.id ?? "").padEnd(8), String(ref).padEnd(20), when.padEnd(11), String(status).padEnd(18), String(r.assigned_to ?? "").padEnd(12), name].join(" ")
+}
+
+/** The staff edit to send. Null when nothing was asked for. */
+export function reviewPayload(opts: { status?: string; assign?: string; decision?: string; note?: string }): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  if (opts.status !== undefined) out.review_status = String(opts.status).trim().toLowerCase()
+  if (opts.assign !== undefined) out.assigned_to = String(opts.assign).trim()
+  if (opts.decision !== undefined) out.decision = String(opts.decision).trim()
+  if (opts.note !== undefined && String(opts.note).trim() !== "") out.note = String(opts.note).trim()
+  return Object.keys(out).length ? out : null
+}

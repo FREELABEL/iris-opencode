@@ -105,3 +105,25 @@ describe("readProbe", () => {
     expect(readProbe(201, { success: true, data: { id: 5 } }).message).toContain("SAVED")
   })
 })
+
+describe("working the queue (#192612)", () => {
+  const { queueLine, reviewPayload } = require("./public-submit-lane")
+
+  test("a queue line names the reference, status and person", () => {
+    const line = queueLine({ id: 7, submission_ref: "IRIS-1", submitted_at: "2026-11-05T10:00:00Z", review_status: "new", first_name: "Pat", last_name: "Doe" })
+    expect(line).toContain("IRIS-1")
+    expect(line).toContain("2026-11-05")
+    expect(line).toContain("new")
+    expect(line).toContain("Pat Doe")
+  })
+
+  test("an FA case row reads too", () => {
+    expect(queueLine({ id: 3, case_id: "CAS-1", stage_name: "Intake", patient_name: "A B" })).toContain("CAS-1")
+  })
+
+  test("review sends only what was asked, lowercases the status, drops an empty note", () => {
+    expect(reviewPayload({ status: "Progress", note: "  " })).toEqual({ review_status: "progress" })
+    expect(reviewPayload({ assign: "Ellie", note: "called" })).toEqual({ assigned_to: "Ellie", note: "called" })
+    expect(reviewPayload({})).toBeNull()
+  })
+})
