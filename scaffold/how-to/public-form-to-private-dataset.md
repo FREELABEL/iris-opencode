@@ -98,6 +98,31 @@ sign-in without a code loops.
 On your signed-in staff page, read `GET /api/v1/app-data/<page>/<collection>` — the same address,
 read with a staff session. Anyone signed out gets 401.
 
+**6. Tell staff when something arrives**
+
+```bash
+iris datasets public-submit enable referrals --notify desk@example.com --notify-link https://heyiris.io/p/referrals-desk
+```
+
+Each new submission emails up to five addresses with its reference and a link to the staff page.
+The email never contains anything the sender typed — staff sign in to read it. `--notify none` stops it.
+
+**7. Work the queue from the CLI or an agent**
+
+```bash
+iris datasets public-submit queue referrals                      # what has come in
+iris datasets public-submit queue referrals --status new --json  # for an agent
+iris datasets public-submit review referrals 26600 --status progress --assign Ellie --note "Called the firm"
+```
+
+Your own IRIS account works here if you are an owner or editor of the board that owns the staff page
+**and** the page allows members — add `"platformMemberRoles": ["owner","editor"]` to the page's `gate`
+(pull, edit, push with `--publish`). Signed-in staff on the page itself can do the same from its buttons.
+
+What staff can change: `review_status`, `assigned_to`, `decision`, and notes. Notes are appended with
+who and when — never replaced. Status changes are kept in `status_history`. Nothing the sender typed can
+be changed. To limit the statuses: `enable referrals --statuses new,progress,hold,submitted,accepted,rejected`.
+
 ## Check it / turn it off
 
 ```bash

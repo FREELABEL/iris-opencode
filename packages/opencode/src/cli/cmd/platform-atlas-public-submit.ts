@@ -11,6 +11,8 @@ import {
   laneUrl,
   mergeSettings,
   readProbe,
+  queueLine,
+  reviewPayload,
   type LaneConfig,
 } from "./public-submit-lane"
 
@@ -55,6 +57,8 @@ function printLane(lane: LaneConfig, slug: string) {
   console.log(`  ${dim("Sites:")}       same host, heyiris.io${lane.origins?.length ? ", " + lane.origins.join(", ") : ""}`)
   console.log(`  ${dim("Limits:")}      ${Math.min(lane.per_sender ?? 5, MAX_PER_SENDER)} per sender / 10 min · ${Math.min(lane.per_hour ?? 200, MAX_PER_HOUR)} per hour`)
   console.log(`  ${dim("Reads back:")}  nothing — the dataset stays private; staff read it signed in`)
+  console.log(`  ${dim("Alerts:")}      ${lane.notify_emails?.length ? lane.notify_emails.join(", ") + (lane.notify_link ? ` → ${lane.notify_link}` : "") : "none"}`)
+  console.log(`  ${dim("Staff set:")}   ${lane.staff_update?.statuses?.length ? lane.staff_update.statuses.join(", ") : "any status"} · notes appended`)
 }
 
 /**
@@ -111,6 +115,9 @@ const EnableCommand = cmd({
       .option("ref-prefix", { type: "string", describe: "letters in front of each reference, e.g. INTAKE" })
       .option("per-sender", { type: "number", describe: `submissions per address per 10 minutes (max ${MAX_PER_SENDER})` })
       .option("per-hour", { type: "number", describe: `submissions per hour for the whole lane (max ${MAX_PER_HOUR})` })
+      .option("notify", { type: "array", string: true, describe: "email staff when a submission arrives (max 5; 'none' clears) — reference and link only, no sender data" })
+      .option("notify-link", { type: "string", describe: "page the alert links to (https://heyiris.io/p/…); defaults to the lane's page" })
+      .option("statuses", { type: "array", string: true, describe: "review statuses staff may set (comma-separate; 'any' clears)" })
       .option("dry-run", { type: "boolean", default: false, describe: "show what would be stored; change nothing" }),
   async handler(args) {
     UI.empty()
@@ -130,6 +137,9 @@ const EnableCommand = cmd({
       refPrefix: args["ref-prefix"] as string | undefined,
       perSender: args["per-sender"] as number | undefined,
       perHour: args["per-hour"] as number | undefined,
+      notify: args.notify as string[] | undefined,
+      notifyLink: args["notify-link"] as string | undefined,
+      statuses: args.statuses as string[] | undefined,
     }, fieldKeys(schema))
     for (const w of built.warnings) prompts.log.warn(w)
     if (!built.lane) {
@@ -220,10 +230,91 @@ const TestCommand = cmd({
   },
 })
 
+async function laneOf(slug: string): Promise<LaneConfig | null> {
+  const schema = await loadSchema(slug)
+  const lane = settingsOf(schema).public_submit as LaneConfig | undefined
+  if (!lane?.page || !lane?.collection) {
+    prompts.log.error("This dataset has no public-submit lane, so there is no queue to work.")
+    return null
+  }
+  return lane
+}
+
+const QueueCommand = cmd({
+  command: "queue <slug>",
+  describe: "list what has come in through a dataset's lane — for staff; your IRIS account must be on the board",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true, describe: "dataset (schema) slug" })
+      .option("collection", { type: "string", describe: "read another collection on the same desk, e.g. cases" })
+      .option("status", { type: "string", describe: "only rows with this review status" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!isJson) { UI.empty(); prompts.intro(`◈  Queue: ${args.slug}`) }
+    if (!(await requireAuth())) { if (!isJson) prompts.outro("Done"); return }
+    const lane = await laneOf(String(args.slug))
+    if (!lane) { process.exitCode = 1; if (!isJson) prompts.outro("Done"); return }
+    const collection = String(args.collection ?? lane.collection)
+    const res = await irisFetch(`/api/v1/app-data/${encodeURIComponent(lane.page)}/${encodeURIComponent(collection)}?per_page=200`, {}, PLATFORM_URLS.publicSite)
+    if (res.status === 401) {
+      prompts.log.error("Not allowed: your IRIS account must be an owner/editor on the page's board, and the page must allow members (gate.platformMemberRoles).")
+      process.exitCode = 1
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+    if (!(await handleApiError(res, "Read queue"))) { process.exitCode = 1; if (!isJson) prompts.outro("Done"); return }
+    const got = ((await res.json().catch(() => ({}))) as any)?.data
+    let rows: any[] = Array.isArray(got) ? got : []
+    if (args.status) rows = rows.filter((r) => String(r.review_status ?? r.stage_name ?? "").toLowerCase() === String(args.status).toLowerCase())
+    if (isJson) { await writeJson(rows); return }
+    if (!rows.length) { prompts.outro("Nothing in the queue"); return }
+    console.log(dim(`  ${"id".padEnd(8)} ${"reference".padEnd(20)} ${"received".padEnd(11)} ${"status".padEnd(18)} ${"assigned".padEnd(12)} who`))
+    for (const r of rows) console.log("  " + queueLine(r))
+    prompts.outro(`${rows.length} row(s) · update one: iris datasets public-submit review ${args.slug} <id> --status progress --note "…"`)
+  },
+})
+
+const ReviewCommand = cmd({
+  command: "review <slug> <id>",
+  describe: "staff update of one submission — status, assignee, decision, or a note (notes are appended, never replaced)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true, describe: "dataset (schema) slug" })
+      .positional("id", { type: "number", demandOption: true, describe: "row id from `queue`" })
+      .option("status", { type: "string", describe: "new review status (e.g. progress, feedback, submitted, accepted, rejected)" })
+      .option("assign", { type: "string", describe: "who is working it" })
+      .option("decision", { type: "string", describe: "a short decision note" })
+      .option("note", { type: "string", describe: "add a note (kept with who and when)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!isJson) { UI.empty(); prompts.intro(`◈  Review #${args.id}`) }
+    const payload = reviewPayload({ status: args.status as any, assign: args.assign as any, decision: args.decision as any, note: args.note as any })
+    if (!payload) { prompts.log.error("Nothing to change — pass --status, --assign, --decision or --note."); process.exitCode = 1; if (!isJson) prompts.outro("Nothing changed"); return }
+    if (!(await requireAuth())) { if (!isJson) prompts.outro("Done"); return }
+    const lane = await laneOf(String(args.slug))
+    if (!lane) { process.exitCode = 1; if (!isJson) prompts.outro("Nothing changed"); return }
+    const res = await irisFetch(`/api/v1/app-data/${encodeURIComponent(lane.page)}/${encodeURIComponent(lane.collection)}/${encodeURIComponent(String(args.id))}`,
+      { method: "PUT", body: JSON.stringify(payload) }, PLATFORM_URLS.publicSite)
+    const body: any = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      prompts.log.error(body?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1
+      if (!isJson) prompts.outro("Nothing changed")
+      return
+    }
+    if (isJson) { await writeJson(body?.data ?? {}); return }
+    const d = body?.data ?? {}
+    prompts.log.success(`Saved — status ${d.review_status ?? "—"}${d.assigned_to ? `, assigned ${d.assigned_to}` : ""}${Array.isArray(d.staff_notes) ? `, ${d.staff_notes.length} note(s)` : ""}`)
+    prompts.outro("Done")
+  },
+})
+
 export const DatasetPublicSubmitGroup = cmd({
   command: "public-submit",
   aliases: ["public-lane", "intake-lane"],
   describe: "let a public form add records to a private dataset — show, enable, disable, test",
-  builder: (y) => y.command(ShowCommand).command(EnableCommand).command(DisableCommand).command(TestCommand).demandCommand(),
+  builder: (y) => y.command(ShowCommand).command(EnableCommand).command(DisableCommand).command(TestCommand).command(QueueCommand).command(ReviewCommand).demandCommand(),
   async handler() {},
 })

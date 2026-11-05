@@ -20,6 +20,12 @@ export interface LaneConfig {
   ref_prefix?: string
   per_sender?: number
   per_hour?: number
+  /** Staff told by email when a submission arrives (max 5). The email carries a reference and a link, never the sender's words. */
+  notify_emails?: string[]
+  /** Where that email links (a heyiris.io/p/ page); defaults to the lane's page. */
+  notify_link?: string
+  /** What staff may change on a submission, and which statuses are allowed. */
+  staff_update?: { fields?: string[]; statuses?: string[] }
 }
 
 /** The ceilings fl-iris-api enforces whatever the settings say. Kept here so `show` tells the truth. */
@@ -40,7 +46,16 @@ export type LaneOptions = {
   refPrefix?: string
   perSender?: number
   perHour?: number
+  /** Emails to alert on a new submission; ["none"] clears the list. */
+  notify?: string[]
+  notifyLink?: string
+  /** Statuses staff may set (comma-separated or repeated); ["any"] clears the restriction. */
+  statuses?: string[]
 }
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const STATUS = /^[a-z][a-z0-9_-]{0,39}$/
+const MAX_NOTIFY = 5
 
 function pairs(list: string[] | undefined, label: string, errors: string[]): Record<string, string> {
   const out: Record<string, string> = {}
@@ -134,6 +149,31 @@ export function buildLane(
   if (refPrefix) lane.ref_prefix = refPrefix
   lane.per_sender = perSender
   lane.per_hour = perHour
+
+  // Alert + staff settings: kept as they were unless an option names them.
+  const split = (l: string[]) => l.flatMap((x) => String(x).split(",")).map((x) => x.trim()).filter(Boolean)
+  let notify = prev.notify_emails ?? []
+  if (opts.notify?.length) {
+    const asked = split(opts.notify)
+    notify = asked.length === 1 && asked[0].toLowerCase() === "none" ? [] : [...new Set(asked.map((e) => e.toLowerCase()))]
+    for (const e of notify) if (!EMAIL.test(e)) errors.push(`--notify '${e}' is not an email address`)
+    if (notify.length > MAX_NOTIFY) errors.push(`--notify takes at most ${MAX_NOTIFY} addresses`)
+  }
+  const notifyLink = (opts.notifyLink ?? prev.notify_link ?? "").trim()
+  if (notifyLink && !/^https:\/\/(www\.)?heyiris\.io\/p\//.test(notifyLink)) errors.push("--notify-link must be a https://heyiris.io/p/… page")
+  const staff = { ...(prev.staff_update ?? {}) }
+  if (opts.statuses?.length) {
+    const asked = split(opts.statuses).map((x) => x.toLowerCase())
+    if (asked.length === 1 && asked[0] === "any") delete staff.statuses
+    else {
+      for (const st of asked) if (!STATUS.test(st)) errors.push(`--statuses '${st}' must be lowercase letters, digits, - or _`)
+      staff.statuses = [...new Set(asked)]
+    }
+  }
+  if (errors.length) return { errors, warnings }
+  if (notify.length) lane.notify_emails = notify
+  if (notifyLink) lane.notify_link = notifyLink
+  if (Object.keys(staff).length) lane.staff_update = staff
   return { lane, errors, warnings }
 }
 
@@ -183,4 +223,25 @@ export function readProbe(status: number, body: any): { live: boolean; message: 
   if (status === 429) return { live: true, message: "Lane is live but rate-limited this address — try again in a few minutes." }
   if (status === 201) return { live: true, message: "Lane answered 201 but returned a record id — the probe may have been SAVED. Check the dataset." }
   return { live: false, message: `Unexpected answer: HTTP ${status}${body?.error ? ` — ${body.error}` : ""}` }
+}
+
+// ── Working the queue (#192612) ─────────────────────────────────────────────────────────────
+
+/** One line per queue row: reference, when, status, assignee, and who it is about. */
+export function queueLine(r: Record<string, any>): string {
+  const name = [r.first_name, r.last_name].filter(Boolean).join(" ") || r.patient_name || r.name || "—"
+  const when = String(r.submitted_at ?? r.created_at ?? r.last_activity ?? "").slice(0, 10) || "—"
+  const ref = r.submission_ref ?? r.case_id ?? `#${r.id}`
+  const status = r.review_status ?? r.stage_name ?? "—"
+  return [String(r.id ?? "").padEnd(8), String(ref).padEnd(20), when.padEnd(11), String(status).padEnd(18), String(r.assigned_to ?? "").padEnd(12), name].join(" ")
+}
+
+/** The staff edit to send. Null when nothing was asked for. */
+export function reviewPayload(opts: { status?: string; assign?: string; decision?: string; note?: string }): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  if (opts.status !== undefined) out.review_status = String(opts.status).trim().toLowerCase()
+  if (opts.assign !== undefined) out.assigned_to = String(opts.assign).trim()
+  if (opts.decision !== undefined) out.decision = String(opts.decision).trim()
+  if (opts.note !== undefined && String(opts.note).trim() !== "") out.note = String(opts.note).trim()
+  return Object.keys(out).length ? out : null
 }

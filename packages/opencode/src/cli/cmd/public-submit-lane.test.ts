@@ -105,3 +105,46 @@ describe("readProbe", () => {
     expect(readProbe(201, { success: true, data: { id: 5 } }).message).toContain("SAVED")
   })
 })
+
+describe("working the queue (#192612)", () => {
+  const { queueLine, reviewPayload } = require("./public-submit-lane")
+
+  test("a queue line names the reference, status and person", () => {
+    const line = queueLine({ id: 7, submission_ref: "IRIS-1", submitted_at: "2026-11-05T10:00:00Z", review_status: "new", first_name: "Pat", last_name: "Doe" })
+    expect(line).toContain("IRIS-1")
+    expect(line).toContain("2026-11-05")
+    expect(line).toContain("new")
+    expect(line).toContain("Pat Doe")
+  })
+
+  test("an FA case row reads too", () => {
+    expect(queueLine({ id: 3, case_id: "CAS-1", stage_name: "Intake", patient_name: "A B" })).toContain("CAS-1")
+  })
+
+  test("review sends only what was asked, lowercases the status, drops an empty note", () => {
+    expect(reviewPayload({ status: "Progress", note: "  " })).toEqual({ review_status: "progress" })
+    expect(reviewPayload({ assign: "Ellie", note: "called" })).toEqual({ assigned_to: "Ellie", note: "called" })
+    expect(reviewPayload({})).toBeNull()
+  })
+})
+
+describe("alerts and staff settings (#192612)", () => {
+  const { buildLane } = require("./public-submit-lane")
+  const base = { enabled: true, page: "desk", collection: "submissions", require_any: ["name"] }
+
+  test("an unrelated change keeps the alert and statuses", () => {
+    const prev = { ...base, notify_emails: ["a@x.io"], notify_link: "https://heyiris.io/p/desk-v3", staff_update: { statuses: ["new", "hold"] } }
+    const { lane } = buildLane(prev, { perSender: 10 }, [])
+    expect(lane.notify_emails).toEqual(["a@x.io"])
+    expect(lane.notify_link).toBe("https://heyiris.io/p/desk-v3")
+    expect(lane.staff_update).toEqual({ statuses: ["new", "hold"] })
+  })
+
+  test("sets, clears and validates", () => {
+    expect(buildLane(base, { notify: ["A@x.io,b@y.io"], statuses: ["new,Hold"] }, []).lane).toMatchObject({ notify_emails: ["a@x.io", "b@y.io"], staff_update: { statuses: ["new", "hold"] } })
+    expect(buildLane({ ...base, notify_emails: ["a@x.io"] }, { notify: ["none"] }, []).lane.notify_emails).toBeUndefined()
+    expect(buildLane(base, { notify: ["not-an-email"] }, []).errors.join()).toContain("not an email")
+    expect(buildLane(base, { notifyLink: "https://evil.example/p/x" }, []).errors.join()).toContain("heyiris.io/p/")
+    expect(buildLane(base, { notify: ["a@x.io,b@x.io,c@x.io,d@x.io,e@x.io,f@x.io"] }, []).errors.join()).toContain("at most 5")
+  })
+})
