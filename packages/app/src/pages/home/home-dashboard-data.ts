@@ -21,7 +21,15 @@ export type RecentItem = {
   updatedAt?: string
 }
 export type RecentPayload = { measured: boolean; reason?: string; items: RecentItem[] }
-export type InboxItem = { index: number; read: boolean; type: string; from: string; receivedAt?: string; label: string; preview?: string }
+export type InboxItem = {
+  index: number
+  read: boolean
+  type: string
+  from: string
+  receivedAt?: string
+  label: string
+  preview?: string
+}
 export type InboxList = InboxPayload & { items?: InboxItem[] }
 export type HomeDashboardData = {
   hive: HivePayload
@@ -44,7 +52,17 @@ export function failedPart<T extends object>(fallback: T, reason: string): T {
   return part
 }
 
-export async function fetchHomeDashboard(base: string, fetch: Fetch): Promise<HomeDashboardData> {
+/**
+ * Each part lands on its own (#192535). This used to be one Promise.all, so Home showed nothing
+ * until the slowest read finished — /iris/heartbeats, ~2.6 s — while the counts it could have drawn
+ * had been back for two seconds. `onPart` hears every arrival; parts not yet back are placeholders
+ * marked failed, so a merge keeps the last good copy of them instead of blanking it.
+ */
+export async function fetchHomeDashboard(
+  base: string,
+  fetch: Fetch,
+  onPart?: (partial: HomeDashboardData) => void,
+): Promise<HomeDashboardData> {
   const root = base.replace(/\/$/, "")
   const get = async <T extends object>(path: string, fallback: T): Promise<T> => {
     try {
@@ -55,18 +73,35 @@ export async function fetchHomeDashboard(base: string, fetch: Fetch): Promise<Ho
       return failedPart(fallback, e instanceof Error ? e.message : String(e))
     }
   }
-  const [hive, agents, inbox, bloqs, beats, accounts, recent] = await Promise.all([
-    get<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
-    get<AgentsPayload>("/iris/agents-mine", { measured: false, agents: [] }),
-    get<InboxList>("/iris/inbox?perPage=25", { measured: false, unread: null }),
-    get<BloqsPayload>("/iris/bloqs?perPage=1", { measured: false, bloqs: [] }),
-    get<BeatsPayload>("/iris/heartbeats", { measured: false, heartbeats: [] }),
-    get<AccountsPayload>("/iris/accounts", { accounts: [] }),
-    get<RecentPayload>("/iris/recent?perPage=50", { measured: false, items: [] }),
+  const empty = {
+    hive: { measured: false, nodes: [] } as HivePayload,
+    agents: { measured: false, agents: [] } as AgentsPayload,
+    inbox: { measured: false, unread: null } as InboxList,
+    bloqs: { measured: false, bloqs: [] } as BloqsPayload,
+    beats: { measured: false, heartbeats: [] } as BeatsPayload,
+    accounts: { accounts: [] } as AccountsPayload,
+    recent: { measured: false, items: [] } as RecentPayload,
+  }
+  type Part = keyof typeof empty
+  const parts = Object.fromEntries(
+    (Object.keys(empty) as Part[]).map((k) => [k, failedPart(empty[k], "loading")]),
+  ) as unknown as Omit<HomeDashboardData, "at">
+  const land = <K extends Part>(k: K, path: string) =>
+    get(path, empty[k]).then((value) => {
+      ;(parts as Record<Part, unknown>)[k] = value
+      onPart?.({ ...parts, at: Date.now() })
+    })
+  await Promise.all([
+    land("hive", "/iris/hive?perPage=200"),
+    land("agents", "/iris/agents-mine"),
+    land("inbox", "/iris/inbox?perPage=25"),
+    land("bloqs", "/iris/bloqs?perPage=1"),
+    land("beats", "/iris/heartbeats"),
+    land("accounts", "/iris/accounts"),
+    land("recent", "/iris/recent?perPage=50"),
   ])
-  return { hive, agents, inbox, bloqs, beats, accounts, recent, at: Date.now() }
+  return { ...parts, at: Date.now() }
 }
-
 export function keepGoodParts(prev: HomeDashboardData, next: HomeDashboardData): HomeDashboardData {
   const pick = <K extends Exclude<keyof HomeDashboardData, "at">>(k: K) => (FAILED.has(next[k]) ? prev[k] : next[k])
   return {
@@ -88,7 +123,10 @@ export function createSwrCache<T>(opts: {
   merge?: (prev: T, next: T) => T
   now?: () => number
   /** Where a copy outlives the page (a reload, a relaunch); read once per key, written after each read. */
-  storage?: { load(key: string): { value: T; at: number } | undefined; save(key: string, entry: { value: T; at: number }): void }
+  storage?: {
+    load(key: string): { value: T; at: number } | undefined
+    save(key: string, entry: { value: T; at: number }): void
+  }
 }) {
   const now = opts.now ?? Date.now
   const entries = new Map<string, { value: T; at: number }>()
@@ -106,10 +144,17 @@ export function createSwrCache<T>(opts: {
     const entry = entryOf(key)
     return entry ? now() - entry.at : Infinity
   }
-  const load = (key: string, fetch: () => Promise<T>): Promise<T> => {
+  // `fetch` may report partial values as they arrive; listeners see them (merged over the last
+  // good copy), but only the finished value is kept and stored.
+  type Fetcher = (progress: (partial: T) => void) => Promise<T>
+  const load = (key: string, fetch: Fetcher): Promise<T> => {
     const running = inflight.get(key)
     if (running) return running
-    const pending = fetch()
+    const pending = fetch((partial) => {
+      const prev = entryOf(key)
+      const value = prev && opts.merge ? opts.merge(prev.value, partial) : partial
+      for (const fn of listeners) fn(key, value)
+    })
       .then((next) => {
         const prev = entryOf(key)
         const value = prev && opts.merge ? opts.merge(prev.value, next) : next
@@ -126,13 +171,13 @@ export function createSwrCache<T>(opts: {
   return {
     load,
     /** The copy if it is still usable (younger than staleMs); refreshed in the background once it is not fresh. */
-    read(key: string, fetch: () => Promise<T>): T | undefined {
+    read(key: string, fetch: Fetcher): T | undefined {
       const a = age(key)
       if (a > opts.freshMs) void load(key, fetch).catch(() => {})
       return a <= opts.staleMs ? entryOf(key)?.value : undefined
     },
     /** Load in the background unless there is a copy younger than maxAgeMs. */
-    warm(key: string, fetch: () => Promise<T>, maxAgeMs: number) {
+    warm(key: string, fetch: Fetcher, maxAgeMs: number) {
       if (age(key) > maxAgeMs) void load(key, fetch).catch(() => {})
     },
     subscribe(fn: (key: string, value: T) => void) {
@@ -160,7 +205,11 @@ const localCopy = {
       // Counts only: item titles and messages stay off disk — some boards hold patient data, and the
       // Atlas offline copy keeps those off disk unless asked (includePhi). They refill on the next read.
       const { recent, inbox } = entry.value
-      const value = { ...entry.value, recent: { ...recent, measured: false, items: [] }, inbox: { ...inbox, items: [] } }
+      const value = {
+        ...entry.value,
+        recent: { ...recent, measured: false, items: [] },
+        inbox: { ...inbox, items: [] },
+      }
       localStorage.setItem(STORED + key, JSON.stringify({ ...entry, value }))
     } catch {}
   },
@@ -176,7 +225,7 @@ export const homeDashboardKey = (base: string) => base.replace(/\/$/, "")
 
 /** Keep a copy at most five minutes old, so the first click on Home draws at once. */
 export function warmHomeDashboard(base: string, fetch: Fetch) {
-  homeDashboard.warm(homeDashboardKey(base), () => fetchHomeDashboard(base, fetch), 5 * 60_000)
+  homeDashboard.warm(homeDashboardKey(base), (progress) => fetchHomeDashboard(base, fetch, progress), 5 * 60_000)
 }
 
 /** One page of a list held in full — Home's tabs show five rows and page through the rest. */

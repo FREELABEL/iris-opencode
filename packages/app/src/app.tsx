@@ -1,3 +1,4 @@
+import { IrisShell } from "@/components/iris-shell"
 import "@/index.css"
 import * as Sentry from "@sentry/solid"
 import { I18nProvider } from "@opencode-ai/ui/context"
@@ -68,7 +69,12 @@ import { useCheckServerHealth } from "./utils/server-health"
 import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 
-import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
+// The chat page (with its timeline, diffs and side panel) is its own chunk, so Home does not parse
+// it on the way in (#192535); the shell preloads it once the browser is idle.
+const sessionPage = () => import("@/pages/session")
+const SessionPage = lazy(() => sessionPage().then((m) => ({ default: m.SessionPage })))
+const SessionRouteErrorBoundary = lazy(() => sessionPage().then((m) => ({ default: m.SessionRouteErrorBoundary })))
+const TargetSessionRouteContent = lazy(() => sessionPage().then((m) => ({ default: m.TargetSessionRouteContent })))
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
 
@@ -603,15 +609,15 @@ export function AppInterface(props: {
                 root={(routerProps) => (
                   <TabsProvider>
                     <SplitProvider>
-                    <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                          </Show>
-                        </ServerShell>
-                      </NotificationProvider>
-                    </PermissionProvider>
+                      <PermissionProvider>
+                        <NotificationProvider>
+                          <ServerShell>
+                            <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                              <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                            </Show>
+                          </ServerShell>
+                        </NotificationProvider>
+                      </PermissionProvider>
                     </SplitProvider>
                   </TabsProvider>
                 )}
@@ -650,11 +656,17 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
-        <Route path="/" component={NewHome} />
-        <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
-        <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+        {/* One shell, mounted once: only the left side changes between these (#192535). */}
+        <Route component={(routeProps) => <IrisShell>{routeProps.children}</IrisShell>}>
+          <Route path="/" component={NewHome} />
+          <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
+          <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+          <Route path="/new-session" component={DraftRoute} />
+        </Route>
       </Show>
-      <Route path="/new-session" component={DraftRoute} />
+      <Show when={!settings.general.newLayoutDesigns()}>
+        <Route path="/new-session" component={DraftRoute} />
+      </Show>
     </>
   )
 }

@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { agoOf, createSwrCache, failedPart, keepGoodParts, sliceOf, verbOf, type HomeDashboardData } from "./home-dashboard-data"
+import {
+  agoOf,
+  createSwrCache,
+  failedPart,
+  fetchHomeDashboard,
+  keepGoodParts,
+  sliceOf,
+  verbOf,
+  type HomeDashboardData,
+} from "./home-dashboard-data"
 
 const clock = () => {
   let t = 0
   return { now: () => t, advance: (ms: number) => (t += ms) }
 }
 const settle = () => new Promise((r) => setTimeout(r, 0))
-const counter = <T,>(value: (n: number) => T) => {
+const counter = <T>(value: (n: number) => T) => {
   let calls = 0
   return { fetch: async () => value(++calls), calls: () => calls }
 }
@@ -77,7 +86,11 @@ describe("createSwrCache", () => {
 describe("createSwrCache storage", () => {
   const memory = () => {
     const saved = new Map<string, { value: number; at: number }>()
-    return { saved, load: (k: string) => saved.get(k), save: (k: string, e: { value: number; at: number }) => void saved.set(k, e) }
+    return {
+      saved,
+      load: (k: string) => saved.get(k),
+      save: (k: string, e: { value: number; at: number }) => void saved.set(k, e),
+    }
   }
 
   test("a stored copy is served after a reload, without a fetch while it is fresh", () => {
@@ -112,7 +125,9 @@ describe("keepGoodParts", () => {
     agents: { measured: true, agents: [] },
     inbox: { measured: true, unread: n },
     bloqs: { measured: true, total: n, bloqs: [] },
-    beats: beatsFailed ? failedPart({ measured: false, heartbeats: [] }, "engine 502") : { measured: true, heartbeats: [] },
+    beats: beatsFailed
+      ? failedPart({ measured: false, heartbeats: [] }, "engine 502")
+      : { measured: true, heartbeats: [] },
     accounts: { accounts: [{ id: n, active: true }] },
     recent: { measured: true, items: [] },
     at: n,
@@ -145,5 +160,60 @@ describe("Home tab helpers", () => {
   test("verbOf: created unless touched more than two minutes later", () => {
     expect(verbOf({ createdAt: "2026-11-05T01:00:00Z", updatedAt: "2026-11-05T01:01:00Z" })).toBe("created")
     expect(verbOf({ createdAt: "2026-11-05T01:00:00Z", updatedAt: "2026-11-05T03:00:00Z" })).toBe("edited")
+  })
+})
+
+describe("progressive Home (#192535)", () => {
+  test("each part is reported as it lands — the slowest read no longer holds the rest back", async () => {
+    let release!: () => void
+    const slow = new Promise<void>((resolve) => (release = resolve))
+    const fetch = (async (url: string | URL | Request) => {
+      if (String(url).includes("/iris/heartbeats")) await slow
+      const body = {
+        measured: true,
+        nodes: [],
+        agents: [],
+        heartbeats: [],
+        bloqs: [],
+        accounts: [],
+        items: [],
+        unread: 0,
+      }
+      return new Response(JSON.stringify(body))
+    }) as unknown as typeof globalThis.fetch
+    const beatsSeen: boolean[] = []
+    const done = fetchHomeDashboard("http://engine", fetch, (partial) => beatsSeen.push(partial.beats.measured))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(beatsSeen).toEqual([false, false, false, false, false, false])
+    release()
+    const final = await done
+    expect(final.beats.measured).toBe(true)
+    expect(beatsSeen.length).toBe(7)
+  })
+
+  test("a part not back yet keeps the last good copy instead of blanking it", async () => {
+    const fetch = (async () => new Response("{}", { status: 500 })) as unknown as typeof globalThis.fetch
+    const partials: HomeDashboardData[] = []
+    await fetchHomeDashboard("http://engine", fetch, (p) => partials.push(p))
+    const good = { ...partials[0], beats: { measured: true, heartbeats: [] } }
+    expect(keepGoodParts(good, partials[0]).beats.measured).toBe(true)
+  })
+
+  test("the cache passes progress to listeners merged over the last copy, and keeps only the final value", async () => {
+    const cache = createSwrCache<number>({
+      freshMs: 60_000,
+      staleMs: 600_000,
+      merge: (prev, next) => (next < 0 ? prev : next),
+    })
+    const heard: number[] = []
+    cache.subscribe((_, value) => heard.push(value))
+    await cache.load("k", async () => 5)
+    await cache.load("k", async (progress) => {
+      progress(-1)
+      progress(7)
+      return 9
+    })
+    expect(heard).toEqual([5, 5, 7, 9])
+    expect(cache.read("k", async () => 0)).toBe(9)
   })
 })
