@@ -129,6 +129,7 @@ export function IrisShell(props: ParentProps) {
         <div class="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>
         {/* Hidden, never unmounted: the container (and what is portaled into it) survives. */}
         <div
+          data-component="iris-shell-panel"
           class="relative flex min-h-0 shrink-0"
           classList={{ hidden: !visible() }}
           style={{ width: `${panelWidth()}px` }}
