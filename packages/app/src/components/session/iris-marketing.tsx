@@ -46,7 +46,7 @@ export type PinResult = { ok: true; pin: MarketingPin } | { ok: false; reason: s
  * engine decides (POST /iris/page-pin: the account's own pages only); nothing is stored unless it
  * allows the page. Pure I/O: the caller stores the pin (IrisMarketing's `pin` does both).
  */
-export async function checkPin(doFetch: Fetch, slug: string, label?: string): Promise<PinResult> {
+export async function checkPin(doFetch: Fetch, slug: string, label?: string, opts?: PinOptions): Promise<PinResult> {
   const c = await doFetch(`/iris/page-pin`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -55,13 +55,17 @@ export async function checkPin(doFetch: Fetch, slug: string, label?: string): Pr
     .then((r) => r.json() as Promise<PinCheck>)
     .catch(() => ({ measured: false, allowed: false, reason: "IRIS isn't answering" }) as PinCheck)
   if (!c.allowed || !c.page) return { ok: false, reason: c.reason ?? "this page can't be pinned" }
-  return { ok: true, pin: { slug: c.page.slug, label: label ?? c.page.title, ...(c.page.signIn ? { signIn: true } : {}) } }
+  const signIn = c.page.signIn || opts?.signIn === true
+  return { ok: true, pin: { slug: c.page.slug, label: label ?? c.page.title, ...(signIn ? { signIn: true } : {}) } }
 }
+
+/** `signIn: true` opens the page signed in (#192482) even if the page list calls it public — a members-only page made just now. */
+export type PinOptions = { signIn?: boolean }
 
 /** What the empty state hands a slotted action (#192627), so it can pin what it creates. */
 export type MarketingEmptyActions = {
   /** Check with the engine, then pin and open the page. Resolves with the outcome. */
-  pin: (slug: string, label?: string) => Promise<PinResult>
+  pin: (slug: string, label?: string, opts?: PinOptions) => Promise<PinResult>
   accountId: number
 }
 
@@ -82,6 +86,8 @@ export function IrisMarketing(props: {
    * campaign board" here). Given `pin` so it can pin the page it creates.
    */
   emptyActions?: (ctx: MarketingEmptyActions) => JSX.Element
+  /** The same, drawn small at the top of the "+" picker, so an account with pins can use it too (#192627). */
+  pickerActions?: (ctx: MarketingEmptyActions) => JSX.Element
 }) {
   const [account, setAccount] = createSignal<Account>({ at: "checking" })
   // Asked on every mount: switching accounts and coming back to Marketing shows the new account's pins.
@@ -118,9 +124,9 @@ export function IrisMarketing(props: {
     save(addPin(state(), pin))
     setPicking(false)
   }
-  const pinBySlug = async (slug: string, label?: string): Promise<PinResult> => {
+  const pinBySlug = async (slug: string, label?: string, opts?: PinOptions): Promise<PinResult> => {
     if (!key()) return { ok: false, reason: "nobody is signed in" }
-    const r = await checkPin(props.doFetch, slug, label)
+    const r = await checkPin(props.doFetch, slug, label, opts)
     if (r.ok) pick(r.pin)
     return r
   }
@@ -250,6 +256,9 @@ export function IrisMarketing(props: {
               keyed
               fallback={
                 <div class="iris-mkt__picker-wrap">
+                  <Show when={props.pickerActions}>
+                    {(slot) => slot()({ pin: pinBySlug, accountId: (account() as { id: number }).id })}
+                  </Show>
                   <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} onClose={() => setPicking(false)} />
                 </div>
               }
