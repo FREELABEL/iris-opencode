@@ -1,3 +1,4 @@
+import { irisSplitShare, setIrisSplitShare } from "@/components/iris-split"
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { IrisCardNotices } from "@/components/session/iris-card-notices"
 import { getFilename } from "@opencode-ai/core/util/path"
@@ -530,9 +531,15 @@ export default function Page() {
   })
   // Clamp at render time so window or sidebar resizes squeeze the chat panel
   // instead of the review pane, without overwriting the persisted width.
+  // The chat column's width is the shared split (#192535) times the row, so the split set on Home
+  // is the split here; layout.session.width is only the fallback before the row is measured.
+  const sharedSessionWidth = () => {
+    const available = sessionPanelAvailable()
+    return available === undefined ? layout.session.width() : Math.round(available * irisSplitShare())
+  }
   const sessionPanelResizedWidth = createMemo(() =>
     clampSessionPanelWidth({
-      width: layout.session.width(),
+      width: sharedSessionWidth(),
       available: sessionPanelAvailable(),
       split: splitReview(),
     }),
@@ -1161,7 +1168,11 @@ export default function Page() {
     base: () => sdk().url,
     voice: () => settings.voice.speakVoice() || undefined,
     onUnavailable: (reason) =>
-      showToast({ variant: "error", title: language.t("settings.general.row.speakReplies.unavailable"), description: reason }),
+      showToast({
+        variant: "error",
+        title: language.t("settings.general.row.speakReplies.unavailable"),
+        description: reason,
+      }),
   })
 
   createEffect(
@@ -2407,6 +2418,8 @@ export default function Page() {
                 onResize={(width) => {
                   size.touch()
                   layout.session.resize(width)
+                  const available = sessionPanelAvailable()
+                  if (available) setIrisSplitShare(width / available)
                 }}
               />
             </div>
