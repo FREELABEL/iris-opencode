@@ -2,6 +2,7 @@ import { createEffect, createMemo, createResource, createSignal, For, on, onClea
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
 import "./iris-hive-sessions.css"
+import { focusHiveSession, irisHiveSessionFocus } from "./iris-nav"
 import {
   continueText,
   ago,
@@ -112,6 +113,16 @@ export function IrisHiveSessions(props: {
     const node = nodes().find((n) => n.id === p.nodeId)
     const session = node?.sessions.find((s) => s.sessionId === p.sessionId)
     return node && session ? { node, session } : undefined
+  })
+  // Home › On your machines names a session (#192626); open it once the list has it.
+  createEffect(() => {
+    const f = irisHiveSessionFocus()
+    if (!f) return
+    const node = nodes().find((n) => n.id === f.nodeId)
+    if (!node?.sessions.some((s) => s.sessionId === f.sessionId)) return
+    setCollapsed((c) => ({ ...c, [node.id]: true }))
+    setPicked({ nodeId: f.nodeId, sessionId: f.sessionId })
+    focusHiveSession(null)
   })
 
   return (

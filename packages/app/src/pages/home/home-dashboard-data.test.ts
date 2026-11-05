@@ -130,6 +130,7 @@ describe("keepGoodParts", () => {
       : { measured: true, heartbeats: [] },
     accounts: { accounts: [{ id: n, active: true }] },
     recent: { measured: true, items: [] },
+    sessions: { measured: true, nodes: [] },
     at: n,
   })
 
@@ -184,11 +185,11 @@ describe("progressive Home (#192535)", () => {
     const beatsSeen: boolean[] = []
     const done = fetchHomeDashboard("http://engine", fetch, (partial) => beatsSeen.push(partial.beats.measured))
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(beatsSeen).toEqual([false, false, false, false, false, false])
+    expect(beatsSeen).toEqual([false, false, false, false, false, false, false])
     release()
     const final = await done
     expect(final.beats.measured).toBe(true)
-    expect(beatsSeen.length).toBe(7)
+    expect(beatsSeen.length).toBe(8)
   })
 
   test("a part not back yet keeps the last good copy instead of blanking it", async () => {

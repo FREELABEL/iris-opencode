@@ -28,6 +28,8 @@ import {
   type HomeDashboardData,
 } from "./home-dashboard-data"
 import { hivePillTarget } from "@/components/session/iris-hive-inbox-model"
+import { focusHiveSession } from "@/components/session/iris-nav"
+import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
 import "./home-dashboard.css"
 
 /**
@@ -180,6 +182,20 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   const mail = createMemo(() => sliceOf(data()?.inbox.items ?? [], inboxPage()))
   const openItem = (item: RecentItem) => openIrisPanel({ surface: "atlas", bloqId: item.bloqId, itemId: item.id })
   const openInbox = () => openIrisPanel(hivePillTarget("inbox"))
+  // On your machines (#192626): one row per live session, any tool, any machine you have.
+  const fleet = createMemo(() => fleetOf(data()?.sessions))
+  const [tool, setTool] = createSignal<string | null>(null)
+  const [fleetPage, setFleetPage] = createSignal(1)
+  const fleetRows = createMemo(() => sliceOf(byTool(fleet().rows, tool()), fleetPage()))
+  const pickTool = (t: string | null) => {
+    setTool(t)
+    setFleetPage(1)
+  }
+  const openSessions = () => openIrisPanel({ surface: "hive", sub: "sessions" })
+  const openFleetRow = (r: FleetRow) => {
+    focusHiveSession({ nodeId: r.nodeId, sessionId: r.sessionId })
+    openSessions()
+  }
   const pick = (t: Tab) => {
     setTab(t)
     setPage(1)
@@ -626,6 +642,113 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </Switch>
           </section>
         </Show>
+
+        <section class="ihd-card" aria-label="On your machines">
+          <div class="ihd-card-h">
+            <h2>On your machines</h2>
+            <Show when={data()?.sessions.measured && fleet().rows.length}>
+              <p class="ihd-sum">
+                <span>
+                  <b>{fleet().rows.length}</b> live on <b>{fleet().machines}</b>{" "}
+                  {fleet().machines === 1 ? "machine" : "machines"}
+                </span>
+                <Show when={fleet().rows.filter((r) => r.status === "needs_you").length}>
+                  {(n) => (
+                    <span data-tone="warn">
+                      <b>{n()}</b> need{n() === 1 ? "s" : ""} you
+                    </span>
+                  )}
+                </Show>
+              </p>
+            </Show>
+            <button type="button" class="ihd-more" onClick={openSessions}>
+              Hive › Sessions
+            </button>
+          </div>
+          <Show
+            when={data()?.sessions.measured}
+            fallback={
+              <div class="ihd-empty">
+                {data()?.sessions.reason && data()?.sessions.reason !== "loading"
+                  ? `Your machines' sessions could not be read — ${data()?.sessions.reason}`
+                  : "Reading your machines' sessions…"}
+              </div>
+            }
+          >
+            <Show
+              when={fleet().rows.length}
+              fallback={<div class="ihd-empty">Nothing is running on your machines right now.</div>}
+            >
+              <Show when={fleet().tools.length > 1}>
+                <div class="ihd-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    class="ihd-tab"
+                    aria-selected={tool() === null}
+                    onClick={() => pickTool(null)}
+                  >
+                    All<span>{fleet().rows.length}</span>
+                  </button>
+                  <For each={fleet().tools}>
+                    {(t) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        class="ihd-tab"
+                        aria-selected={tool() === t}
+                        onClick={() => pickTool(t)}
+                      >
+                        {t}
+                        <span>{byTool(fleet().rows, t).length}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <For each={fleetRows().items}>
+                {(r) => (
+                  <div
+                    class="ihd-sr"
+                    data-status={r.status}
+                    role="button"
+                    tabIndex={0}
+                    title={`${r.tool} · ${r.machine} · ${r.working ? "working" : r.status.replace("_", " ")}\nOpen in Hive › Sessions`}
+                    onClick={() => openFleetRow(r)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openFleetRow(r)}
+                  >
+                    <span class="ihd-st">
+                      <Switch fallback={<Icon name="moon" color="var(--ihd-in)" />}>
+                        <Match when={r.status === "needs_you"}>
+                          <Icon name="warn" color={AMBER} />
+                        </Match>
+                        <Match when={r.working}>
+                          <i class="ihd-spin" />
+                        </Match>
+                        <Match when={r.status === "active"}>
+                          <i class="ihd-live" />
+                        </Match>
+                      </Switch>
+                    </span>
+                    <span class="ihd-name">
+                      {r.label}
+                      <Show when={r.branch}>{(b) => <small>{b()}</small>}</Show>
+                    </span>
+                    <span class="ihd-mu ihd-tool">{r.tool}</span>
+                    <span class="ihd-mu ihd-where">{r.machine}</span>
+                    <span class="ihd-mu ihd-age">{agoOf(r.updatedAt ?? undefined, now())}</span>
+                  </div>
+                )}
+              </For>
+              <Pager slice={fleetRows()} onPage={setFleetPage} />
+            </Show>
+            <Show when={fleet().hidden}>
+              <div class="ihd-hidden">
+                {fleet().hidden} older, or on machines that have not reported lately — all in Hive › Sessions.
+              </div>
+            </Show>
+          </Show>
+        </section>
       </div>
     </Show>
   )
