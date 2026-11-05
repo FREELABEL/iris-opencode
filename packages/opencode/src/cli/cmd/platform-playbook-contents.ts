@@ -13,6 +13,7 @@ import {
   IRIS_API,
 } from "./iris-api"
 import { firstArray } from "../../util/array"
+import { parseRights, parseCaps, parseObjective, SeatArgError, DECISION_TYPES, type Objective } from "./seat-args"
 
 /**
  * A playbook's contents, and attaching one to a bounty (#180756).
@@ -367,11 +368,159 @@ const RolesRemoveCommand = cmd({
   },
 })
 
+// ---------------------------------------------------------------------------
+// Seats (#192422, epic #192420) — who holds a role, and what the holder may decide
+// ---------------------------------------------------------------------------
+
+async function fetchRole(name: string, roleId: number): Promise<any | null> {
+  const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}/roles`, {}, IRIS_API)
+  if (!(await handleApiError(res, "Read roles"))) return null
+  const role = (((await res.json()) as any)?.roles ?? []).find((r: any) => Number(r.id) === Number(roleId))
+  if (!role) console.error(`No role #${roleId} in ${name}. See: iris playbook roles list ${name}`)
+  return role ?? null
+}
+
+async function putRole(name: string, roleId: number, payload: Record<string, unknown>, what: string): Promise<any | null> {
+  const res = await irisFetch(
+    `/api/v1/playbooks/${encodeURIComponent(name)}/roles/${roleId}`,
+    { method: "PUT", body: JSON.stringify(payload) },
+    IRIS_API,
+  )
+  if (!(await handleApiError(res, what))) return null
+  return ((await res.json()) as any)?.role ?? {}
+}
+
+const seatArgs = (y: any) => y.positional("name", { type: "string", demandOption: true }).positional("roleId", { type: "number", demandOption: true })
+
+const notCompiled = dim("  The holder's settings no longer match this seat until you run: iris playbook roles compile <name> <roleId>")
+
+const RolesAssignCommand = cmd({
+  command: "assign <name> <roleId>",
+  describe: "put a person or an agent in a seat — or leave it vacant",
+  builder: (y: any) =>
+    seatArgs(y)
+      .option("agent", { type: "number", describe: "agent id (one seat per agent)" })
+      .option("human", { type: "number", describe: "user id — you, or a member of one of your boards" })
+      .option("vacant", { type: "boolean", default: false }),
+  async handler(args: any) {
+    const n = [args.agent, args.human, args.vacant || undefined].filter((x) => x !== undefined).length
+    if (n !== 1) {
+      console.error("Give exactly one of --agent <id>, --human <userId>, --vacant.")
+      process.exitCode = 1
+      return
+    }
+    if (!(await requireAuth())) return
+    const payload = args.vacant ? { holder_type: null, holder_id: null } : args.agent ? { holder_type: "agent", holder_id: args.agent } : { holder_type: "human", holder_id: args.human }
+    const role = await putRole(String(args.name), args.roleId, payload, "Assign seat")
+    if (!role) return void (process.exitCode = 1)
+    console.log(`${success("✓")} ${bold(role.title)}  ${role.holder ? `${role.holder.type} #${role.holder.id}` : "vacant"}`)
+    console.log(notCompiled)
+  },
+})
+
+const RolesRightsCommand = cmd({
+  command: "rights <name> <roleId>",
+  describe: "what a seat's holder decides alone, who decides the rest, and its rate caps",
+  builder: (y: any) =>
+    seatArgs(y)
+      .option("set", { type: "string", array: true, describe: "effect=self|<seat id> (own_write, unclassified, shared_write, shared_overwrite, egress, payment); effect= removes" })
+      .option("cap", { type: "string", array: true, describe: "effect.per_hour|per_day=<n>; empty removes" })
+      .option("expires", { type: "string", describe: "the seat's authority ends at this date" }),
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+    const role = await fetchRole(String(args.name), args.roleId)
+    if (!role) return void (process.exitCode = 1)
+    const payload: Record<string, unknown> = {}
+    try {
+      if (args.set) payload.decision_rights = parseRights(args.set, role.decision_rights ?? {})
+      if (args.cap || args.expires) {
+        const limits = parseCaps(args.cap, role.limits)
+        payload.limits = args.expires ? { ...(limits ?? {}), expires_at: args.expires } : limits
+      }
+    } catch (e) {
+      if (!(e instanceof SeatArgError)) throw e
+      console.error(e.message)
+      return void (process.exitCode = 1)
+    }
+    if (!Object.keys(payload).length) {
+      // Read-only: show what the seat says, including what it holds by saying nothing.
+      for (const t of DECISION_TYPES) {
+        const d = role.decision_rights?.[t]?.decide
+        console.log(`  ${t.padEnd(18)} ${d === "self" ? success("decides alone") : d ? `seat #${d} decides` : dim("held — not mentioned")}`)
+      }
+      if (role.limits) console.log(dim(`  limits ${JSON.stringify(role.limits)}`))
+      return
+    }
+    const saved = await putRole(String(args.name), args.roleId, payload, "Set seat rights")
+    if (!saved) return void (process.exitCode = 1)
+    console.log(`${success("✓")} ${bold(saved.title)} rights saved`)
+    console.log(notCompiled)
+  },
+})
+
+const RolesObjectivesCommand = cmd({
+  command: "objectives <name> <roleId>",
+  describe: "what a seat is measured on — each objective scored by a command (`iris org review` runs them)",
+  builder: (y: any) =>
+    seatArgs(y)
+      .option("add", { type: "string", array: true, describe: '"id|title|exit_check command"' })
+      .option("rm", { type: "string", array: true, describe: "objective id to remove" }),
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+    const role = await fetchRole(String(args.name), args.roleId)
+    if (!role) return void (process.exitCode = 1)
+    let objectives: Objective[] = role.objectives ?? []
+    if (!args.add && !args.rm) {
+      if (!objectives.length) console.log(dim("  no objectives — add one: --add \"id|title|command\""))
+      for (const o of objectives)
+        console.log(`  ${bold(o.id)}  ${o.title}  ${o.last ? (o.last.ok ? success("met") : "NOT MET") + dim(` ${o.last.at}`) : dim("never reviewed")}\n    ${dim(o.exit_check)}`)
+      return
+    }
+    try {
+      for (const raw of [].concat(args.add ?? [])) {
+        const o = parseObjective(raw)
+        objectives = [...objectives.filter((x) => x.id !== o.id), o]
+      }
+    } catch (e) {
+      if (!(e instanceof SeatArgError)) throw e
+      console.error(e.message)
+      return void (process.exitCode = 1)
+    }
+    const drop = new Set<string>([].concat(args.rm ?? []).map(String))
+    objectives = objectives.filter((o) => !drop.has(o.id))
+    const saved = await putRole(String(args.name), args.roleId, { objectives: objectives.length ? objectives : null }, "Set objectives")
+    if (!saved) return void (process.exitCode = 1)
+    console.log(`${success("✓")} ${bold(saved.title)}: ${objectives.length} objective${objectives.length === 1 ? "" : "s"}`)
+  },
+})
+
+const RolesCompileCommand = cmd({
+  command: "compile <name> <roleId>",
+  describe: "write a seat onto the agent that holds it — trust level and rate caps — and say what changed",
+  builder: seatArgs,
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+    const res = await irisFetch(
+      `/api/v1/playbooks/${encodeURIComponent(String(args.name))}/roles/${args.roleId}/compile`,
+      { method: "POST" },
+      IRIS_API,
+    )
+    if (!(await handleApiError(res, "Compile seat"))) return void (process.exitCode = 1)
+    const c = ((await res.json()) as any)?.compiled ?? {}
+    console.log(`${success("✓")} agent #${c.agent_id} → trust level ${bold(c.autonomy)}${c.rate_caps ? dim(`, caps ${JSON.stringify(c.rate_caps)}`) : ""}`)
+    if ((c.wider_than_seat ?? []).length)
+      console.log(dim(`  the gate also holds ${c.wider_than_seat.join(", ")} — the nearest trust level is coarser than the seat (payment is always held)`))
+    if (c.kinetic_hash_changes)
+      console.log(`  ${bold("Kinetic:")} the agent's sealed hash changed, so couples bound to the old one no longer match (#192423). Re-seal and re-issue: iris kinetic seal --agent ${c.agent_id}`)
+    console.log(dim(`  check it: iris org explain ${c.agent_id} --verify`))
+  },
+})
+
 const PlaybookRolesCommand = cmd({
   command: "roles <subcommand>",
   describe: "the org chart — roles, who reports to whom, and which procedures each owns",
   builder: (yargs) =>
-    yargs.command(RolesListCommand).command(RolesAddCommand).command(RolesRemoveCommand).demandCommand(1, ""),
+    yargs.command(RolesListCommand).command(RolesAddCommand).command(RolesRemoveCommand).command(RolesAssignCommand).command(RolesRightsCommand).command(RolesObjectivesCommand).command(RolesCompileCommand).demandCommand(1, ""),
   handler() {},
 })
 
