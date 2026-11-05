@@ -1824,6 +1824,7 @@ export const IrisPaths = {
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
   pageSignIn: `${root}/page-signin`,
+  pagePin: `${root}/page-pin`,
   panel: `${root}/panel`,
   panelState: `${root}/panel/state`,
   panelCommand: `${root}/panel/command`,
@@ -3201,6 +3202,34 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Open a pinned Genesis page signed in",
           description:
             "A framed page cannot keep its sign-in cookie (WKWebView refuses third-party cookies; WebView2 refuses SameSite=Lax), so the sidecar asks fl-iris-api for a one-time code with the person's own token and the page's SDK trades it for a session held in memory (#192482). Mints on every call.",
+        }),
+      ),
+      HttpApiEndpoint.post("pagePin", IrisPaths.pagePin, {
+        payload: Schema.Struct({ slug: described(Schema.String, "The Genesis page to pin as a Marketing sub-tab, e.g. my-ads-review.") }),
+        success: described(
+          Schema.Struct({
+            measured: described(Schema.Boolean, "False when the account's pages could not be read; `allowed` is then false."),
+            allowed: described(Schema.Boolean, "True only for a page the account owns, created, or that belongs to a board it owns or is a member of."),
+            reason: Schema.optional(Schema.String),
+            page: Schema.optional(
+              Schema.Struct({
+                slug: Schema.String,
+                title: Schema.String,
+                status: Schema.String,
+                visibility: Schema.optional(Schema.String),
+                requiresAuth: Schema.optional(Schema.Boolean),
+                signIn: described(Schema.Boolean, "Open it signed in (#192482): it asks for a sign-in, or is not public."),
+              }),
+            ),
+          }).annotate({ identifier: "IrisPagePin" }),
+          "Whether this account may pin the page",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pagePin",
+          summary: "May this account pin a Genesis page",
+          description:
+            "#192624. Desktop's Marketing tab pins only the signed-in account's own pages. The check is the platform's own page scope (fl-api Page::scopeVisibleTo, via the Genesis page list): the exact slug must be in the account's pages. Fails closed when the list cannot be read.",
         }),
       ),
       HttpApiEndpoint.get("panel", IrisPaths.panel, {
