@@ -29,8 +29,35 @@ export const LEGACY_FILES_KEY = "iris.panel.files"
  */
 export const DEFAULT_NAV_LAYOUT: NavLayout = {
   version: 2,
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "playbooks", "hive", "integrations", "mcp"],
-  hidden: [FILES_ITEM, "leads", "playbooks", "hive", "integrations", "mcp"],
+  // Leads (#192544, which took in Outreach #192483) and Marketing (#192481) are shown: approvals and
+  // ads review wait there, and a hidden tab is the problem they fix. After the file tree, so for a
+  // saved layout they land after what the person arranged.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "marketing", "playbooks", "hive", "integrations", "mcp"],
+  hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
+}
+
+/**
+ * Items that became another item (#192544): Outreach is part of Leads now.
+ *
+ * A layout saved while Outreach was its own tab keeps the person's choice: the merged item takes
+ * the slot of whichever of the two they had showing (the first one, in their order), and is shown
+ * if either was. Never twice. A layout that never had Outreach is returned as it was.
+ */
+export const RENAMED_NAV_ITEMS: Record<string, string> = { outreach: "leads" }
+
+export function migrateNavLayout(saved: NavLayout): NavLayout {
+  let { order, hidden } = saved
+  for (const [from, to] of Object.entries(RENAMED_NAV_ITEMS)) {
+    if (!order.includes(from) && !hidden.includes(from)) continue
+    const shown = (id: string) => order.includes(id) && !hidden.includes(id)
+    const visible = shown(from) || shown(to)
+    // The slot: the first of the two that was showing; if neither was, where either already sat.
+    const pick = order.find((id) => (id === from || id === to) && shown(id)) ?? order.find((id) => id === from || id === to)
+    const slot = pick === undefined ? -1 : order.indexOf(pick)
+    order = order.map((id, i) => (i === slot ? to : id)).filter((id, i) => i === slot || (id !== from && id !== to))
+    hidden = uniq(hidden.filter((id) => id !== from && id !== to).concat(visible ? [] : [to]))
+  }
+  return { ...saved, order, hidden }
 }
 
 const uniq = (xs: string[]) => [...new Set(xs)]

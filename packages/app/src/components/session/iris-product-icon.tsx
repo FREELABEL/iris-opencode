@@ -68,11 +68,24 @@ const ACTIVITY: Shape[] = [
     { d: "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" },
   ],
 ]
+// lucide "megaphone" — Marketing (#192481).
+const MEGAPHONE: Shape[] = [
+  ["path", { d: "m3 11 18-5v12L3 14v-3z" }],
+  ["path", { d: "M11.6 16.8a3 3 0 1 1-5.8-1.6" }],
+]
 const PLUG: Shape[] = [
   ["path", { d: "M12 22v-5" }],
   ["path", { d: "M9 8V2" }],
   ["path", { d: "M15 8V2" }],
   ["path", { d: "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" }],
+]
+// Lexicon (#192484) — lucide "scale", as the site's Solutions menu draws it.
+const SCALE: Shape[] = [
+  ["path", { d: "m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "M7 21h10" }],
+  ["path", { d: "M12 3v18" }],
+  ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
 ]
 
 /** Surface id → glyph and colour. Colours are Tailwind's, as the site uses them. */
@@ -83,9 +96,11 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
   pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
+  marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
+  lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
 }
 
 export function IrisProductIcon(props: { id: string; size?: number }) {

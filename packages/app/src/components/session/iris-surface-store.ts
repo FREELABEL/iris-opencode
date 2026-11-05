@@ -63,10 +63,23 @@ export function surfaceSync(surface: string): SurfaceSync | undefined {
   return sync[surface]
 }
 
+/**
+ * A number a product's tab carries — Outreach's "in review" (#192483). Absent = unknown, and the
+ * tab shows nothing rather than a 0 it does not know.
+ */
+const [counts, setCounts] = createStore<Record<string, number | undefined>>({})
+export function setSurfaceCount(surface: string, n: number | undefined) {
+  setCounts(surface, n)
+}
+export function surfaceCount(surface: string): number | undefined {
+  return counts[surface]
+}
+
 /** Tests only. */
 export function resetSurfaceStore() {
   held.clear()
   for (const k of Object.keys(sync)) setSync(k, undefined as any)
+  for (const k of Object.keys(counts)) setCounts(k, undefined)
 }
 
 /**
