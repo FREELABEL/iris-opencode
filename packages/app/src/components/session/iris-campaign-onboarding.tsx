@@ -187,7 +187,7 @@ export function IrisCampaignOnboarding(props: { doFetch: Fetch; pin: Pin; compac
                   </Button>
                 </Show>
                 <Button size="small" variant="ghost" onClick={() => go({ at: "idle" })}>
-                  Close
+                  Dismiss
                 </Button>
               </div>
             </div>

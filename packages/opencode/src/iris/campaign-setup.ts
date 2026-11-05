@@ -98,9 +98,9 @@ export async function runCampaignSetup(bloqId: number): Promise<CampaignSetup> {
 function refusal(status: number): CampaignSetup {
   if (status === 401) return fail("signed_out", "Sign in to IRIS first.")
   if (status === 403)
-    return fail("not_allowed", "You can't set up campaigns on this board. Only its owner, or someone who can edit the whole board, can.")
+    return fail("not_allowed", "Only a board's owner, or someone who can edit the whole board, can set up campaigns on it. Nothing was made.")
   if (status === 404 || status === 405)
-    return fail("not_deployed", "Campaign boards aren't switched on for your account yet. Nothing was made.")
+    return fail("not_deployed", "This part of IRIS isn't switched on yet. Nothing was made — try again after the next update.")
   if (status === 409)
     return fail(
       "conflict",
