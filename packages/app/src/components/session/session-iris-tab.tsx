@@ -657,7 +657,10 @@ const SURFACES = [
   // so old links, pins and stored panels still land there.
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
   // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
-  { id: "marketing", label: "Marketing", path: () => `` },
+  // #192624: the pages are the signed-in ACCOUNT's own pins, never pages named in code. With no
+  // sub-views here the surface draws `marketing-pins`, which owns its pane and its empty state —
+  // so no stored sub-view, deep link or agent command can open a page by an id from an older build.
+  { id: "marketing", label: "Marketing", pane: "marketing-pins", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -694,6 +697,8 @@ const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
+// Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
+SELF_PANES.add("marketing-pins")
 
 interface SubView {
   id: string
@@ -825,12 +830,9 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
     { id: "review", label: "Needs approval", pane: "reachr", path: () => `/iris/reachr`, countOf: "leads" },
   ],
-  // Each a pinned Genesis page (#192480). The native Ads panel (#192320) replaces these when it lands.
-  marketing: [
-    { id: "freelabel-ads", label: "FREELABEL ads", pane: "page", slug: "freelabel-ads-review", path: () => `` },
-    { id: "hive-ads", label: "Hive ads", pane: "page", slug: "hive-ads-review", path: () => `` },
-    { id: "x-ads", label: "X ads", pane: "page", slug: "x-ads-board", path: () => `` },
-  ],
+  // NO `marketing` entry (#192624). 1.18.169 hardcoded FREELABEL's and Hive's ads pages here, so every
+  // customer saw them. Marketing's sub-tabs are the signed-in account's own pins (the
+  // `marketing-pins` pane); a page slug written in this file would be shown to everyone again.
   pulse: [
     { id: "topic", label: "Topic", pane: "pulse-topic", path: () => `/iris/pulse/topic`, default: true },
     { id: "contact", label: "Contact", pane: "pulse-contact", path: () => `/iris/pulse/contacts` },
@@ -1132,10 +1134,7 @@ const PANEL_HINTS: Record<string, string> = {
   leads: "Leads — what needs approval, who replied, leads by stage; open one to work it",
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Needs approval: review exact messages, approve some, hold others, and schedule the send",
-  marketing: "Ads review — FREELABEL, Hive and X ads, with scores and notes",
-  "marketing/freelabel-ads": "Review FREELABEL's ads: read each one, score it, leave a note",
-  "marketing/hive-ads": "Hive's ads, searchable by angle, product or a phrase",
-  "marketing/x-ads": "The X ads board: what is running, trend, creative, spend",
+  marketing: "Marketing — the review pages this account pinned from its own Genesis pages",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
   "playbooks/project": "Playbooks this project uses",
@@ -4225,6 +4224,15 @@ export function SessionIrisTab() {
                 openExternal={(url) => platform.openExternal(url)}
               />
             )}
+          </Match>
+          {/* Marketing (#192624): the account's own pins. Nothing pinned → this, never someone else's pages. */}
+          <Match when={pane() === "marketing-pins"}>
+            <div class="iris-pinned__note" data-slot="marketing-empty">
+              <div class="iris-pinned__title">Pin your review pages here</div>
+              <div class="iris-pinned__reason">
+                Marketing shows the Genesis pages you pin from your own account. Nothing is pinned to this account yet.
+              </div>
+            </div>
           </Match>
           <Match when={pane() === "lexicon-agreements"}>
             <IrisLexiconAgreements doFetch={doFetch} />
