@@ -65,6 +65,7 @@
 .ihd-st svg { width: 14px; height: 14px; }
 @keyframes ihd-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, .55); } 70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
 @keyframes ihd-spin { to { transform: rotate(360deg); } }
+.ihd-idle { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ihd-faint); display: inline-block; box-sizing: border-box; }
 .ihd-live { width: 8px; height: 8px; border-radius: 50%; background: var(--ihd-em); display: inline-block; animation: ihd-pulse 2s infinite; }
 .ihd-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--ihd-em) 25%, transparent); border-top-color: var(--ihd-em); animation: ihd-spin .8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .ihd-live, .ihd-spin { animation: none; } }

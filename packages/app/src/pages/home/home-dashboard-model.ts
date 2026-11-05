@@ -8,7 +8,8 @@ import { lastBeatAt, periodOf, restOf, sortBeats, stateOf, stripOf, type BeatKin
  * history cut-over; a second copy here would drift.
  */
 
-export type Indicator = "ok" | "running" | "resting" | "stopped" | "late" | "failing" | "paused"
+/** `idle` (#192647): an agent with no heartbeat — it runs when someone asks it to, not on a schedule. */
+export type Indicator = "ok" | "running" | "resting" | "stopped" | "late" | "failing" | "paused" | "idle"
 export const indicatorOf = (s: BeatState): Indicator => (s === "silent" ? "stopped" : s)
 /** The indicator for a row, resting included: skipping by choice, and the platform will run it again soon. */
 export const indicatorFor = (r: HeartbeatRow, now: number): Indicator => (restOf(r, now) ? "resting" : indicatorOf(stateOf(r, now)))
@@ -63,6 +64,7 @@ const WHY: Record<Indicator, string> = {
   late: "Late — past its time and has not fired",
   failing: "Last run failed",
   paused: "Paused",
+  idle: "No schedule — it runs when someone asks it to",
 }
 
 export function rowOf(r: HeartbeatRow, now: number): AgentRow {
@@ -98,6 +100,56 @@ export function tabRows(rows: readonly HeartbeatRow[], tab: Tab, now: number): H
 
 export function tabCount(rows: readonly HeartbeatRow[], tab: Tab, now: number): number {
   return tabRows(rows, tab, now).length
+}
+
+/** An agent as /iris/agents-mine returns it. */
+export type AgentLite = { id: number; name: string }
+
+/** A row for an agent that has no heartbeat (#192647). */
+export function unscheduledRow(a: AgentLite): AgentRow {
+  return {
+    jobId: 0,
+    agentId: a.id,
+    name: a.name,
+    indicator: "idle",
+    why: WHY.idle,
+    every: "—",
+    strip: [],
+    last: "—",
+    lastAt: null,
+    model: null,
+    runCount: 0,
+  }
+}
+
+/**
+ * The Agents list (#192647). It used to be built from heartbeats alone, so an account with 56
+ * agents and no schedules saw the card say 56 and the list say nothing. "All" now lists every
+ * agent — scheduled ones first, with their state, then the rest as "No schedule". The other tabs
+ * are about schedules and stay heartbeat-only.
+ */
+export function listRows(beats: readonly HeartbeatRow[], agents: readonly AgentLite[], tab: Tab, now: number): AgentRow[] {
+  const scheduled = tabRows(beats, tab, now).map((r) => rowOf(r, now))
+  if (tab !== "all") return scheduled
+  const hasBeat = new Set(beats.map((b) => b.agentId))
+  const rest = agents
+    .filter((a) => !hasBeat.has(a.id))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(unscheduledRow)
+  return [...scheduled, ...rest]
+}
+
+/** What an empty list should say — the truth for that tab, not one sentence for every case. */
+export function emptyText(tab: Tab, scheduled: number, agents: number): string {
+  if (agents === 0 && scheduled === 0) return "No agents yet — create one and it shows here."
+  if (scheduled === 0)
+    return tab === "all"
+      ? "No agents yet — create one and it shows here."
+      : `None of your ${agents} agent${agents === 1 ? "" : "s"} runs on a schedule yet — give one a heartbeat to see it here.`
+  if (tab === "attention") return "Nothing needs attention — every scheduled agent is beating."
+  if (tab === "active") return "No scheduled agent has run yet."
+  return "No agents yet."
 }
 
 export type Page<T> = { items: T[]; page: number; pages: number; from: number; to: number; total: number }
