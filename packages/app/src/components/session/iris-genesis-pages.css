@@ -53,6 +53,7 @@
 .iris-gp-brand { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); font-size: 11.5px; color: var(--text-base); min-width: 0; }
 .iris-gp-brandname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-gp-brand[data-by="slug"] .iris-gp-brandname { color: var(--text-weak); }
+.iris-gp-guessed { flex: none; font-size: 10.5px; color: var(--text-weak); font-style: italic; }
 
 /* List view: the same card, laid out as a row. */
 .iris-gp[data-view="list"] .iris-gp-cards { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0; }

@@ -43,6 +43,8 @@ export interface GenesisPage {
   ownerType?: string
   ownerId?: number
   siteId?: number
+  /** The brand the page stores (pages.brand_id, #192665). Absent: the app infers one and says "guessed". */
+  brandId?: number
 }
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined)
@@ -70,6 +72,7 @@ export function pageRow(p: any): GenesisPage {
     ownerType: str(p.owner_type),
     ownerId: num(p.owner_id),
     siteId: num(p.site_id),
+    brandId: num(p.brand_id),
   }
 }
 

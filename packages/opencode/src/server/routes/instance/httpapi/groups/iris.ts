@@ -814,6 +814,7 @@ const PagesResponse = Schema.Struct({
       ownerType: described(Schema.optional(Schema.String), '"bloq" or "user" — with ownerId, which board owns it.'),
       ownerId: Schema.optional(Schema.Finite),
       siteId: Schema.optional(Schema.Finite),
+      brandId: described(Schema.optional(Schema.Finite), "The brand the page stores (pages.brand_id). Absent when none is stored."),
     }).annotate({ identifier: "IrisPage" }),
   ),
   counts: Schema.optional(
