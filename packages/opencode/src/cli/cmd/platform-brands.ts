@@ -4,6 +4,8 @@ import { fetchSite, parseDesignMd, siteImport } from "./brand-import"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
+import { pairLines, parseLinkArg } from "./brand-links"
+import { draftPersonaFromVoice } from "./brand-persona-draft"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -124,21 +126,23 @@ const BrandsShowCommand = cmd({
   aliases: ["get"],
   describe: "show brand details with personas, integrations, assets",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "brand ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "brand ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Brand #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Brand #${args.id}`) }
+    const token = await requireAuth(); if (!token) { process.exitCode = 1; if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Loading…")
     try {
       const res = await irisFetch(`/api/v1/brands/${args.id}`)
-      const ok = await handleApiError(res, "Get brand"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Get brand"); if (!ok) { spinner?.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data
-      spinner.stop(String(b.name ?? `Brand #${b.id}`))
+      if (args.json) { await writeJson(b); return }
+      spinner?.stop(String(b.name ?? `Brand #${b.id}`))
 
       printDivider()
       printKV("ID", b.id)
@@ -146,8 +150,10 @@ const BrandsShowCommand = cmd({
       printKV("Name", b.name)
       printKV("Entity Type", b.entity_type)
       printKV("Status", b.status)
-      printKV("Bloq", b.bloq_id ?? dim("(reusable / no bloq)"))
+      printKV("Board", b.bloq_id ?? dim(`(none — set: iris brands update ${b.id} --bloq <board>)`))
       if (b.parent_brand_id) printKV("Parent", `#${b.parent_brand_id}`)
+      // The pair (#192666): which kit this brand reads, and which brands read this one's.
+      for (const [k, v] of pairLines(b)) printKV(k, v)
       if (b.description) printKV("Description", b.description)
       console.log()
 
@@ -191,7 +197,9 @@ const BrandsShowCommand = cmd({
         `${dim("iris brands dt get " + (b.slug ?? b.id))}  ·  ${dim("iris brands personas add " + b.id)}  ·  ${dim("iris brands attach " + b.id + " <int_id>")}`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      process.exitCode = 1
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -261,7 +269,11 @@ const BrandsUpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("status", { describe: "active|archived|draft", type: "string" })
       .option("description", { describe: "description", type: "string" })
-      .option("entity-type", { describe: "creator|studio|venue|business|service|brand", type: "string" }),
+      .option("entity-type", { describe: "creator|studio|venue|business|service|brand", type: "string" })
+      .option("bloq", {
+        describe: "the board that owns this brand (a board you own or administer); 'none' clears it",
+        type: "string",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Brand #${args.id}`)
@@ -271,8 +283,18 @@ const BrandsUpdateCommand = cmd({
     if (args.status) body.status = args.status
     if (args.description) body.description = args.description
     if (args["entity-type"]) body.entity_type = args["entity-type"]
+    if (args.bloq !== undefined) {
+      const board = parseLinkArg(args.bloq)
+      if (board === "invalid") {
+        prompts.log.error(`--bloq takes a board id (e.g. 680) or 'none', not '${args.bloq}'.`)
+        process.exitCode = 1
+        prompts.outro("Nothing changed")
+        return
+      }
+      body.bloq_id = board
+    }
     if (Object.keys(body).length === 0) {
-      failNoOp("update", "pass --name, --status, --description, or --entity-type")
+      failNoOp("update", "pass --name, --status, --description, --entity-type or --bloq")
     }
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
@@ -280,13 +302,82 @@ const BrandsUpdateCommand = cmd({
     spinner.start("Updating…")
     try {
       const res = await irisFetch(`/api/v1/brands/${args.id}`, { method: "PATCH", body: JSON.stringify(body) })
-      const ok = await handleApiError(res, "Update brand"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      spinner.stop("Updated")
+      const ok = await handleApiError(res, "Update brand"); if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Nothing changed"); return }
+      // A board link is checked against what the server now holds, not the 200 (#192665).
+      if ("bloq_id" in body) {
+        const updated = ((await res.json().catch(() => null)) as { data?: any } | null)?.data
+        if (updated && (updated.bloq_id ?? null) !== body.bloq_id) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(`The API accepted the request but the board is ${updated.bloq_id ?? "none"}, not ${body.bloq_id ?? "none"}.`)
+          process.exitCode = 1
+          prompts.outro("Nothing changed")
+          return
+        }
+        spinner.stop(body.bloq_id ? `Board set to #${body.bloq_id}` : "Board cleared")
+      } else {
+        spinner.stop("Updated")
+      }
       prompts.outro(`${dim("iris brands show " + args.id)}`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
+    }
+  },
+})
+
+// ----------------------------------------------------------------------------
+// brands link-design — one company, two brands (#192666)
+// ----------------------------------------------------------------------------
+const BrandsLinkDesignCommand = cmd({
+  command: "link-design <posting> [design]",
+  describe: "make a posting brand read its design kit from another brand (e.g. heyiris #15 → iris #8)",
+  builder: (yargs) =>
+    yargs
+      .positional("posting", { describe: "the brand that posts (holds the social accounts)", type: "number", demandOption: true })
+      .positional("design", { describe: "the brand that holds the design kit", type: "number" })
+      .option("unlink", { describe: "remove the link (the brand's own tokens are served again)", type: "boolean", default: false })
+      .example("iris brands link-design 15 8", "heyiris posts wearing the IRIS kit")
+      .example("iris brands link-design 15 --unlink", "heyiris goes back to its own tokens"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Design kit for brand #${args.posting}`)
+    if (!args.unlink && args.design == null) {
+      prompts.log.error("Name the design brand (iris brands link-design <posting> <design>) or pass --unlink.")
+      process.exitCode = 1
+      prompts.outro("Nothing changed")
+      return
+    }
+    if (args.unlink && args.design != null) {
+      prompts.log.error("Pass a design brand or --unlink, not both.")
+      process.exitCode = 1
+      prompts.outro("Nothing changed")
+      return
+    }
+    const token = await requireAuth(); if (!token) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+
+    const want = args.unlink ? null : Number(args.design)
+    const spinner = prompts.spinner()
+    spinner.start(want ? `Linking #${args.posting} → #${want}…` : "Unlinking…")
+    try {
+      const res = await irisFetch(`/api/v1/brands/${args.posting}`, { method: "PATCH", body: JSON.stringify({ design_brand_id: want }) })
+      const ok = await handleApiError(res, "Link design kit"); if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Nothing changed"); return }
+      const b = ((await res.json()) as { data?: any })?.data ?? {}
+      if ((b.design_brand_id ?? null) !== want) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error(`The API accepted the request but the design link is ${b.design_brand_id ?? "none"}, not ${want ?? "none"}.`)
+        process.exitCode = 1
+        prompts.outro("Nothing changed")
+        return
+      }
+      spinner.stop(want ? `#${b.id} ${b.slug} now wears ${b.design_brand?.slug ? `#${want} ${b.design_brand.slug}` : `#${want}`}'s kit` : `#${b.id} ${b.slug} reads its own tokens again`)
+      for (const [k, v] of pairLines(b)) printKV(k, v)
+      prompts.outro(`${dim(`iris brands dt get ${b.slug ?? args.posting}`)}  ·  ${dim(`iris brands show ${args.posting}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Nothing changed")
     }
   },
 })
@@ -437,19 +528,34 @@ const PersonasListCommand = cmd({
 const PersonasAddCommand = cmd({
   command: "add <brandId>",
   aliases: ["create"],
-  describe: "add a persona to a brand",
+  describe: "add a persona to a brand (--from-voice drafts one from the kit's voice/tone for you to approve)",
   builder: (yargs) =>
     yargs
       .positional("brandId", { describe: "brand ID", type: "number", demandOption: true })
-      .option("name", { describe: "persona name", type: "string", demandOption: true })
+      .option("name", { describe: "persona name (required unless --from-voice)", type: "string" })
+      .option("from-voice", {
+        describe: "draft the persona from the brand's design_tokens.brand voice/tone — printed, not saved",
+        type: "boolean",
+        default: false,
+      })
+      .option("save", { describe: "with --from-voice: create the drafted persona", type: "boolean", default: false })
+      .option("audience", { describe: "with --from-voice: who it speaks to, when the kit does not say", type: "string" })
+      .option("json", { describe: "with --from-voice: print the draft as JSON", type: "boolean", default: false })
       .option("archetype", { describe: "trusted_planner|hype_curator|newscaster|...", type: "string" })
       .option("tone", { describe: "free-form tone", type: "string" })
       .option("system-prompt", { describe: "AI system prompt", type: "string" })
       .option("voice-sample-id", { describe: "FK voice_samples.id", type: "number" })
       .option("default", { describe: "make this the default persona", type: "boolean", default: false }),
   async handler(args) {
+    if (args["from-voice"]) return addPersonaFromVoice(args)
     UI.empty()
     prompts.intro(`◈  Add persona to brand #${args.brandId}`)
+    if (!args.name) {
+      prompts.log.error("Pass --name, or --from-voice to draft one from the brand's voice.")
+      process.exitCode = 1
+      prompts.outro("Nothing changed")
+      return
+    }
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const body: Record<string, unknown> = { name: args.name, is_default: args.default }
@@ -475,6 +581,85 @@ const PersonasAddCommand = cmd({
     }
   },
 })
+
+/**
+ * `personas add <id> --from-voice` (#192669): draft a persona from the kit's own voice/tone and
+ * print it for a person to approve. It is written ONLY with --save — a persona is what writing
+ * tools speak as, so it never appears without someone having read it.
+ */
+async function addPersonaFromVoice(args: {
+  brandId: number
+  name?: string
+  audience?: string
+  default?: boolean
+  save?: boolean
+  json?: boolean
+}) {
+  const quiet = args.json === true
+  if (!quiet) { UI.empty(); prompts.intro(`◈  Draft a persona for brand #${args.brandId} from its voice`) }
+  const token = await requireAuth(); if (!token) { process.exitCode = 1; if (!quiet) prompts.outro("Nothing saved"); return }
+  const fail = (msg: string) => {
+    process.exitCode = 1
+    if (quiet) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Nothing saved") }
+  }
+  try {
+    const bRes = await irisFetch(`/api/v1/brands/${args.brandId}`)
+    if (!bRes.ok) { if (!quiet) await handleApiError(bRes, "Get brand"); return fail(`Brand #${args.brandId}: HTTP ${bRes.status}`) }
+    const brand = ((await bRes.json()) as { data?: any })?.data ?? {}
+    // Resolves through the design link (#192666): a posting brand drafts from its design kit's voice.
+    const tRes = await irisFetch(`/api/v1/brands/${args.brandId}/design-tokens`)
+    if (!tRes.ok) { if (!quiet) await handleApiError(tRes, "Get design tokens"); return fail(`Design tokens: HTTP ${tRes.status}`) }
+    const tokens = ((await tRes.json()) as { data?: any })?.data ?? {}
+    const kit = (tokens?.brand ?? {}) as Record<string, unknown>
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined)
+    const draft = draftPersonaFromVoice(
+      { name: str(kit.name), voice: str(kit.voice), tone: str(kit.tone), tagline: str(kit.tagline), description: str(kit.description), audience: str(kit.audience) },
+      { brandName: str(kit.name) ?? brand.name, name: args.name, audience: args.audience, isDefault: args.default },
+    )
+    if ("error" in draft) return fail(draft.error)
+
+    const existing = Array.isArray(brand.personas) ? brand.personas.find((p: any) => String(p?.name).toLowerCase() === draft.body.name.toLowerCase()) : undefined
+    const source = brand.design_brand?.id ? ` (voice from design kit #${brand.design_brand.id} ${brand.design_brand.slug})` : ""
+
+    let saved: any = null
+    if (args.save) {
+      if (existing) return fail(`Brand #${args.brandId} already has a persona named "${draft.body.name}" (#${existing.id}). Pass --name to save this one under another name.`)
+      const res = await irisFetch(`/api/v1/brands/${args.brandId}/personas`, { method: "POST", body: JSON.stringify(draft.body) })
+      if (!res.ok) { if (!quiet) await handleApiError(res, "Create persona"); return fail(`Create persona: HTTP ${res.status}`) }
+      saved = ((await res.json()) as { data?: any })?.data ?? null
+    }
+
+    if (quiet) {
+      await writeJson({ success: true, saved: saved ? { id: saved.id } : null, missing: draft.missing, draft: draft.body })
+      return
+    }
+    const g = draft.body.style_guidelines
+    printDivider()
+    printKV("Brand", `#${brand.id ?? args.brandId} ${brand.slug ?? ""}${source}`)
+    printKV("Name", draft.body.name)
+    printKV("Audience", draft.body.target_demographic ?? dim("not stated in the kit — pass --audience"))
+    if (draft.body.tone) printKV("Tone", draft.body.tone)
+    console.log()
+    console.log(bold("Do:"))
+    for (const x of g.do) console.log(`  + ${x}`)
+    console.log(bold("Don't:"))
+    for (const x of g.dont.length ? g.dont : [dim("(the kit names nothing to avoid)")]) console.log(`  − ${x}`)
+    console.log(bold("Sample lines") + dim(" (the kit's own words):"))
+    for (const x of g.sample_lines.length ? g.sample_lines : [dim("(none in the kit)")]) console.log(`  “${x}”`)
+    console.log()
+    console.log(dim(`Drafted from ${g.drafted_from.join(", ")}. Nothing above was written for the brand.`))
+    printDivider()
+    if (saved) {
+      prompts.outro(success(`Saved persona #${saved.id} "${draft.body.name}"`) + `  ·  ${dim(`iris brands personas list ${args.brandId}`)}`)
+    } else {
+      if (existing) prompts.log.warn(`A persona named "${draft.body.name}" already exists (#${existing.id}).`)
+      prompts.outro(`Nothing saved. Approve it with: ${dim(`iris brands personas add ${args.brandId} --from-voice --save${args.audience ? ` --audience "${args.audience}"` : ""}${args.name ? ` --name "${args.name}"` : ""}`)}`)
+    }
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err))
+  }
+}
 
 const PersonasUpdateCommand = cmd({
   command: "update <brandId> <personaId>",
@@ -1152,6 +1337,10 @@ const DesignTokensGetCommand = cmd({
       const data = (await res.json()) as Record<string, unknown>
       const tokens = (data?.design_tokens ?? {}) as Record<string, unknown>
       spinner.stop(String(data?.name ?? args.slug))
+      // #192666: a posting brand linked to a design brand is served that brand's kit.
+      const design = data?.design_brand as { id?: number; slug?: string } | null | undefined
+      if (design?.id) prompts.log.info(`Kit read from design brand #${design.id} ${design.slug ?? ""} (iris brands link-design)`)
+      if (data?.design_brand_unavailable) prompts.log.warn(`Linked to design brand #${data.design_brand_unavailable}, which is not active — showing this brand's own copy.`)
 
       if (Object.keys(tokens).length === 0) {
         prompts.log.warn("No design tokens set")
@@ -1843,6 +2032,7 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsShowCommand)
       .command(BrandsCreateCommand)
       .command(BrandsUpdateCommand)
+      .command(BrandsLinkDesignCommand)
       .command(BrandsDeleteCommand)
       .command(BrandsAttachCommand)
       .command(BrandsDetachCommand)
