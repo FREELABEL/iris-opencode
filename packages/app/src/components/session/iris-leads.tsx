@@ -1,5 +1,7 @@
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import "./iris-leads.css"
+import { AiHistoryView, SequenceView, ThreadBody, useThread } from "./iris-inbox"
+import { channelLabel, readableBody } from "./iris-inbox-model"
 import {
   agoLine,
   displayName,
@@ -23,7 +25,9 @@ export type Answer = { measured: boolean; reason?: string; data: any }
 export type Op = { op: string; leadId?: number; taskId?: number; query?: Record<string, string>; body?: unknown }
 
 const STATUSES = ["Prospected", "New", "Contacted", "Qualified", "Proposal", "Negotiation", "Won", "Lost", "On Hold", "Inactive"]
-const TABS = ["Details", "Notes", "Tasks", "Outreach", "Pulse"] as const
+// Chat (#192688): the conversation with this lead and a reply box, as in the Inbox. Outreach: where the
+// lead is in its sequence, the outreach log and the AI responses (Elon's LeadOutreachTab / LeadChatTab).
+const TABS = ["Details", "Notes", "Tasks", "Outreach", "Chat", "Pulse"] as const
 type Tab = (typeof TABS)[number]
 
 /** Every leads read and write goes through the engine's one leads route, as ELON's do through fl-api. */
@@ -46,9 +50,18 @@ function StatusPill(props: { status?: string | null }) {
   )
 }
 
-export function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadRow; onBack: () => void; onSaved?: () => void; hideBack?: boolean }) {
+export function LeadDetail(props: {
+  call: (o: Op) => Promise<Answer>
+  row: LeadRow
+  onBack: () => void
+  onSaved?: () => void
+  hideBack?: boolean
+  /** The engine fetch, for the conversation routes (#192688). Without it, Outreach and Chat show the leads route only. */
+  doFetch?: Fetch
+  initialTab?: Tab
+}) {
   const id = props.row.id
-  const [tab, setTab] = createSignal<Tab>("Details")
+  const [tab, setTab] = createSignal<Tab>(props.initialTab ?? "Details")
   const [error, setError] = createSignal<string>()
   const [lead, { refetch }] = createResource(async () => {
     const r = await props.call({ op: "get", leadId: id })
@@ -106,7 +119,14 @@ export function LeadDetail(props: { call: (o: Op) => Promise<Answer>; row: LeadR
         <Show when={tab() === "Details"}><DetailsTab lead={current()} onSave={(body) => save({ op: "update", leadId: id, body })} /></Show>
         <Show when={tab() === "Notes"}><NotesTab notes={notes()} onAdd={(message) => save({ op: "addNote", leadId: id, body: { message, content: message } })} /></Show>
         <Show when={tab() === "Tasks"}><TasksTab call={props.call} leadId={id} setError={setError} /></Show>
-        <Show when={tab() === "Outreach"}><OutreachTab call={props.call} lead={current()} /></Show>
+        <Show when={tab() === "Outreach"}>
+          <OutreachTab call={props.call} lead={current()} doFetch={props.doFetch} onAddNote={(message) => save({ op: "addNote", leadId: id, body: { message, content: message } })} />
+        </Show>
+        <Show when={tab() === "Chat"}>
+          <Show when={props.doFetch} fallback={<div class="iris-ld-empty">The conversation needs the IRIS engine.</div>}>
+            {(f) => <ChatTab doFetch={f()} leadId={id} name={displayName(current())} />}
+          </Show>
+        </Show>
         <Show when={tab() === "Pulse"}><PulseTab call={props.call} leadId={id} /></Show>
       </div>
     </>
@@ -227,35 +247,53 @@ function TasksTab(props: { call: (o: Op) => Promise<Answer>; leadId: number; set
   )
 }
 
-function OutreachTab(props: { call: (o: Op) => Promise<Answer>; lead: LeadRow }) {
-  const listOf = (r: Answer) => {
-    const d = r.data?.data ?? r.data
-    return (Array.isArray(d) ? d : (d?.messages ?? d?.steps ?? d?.data ?? [])) as any[]
-  }
-  const [steps] = createResource(() => props.call({ op: "steps", leadId: props.lead.id }).then(listOf))
-  const [messages] = createResource(() => props.call({ op: "messages", leadId: props.lead.id }).then(listOf))
+function OutreachTab(props: { call: (o: Op) => Promise<Answer>; lead: LeadRow; doFetch?: Fetch; onAddNote: (text: string) => Promise<boolean> }) {
+  const [thread] = useThread(props.doFetch ?? (() => Promise.reject(new Error("no engine"))), () => (props.doFetch ? props.lead.id : undefined))
+  // The outreach log: what was sent and what came back on the lead's outreach channels (fl-api
+  // `/outreach/messages`; the old `/messages` was a 404, so this said "No messages logged" for everyone).
+  const [messages] = createResource(() =>
+    props.call({ op: "messages", leadId: props.lead.id }).then((r) => (r.measured ? ((r.data?.messages ?? []) as any[]) : undefined)),
+  )
   return (
-    <>
-      <span class="iris-ld-sectionhead" style={{ "margin-top": 0 }}>Steps</span>
-      <For each={steps() ?? []} fallback={<div class="iris-ld-when">{steps.loading ? "Loading…" : "No outreach steps"}</div>}>
-        {(s) => (
-          <label class="iris-ld-task" data-done={!!s.completed_at || !!s.is_completed}>
-            <input type="checkbox" disabled checked={!!s.completed_at || !!s.is_completed} />
-            <span>{s.title ?? s.type ?? `Step ${s.step_number ?? ""}`}</span>
-            <Show when={s.due_date}><time class="iris-ld-when">{humanDate(s.due_date)}</time></Show>
-          </label>
+    <div class="iris-ui iris-inb iris-ld-outreach">
+      <Show when={thread()} fallback={<div class="iris-ld-when">{props.doFetch ? "Loading…" : ""}</div>}>
+        {(t) => (
+          <>
+            <SequenceView thread={t()} />
+            <AiHistoryView thread={t()} leadId={props.lead.id} onAddNote={props.onAddNote} />
+          </>
         )}
-      </For>
-      <span class="iris-ld-sectionhead">Messages</span>
-      <For each={messages() ?? []} fallback={<div class="iris-ld-when">{messages.loading ? "Loading…" : "No messages logged"}</div>}>
+      </Show>
+      <div class="iris-inb-sechead">
+        Outreach log <span class="weak">{messages()?.length ?? ""}</span>
+      </div>
+      <For each={messages() ?? []} fallback={<div class="iris-ld-when">{messages.loading ? "Loading…" : messages() ? "No outreach messages logged" : "Couldn't read the outreach log"}</div>}>
         {(m) => (
           <div class="iris-ld-message">
-            <strong>{m.subject ?? m.type ?? "Message"}</strong> <span class="iris-ld-when">{m.status} · {humanDate(m.sent_at ?? m.created_at)}</span>
-            <p>{String(m.message ?? m.body ?? "").replace(/<[^>]+>/g, "").slice(0, 600)}</p>
+            <strong>{m.subject ?? String(m.type ?? "message").replace(/_/g, " ")}</strong>{" "}
+            <span class="iris-ld-when">
+              {m.direction === "inbound" ? "received" : "sent"} · {m.status} · {humanDate(m.sent_at ?? m.created_at)}
+              {m.generated_by_ai ? " · AI" : ""}
+            </span>
+            <p>{readableBody(String(m.message ?? m.body ?? "").replace(/<[^>]+>/g, "")).slice(0, 600)}</p>
           </div>
         )}
       </For>
-    </>
+    </div>
+  )
+}
+
+/** Chat: the conversation itself, every channel, with the Inbox's reply box (drafts approve, Send asks). */
+function ChatTab(props: { doFetch: Fetch; leadId: number; name: string }) {
+  const [thread, { refetch }] = useThread(props.doFetch, () => props.leadId)
+  const lastChannel = () => thread.latest?.messages.at(-1)?.channel
+  return (
+    <div class="iris-ui iris-inb iris-ld-chat" data-slot="iris-lead-chat">
+      <Show when={lastChannel()}>
+        <div class="iris-ld-when iris-ld-chatline">Last message on {channelLabel(lastChannel()!)}</div>
+      </Show>
+      <ThreadBody doFetch={props.doFetch} leadId={props.leadId} name={props.name} thread={thread.latest} loading={thread.loading} refetch={refetch} preferChannel={lastChannel()} />
+    </div>
   )
 }
 

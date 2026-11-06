@@ -24,6 +24,13 @@ import { inReviewCount, type ReviewBatch } from "./iris-reachr-review-model"
 import { setSurfaceCount, surfaceCount } from "./iris-surface-store"
 
 /**
+ * "Open in Leads" from somewhere else (#192688: the Inbox). The request waits here until the Leads
+ * tab is on screen; it then opens that lead's panel and clears it.
+ */
+const [leadJump, setLeadJump] = createSignal<{ id: number; tab?: "Chat" | "Outreach" }>()
+export const requestLeadOpen = (id: number, tab?: "Chat" | "Outreach") => setLeadJump({ id, tab })
+
+/**
  * THE LEADS TAB (#192544, epic #192479): Elon's BloqLeadsTab, in the panel's own design language.
  *
  * The same layout people already work leads in — a header bar (search, filters, bulk actions,
@@ -168,6 +175,17 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
 
   // ── Selection: one lead open in the side panel; any number checked for bulk actions ──
   const [open, setOpen] = createSignal<LeadRow>()
+  const [openTab, setOpenTab] = createSignal<"Chat" | "Outreach">()
+  createEffect(
+    on(leadJump, async (j) => {
+      if (!j) return
+      setLeadJump(undefined)
+      const r = await call({ op: "get", leadId: j.id })
+      const row = (r.data?.data ?? r.data) as LeadRow | undefined
+      setOpenTab(j.tab)
+      setOpen(row?.id ? row : ({ id: j.id } as LeadRow))
+    }),
+  )
   const [checked, setChecked] = createSignal(new Set<number>())
   const toggleCheck = (id: number) => {
     const next = new Set(checked())
@@ -392,7 +410,7 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
                     const band = bandOf(l.updated_at, Date.now())
                     const ig = (l as any).contact_info?.instagram as string | undefined
                     return (
-                      <tr data-slot="iris-lead-row" aria-current={open()?.id === l.id || undefined} onClick={() => setOpen(l)}>
+                      <tr data-slot="iris-lead-row" aria-current={open()?.id === l.id || undefined} onClick={() => (setOpenTab(undefined), setOpen(l))}>
                         <td class="cb" onClick={(e) => e.stopPropagation()}>
                           <input type="checkbox" aria-label={`Select ${displayName(l)}`} checked={checked().has(l.id)} onChange={() => toggleCheck(l.id)} />
                         </td>
@@ -452,7 +470,7 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
                   <Icon d={CLOSE} />
                 </button>
                 <div class="iris-ld" data-slot="iris-leads">
-                  <LeadDetail call={call} row={lead} onBack={() => setOpen(undefined)} onSaved={refresh} hideBack />
+                  <LeadDetail call={call} doFetch={props.doFetch} row={lead} initialTab={openTab()} onBack={() => setOpen(undefined)} onSaved={refresh} hideBack />
                 </div>
               </section>
             )}
