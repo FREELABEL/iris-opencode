@@ -604,6 +604,100 @@ export function mergeSkeleton(
   return out
 }
 
+/**
+ * BIG BOARDS ARE READ A PAGE PER LIST (#192670).
+ *
+ * Opening IRIS CLI Bug Reports (#297, 7,027 cards) downloaded 9.4 MB in 3.1 s to show 160 cards
+ * (189 KB). Past ATLAS_BIG cards a board is read as its SKELETON — every list and every card's id
+ * and rev, 242 KB for #297 — plus the first ATLAS_HEAD cards of each list by id. Each list keeps
+ * its true `total` and the ids not yet read (`more`); "Show more" reads the next ones by id. A board
+ * at or under ATLAS_BIG is read whole, exactly as before.
+ */
+export const ATLAS_BIG = 1000
+export const ATLAS_HEAD = 50
+export type AtlasSkeletonList = { id: number; name?: string; items?: { id: number; rev?: string | null }[] }
+export type AtlasSkeleton = { version: string; containsPhi: boolean; lists: AtlasSkeletonList[] }
+export type AtlasPagedList = AtlasList & { total: number; more: number[] }
+export const skeletonTotal = (s: AtlasSkeleton) => s.lists.reduce((n, l) => n + (l.items?.length ?? 0), 0)
+
+/** The skeleton, or "unchanged" when `version` is still current. `full` = an fl-api without versions. */
+export async function fetchAtlasSkeleton(
+  bloqId: number,
+  version = "none",
+): Promise<{ kind: "unchanged"; version: string } | { kind: "skeleton"; skel: AtlasSkeleton } | { kind: "full" } | { kind: "error"; reason: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?if_version=${encodeURIComponent(version)}`)
+    if (!res.ok) return { kind: "error", reason: `fl-api ${res.status}` }
+    const json = (await res.json()) as any
+    const s = json?.data ?? json
+    if (typeof s?.version !== "string") return { kind: "full" }
+    if (s.unchanged === true) return { kind: "unchanged", version: s.version }
+    if (!Array.isArray(s.lists)) return { kind: "full" }
+    return { kind: "skeleton", skel: { version: s.version, containsPhi: s.contains_phi === true, lists: s.lists } }
+  } catch (e) {
+    return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Cards by id, light, in parallel requests of MAX_IDS. */
+export async function fetchAtlasCards(bloqId: number, ids: number[]): Promise<{ cards: Map<number, AtlasItem> } | { error: string }> {
+  const cards = new Map<number, AtlasItem>()
+  if (!ids.length) return { cards }
+  const userId = await resolveUserId()
+  if (!userId) return { error: `not signed in (token: ${tokenSource()})` }
+  const q = Date.now() >= previewsUnsupportedUntil ? "light=1&summary=1" : "no_searchable_content=1&summary=1"
+  const chunks: number[][] = []
+  for (let i = 0; i < ids.length; i += MAX_IDS) chunks.push(ids.slice(i, i + MAX_IDS))
+  try {
+    const answers = await Promise.all(chunks.map((c) => irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?ids=${c.join(",")}&${q}`)))
+    for (const r of answers) {
+      if (!r.ok) return { error: `fl-api ${r.status}` }
+      const j = (await r.json()) as any
+      for (const l of (j?.data ?? j)?.lists ?? []) for (const i of l?.items ?? []) cards.set(i.id, atlasItemOf(i))
+    }
+    return { cards }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Which cards a page needs, and the lists it makes — pure, so it is tested without fl-api. `depth`
+ * says how many cards of a list are wanted; a held card whose rev still matches is reused, so a
+ * refresh fetches only what moved among the cards on screen.
+ */
+export function pageSkeleton(
+  skel: AtlasSkeleton,
+  depth: (listId: number) => number,
+  held: Map<number, AtlasItem> = new Map(),
+  names: Map<number, string> = new Map(),
+): { need: number[]; build: (fetched: Map<number, AtlasItem>) => AtlasPagedList[] } {
+  const need: number[] = []
+  const heads = skel.lists.map((l) => {
+    const all = l.items ?? []
+    const head = all.slice(0, Math.max(0, depth(l.id)))
+    for (const c of head) {
+      const mine = held.get(c.id)
+      if (!mine || !mine.rev || mine.rev !== c.rev) need.push(c.id)
+    }
+    return { l, head, rest: all.slice(head.length).map((c) => c.id), total: all.length }
+  })
+  return {
+    need,
+    build: (fetched) =>
+      heads.map(({ l, head, rest, total }) => ({
+        id: l.id,
+        name: l.name ?? names.get(l.id) ?? "",
+        // A card deleted between the two requests is simply absent; the count stays the skeleton's.
+        items: head.map((c) => fetched.get(c.id) ?? held.get(c.id)).filter((x): x is AtlasItem => !!x),
+        total,
+        more: rest,
+      })),
+  }
+}
+
 export interface HiveNode {
   id: string
   name: string
