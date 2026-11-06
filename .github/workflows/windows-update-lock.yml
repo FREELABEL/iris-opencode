@@ -51,14 +51,19 @@ jobs:
           if (-not (Test-Path "$dir\iris-cli.exe")) { throw "old install has no iris-cli.exe in $dir" }
           (Get-FileHash "$dir\iris-cli.exe").Hash | Out-File old-hash.txt
 
-      - name: Start the engine so iris-cli.exe is locked (as when IRIS is open)
+      - name: Open IRIS, as a person does — the app starts its engine and SUPERVISES it
         shell: pwsh
         run: |
+          # The real failure (#192439, 1.18.166) was a race: the installer killed iris-cli.exe and
+          # the app's engine supervisor respawned it a second later, re-locking the file. A bare
+          # engine cannot reproduce that, so the app itself is what we start.
           $dir = Join-Path $env:LOCALAPPDATA "IRIS"
-          $engine = Start-Process "$dir\iris-cli.exe" -ArgumentList "serve","--port","4777","--hostname","127.0.0.1" -PassThru -WindowStyle Hidden
-          Start-Sleep -Seconds 8
-          if ($engine.HasExited) { throw "engine exited early ($($engine.ExitCode)) — nothing is holding the file" }
-          "engine pid $($engine.Id) running"
+          $app = Start-Process "$dir\IRIS.exe" -PassThru
+          $deadline = (Get-Date).AddSeconds(90)
+          do { Start-Sleep -Seconds 3; $eng = Get-Process iris-cli -ErrorAction SilentlyContinue } while (-not $eng -and (Get-Date) -lt $deadline)
+          if ($app.HasExited) { throw "IRIS.exe exited ($($app.ExitCode)) — no app, no supervisor" }
+          if (-not $eng) { throw "IRIS.exe is running but never started iris-cli.exe" }
+          "IRIS.exe pid $($app.Id) running; its engine iris-cli.exe pid(s): $(($eng | ForEach-Object Id) -join ',')"
           # Prove the file is really locked before we try the update.
           try { $fs = [System.IO.File]::Open("$dir\iris-cli.exe", "Open", "ReadWrite", "None"); $fs.Close(); throw "iris-cli.exe is NOT locked — the test would prove nothing" }
           catch [System.IO.IOException] { "iris-cli.exe is locked by the running engine (as in the bug report)" }
@@ -68,6 +73,7 @@ jobs:
         shell: pwsh
         run: |
           $dir = Join-Path $env:LOCALAPPDATA "IRIS"
+          "before: IRIS.exe $((Get-Process IRIS -ErrorAction SilentlyContinue | Measure-Object).Count), iris-cli.exe $((Get-Process iris-cli -ErrorAction SilentlyContinue | Measure-Object).Count)"
           $p = Start-Process .\new.exe -ArgumentList "/S" -PassThru
           if (-not $p.WaitForExit(300000)) { $p.Kill(); "TIMEOUT"; "result=timeout" >> $env:GITHUB_OUTPUT; exit 0 }
           $old = (Get-Content old-hash.txt).Trim()
