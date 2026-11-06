@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import { Spinner } from "@opencode-ai/ui/spinner"
@@ -40,6 +40,17 @@ import {
 import { PAGE_ALLOW, PAGE_SANDBOX } from "./iris-pinned-page-model"
 import { checkPin } from "./iris-marketing"
 import { addPin, parsePins, pinsKey, serializePins } from "./iris-marketing-pins"
+import {
+  boardForPage,
+  filterBySite,
+  groupBySite,
+  groupCount,
+  readGroup,
+  SITE_GROUP_KEY,
+  siteNameOf,
+  type SiteFilter,
+} from "./iris-genesis-sites-model"
+import { loadBoardSites, SITE_GLYPH, SiteChip, SiteDialog } from "./iris-genesis-sites"
 
 /**
  * GENESIS › PAGES (#192632). The account's pages as cards that show the page itself, a detail that
@@ -116,6 +127,10 @@ export function IrisGenesisPages(props: {
     scope: (props.bloqId != null ? "project" : "all") as "project" | "all",
     filter: "all" as PagesFilter,
     brand: undefined as number | undefined,
+    // Which site (#192672): every page, pages in no site, or one site's. Grouping draws pages under
+    // their site, Elon's layout; it is on unless the person turned it off.
+    site: "any" as SiteFilter,
+    grouped: readGroup((() => { try { return localStorage.getItem(SITE_GROUP_KEY) } catch { return null } })()),
     q: "",
     page: 1,
   })
@@ -127,6 +142,13 @@ export function IrisGenesisPages(props: {
     setSt("view", v)
     try { localStorage.setItem(PAGES_VIEW_KEY, v) } catch {}
   }
+  const setGrouped = (on: boolean) => {
+    setSt({ grouped: on, page: 1 })
+    try { localStorage.setItem(SITE_GROUP_KEY, on ? "1" : "0") } catch {}
+  }
+  // Grouped, a page of results is 100 rather than 24: a site's pages split across pager pages read
+  // as a site with fewer pages than it has. Each group header still says when that is so.
+  const perPage = () => (st.grouped || st.site !== "any" ? 100 : PER_PAGE)
 
   // ── search: typed vs asked for ──
   const [input, setInput] = createSignal("")
@@ -161,7 +183,7 @@ export function IrisGenesisPages(props: {
     const board = bf?.bloqId ?? (st.scope === "project" ? props.bloqId : undefined)
     const scope = board != null ? "project" : "all"
     const q = st.q || (bf && bf.bloqId == null ? bf.slug.replace(/_/g, "-") : "")
-    const qs = new URLSearchParams({ scope, filter: st.filter, page: String(st.page), perPage: String(PER_PAGE) })
+    const qs = new URLSearchParams({ scope, filter: st.filter, page: String(st.page), perPage: String(perPage()) })
     if (q) qs.set("q", q)
     try {
       const r = await json<PagesPayload>(`/iris/pages/${board ?? 0}?${qs}`)
@@ -175,13 +197,37 @@ export function IrisGenesisPages(props: {
       if (mine === latest) setLoading(false)
     }
   }
-  createEffect(on([() => props.bloqId, () => st.scope, () => st.filter, () => st.brand, () => st.q, () => st.page], () => void load()))
+  createEffect(on([() => props.bloqId, () => st.scope, () => st.filter, () => st.brand, () => st.q, () => st.page, perPage], () => void load()))
   const rows = createMemo(() => {
     const all = data()?.pages ?? []
     const bf = brandFilter()
-    if (!bf || bf.bloqId != null) return all
-    return all.filter((p) => brandOf(p)?.brand.id === bf.id)
+    const branded = !bf || bf.bloqId != null ? all : all.filter((p) => brandOf(p)?.brand.id === bf.id)
+    return filterBySite(branded, st.site)
   })
+
+  // ── sites (#192672): which site each page is in, and putting it in one ──
+  const [boardSites, { refetch: refetchSites }] = createResource(
+    () => props.bloqId,
+    (b) => loadBoardSites(props.doFetch, b),
+  )
+  const sites = () => boardSites.latest?.sites ?? []
+  const siteName = (p: GenesisPage) => siteNameOf(p, sites())
+  const [siteMenu, setSiteMenu] = createSignal(false)
+  const siteFilterLabel = () => (st.site === "any" ? "Any site" : st.site === "none" ? "No site" : (sites().find((x) => x.id === st.site)?.name ?? `Site #${st.site}`))
+  const groups = createMemo(() => groupBySite(rows(), sites()))
+  const [collapsed, setCollapsed] = createStore<Record<string, boolean>>({})
+  /** The cards in the order they are drawn — what the arrow keys walk. */
+  const ordered = createMemo(() => (st.grouped ? groups().flatMap((g) => (collapsed[g.key] ? [] : g.pages)) : rows()))
+  const [sitePage, setSitePage] = createSignal<GenesisPage>()
+  function siteChanged(page: GenesisPage, siteId: number | undefined, text: string) {
+    const patch = (x: GenesisPage) => (x.id === page.id ? { ...x, siteId } : x)
+    setData((d) => (d ? { ...d, pages: d.pages.map(patch) } : d))
+    setOpen((o) => (o ? patch(o) : o))
+    setInfo((i) => (i?.page ? { ...i, page: patch(i.page) } : i))
+    setSitePage(undefined)
+    setNote({ tone: "good", text })
+    void refetchSites()
+  }
   const counts = () => data()?.counts ?? {}
   const boardName = (id?: number) => (id == null ? undefined : props.boards?.find((b) => Number(b.id) === id)?.name)
 
@@ -193,7 +239,7 @@ export function IrisGenesisPages(props: {
     const t = getComputedStyle(listEl).gridTemplateColumns
     return Math.max(1, t.split(" ").filter(Boolean).length)
   }
-  createEffect(on(rows, () => setFocus(-1)))
+  createEffect(on(ordered, () => setFocus(-1)))
   const focusCard = (i: number) => {
     setFocus(i)
     listEl?.querySelectorAll<HTMLElement>("[data-slot='gp-card']")[i]?.focus()
@@ -398,20 +444,21 @@ export function IrisGenesisPages(props: {
       const typing = !!t.closest("input,textarea,select,[contenteditable]")
       if (e.key === "Escape") {
         if (confirm() && !busy()) return (setConfirm(undefined), e.preventDefault())
-        if (visMenu() || brandMenu()) return (setVisMenu(false), setBrandMenu(false), e.preventDefault())
+        if (sitePage()) return (setSitePage(undefined), e.preventDefault())
+        if (visMenu() || brandMenu() || siteMenu()) return (setVisMenu(false), setBrandMenu(false), setSiteMenu(false), e.preventDefault())
         if (open() && !typing) return (closePage(), e.preventDefault())
         return
       }
-      if (open() || typing) return
+      if (open() || typing || sitePage()) return
       if (e.key === "/") {
         searchEl?.focus()
         e.preventDefault()
       } else if (e.key.startsWith("Arrow")) {
-        const n = moveFocus(focus(), e.key, rows().length, cols())
+        const n = moveFocus(focus(), e.key, ordered().length, cols())
         if (n >= 0) focusCard(n)
         e.preventDefault()
-      } else if (e.key === "Enter" && focus() >= 0 && rows()[focus()]) {
-        openPage(rows()[focus()])
+      } else if (e.key === "Enter" && !t.closest("button") && focus() >= 0 && ordered()[focus()]) {
+        openPage(ordered()[focus()])
         e.preventDefault()
       }
     }
@@ -423,6 +470,8 @@ export function IrisGenesisPages(props: {
     const bf = brandFilter()
     if (st.q) return <>No pages match “{st.q}”{st.filter !== "all" ? ` in ${FILTERS.find((f) => f.id === st.filter)!.label}` : ""}.</>
     if (bf) return <>No pages found for {bf.name}.</>
+    if (st.site === "none") return <>Every page here is in a site.</>
+    if (st.site !== "any") return <>No pages from {siteFilterLabel()} in this list.</>
     if (st.filter === "draft") return <>No drafts — everything here is published.</>
     if (st.filter === "published") return <>Nothing published yet.</>
     if (st.filter === "private") return <>Every page here is public.</>
@@ -433,6 +482,24 @@ export function IrisGenesisPages(props: {
         </>
       )
     return <>No pages on this account yet.</>
+  }
+
+  const card = (p: GenesisPage) => {
+    const i = () => ordered().indexOf(p)
+    return (
+      <PageCard
+        page={p}
+        brand={brandOf(p)}
+        board={p.ownerType === "bloq" ? boardName(p.ownerId) : undefined}
+        site={siteName(p)}
+        focused={focus() === i()}
+        onFocus={() => setFocus(i())}
+        onOpen={() => openPage(p)}
+        onCopy={() => copy(p.url, "Link")}
+        onExternal={() => p.url && props.openExternal(p.url)}
+        onSite={() => setSitePage(p)}
+      />
+    )
   }
 
   return (
@@ -481,6 +548,17 @@ export function IrisGenesisPages(props: {
               <Svg d={LIST} />
             </button>
           </div>
+          <button
+            type="button"
+            class="iris-ui-icon"
+            data-slot="gp-group-by-site"
+            aria-pressed={st.grouped}
+            title={st.grouped ? "Grouped by site — show one list" : "Group by site"}
+            aria-label="Group by site"
+            onClick={() => setGrouped(!st.grouped)}
+          >
+            <Svg d={SITE_GLYPH} />
+          </button>
           <button type="button" class="iris-ui-icon" title="Refresh" aria-label="Refresh" disabled={loading()} onClick={() => void load()}>
             <Show when={loading()} fallback={<Icon name="reset" size="small" />}>
               <Spinner class="iris-ui-spin" />
@@ -505,11 +583,52 @@ export function IrisGenesisPages(props: {
             <button
               type="button"
               class="iris-ui-tab"
+              data-slot="gp-site-filter"
+              aria-pressed={st.site !== "any"}
+              aria-haspopup="menu"
+              aria-expanded={siteMenu()}
+              onClick={() => (setSiteMenu(!siteMenu()), setBrandMenu(false))}
+            >
+              <Svg d={SITE_GLYPH} />
+              {siteFilterLabel()}
+              <Icon name="chevron-down" size="small" />
+            </button>
+            <Show when={siteMenu()}>
+              <div class="iris-ui-menu iris-gp-brandmenu" role="menu" aria-label="Site">
+                <button type="button" role="menuitemradio" aria-checked={st.site === "any"} onClick={() => (setSt({ site: "any", page: 1 }), setSiteMenu(false))}>
+                  Any site
+                </button>
+                <button type="button" role="menuitemradio" aria-checked={st.site === "none"} onClick={() => (setSt({ site: "none", page: 1 }), setSiteMenu(false))}>
+                  <span class="iris-gp-grow">
+                    No site
+                    <span class="sub">Pages with their own sidebar and sign-in list</span>
+                  </span>
+                </button>
+                <For each={sites()}>
+                  {(x) => (
+                    <button type="button" role="menuitemradio" aria-checked={st.site === x.id} onClick={() => (setSt({ site: x.id, page: 1 }), setSiteMenu(false))}>
+                      <span class="iris-gp-grow">
+                        {x.name}
+                        <span class="sub">/s/{x.slug} · {x.pagesCount} page{x.pagesCount === 1 ? "" : "s"}</span>
+                      </span>
+                    </button>
+                  )}
+                </For>
+                <Show when={props.bloqId == null}>
+                  <span class="sub" style={{ padding: "6px 8px" }}>Open a project to list its sites.</span>
+                </Show>
+              </div>
+            </Show>
+          </div>
+          <div class="iris-gp-brandpick">
+            <button
+              type="button"
+              class="iris-ui-tab"
               aria-pressed={st.brand != null}
               aria-haspopup="menu"
               aria-expanded={brandMenu()}
               disabled={brands().length === 0}
-              onClick={() => setBrandMenu(!brandMenu())}
+              onClick={() => (setBrandMenu(!brandMenu()), setSiteMenu(false))}
             >
               <Show when={brandFilter()} fallback={<>Any brand</>}>
                 {(b) => (
@@ -539,6 +658,18 @@ export function IrisGenesisPages(props: {
             </Show>
           </div>
         </div>
+
+        <Show when={note()}>
+          {(n) => (
+            <div class="iris-ui-callout iris-gp-banner" data-tone={n().tone} role={n().tone === "bad" ? "alert" : "status"}>
+              <Ic name={n().tone === "bad" ? "warning" : n().tone === "good" ? "circle-check" : "check-small"} />
+              <span class="iris-gp-grow">{n().text}</span>
+              <button type="button" class="iris-ui-icon iris-gp-x" aria-label="Dismiss" onClick={() => setNote(undefined)}>
+                <Icon name="close-small" size="small" />
+              </button>
+            </div>
+          )}
+        </Show>
 
         <Show when={error() && data()?.pages?.length}>
           <div class="iris-ui-callout iris-gp-banner" data-tone="bad" role="alert">
@@ -570,20 +701,45 @@ export function IrisGenesisPages(props: {
                 <span>{empty()}</span>
               </div>
             </Match>
-            <Match when={rows().length > 0}>
+            <Match when={rows().length > 0 && !st.grouped}>
               <div class="iris-gp-cards" ref={listEl} role="listbox" aria-label="Pages" data-busy={loading() ? "" : undefined}>
-                <For each={rows()}>
-                  {(p, i) => (
-                    <PageCard
-                      page={p}
-                      brand={brandOf(p)}
-                      board={p.ownerType === "bloq" ? boardName(p.ownerId) : undefined}
-                      focused={focus() === i()}
-                      onFocus={() => setFocus(i())}
-                      onOpen={() => openPage(p)}
-                      onCopy={() => copy(p.url, "Link")}
-                      onExternal={() => p.url && props.openExternal(p.url)}
-                    />
+                <For each={rows()}>{(p) => card(p)}</For>
+              </div>
+            </Match>
+            {/* GROUPED BY SITE (#192672) — Elon's layout: a header per site, its pages under it,
+              then the pages in no site. A header says when the site holds more than are here. */}
+            <Match when={rows().length > 0 && st.grouped}>
+              <div class="iris-gs-groups" ref={listEl} data-slot="gp-site-groups" data-busy={loading() ? "" : undefined}>
+                <For each={groups()}>
+                  {(g) => (
+                    <section class="iris-gs-group" data-slot="gp-site-group" data-key={g.key}>
+                      <button type="button" class="iris-gs-head" aria-expanded={!collapsed[g.key]} onClick={() => setCollapsed(g.key, !collapsed[g.key])}>
+                        <span class="iris-gs-caret"><Icon name="chevron-down" size="small" /></span>
+                        <Show when={g.kind === "site"} fallback={<span class="iris-gs-hname">Not in a site</span>}>
+                          <Svg d={SITE_GLYPH} />
+                          <span class="iris-gs-hname">{g.kind === "site" ? g.site.name : ""}</span>
+                          <Show when={g.kind === "site" && g.known ? g.site : undefined}>
+                            {(x) => (
+                              <>
+                                <span class="iris-ui-chip" data-tone={x().status === "published" ? "good" : "warn"}>{x().status === "published" ? "Published" : x().status}</span>
+                                <Show when={x().requiresAuth}>
+                                  <span class="iris-ui-chip" title="Visitors sign in once for the whole site"><Icon name="shield" size="small" />sign-in</span>
+                                </Show>
+                                <span class="iris-gs-hslug">/s/{x().slug}</span>
+                              </>
+                            )}
+                          </Show>
+                        </Show>
+                        <span class="iris-gs-hcount">
+                          {g.kind === "none" ? `${g.pages.length} page${g.pages.length === 1 ? "" : "s"} · own sidebar and sign-in each` : groupCount(g.pages.length, g.known ? g.site.pagesCount : undefined)}
+                        </span>
+                      </button>
+                      <Show when={!collapsed[g.key]}>
+                        <div class="iris-gp-cards" role="listbox" aria-label={g.kind === "site" ? `Pages in ${g.site.name}` : "Pages in no site"}>
+                          <For each={g.pages}>{(p) => card(p)}</For>
+                        </div>
+                      </Show>
+                    </section>
                   )}
                 </For>
               </div>
@@ -594,9 +750,12 @@ export function IrisGenesisPages(props: {
         <Show when={data()?.measured}>
           <div class="iris-gp-pager">
             <span class="iris-gp-range">
-              {rangeLine({ page: st.page, perPage: PER_PAGE, shown: data()!.pages.length, total: data()!.total, totalIsExact: data()!.totalIsExact })}
+              {rangeLine({ page: st.page, perPage: perPage(), shown: data()!.pages.length, total: data()!.total, totalIsExact: data()!.totalIsExact })}
               <Show when={brandFilter() && brandFilter()!.bloqId == null && rows().length !== data()!.pages.length}>
                 {` · ${rows().length} match ${brandFilter()!.name}`}
+              </Show>
+              <Show when={st.site !== "any" && !(brandFilter() && brandFilter()!.bloqId == null)}>
+                {` · ${rows().length} ${st.site === "none" ? "in no site" : `in ${siteFilterLabel()}`}`}
               </Show>
             </span>
             <span class="iris-ui-spacer" />
@@ -630,6 +789,7 @@ export function IrisGenesisPages(props: {
                   </Show>
                 </div>
                 <span class="iris-ui-chip" data-tone={status().tone}>{status().label}</span>
+                <SiteChip name={siteName(p()) ? `Site: ${siteName(p())}` : undefined} onClick={() => setSitePage(p())} />
                 <span class="iris-ui-spacer" />
                 <Show
                   when={p().status === "published"}
@@ -909,6 +1069,19 @@ export function IrisGenesisPages(props: {
           </div>
         )}
       </Show>
+
+      {/* ── which site this page is in (#192672) ── */}
+      <Show when={sitePage()} keyed>
+        {(sp) => (
+          <SiteDialog
+            page={sp}
+            board={boardForPage(sp, props.bloqId)}
+            doFetch={props.doFetch}
+            onClose={() => setSitePage(undefined)}
+            onChanged={(siteId, _site, text) => siteChanged(sp, siteId, text)}
+          />
+        )}
+      </Show>
     </div>
   )
 }
@@ -964,11 +1137,13 @@ function PageCard(props: {
   page: GenesisPage
   brand?: BrandMatch
   board?: string
+  site?: string
   focused: boolean
   onFocus: () => void
   onOpen: () => void
   onCopy: () => void
   onExternal: () => void
+  onSite: () => void
 }) {
   const p = () => props.page
   const status = () => statusOf(p())
@@ -1007,6 +1182,7 @@ function PageCard(props: {
         <div class="iris-gp-chips">
           <span class="iris-ui-chip" data-tone={status().tone}>{status().label}</span>
           <VisChip page={p()} />
+          <SiteChip name={props.site} onClick={props.onSite} />
           <span class="iris-gp-when" title={exactTime(p().updatedAt)}>{relativeTime(p().updatedAt, Date.now())}</span>
         </div>
         <Show when={props.brand}>

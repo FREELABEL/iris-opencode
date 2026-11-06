@@ -2461,7 +2461,10 @@ export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { sites: [] } }
 
   try {
-    const res = await irisFetch(`/api/v1/sites`)
+    // per_page: fl-api pages this list at 20 by default, newest first, and the board filter below
+    // runs AFTER that — an account with more than 20 sites lost the older ones of THIS board from
+    // the list, so a page in one of them showed as in no site at all (#192672).
+    const res = await irisFetch(`/api/v1/sites?per_page=100`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { sites: [] } }
     const json = (await res.json()) as any
     const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : []

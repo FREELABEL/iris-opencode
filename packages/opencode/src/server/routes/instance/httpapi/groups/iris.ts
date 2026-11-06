@@ -956,6 +956,33 @@ const SitesResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisSitesResponse" })
 
+// Genesis › Sites, one site (#192672): its pages IN THE SITE'S ORDER — the order its sidebar lists them.
+const SiteDetailSchema = Schema.Struct({
+  id: Schema.Finite,
+  name: Schema.String,
+  slug: Schema.String,
+  status: Schema.String,
+  requiresAuth: Schema.Boolean,
+  homePageId: Schema.optional(Schema.Finite),
+  pages: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      title: Schema.String,
+      slug: Schema.optional(Schema.String),
+      status: Schema.String,
+      sortOrder: Schema.Finite,
+      updatedAt: Schema.optional(Schema.String),
+      thumbnailUrl: Schema.optional(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "IrisSiteDetail" })
+const SiteResponse = Schema.Struct({ ...Measured, site: Schema.optional(SiteDetailSchema) }).annotate({ identifier: "IrisSiteResponse" })
+const SiteActionResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  site: described(Schema.optional(SiteDetailSchema), "The site and its pages as the platform holds them AFTER the write — read back, not assumed."),
+}).annotate({ identifier: "IrisSiteActionResult" })
+
 // Genesis › Brand kits (#188816). Account-wide, like Sites: a brand is owned by its user.
 const BrandSwatch = Schema.Struct({ name: Schema.String, value: Schema.String })
 const BrandsResponse = Schema.Struct({
@@ -1933,6 +1960,11 @@ export const IrisPaths = {
   integrations: `${root}/integrations/:bloqID`,
   records: `${root}/records/:bloqID/:slug`,
   sites: `${root}/sites/:bloqID`,
+  // Genesis › Sites, writing (#192672): one site and its pages in order; put a page in, take it out.
+  site: `${root}/site/:siteID`,
+  siteCreate: `${root}/site`,
+  sitePage: `${root}/site/:siteID/pages/:pageID`,
+  siteReorder: `${root}/site/:siteID/reorder`,
   brands: `${root}/brands`,
   brandKit: `${root}/brands/:brandID`,
   brandSave: `${root}/brands/:brandID/save`,
@@ -4254,6 +4286,40 @@ export const IrisApi = HttpApi.make("iris").add(
             "A site groups pages under shared navigation, and owns settings, a contact-form inbox and a comms thread that a page does not have. Listing only pages made all of that invisible and made a nine-page site look like nine unrelated rows. NOT board-filtered: sites are owned by a user OR a bloq and the endpoint mixes both, so narrowing by board would hide every account-level site.",
         }),
       ),
+      HttpApiEndpoint.get("site", IrisPaths.site, {
+        params: { siteID: Schema.NumberFromString },
+        success: described(SiteResponse, "One site and its pages, in the site's order"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.site", summary: "One site and its pages", description: "#192672. fl-api GET /api/v1/sites/{id}." })),
+      HttpApiEndpoint.post("siteCreate", IrisPaths.siteCreate, {
+        payload: Schema.Struct({
+          name: Schema.String,
+          description: Schema.optional(Schema.String),
+          bloqId: described(Schema.Finite, "The board that owns the new site."),
+        }),
+        success: described(SiteActionResponse, "The new site, empty and a draft"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.siteCreate", summary: "Make a site on a board", description: "#192672. What Elon's Create Site makes: a draft, owned by the board, with no pages." })),
+      HttpApiEndpoint.post("sitePageAdd", IrisPaths.sitePage, {
+        params: { siteID: Schema.NumberFromString, pageID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          fromSiteId: described(Schema.optional(Schema.Finite), "The site the page is in now, when this is a move. It is taken out of that one first."),
+        }),
+        success: described(SiteActionResponse, "Whether it landed, and the site read back"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.sitePageAdd",
+          summary: "Put a page in a site (or move it)",
+          description: "#192672. The page takes the site's sidebar and sign-in rules. fl-api POST /api/v1/sites/{site}/pages/{page}; a move detaches from the old site first so its home page is handed on.",
+        }),
+      ),
+      HttpApiEndpoint.delete("sitePageRemove", IrisPaths.sitePage, {
+        params: { siteID: Schema.NumberFromString, pageID: Schema.NumberFromString },
+        success: described(SiteActionResponse, "Whether it landed, and the site read back"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sitePageRemove", summary: "Take a page out of a site", description: "#192672. fl-api DELETE /api/v1/sites/{site}/pages/{page}. The page itself is untouched." })),
+      HttpApiEndpoint.post("siteReorder", IrisPaths.siteReorder, {
+        params: { siteID: Schema.NumberFromString },
+        payload: Schema.Struct({ pageIds: described(Schema.Array(Schema.Finite), "Every page of the site, in the new order.") }),
+        success: described(SiteActionResponse, "Whether it landed, and the site read back"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.siteReorder", summary: "Order a site's pages", description: "#192672. fl-api PUT /api/v1/sites/{id}/reorder — the order the site's sidebar lists them." })),
       HttpApiEndpoint.get("brands", IrisPaths.brands, {
         success: described(BrandsResponse, "Your brands, with swatches for the list"),
       }).annotateMerge(
