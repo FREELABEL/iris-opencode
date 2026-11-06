@@ -991,15 +991,33 @@ const BrandKitSchema = Schema.Struct({
     }),
   ),
   fonts: Schema.Array(Schema.Struct({ role: Schema.String, family: Schema.String })),
+  fontSection: described(
+    Schema.Literals(["typography", "fonts", "font"]),
+    "#192667. Which section the font stacks were read from — a save writes them back there.",
+  ),
   typeScale: Schema.Array(Schema.Struct({ role: Schema.String, value: Schema.String })),
   logoUrl: Schema.optional(Schema.String),
+  logos: described(
+    Schema.Struct({
+      primary: Schema.optional(Schema.String),
+      on_dark: Schema.optional(Schema.String),
+      on_light: Schema.optional(Schema.String),
+      icon: Schema.optional(Schema.String),
+      social: Schema.optional(Schema.String),
+    }),
+    "#192667. Every logo variant the kit names, in the #192664 shape (brand.logo), falling back to the older logos.*.url.",
+  ),
   motion: Schema.optional(
     Schema.Struct({
       ease: Schema.optional(Schema.String),
       durationMs: Schema.optional(Schema.Finite),
       character: Schema.optional(Schema.String),
+      stiffness: Schema.optional(Schema.Finite),
+      damping: Schema.optional(Schema.Finite),
     }),
   ),
+  voice: described(Schema.optional(Schema.String), "#192667. brand.voice — how the brand speaks."),
+  tone: described(Schema.optional(Schema.String), "#192667. brand.tone."),
   personas: Schema.Array(
     Schema.Struct({ name: Schema.String, isDefault: Schema.Boolean, tone: Schema.optional(Schema.String) }),
   ),
@@ -1796,6 +1814,8 @@ export const IrisPaths = {
   brands: `${root}/brands`,
   brandKit: `${root}/brands/:brandID`,
   brandSave: `${root}/brands/:brandID/save`,
+  brandLogoUpload: `${root}/brands/:brandID/logo`,
+  brandLogoProbe: `${root}/brand-logo/probe`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   agentLive: `${root}/agents/:agentID/live`,
   heartbeats: `${root}/heartbeats`,
@@ -4078,24 +4098,76 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.post("brandSave", IrisPaths.brandSave, {
         params: { brandID: Schema.NumberFromString },
         payload: Schema.Struct({
-          section: Schema.Literals(["colors", "typography", "motion"]),
-          value: Schema.Unknown,
-          expected: described(Schema.String, "The section as read (kit.sections[section])"),
+          changes: described(
+            Schema.Record(Schema.String, Schema.Unknown),
+            "Section (colors, typography, fonts, font, motion, brand) → its whole new value. fl-api replaces sections whole.",
+          ),
+          expected: described(
+            Schema.Record(Schema.String, Schema.String),
+            "Section → that section as read (kit.sections[section]), for every section in `changes`",
+          ),
         }),
         success: described(
           Schema.Struct({
             ok: Schema.Boolean,
             reason: Schema.optional(Schema.String),
             kit: Schema.optional(BrandKitSchema),
+            saved: described(Schema.optional(Schema.Array(Schema.String)), "The sections written"),
           }).annotate({ identifier: "IrisBrandSaveResult" }),
           "Whether the save landed, and the kit as the server now holds it",
         ),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.brandSave",
-          summary: "Save one section of a brand kit",
+          summary: "Save a brand kit's changed sections",
           description:
-            "PINNED to what was read. fl-api's PATCH design-tokens replaces a whole section with no version check, so a second editor would silently win. This re-reads the section and refuses when it moved since `expected`, then writes and reads back.",
+            "#192667. Every changed section in ONE PATCH design-tokens (the `iris brands dt push` call), PINNED to what was read: fl-api replaces whole sections with no version check, so a second editor would silently win. This re-reads and refuses the whole save when any section moved since `expected`, then writes and reads back.",
+        }),
+      ),
+      HttpApiEndpoint.post("brandLogoUpload", IrisPaths.brandLogoUpload, {
+        params: { brandID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          name: Schema.String,
+          type: described(Schema.String, "image/png, image/jpeg, image/webp, image/gif or image/svg+xml"),
+          data: described(Schema.String, "The file, base64. A data: URL prefix is tolerated."),
+          variant: Schema.optional(Schema.String),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            url: Schema.optional(Schema.String),
+            fileId: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisBrandLogoUploaded" }),
+          "The uploaded file's URL. The kit is NOT changed — the URL goes into the editor's draft.",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandLogoUpload",
+          summary: "Upload a logo file for a brand",
+          description:
+            "#192667. JSON with the file base64, forwarded as multipart to fl-api /cloud-files/upload (the `iris cloud:upload` call) with the brand's id. Images only, up to 5 MB. Writes no design tokens.",
+        }),
+      ),
+      HttpApiEndpoint.get("brandLogoProbe", IrisPaths.brandLogoProbe, {
+        query: Schema.Struct({ url: described(Schema.String, "The logo's public http(s) URL") }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            status: Schema.optional(Schema.Finite),
+            contentType: Schema.optional(Schema.String),
+            bytes: Schema.optional(Schema.Finite),
+            dataUrl: described(Schema.optional(Schema.String), "The image as a data: URL, so the editor can read its pixels"),
+          }).annotate({ identifier: "IrisBrandLogoProbe" }),
+          "Whether the URL is a working image, and the image itself",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandLogoProbe",
+          summary: "Fetch a logo for the editor to measure",
+          description:
+            "#192667. The editor flags a logo that would vanish on its tile, which needs the image's pixels — a canvas cannot read a cross-origin image without CORS headers. The engine fetches it (public http(s) hosts only, images only, up to 3 MB) and returns it as a data URL.",
         }),
       ),
       HttpApiEndpoint.get("records", IrisPaths.records, {
