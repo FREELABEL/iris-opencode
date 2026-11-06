@@ -72,15 +72,15 @@ describe("what changes, in one plain line", () => {
   test("add, move, remove and no change", () => {
     const add = siteChange(undefined, STAFF)
     expect(add).toEqual({ kind: "add", to: "Staff portal" })
-    expect(siteChangeLine(add)).toBe("This page will use Staff portal’s sidebar and sign-in rules.")
+    expect(siteChangeLine(add)).toBe("This page will use the sidebar and sign-in rules of Staff portal.")
     expect(siteChangeLabel(add)).toBe("Add to site")
 
     const move = siteChange(PUBLIC, STAFF)
-    expect(siteChangeLine(move)).toBe("This page will leave Public site and use Staff portal’s sidebar and sign-in rules instead.")
+    expect(siteChangeLine(move)).toBe("This page will leave Public site and use the sidebar and sign-in rules of Staff portal instead.")
     expect(siteChangeLabel(move)).toBe("Move to site")
 
     const out = siteChange(STAFF, undefined)
-    expect(siteChangeLine(out)).toContain("stop using Staff portal’s sidebar and sign-in rules")
+    expect(siteChangeLine(out)).toContain("stop using the sidebar and sign-in rules of Staff portal")
     expect(siteChangeLabel(out)).toBe("Remove from site")
 
     expect(siteChange(STAFF, STAFF)).toEqual({ kind: "same" })
@@ -88,7 +88,7 @@ describe("what changes, in one plain line", () => {
   })
 
   test("several pages at once are counted", () => {
-    expect(siteChangeLine({ kind: "add", to: "Staff portal" }, 3)).toBe("These 3 pages will use Staff portal’s sidebar and sign-in rules.")
+    expect(siteChangeLine({ kind: "add", to: "Staff portal" }, 3)).toBe("These 3 pages will use the sidebar and sign-in rules of Staff portal.")
   })
 })
 

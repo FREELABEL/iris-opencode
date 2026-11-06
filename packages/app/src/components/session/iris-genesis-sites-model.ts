@@ -94,9 +94,9 @@ export function siteChange(from: { id: number; name: string } | undefined, to: {
 /** The one plain line of what changes. Never "Are you sure?". */
 export function siteChangeLine(c: SiteChange, count = 1): string | undefined {
   const it = count === 1 ? "This page" : `These ${count} pages`
-  if (c.kind === "add") return `${it} will use ${c.to}’s sidebar and sign-in rules.`
-  if (c.kind === "move") return `${it} will leave ${c.from} and use ${c.to}’s sidebar and sign-in rules instead.`
-  if (c.kind === "remove") return `${it} will stop using ${c.from}’s sidebar and sign-in rules, and go back to its own.`
+  if (c.kind === "add") return `${it} will use the sidebar and sign-in rules of ${c.to}.`
+  if (c.kind === "move") return `${it} will leave ${c.from} and use the sidebar and sign-in rules of ${c.to} instead.`
+  if (c.kind === "remove") return `${it} will stop using the sidebar and sign-in rules of ${c.from}, and go back to its own.`
   return undefined
 }
 

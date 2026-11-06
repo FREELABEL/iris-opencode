@@ -63,3 +63,5 @@
 .iris-gs-row:last-child { border-bottom: 0; }
 .iris-gs-row > .iris-ui-chip { flex: none; }
 .iris-gs-n { flex: none; width: 18px; text-align: end; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; font-family: var(--font-mono, ui-monospace, monospace); }
+.iris-gs-check input { accent-color: var(--text-strong); }
+.iris-gs-head .iris-gs-caret { display: inline-flex; }
