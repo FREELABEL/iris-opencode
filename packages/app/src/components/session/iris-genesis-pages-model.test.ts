@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   confirmFor,
   frameScale,
+  isGuessed,
   isWidening,
   matchBrand,
   moveFocus,
@@ -134,6 +135,15 @@ describe("which brand a page belongs to", () => {
     expect(matchBrand({ ...PAGE, slug: "iris-launch", ownerId: 1 }, BRANDS)).toMatchObject({ brand: { id: 8 } })
     expect(matchBrand({ ...PAGE, slug: "irisx", ownerId: 1 }, BRANDS)).toBeUndefined()
     expect(matchBrand({ ...PAGE, slug: "riviere", ownerId: 889 }, BRANDS)).toBeUndefined()
+  })
+  test("a brand the page stores wins over every guess, and only it is not a guess (#192665)", () => {
+    const stored = matchBrand({ ...PAGE, slug: "iris-desktop-launch", ownerId: 314, brandId: 8 }, BRANDS, "IRIS Desktop")!
+    expect(stored).toMatchObject({ brand: { id: 8 }, by: "stored" })
+    expect(isGuessed(stored)).toBe(false)
+    expect(isGuessed(matchBrand({ ...PAGE, slug: "iris-desktop-launch", ownerId: 1 }, BRANDS)!)).toBe(true)
+  })
+  test("a stored brand you cannot see falls back to the guess rather than to nothing", () => {
+    expect(matchBrand({ ...PAGE, slug: "cwc-events", ownerId: 314, brandId: 999 }, BRANDS)).toMatchObject({ brand: { id: 24 }, by: "board" })
   })
 })
 

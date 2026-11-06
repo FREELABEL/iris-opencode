@@ -29,6 +29,9 @@ describe("reading the page list", () => {
     expect(p.thumbnailUrl).toBe(ROW.thumbnail_url)
     expect(p.ogImage).toBeUndefined()
     expect([p.ownerType, p.ownerId, p.siteId, p.version]).toEqual(["bloq", 314, 14, 32])
+    // The stored brand (#192665) — absent until the platform returns one.
+    expect(p.brandId).toBeUndefined()
+    expect(pageRow({ ...ROW, brand_id: 24 }).brandId).toBe(24)
     expect(p.url).toBe(ROW.public_url)
   })
 

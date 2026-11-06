@@ -32,6 +32,8 @@ export type GenesisPage = {
   ownerType?: string
   ownerId?: number
   siteId?: number
+  /** The brand the page stores (#192665). When set it wins; everything else is a guess. */
+  brandId?: number
 }
 
 export type PagesPayload = {
@@ -194,13 +196,18 @@ export function narrowedNote(p: GenesisPage, a: PageAction): string | undefined 
 }
 
 /**
- * Which brand a page belongs to. The platform stores no page→brand link, so it is inferred, and the
- * card says how: the brand the page's own theme names; else the brand of the board that owns it
+ * Which brand a page belongs to. The brand the page STORES wins (pages.brand_id, #192665 — set with
+ * `iris pages set <slug> --brand <brand>`). Without one it is inferred, the card says how, and marks
+ * it guessed: the brand the page's own theme names; else the brand of the board that owns it
  * (several brands on one board → the one whose slug starts the page's slug); else a brand whose
  * slug starts the page's slug ("iris-desktop-…" → IRIS Desktop, the longest match wins).
  */
-export type BrandMatch = { brand: BrandSummary; by: "page" | "board" | "slug" }
+export type BrandMatch = { brand: BrandSummary; by: "stored" | "page" | "board" | "slug" }
 export function matchBrand(p: GenesisPage, brands: BrandSummary[], named?: string): BrandMatch | undefined {
+  if (p.brandId != null) {
+    const stored = brands.find((b) => b.id === p.brandId)
+    if (stored) return { brand: stored, by: "stored" }
+  }
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
   if (named) {
     const n = norm(named)
@@ -223,9 +230,21 @@ export function matchBrand(p: GenesisPage, brands: BrandSummary[], named?: strin
 }
 
 export const BRAND_BY: Record<BrandMatch["by"], string> = {
-  page: "the page's theme names this brand",
-  board: "the brand of the board that owns this page",
-  slug: "matched by the page's address",
+  stored: "the brand stored on this page",
+  page: "guessed — the page's theme names this brand",
+  board: "guessed — the brand of the board that owns this page",
+  slug: "guessed — matched by the page's address",
+}
+
+/** Only a stored brand is a fact; every other match is a guess, and the card says so. */
+export const isGuessed = (m: BrandMatch) => m.by !== "stored"
+
+/** The short line under a brand in the detail. */
+export const BRAND_BY_SHORT: Record<BrandMatch["by"], string> = {
+  stored: "stored on the page",
+  page: "guessed · named by the page",
+  board: "guessed · the board's brand",
+  slug: "guessed · matched by address",
 }
 
 /**
