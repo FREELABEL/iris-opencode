@@ -1,0 +1,65 @@
+/*
+ * Genesis › Sites controls (#192672). Built on iris-panel-ui.css; only what is particular to "which
+ * site is this page in" is here — the site chip on a card, the site groups, the choose-a-site dialog
+ * and a site's ordered pages. Same tokens, radii and type sizes as the Pages pane around it.
+ */
+.iris-gs-grow { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.iris-gs-sub { display: block; font-size: 11.5px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; }
+.iris-gs-optname { display: block; font-size: 12.5px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
+.iris-gs-pad { padding: 8px 2px 4px; }
+
+/* ── the chip on a page card: a button, so it says it can be changed ── */
+.iris-gs-chip { border: 0; cursor: pointer; font: inherit; font-size: 11px; max-width: 160px; }
+.iris-gs-chip:not([data-in]) { background: transparent; box-shadow: inset 0 0 0 1px var(--border-weaker-base); }
+.iris-gs-chip[data-in] { color: var(--text-base); }
+.iris-gs-chip:hover { color: var(--text-strong); background: var(--ui-hover); }
+.iris-gs-chip .iris-ui-ic { width: 12px; height: 12px; opacity: 0.7; }
+.iris-gs-chipname { overflow: hidden; text-overflow: ellipsis; }
+
+/* ── pages grouped under their site (Elon's layout): a header row, then that site's cards ── */
+.iris-gs-groups { display: flex; flex-direction: column; padding: 4px 0 12px; }
+.iris-gs-group + .iris-gs-group { border-top: 1px solid var(--border-weaker-base); }
+.iris-gs-head { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; padding: 8px 12px; font-size: 12.5px; cursor: pointer; }
+.iris-gs-head:hover { background: var(--ui-hover); }
+.iris-gs-head .iris-gs-caret { transition: transform 0.12s; color: var(--text-weak); }
+.iris-gs-head[aria-expanded="false"] .iris-gs-caret { transform: rotate(-90deg); }
+.iris-gs-head .iris-gs-hname { color: var(--text-strong); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.iris-gs-head .iris-gs-hslug { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weak); white-space: nowrap; }
+.iris-gs-head .iris-gs-hcount { margin-left: auto; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iris-gs-head > .iris-ui-chip { flex: none; }
+.iris-gs-group > .iris-gp-cards { padding-top: 2px; }
+.iris-gp[data-view="list"] .iris-gs-group > .iris-gp-cards { padding-top: 0; }
+
+/* ── the choose-a-site dialog ── */
+.iris-gs-dialog { width: min(440px, 100%); max-height: calc(100% - 8px); display: flex; flex-direction: column; }
+.iris-gs-intro { color: var(--text-weak) !important; }
+.iris-gs-opts { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; margin: 4px 0 8px; border: 1px solid var(--border-weaker-base); border-radius: 8px; padding: 4px; }
+.iris-gs-opt { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; padding: 7px 8px; border-radius: 6px; cursor: pointer; font: inherit; }
+.iris-gs-opt:hover:not(:disabled) { background: var(--ui-hover); }
+.iris-gs-opt[aria-checked="true"] { background: var(--ui-sel); }
+.iris-gs-opt > .iris-ui-chip { flex: none; }
+.iris-gs-radio { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-weak-base); }
+.iris-gs-opt[aria-checked="true"] .iris-gs-radio { box-shadow: inset 0 0 0 4px var(--text-strong); }
+.iris-gs-new { align-self: flex-start; }
+.iris-gs-newform { display: flex; gap: 6px; }
+.iris-gs-input { flex: 1; min-width: 0; border: 1px solid var(--border-weak-base); border-radius: 6px; background: transparent; color: var(--text-strong); font-size: 12px; padding: 4px 8px; outline: none; }
+.iris-gs-input:focus { border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-gs-line { margin: 10px 0 0 !important; padding: 7px 10px; border-radius: 6px; background: var(--background-element); color: var(--text-strong) !important; font-size: 12px !important; }
+.iris-gs-error { color: var(--ui-bad) !important; font-size: 12px !important; margin: 8px 0 0 !important; }
+
+/* ── one site's pages, in order (Genesis › Sites › Pages tab) ── */
+.iris-gs-editor { height: auto; gap: 6px; }
+.iris-gs-bar { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.iris-gs-note, .iris-gs-confirm { align-items: center; }
+.iris-gs-confirm p { margin: 0; white-space: normal; }
+.iris-gs-picker { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border-weaker-base); border-radius: 8px; }
+.iris-gs-checks { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.iris-gs-check { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 5px; cursor: pointer; }
+.iris-gs-check:hover { background: var(--ui-hover); }
+.iris-gs-check > .iris-ui-chip { flex: none; }
+.iris-gs-picker .iris-gs-line { margin: 0 !important; }
+.iris-gs-order { list-style: none; margin: 0; padding: 0; }
+.iris-gs-row { display: flex; align-items: center; gap: 6px; padding: 5px 2px; border-bottom: 1px solid var(--border-weaker-base); }
+.iris-gs-row:last-child { border-bottom: 0; }
+.iris-gs-row > .iris-ui-chip { flex: none; }
+.iris-gs-n { flex: none; width: 18px; text-align: end; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; font-family: var(--font-mono, ui-monospace, monospace); }

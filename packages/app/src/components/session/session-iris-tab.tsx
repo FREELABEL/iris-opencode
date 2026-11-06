@@ -107,6 +107,8 @@ import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisLeadsTab } from "./iris-leads-tab"
 import { IrisGenesisPages } from "./iris-genesis-pages"
+import { SitePagesEditor } from "./iris-genesis-sites"
+import { ownerBoard } from "./iris-genesis-sites-model"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_ASSIGNED,
@@ -4115,28 +4117,15 @@ export function SessionIrisTab() {
                 {/* The site's navigation, as links you can actually open. Each entry is a
                   /p/<slug> page, which serves fine — it is the site route itself that does not. */}
                 <Match when={detailTab() === "sitepages"}>
-                  <Show
-                    when={(openRow()!.raw?.navItems?.length ?? 0) > 0}
-                    fallback={
-                      <p class="text-12-regular text-text-weak py-2">
-                        This site has {openRow()!.raw?.pagesCount ?? 0} page(s) attached but no navigation defined.
-                      </p>
-                    }
-                  >
-                    <For each={openRow()!.raw.navItems}>
-                      {(n: any) => (
-                        <a
-                          href={`https://heyiris.io${n.url}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 hover:bg-background-element"
-                        >
-                          <span class="text-12-regular text-text-base min-w-0 flex-1">{n.label}</span>
-                          <span class="shrink-0 font-mono text-11-regular text-text-weaker">{n.url}</span>
-                        </a>
-                      )}
-                    </For>
-                  </Show>
+                  {/* #192672: the site's pages in order, with Add pages / remove / move — not only
+                    its navigation links. The board whose pages can be added is the site's owner. */}
+                  <SitePagesEditor
+                    siteId={Number(openRow()!.raw?.id)}
+                    board={ownerBoard(openRow()!.raw?.owner) ?? (activeBloq() != null ? Number(activeBloq()) : undefined)}
+                    doFetch={doFetch}
+                    navItems={openRow()!.raw?.navItems}
+                    onChanged={() => void refetchSurface()}
+                  />
                 </Match>
 
                 {/* THE TABLE. Columns from the schema, rows from the dataset, paged upstream. */}
