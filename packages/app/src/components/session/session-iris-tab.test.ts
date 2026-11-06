@@ -81,13 +81,13 @@ describe("resolvePane", () => {
     expect(resolvePane("atlas", "nonsense").pane).toBe("atlas")
   })
 
-  test("agent modes narrow on the SERVER, in the query string", () => {
-    // Not a client-side filter over rows already fetched: that leaves the footer counting the
-    // unfiltered set, so "12 of 40" sits under nine rows and describes a different set.
-    expect(resolvePane("agents", "scheduled").path(674)).toBe("/iris/agents/674?mode=scheduled")
-    expect(resolvePane("agents", "ondemand").path(674)).toBe("/iris/agents/674?mode=ondemand")
-    // Every agent mode still draws with the agents renderer — same rows, narrower set.
-    expect(resolvePane("agents", "ondemand").pane).toBe("agents")
+  test("Agents is ELON's gallery, and the tabs it replaced land on it (#192619)", () => {
+    // All / Scheduled / On demand / Live became one view. Installs remember those sub-views in
+    // localStorage, so each must open the gallery, never a blank pane.
+    expect(resolvePane("agents", "all").pane).toBe("agent-gallery")
+    for (const old of ["scheduled", "ondemand", "live"]) expect(resolvePane("agents", old).pane).toBe("agent-gallery")
+    expect(resolvePane("agents", "rooms").pane).toBe("rooms")
+    expect(resolvePane("agents", "heartbeats").pane).toBe("heartbeats")
   })
 
   test("the hive inbox is a different endpoint AND a different renderer", () => {

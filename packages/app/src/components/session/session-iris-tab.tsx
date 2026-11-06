@@ -76,12 +76,14 @@ import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from 
 import { heldPayload, holdPayload, setSurfaceSync, surfaceCount, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
+import { IrisAgentGallery } from "./iris-agent-gallery"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
 import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
+import type { StepId } from "./iris-agent-editor-model"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
@@ -696,7 +698,7 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
 /** Panes with an All / This project switch beside the search box; the server takes scope=all. */
 const SCOPED_PANES = new Set(["pages", "agents"])
-const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
+const SELF_PANES = new Set(["agent-gallery", "rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
@@ -752,15 +754,13 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "artifacts", label: "Artifacts", pane: "atlas-artifacts", path: () => `/iris/artifacts` },
   ],
   agents: [
-    { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
-    { id: "scheduled", label: "Scheduled", pane: "agents", path: (b) => `/iris/agents/${b}?mode=scheduled` },
-    { id: "ondemand", label: "On demand", pane: "agents", path: (b) => `/iris/agents/${b}?mode=ondemand` },
+    // ELON's agents gallery (#192619): one view for what All / Scheduled / On demand / Live were —
+    // People · Agents, workspace, sort, this project or the account; a card opens Live. Owns its
+    // pane: IrisAgentGallery fetches every agent in scope, since ELON filters the whole roster.
+    { id: "all", label: "Agents", pane: "agent-gallery", path: () => `/iris/agents/gallery` },
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
-    // "Is it stuck?" (#187921): the picked agent's current step and last tool calls, live, with
-    // Take over / Hand back. Owns its pane: IrisAgentLive polls for itself.
-    { id: "live", label: "Live", pane: "agent-live", path: () => `/iris/agents/live` },
     // Every agent that runs on its own schedule (#189110): is it beating, did the last beat work,
     // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
     // agent's, and an agent can watch several boards), and it owns its pane.
@@ -1114,11 +1114,8 @@ const PANEL_HINTS: Record<string, string> = {
   "atlas/graph": "How boards relate to each other, across the account",
   "atlas/artifacts": "Atlas notes this conversation produced",
   agents: "The account's AI agents",
-  "agents/all": "Every agent",
-  "agents/scheduled": "Agents that run on a schedule",
-  "agents/ondemand": "Agents that run when asked",
+  "agents/all": "Every agent and person — filter, sort, open one to see it live",
   "agents/rooms": "Group chats with several agents (@mention them)",
-  "agents/live": "What an agent is doing right now — take over or hand back",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
   pages: "Genesis — web pages, sites, drafts and brand kits",
   "pages/pages": "Published and draft Genesis pages",
@@ -2748,7 +2745,9 @@ export function SessionIrisTab() {
    * the open board; `{agentId}` = that agent. Clicking an agent opens it here; the read-only
    * record (Info · Tasks · JSON) is one click away under "Details".
    */
-  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any } | null>(null)
+  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any; step?: StepId } | null>(null)
+  // Bumped after the editor saves, so the agents gallery (which fetches for itself) reloads.
+  const [agentsVersion, setAgentsVersion] = createSignal(0)
   // A different product, sub-view or board is a different list: the editor belongs to the one it was opened from.
   createEffect(on([pane, () => activeBloq()], () => setAgentEditor(null), { defer: true }))
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
@@ -3356,9 +3355,11 @@ export function SessionIrisTab() {
               bloqId={activeBloq() != null ? Number(activeBloq()) : null}
               bloqName={activeBloqName()}
               boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              step={ed().step}
               onClose={() => setAgentEditor(null)}
               onSaved={(a) => {
                 void refetchSurface()
+                setAgentsVersion((v) => v + 1)
                 if (a.created) setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
               }}
               onDetails={
@@ -4257,6 +4258,17 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "agent-live"}>
             <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
+          </Match>
+          <Match when={pane() === "agent-gallery"}>
+            <IrisAgentGallery
+              doFetch={doFetch}
+              bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+              reload={agentsVersion()}
+              onNew={() => setAgentEditor({})}
+              onConfigure={(a) => setAgentEditor({ agentId: a.id, row: a })}
+              onTrain={(a) => setAgentEditor({ agentId: a.id, row: a, step: "memory" })}
+              openExternal={(url) => platform.openExternal(url)}
+            />
           </Match>
           {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
               session, not the board, and must render with no board chosen. */}

@@ -32,17 +32,24 @@ const remembered = () => {
   }
 }
 
-export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
+export function IrisAgentLive(props: {
+  doFetch: Fetch
+  bloqId?: number
+  /** Opened from an agent's card (#192619): that agent only, whatever board it is on. */
+  agent?: BoardAgent
+  onBack?: () => void
+}) {
   const json = async <T,>(path: string, init?: RequestInit): Promise<T> =>
     (await (await props.doFetch(path, init)).json()) as T
   const post = <T,>(path: string, body: unknown) =>
     json<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
 
   const [agents] = createResource(
-    () => props.bloqId,
+    () => (props.agent ? undefined : props.bloqId),
     (b) => json<{ agents: BoardAgent[] }>(`/iris/agents/${b}?perPage=100`),
   )
-  const [agentId, setAgentId] = createSignal<number | undefined>(remembered())
+  const roster = () => (props.agent ? [props.agent] : (agents.latest?.agents ?? []))
+  const [agentId, setAgentId] = createSignal<number | undefined>(props.agent?.id ?? remembered())
   const choose = (id: number | undefined) => {
     setAgentId(id)
     try {
@@ -50,7 +57,7 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
     } catch {}
   }
   createEffect(() => {
-    const list = agents.latest?.agents
+    const list = roster()
     if (list?.length && !list.some((a) => a.id === agentId())) choose(list[0].id)
   })
 
@@ -106,8 +113,12 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
   return (
     <div class="iris-live" data-component="iris-agent-live">
       <div class="iris-live__bar">
-        {/* The agent is picked on the map's chips (#192619). */}
-        <span />
+        {/* The agent is picked on the map's chips (#192619); opened from a card, the way back is here. */}
+        <Show when={props.onBack} fallback={<span />}>
+          <button class="iris-card__linkbtn" onClick={() => props.onBack?.()}>
+            ← All agents
+          </button>
+        </Show>
         <Show when={action() === "take-over"}>
           <button class="iris-card__linkbtn iris-card__linkbtn--primary" disabled={busy()} onClick={() => act("take-over")}>
             Take over
@@ -120,9 +131,9 @@ export function IrisAgentLive(props: { doFetch: Fetch; bloqId?: number }) {
         </Show>
       </div>
 
-      <Show when={props.bloqId !== undefined} fallback={<div class="iris-live__empty">Pick a board to see its agents.</div>}>
+      <Show when={props.agent || props.bloqId !== undefined} fallback={<div class="iris-live__empty">Pick a board to see its agents.</div>}>
         <Show when={live.latest?.measured !== false} fallback={<div class="iris-live__error">Could not read the run — {live.latest?.reason}</div>}>
-          <IrisToolMap doFetch={props.doFetch} agents={agents.latest?.agents ?? []} agentId={agentId()} onPick={choose} run={run()} />
+          <IrisToolMap doFetch={props.doFetch} agents={roster()} agentId={agentId()} onPick={choose} run={run()} />
 
           <Show when={v().tone === "warn" || v().tone === "paused"}>
             <div class={`iris-live__verdict iris-live__verdict--${v().tone}`} role="status">

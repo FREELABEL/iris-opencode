@@ -72,6 +72,8 @@ export interface IrisAgentEditorProps {
   onSaved: (agent: { id: number; name: string; created: boolean }) => void
   /** Open the read-only record (Info · Tasks · JSON) this editor replaced as the click target. */
   onDetails?: () => void
+  /** The step to open on — the gallery's Train opens Memory & files (#192619). */
+  step?: StepId
 }
 
 const post = (body: unknown): RequestInit => ({
@@ -175,7 +177,7 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
   )
   const ctx = () => ({ models: models(), alertsRead: alertsRes.state === "ready" && !!alertsRes.latest?.ok })
   const steps = createMemo(() => visibleSteps(draft.isHuman))
-  const [step, setStep] = createSignal<StepId>("basic")
+  const [step, setStep] = createSignal<StepId>(props.step ?? "basic")
   createEffect(() => {
     if (!steps().some((s) => s.id === step())) setStep("basic")
   })
