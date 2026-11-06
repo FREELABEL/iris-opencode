@@ -1825,6 +1825,8 @@ export const IrisPaths = {
   frameCheck: `${root}/frame-check`,
   pageSignIn: `${root}/page-signin`,
   pagePin: `${root}/page-pin`,
+  campaignBoards: `${root}/campaigns/boards`,
+  campaignSetup: `${root}/campaigns/setup`,
   panel: `${root}/panel`,
   panelState: `${root}/panel/state`,
   panelCommand: `${root}/panel/command`,
@@ -3230,6 +3232,59 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "May this account pin a Genesis page",
           description:
             "#192624. Desktop's Marketing tab pins only the signed-in account's own pages. The check is the platform's own page scope (fl-api Page::scopeVisibleTo, via the Genesis page list): the exact slug must be in the account's pages. Fails closed when the list cannot be read.",
+        }),
+      ),
+      HttpApiEndpoint.get("campaignBoards", IrisPaths.campaignBoards, {
+        success: described(
+          Schema.Struct({
+            measured: described(Schema.Boolean, "False when the account's boards could not be read; `reason` says why, in plain words."),
+            reason: Schema.optional(Schema.String),
+            boards: Schema.Array(
+              Schema.Struct({
+                id: Schema.Finite,
+                name: Schema.String,
+                role: described(Schema.Literals(["owner", "editor"]), "The account's role on the board. Viewers are not offered."),
+              }).annotate({ identifier: "IrisCampaignBoard" }),
+            ),
+          }).annotate({ identifier: "IrisCampaignBoards" }),
+          "Boards this account may set campaigns up on",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.campaignBoards",
+          summary: "Boards a campaign board can be set up on",
+          description:
+            "#192627. The account's boards it owns or edits (fl-api /user/{id}/bloqs with the permission column), for Desktop › Marketing's \"Create your campaign board\". fl-api has the last word at setup (owner, or an editor of the whole board).",
+        }),
+      ),
+      HttpApiEndpoint.post("campaignSetup", IrisPaths.campaignSetup, {
+        payload: Schema.Struct({ bloq_id: described(Schema.Finite, "The board to set campaigns up on.") }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            error: Schema.optional(
+              Schema.Struct({
+                kind: Schema.Literals(["signed_out", "not_allowed", "not_deployed", "conflict", "busy", "unreachable", "failed"]),
+                message: described(Schema.String, "What to tell the person — no ids, no HTTP codes."),
+              }),
+            ),
+            page_slug: Schema.optional(Schema.String),
+            url: Schema.optional(Schema.String),
+            page_created: Schema.optional(described(Schema.Boolean, "The review page exists. False = only its address is reserved; do not pin it.")),
+            page_new: Schema.optional(described(Schema.Boolean, "This run made the page.")),
+            already_set_up: Schema.optional(described(Schema.Boolean, "Nothing new was made; the board was already set up.")),
+            datasets: Schema.optional(
+              Schema.Array(Schema.Struct({ slug: Schema.String, state: Schema.Literals(["created", "restored", "present"]) })),
+            ),
+          }).annotate({ identifier: "IrisCampaignSetup" }),
+          "The board's campaign setup, in client terms",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.campaignSetup",
+          summary: "Set a board up for campaigns",
+          description:
+            "#192627. Runs fl-api POST /api/v1/campaigns/setup (#192625; idempotent): the four campaign datasets on the board and its private review page /p/<board-slug>-campaigns. Refusals come back as ok=false with a kind and a plain message.",
         }),
       ),
       HttpApiEndpoint.get("panel", IrisPaths.panel, {
