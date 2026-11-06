@@ -90,6 +90,7 @@ import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisLeadsTab } from "./iris-leads-tab"
+import { IrisGenesisPages } from "./iris-genesis-pages"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_ASSIGNED,
@@ -699,6 +700,7 @@ const SELF_PANES = new Set(["rooms", "artifacts", "atlas-artifacts", "agent-live
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
+SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
 
@@ -766,7 +768,9 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "heartbeats", label: "Heartbeats", pane: "heartbeats", path: () => `/iris/heartbeats` },
   ],
   pages: [
-    { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
+    // Cards with a live look, a preview-first detail and the page's own controls (#192632). It
+    // fetches for itself; the record list and its Info/Preview/Edit/JSON tabs no longer draw pages.
+    { id: "pages", label: "Pages", pane: "genesis-pages", path: (b) => `/iris/pages/${b}` },
     // A SITE IS NOT A PAGE. It groups pages under shared navigation and owns settings, a
     // contact-form inbox and a comms thread that a page does not have at all. Showing only
     // pages made every one of those invisible and made a nine-page site look like nine
@@ -4272,6 +4276,15 @@ export function SessionIrisTab() {
           </Match>
           <Match when={pane() === "brands"}>
             <IrisBrandKits doFetch={doFetch} />
+          </Match>
+          <Match when={pane() === "genesis-pages"}>
+            <IrisGenesisPages
+              doFetch={doFetch}
+              bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+              bloqName={activeBloq() != null ? activeBloqName() : undefined}
+              boards={settled(bloqs)?.bloqs}
+              openExternal={(url) => platform.openExternal(url)}
+            />
           </Match>
           <Match when={pane() === "artifacts"}>
             <IrisArtifacts
