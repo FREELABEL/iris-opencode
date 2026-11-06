@@ -28,6 +28,7 @@ import { absolutizeAssets, injectLiveReload } from "./page-dev"
 // lives apart from this file's yargs/API graph so it can be tested without a server.
 import { readServerRender, type PayloadReading } from "./page-render-read"
 import { mergePageDocs, formatMergeReport, versionDocFromRow, mergePreconditions } from "./page-merge"
+import { pageBrandLine, parseLinkArg } from "./brand-links"
 
 // ============================================================================
 // Helpers
@@ -621,6 +622,13 @@ const ViewCmd = cmd({
       printKV("Status", formatStatus(page.status))
       printKV("Published", page.published_at ?? "Not published")
       printKV("URL", publicUrl(page))
+      // The page's stored brand (#192665). Brands live on fl-api; a miss just prints the id.
+      if (page.brand_id) {
+        const b = await irisFetch(`/api/v1/brands/${page.brand_id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        printKV("Brand", pageBrandLine(page.brand_id, (b as any)?.data))
+      } else {
+        printKV("Brand", dim(`${pageBrandLine(null)} — set: iris pages set ${args.slug} --brand <brand>`))
+      }
       const compCount = page?.json_content?.components?.length ?? 0
       printKV("Components", compCount)
       const access = editAccess(page)
@@ -665,14 +673,35 @@ const GetCmd = cmd({
 })
 
 export const SetCmd = cmd({
-  command: "set <slug> <path> <value>",
-  describe: "set value at dot-notation path (auto-detects JSON values)",
+  command: "set <slug> [path] [value]",
+  describe: "set value at dot-notation path (auto-detects JSON values), or the page's brand with --brand",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
-      .positional("path", { describe: "dot notation path", type: "string", demandOption: true })
-      .positional("value", { describe: "new value (JSON or string)", type: "string", demandOption: true }),
+      .positional("path", { describe: "dot notation path", type: "string" })
+      .positional("value", { describe: "new value (JSON or string)", type: "string" })
+      .option("brand", {
+        describe: "store the brand this page wears (brand id or slug; 'none' clears it)",
+        type: "string",
+      })
+      .example("iris pages set hive --brand 8", "the hive page wears IRIS #8")
+      .example("iris pages set hive --brand none", "clear the stored brand"),
   async handler(args) {
+    if (args.brand !== undefined) {
+      if (args.path !== undefined) {
+        UI.empty()
+        prompts.log.error("Pass a path and value, or --brand — not both.")
+        process.exitCode = 1
+        return
+      }
+      return setPageBrand(String(args.slug), String(args.brand))
+    }
+    if (args.path === undefined || args.value === undefined) {
+      UI.empty()
+      prompts.log.error(`Usage: iris pages set <slug> <path> <value>   or   iris pages set <slug> --brand <brand>`)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     prompts.intro(`◈  Set ${args.slug} → ${args.path}`)
     if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
@@ -711,6 +740,8 @@ export const SetCmd = cmd({
       const PAGE_COLUMNS = new Set([
         "requires_auth", "status", "title", "seo_title", "seo_description", "og_image",
         "visibility", "slug", "owner_type", "owner_id",
+        // The stored brand (#192665). `--brand` is the friendlier spelling (it takes a slug).
+        "brand_id",
       ])
 
       // IMMUTABLE. The API accepts a PUT carrying owner_id, returns 200, and does not apply
@@ -872,6 +903,52 @@ export const SetCmd = cmd({
     }
   },
 })
+
+/**
+ * `iris pages set <slug> --brand <brand>` (#192665): store the brand a page wears. Takes an id or
+ * a slug; a slug two brands share (#184257) is refused with both ids rather than guessed. The
+ * server checks the page's owner may use the brand; this reads the page back to confirm it landed.
+ */
+async function setPageBrand(slug: string, raw: string) {
+  UI.empty()
+  prompts.intro(`◈  Brand for ${slug}`)
+  if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+  const stop = (msg: string) => {
+    prompts.log.error(msg)
+    process.exitCode = 1
+    prompts.outro("Nothing changed")
+  }
+  try {
+    let brandId = parseLinkArg(raw)
+    let label = brandId === null ? "none" : `#${brandId}`
+    if (brandId === "invalid") {
+      const res = await irisFetch(`/api/v1/brands?slug=${encodeURIComponent(raw)}&per_page=10`)
+      if (!res.ok) return stop(`Could not look up brand '${raw}' (HTTP ${res.status}).`)
+      const body = (await res.json()) as { data?: any }
+      const hits: any[] = firstArray(body?.data?.data, body?.data).filter((b: any) => b?.slug === raw)
+      if (hits.length === 0) return stop(`No brand with slug '${raw}' among the brands you can use. See: iris brands list`)
+      if (hits.length > 1) {
+        return stop(`Two or more brands share the slug '${raw}' (${hits.map((b) => `#${b.id}`).join(", ")}). Pass the id: iris pages set ${slug} --brand <id>`)
+      }
+      brandId = Number(hits[0].id)
+      label = `#${brandId} ${hits[0].slug}`
+    }
+    const page = await getBySlug(slug, false)
+    if (!page) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+    const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify({ brand_id: brandId }) })
+    if (!(await handleApiError(res, "Set page brand"))) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+    const fresh = await getBySlug(slug, false)
+    const landed = fresh ? (fresh.brand_id ?? null) : undefined
+    if (landed !== undefined && (landed === null ? null : Number(landed)) !== brandId) {
+      return stop(`The API accepted the request but the page's brand is ${landed ?? "none"}, not ${brandId ?? "none"}.`)
+    }
+    prompts.log.success(brandId === null ? "Stored brand cleared" : `${slug} wears brand ${label}`)
+    if (landed === undefined) prompts.log.warn(`Could not read the page back to confirm. Check: iris pages view ${slug}`)
+    prompts.outro(dim(`iris pages view ${slug}`))
+  } catch (err) {
+    stop(err instanceof Error ? err.message : String(err))
+  }
+}
 
 export const PullCmd = cmd({
   command: "pull <slug>",
