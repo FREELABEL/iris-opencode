@@ -9,7 +9,25 @@ import {
   writeBoardListCopy,
   writeCardCopy,
 } from "./atlas-local-copy"
-import { fetchAtlas, fetchAtlasChanges, fetchBloqs, fetchItem, resolveUserId, type AtlasItem, type AtlasList, type Bloq, type ItemDoc } from "./platform"
+import {
+  ATLAS_BIG,
+  ATLAS_HEAD,
+  fetchAtlas,
+  fetchAtlasCards,
+  fetchAtlasChanges,
+  fetchAtlasSkeleton,
+  fetchBloqs,
+  fetchItem,
+  pageSkeleton,
+  resolveUserId,
+  skeletonTotal,
+  type AtlasItem,
+  type AtlasList,
+  type AtlasPagedList,
+  type AtlasSkeleton,
+  type Bloq,
+  type ItemDoc,
+} from "./platform"
 import { counts, heldOn, overlay, overlayCard, readOutbox, replay, type HeldView } from "./atlas-outbox"
 
 type Read = Awaited<ReturnType<typeof fetchAtlas>>
@@ -36,6 +54,92 @@ export function isRefusal(reason: string | undefined): boolean {
 }
 
 /**
+ * PAGED BOARDS (#192670) — see ATLAS_BIG in platform.ts. A paged board's lists carry `total` and
+ * `more` (the ids not read yet). That state lives here in memory for the engine's life, and in the
+ * board copy when the copy may be kept: with the copy off, or for a board that may not be kept on
+ * disk, "Show more" and refreshes still work.
+ */
+type Paged = { version?: string; containsPhi: boolean; lists: AtlasPagedList[] }
+const pagedBoards = new Map<string, Paged>()
+/** Boards measured as small (or as paged) — so a small board's full read is not preceded by a skeleton every time. */
+const boardSize = new Map<string, number>()
+const keyOf = (userId: number, bloqId: number) => `${userId}:${bloqId}`
+export const isPaged = (lists: AtlasList[]) => lists.some((l) => Array.isArray((l as Partial<AtlasPagedList>).more))
+
+function heldOf(lists: AtlasList[]) {
+  const held = new Map<number, AtlasItem>()
+  const names = new Map<number, string>()
+  for (const l of lists) {
+    names.set(l.id, l.name)
+    for (const i of l.items) held.set(i.id, i)
+  }
+  return { held, names }
+}
+
+/** Read a page per list from a skeleton; `depth` keeps what the person already loaded. */
+async function readPage(userId: number | null, bloqId: number, skel: AtlasSkeleton, had?: AtlasList[]): Promise<Read> {
+  const loaded = new Map((had ?? []).map((l) => [l.id, l.items.length]))
+  const { held, names } = heldOf(had ?? [])
+  const plan = pageSkeleton(skel, (id) => Math.max(ATLAS_HEAD, loaded.get(id) ?? 0), held, names)
+  const got = await fetchAtlasCards(bloqId, plan.need)
+  if ("error" in got) return { measured: false, reason: got.error, data: { lists: [] } }
+  const lists = plan.build(got.cards)
+  if (userId) {
+    pagedBoards.set(keyOf(userId, bloqId), { version: skel.version, containsPhi: skel.containsPhi, lists })
+    boardSize.set(keyOf(userId, bloqId), skeletonTotal(skel))
+    writeBoardCopy(userId, bloqId, skel.containsPhi, lists, skel.version)
+  }
+  return { measured: true, data: { lists, containsPhi: skel.containsPhi, version: skel.version } }
+}
+
+/** The held copy of a board: this machine's saved copy, else this engine's paged state. */
+function heldCopy(userId: number, bloqId: number) {
+  const c = readBoardCopy<AtlasList>(userId, bloqId)
+  if (c) return c
+  const m = pagedBoards.get(keyOf(userId, bloqId))
+  return m
+    ? { lists: m.lists as AtlasList[], version: m.version, containsPhi: m.containsPhi, copiedAt: undefined }
+    : undefined
+}
+
+/**
+ * "Show more" on a paged board (#192670): the next `count` cards of one list, read by id and added
+ * to the held copy. The panel then re-reads the board, which answers from that copy.
+ */
+export async function loadMoreCards(bloqId: number, listId: number, count = ATLAS_HEAD) {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: "not signed in", added: 0, total: 0, left: 0 }
+  const c = heldCopy(userId, bloqId)
+  const list = c?.lists.find((l) => l.id === listId) as AtlasPagedList | undefined
+  if (!c || !list) return { measured: false, reason: "this board is not loaded", added: 0, total: 0, left: 0 }
+  const next = (list.more ?? []).slice(0, Math.max(1, Math.min(500, count)))
+  const got = await fetchAtlasCards(bloqId, next)
+  if ("error" in got)
+    return {
+      measured: false,
+      reason: got.error,
+      added: 0,
+      total: list.total ?? list.items.length,
+      left: list.more?.length ?? 0,
+    }
+  const added = next.map((id) => got.cards.get(id)).filter((x): x is AtlasItem => !!x)
+  const lists = c.lists.map((l) =>
+    l.id === listId
+      ? {
+          ...l,
+          items: [...l.items, ...added],
+          more: (list.more ?? []).slice(next.length),
+          total: list.total ?? l.items.length + added.length,
+        }
+      : l,
+  ) as AtlasPagedList[]
+  pagedBoards.set(keyOf(userId, bloqId), { version: c.version, containsPhi: !!c.containsPhi, lists })
+  writeBoardCopy(userId, bloqId, !!c.containsPhi, lists, c.version)
+  const after = lists.find((l) => l.id === listId)!
+  return { measured: true, added: added.length, total: after.total, left: after.more.length }
+}
+
+/**
  * Where one board read comes from (#190231 phases 1 + 3):
  *  - a search      → fl-api with bodies, always (the copy has no bodies to search);
  *  - a plain open  → this machine's copy when there is one, so the board draws at once;
@@ -52,29 +156,91 @@ export async function readAtlasBoard(bloqId: number, q: { q?: string; fresh?: st
   if (userId && !q.fresh) {
     const c = readBoardCopy<AtlasList>(userId, bloqId)
     if (c) return { r: { measured: true, data: { lists: c.lists } }, source: "copy", copiedAt: c.copiedAt }
+    const m = pagedBoards.get(keyOf(userId, bloqId))
+    if (m) return { r: { measured: true, data: { lists: m.lists, containsPhi: m.containsPhi } }, source: "live" }
   }
 
   if (userId && q.fresh) {
-    const c = readBoardCopy<AtlasList>(userId, bloqId)
-    if (c?.version) {
+    const c = heldCopy(userId, bloqId)
+    // A paged copy is refreshed as a page: unchanged costs nothing, a change re-reads only the
+    // cards on screen whose rev moved. The whole-board delta below would see thousands of cards
+    // "missing" from a paged copy and fall back to reading everything.
+    if (c?.version && isPaged(c.lists)) {
+      const sk = await fetchAtlasSkeleton(bloqId, c.version)
+      if (sk.kind === "unchanged") {
+        writeBoardCopy(userId, bloqId, !!c.containsPhi, c.lists, sk.version)
+        return {
+          r: { measured: true, data: { lists: c.lists, containsPhi: c.containsPhi } },
+          source: "live",
+          sync: "unchanged",
+        }
+      }
+      if (sk.kind === "skeleton" && skeletonTotal(sk.skel) > ATLAS_BIG) {
+        const r = await readPage(userId, bloqId, sk.skel, c.lists)
+        if (r.measured) return { r, source: "live", sync: "delta" }
+      }
+      if (sk.kind === "error") {
+        if (isRefusal(sk.reason)) {
+          deleteBoardCopy(userId, bloqId)
+          pagedBoards.delete(keyOf(userId, bloqId))
+          return { r: { measured: false, reason: sk.reason, data: { lists: [] } }, source: "live" }
+        }
+        return {
+          r: { measured: true, reason: sk.reason, data: { lists: c.lists } },
+          source: "copy",
+          copiedAt: c.copiedAt,
+          offline: true,
+        }
+      }
+      // Shrunk to a small board, or an fl-api without versions: the whole read below.
+    }
+    if (c?.version && !isPaged(c.lists)) {
       const ch = await fetchAtlasChanges(bloqId, { version: c.version, lists: c.lists })
       if (ch.kind === "unchanged") {
         // Rewritten so `copiedAt` says when it was last confirmed, which is what "copy from 12m ago" means.
         writeBoardCopy(userId, bloqId, c.containsPhi, c.lists, ch.version)
-        return { r: { measured: true, data: { lists: c.lists, containsPhi: c.containsPhi } }, source: "live", sync: "unchanged" }
+        return {
+          r: { measured: true, data: { lists: c.lists, containsPhi: c.containsPhi } },
+          source: "live",
+          sync: "unchanged",
+        }
       }
       if (ch.kind === "merged") {
         writeBoardCopy(userId, bloqId, ch.containsPhi, ch.lists, ch.version)
-        return { r: { measured: true, data: { lists: ch.lists, containsPhi: ch.containsPhi } }, source: "live", sync: "delta" }
+        return {
+          r: { measured: true, data: { lists: ch.lists, containsPhi: ch.containsPhi } },
+          source: "live",
+          sync: "delta",
+        }
       }
       if (ch.kind === "error") {
         if (isRefusal(ch.reason)) {
           deleteBoardCopy(userId, bloqId)
           return { r: { measured: false, reason: ch.reason, data: { lists: [] } }, source: "live" }
         }
-        return { r: { measured: true, reason: ch.reason, data: { lists: c.lists } }, source: "copy", copiedAt: c.copiedAt, offline: true }
+        return {
+          r: { measured: true, reason: ch.reason, data: { lists: c.lists } },
+          source: "copy",
+          copiedAt: c.copiedAt,
+          offline: true,
+        }
       }
       // "full": fall through to the whole read.
+    }
+  }
+
+  // How big is it? The skeleton says (242 KB for 7,027 cards), unless this board was already measured small.
+  const known = userId ? boardSize.get(keyOf(userId, bloqId)) : undefined
+  if (known === undefined || known > ATLAS_BIG) {
+    const sk = await fetchAtlasSkeleton(bloqId)
+    if (sk.kind === "skeleton") {
+      const total = skeletonTotal(sk.skel)
+      if (userId) boardSize.set(keyOf(userId, bloqId), total)
+      if (total > ATLAS_BIG) {
+        const had = userId ? heldCopy(userId, bloqId)?.lists : undefined
+        const r = await readPage(userId, bloqId, sk.skel, had && isPaged(had) ? had : undefined)
+        if (r.measured || !userId) return { r, source: "live", sync: "full" }
+      }
     }
   }
 
@@ -89,7 +255,13 @@ export async function readAtlasBoard(bloqId: number, q: { q?: string; fresh?: st
     return { r, source: "live" }
   }
   const c = readBoardCopy<AtlasList>(userId, bloqId)
-  if (c) return { r: { measured: true, reason: r.reason, data: { lists: c.lists } }, source: "copy", copiedAt: c.copiedAt, offline: true }
+  if (c)
+    return {
+      r: { measured: true, reason: r.reason, data: { lists: c.lists } },
+      source: "copy",
+      copiedAt: c.copiedAt,
+      offline: true,
+    }
   return { r, source: "live" }
 }
 
@@ -97,7 +269,11 @@ export async function readAtlasBoard(bloqId: number, q: { q?: string; fresh?: st
  * The board list, with the same rule: kept when it is read, shown from the copy (marked offline)
  * only when fl-api cannot be reached — never when it refuses.
  */
-export async function readBoardList(): Promise<{ r: Awaited<ReturnType<typeof fetchBloqs>>; offline?: boolean; copiedAt?: string }> {
+export async function readBoardList(): Promise<{
+  r: Awaited<ReturnType<typeof fetchBloqs>>
+  offline?: boolean
+  copiedAt?: string
+}> {
   const r = await fetchBloqs()
   const userId = await resolveUserId()
   if (!userId) return { r }
@@ -155,7 +331,9 @@ export function isCardRefusal(reason: string | undefined): boolean {
  * face from the board copy, with the body marked as not here — with this machine's waiting edits
  * on it. Offline, before this, a card could only be edited if it was already open.
  */
-export async function readCard(itemId: number): Promise<Awaited<ReturnType<typeof fetchItem>> & { offline?: CardOffline }> {
+export async function readCard(
+  itemId: number,
+): Promise<Awaited<ReturnType<typeof fetchItem>> & { offline?: CardOffline }> {
   const r = await fetchItem(itemId)
   const userId = await resolveUserId()
   if (!userId) return r
@@ -173,7 +351,15 @@ export async function readCard(itemId: number): Promise<Awaited<ReturnType<typeo
   const face = found.item
   // The board copy is refreshed on every board read, the card only when opened: its face wins.
   const base: ItemDoc = {
-    ...(kept?.doc ?? { id: itemId, content: "", contentKind: "markdown", labels: [], isPublic: false, tasks: [], tasksMeasured: false }),
+    ...(kept?.doc ?? {
+      id: itemId,
+      content: "",
+      contentKind: "markdown",
+      labels: [],
+      isPublic: false,
+      tasks: [],
+      tasksMeasured: false,
+    }),
     title: face.title,
     status: face.status,
     priority: face.priority,
@@ -185,7 +371,11 @@ export async function readCard(itemId: number): Promise<Awaited<ReturnType<typeo
   const doc = overlayCard(userId, itemId, base)
   const { pending: _pending, ...data } = doc
   // A body saved offline is the whole body, so it is here even when the card never was.
-  const body = !!kept || readOutbox(userId).ops.some((op) => op.kind === "save" && op.itemId === itemId && typeof op.patch.content === "string")
+  const body =
+    !!kept ||
+    readOutbox(userId).ops.some(
+      (op) => op.kind === "save" && op.itemId === itemId && typeof op.patch.content === "string",
+    )
   return {
     measured: true,
     data: { ...data, ...(kept ? {} : { tasksReason: "not on this computer" }) },

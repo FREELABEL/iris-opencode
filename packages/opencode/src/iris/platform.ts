@@ -26,7 +26,17 @@
  * reader has to change with it. Noted here rather than discovered later.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, readSync, closeSync, fstatSync } from "fs"
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  unlinkSync,
+  openSync,
+  readSync,
+  closeSync,
+  fstatSync,
+} from "fs"
 // Aliased: this file already exports GraphNode/GraphEdge for the BOARD-TO-BOARD graph (numeric ids).
 // Same names, different graphs — importing them bare silently retyped graphRows.
 import {
@@ -278,7 +288,8 @@ let lastGoodBloqs: { userId: number; at: number; result: BloqList } | undefined
 
 async function recentBloqs(): Promise<BloqList> {
   const userId = await resolveUserId()
-  const fresh = (x?: { userId: number; at: number }) => !!userId && !!x && x.userId === userId && Date.now() - x.at < BLOQ_LIST_REUSE_MS
+  const fresh = (x?: { userId: number; at: number }) =>
+    !!userId && !!x && x.userId === userId && Date.now() - x.at < BLOQ_LIST_REUSE_MS
   // A list already in hand beats waiting for a newer one. The picker re-fetches on every panel
   // open, so preferring "newest" made this guard wait a full round trip each time anyway.
   if (fresh(lastGoodBloqs)) return lastGoodBloqs!.result
@@ -408,7 +419,11 @@ export function cardFace(i: any): Partial<AtlasItem> {
   if (s && typeof s === "object") {
     if (Array.isArray(s.labels)) out.labels = s.labels.map(String)
     if (s.tasks && typeof s.tasks.total === "number")
-      out.tasks = { open: Number(s.tasks.open) || 0, done: Number(s.tasks.done) || 0, total: Number(s.tasks.total) || 0 }
+      out.tasks = {
+        open: Number(s.tasks.open) || 0,
+        done: Number(s.tasks.done) || 0,
+        total: Number(s.tasks.total) || 0,
+      }
     if (typeof s.attachments === "number") out.attachments = s.attachments
     if (typeof s.cover === "string" && /^https?:\/\//.test(s.cover)) out.cover = s.cover
     if (typeof s.preview === "string") out.preview = s.preview
@@ -457,7 +472,8 @@ export function resetPreviewSupport() {
 }
 
 export function lightReadUsable(raw: any): boolean {
-  for (const l of raw?.lists ?? []) for (const i of l?.items ?? []) if (typeof i?.summary?.preview !== "string") return false
+  for (const l of raw?.lists ?? [])
+    for (const i of l?.items ?? []) if (typeof i?.summary?.preview !== "string") return false
   return true
 }
 
@@ -498,12 +514,20 @@ export async function fetchAtlas(
     }
     if (!("raw" in got)) return { measured: false, reason: got.error, data: { lists: [] } }
     const raw = got.raw
-    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({ id: l.id, name: l.name, items: (l.items ?? []).map(atlasItemOf) }))
+    const lists: AtlasList[] = (raw?.lists ?? []).map((l: any) => ({
+      id: l.id,
+      name: l.name,
+      items: (l.items ?? []).map(atlasItemOf),
+    }))
     // fl-api says per board whether it holds patient data; the local copy needs to know (#190231 phase 1).
     // `version` (phase 3) is what the next refresh asks "changed since?" with.
     return {
       measured: true,
-      data: { lists, containsPhi: raw?.contains_phi === true, ...(typeof raw?.version === "string" ? { version: raw.version } : {}) },
+      data: {
+        lists,
+        containsPhi: raw?.contains_phi === true,
+        ...(typeof raw?.version === "string" ? { version: raw.version } : {}),
+      },
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { lists: [] } }
@@ -532,7 +556,10 @@ export type AtlasChanges =
 const CHANGED_SHARE_FOR_FULL = 0.5
 const MAX_IDS = 500
 
-export async function fetchAtlasChanges(bloqId: number, have: { version: string; lists: AtlasList[] }): Promise<AtlasChanges> {
+export async function fetchAtlasChanges(
+  bloqId: number,
+  have: { version: string; lists: AtlasList[] },
+): Promise<AtlasChanges> {
   const userId = await resolveUserId()
   if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
   try {
@@ -554,7 +581,8 @@ export async function fetchAtlasChanges(bloqId: number, have: { version: string;
         const mine = held.get(i.id)
         if (!mine || !mine.rev || mine.rev !== i.rev) wanted.push(i.id)
       }
-    if (wanted.length > MAX_IDS || (total > 0 && wanted.length / total > CHANGED_SHARE_FOR_FULL)) return { kind: "full" }
+    if (wanted.length > MAX_IDS || (total > 0 && wanted.length / total > CHANGED_SHARE_FOR_FULL))
+      return { kind: "full" }
 
     const fetched = new Map<number, AtlasItem>()
     if (wanted.length) {
@@ -566,7 +594,13 @@ export async function fetchAtlasChanges(bloqId: number, have: { version: string;
     }
     const lists = mergeSkeleton(skel.lists, held, fetched)
     if (!lists) return { kind: "full" }
-    return { kind: "merged", version: skel.version, lists, containsPhi: skel.contains_phi === true, fetched: wanted.length }
+    return {
+      kind: "merged",
+      version: skel.version,
+      lists,
+      containsPhi: skel.contains_phi === true,
+      fetched: wanted.length,
+    }
   } catch (e) {
     return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
   }
@@ -602,6 +636,110 @@ export function mergeSkeleton(
     out.push({ id: l.id, name: l.name ?? "", items })
   }
   return out
+}
+
+/**
+ * BIG BOARDS ARE READ A PAGE PER LIST (#192670).
+ *
+ * Opening IRIS CLI Bug Reports (#297, 7,027 cards) downloaded 9.4 MB in 3.1 s to show 160 cards
+ * (189 KB). Past ATLAS_BIG cards a board is read as its SKELETON — every list and every card's id
+ * and rev, 242 KB for #297 — plus the first ATLAS_HEAD cards of each list by id. Each list keeps
+ * its true `total` and the ids not yet read (`more`); "Show more" reads the next ones by id. A board
+ * at or under ATLAS_BIG is read whole, exactly as before.
+ */
+export const ATLAS_BIG = 1000
+export const ATLAS_HEAD = 50
+export type AtlasSkeletonList = { id: number; name?: string; items?: { id: number; rev?: string | null }[] }
+export type AtlasSkeleton = { version: string; containsPhi: boolean; lists: AtlasSkeletonList[] }
+export type AtlasPagedList = AtlasList & { total: number; more: number[] }
+export const skeletonTotal = (s: AtlasSkeleton) => s.lists.reduce((n, l) => n + (l.items?.length ?? 0), 0)
+
+/** The skeleton, or "unchanged" when `version` is still current. `full` = an fl-api without versions. */
+export async function fetchAtlasSkeleton(
+  bloqId: number,
+  version = "none",
+): Promise<
+  | { kind: "unchanged"; version: string }
+  | { kind: "skeleton"; skel: AtlasSkeleton }
+  | { kind: "full" }
+  | { kind: "error"; reason: string }
+> {
+  const userId = await resolveUserId()
+  if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?if_version=${encodeURIComponent(version)}`)
+    if (!res.ok) return { kind: "error", reason: `fl-api ${res.status}` }
+    const json = (await res.json()) as any
+    const s = json?.data ?? json
+    if (typeof s?.version !== "string") return { kind: "full" }
+    if (s.unchanged === true) return { kind: "unchanged", version: s.version }
+    if (!Array.isArray(s.lists)) return { kind: "full" }
+    return { kind: "skeleton", skel: { version: s.version, containsPhi: s.contains_phi === true, lists: s.lists } }
+  } catch (e) {
+    return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Cards by id, light, in parallel requests of MAX_IDS. */
+export async function fetchAtlasCards(
+  bloqId: number,
+  ids: number[],
+): Promise<{ cards: Map<number, AtlasItem> } | { error: string }> {
+  const cards = new Map<number, AtlasItem>()
+  if (!ids.length) return { cards }
+  const userId = await resolveUserId()
+  if (!userId) return { error: `not signed in (token: ${tokenSource()})` }
+  const q = Date.now() >= previewsUnsupportedUntil ? "light=1&summary=1" : "no_searchable_content=1&summary=1"
+  const chunks: number[][] = []
+  for (let i = 0; i < ids.length; i += MAX_IDS) chunks.push(ids.slice(i, i + MAX_IDS))
+  try {
+    const answers = await Promise.all(
+      chunks.map((c) => irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?ids=${c.join(",")}&${q}`)),
+    )
+    for (const r of answers) {
+      if (!r.ok) return { error: `fl-api ${r.status}` }
+      const j = (await r.json()) as any
+      for (const l of (j?.data ?? j)?.lists ?? []) for (const i of l?.items ?? []) cards.set(i.id, atlasItemOf(i))
+    }
+    return { cards }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Which cards a page needs, and the lists it makes — pure, so it is tested without fl-api. `depth`
+ * says how many cards of a list are wanted; a held card whose rev still matches is reused, so a
+ * refresh fetches only what moved among the cards on screen.
+ */
+export function pageSkeleton(
+  skel: AtlasSkeleton,
+  depth: (listId: number) => number,
+  held: Map<number, AtlasItem> = new Map(),
+  names: Map<number, string> = new Map(),
+): { need: number[]; build: (fetched: Map<number, AtlasItem>) => AtlasPagedList[] } {
+  const need: number[] = []
+  const heads = skel.lists.map((l) => {
+    const all = l.items ?? []
+    const head = all.slice(0, Math.max(0, depth(l.id)))
+    for (const c of head) {
+      const mine = held.get(c.id)
+      if (!mine || !mine.rev || mine.rev !== c.rev) need.push(c.id)
+    }
+    return { l, head, rest: all.slice(head.length).map((c) => c.id), total: all.length }
+  })
+  return {
+    need,
+    build: (fetched) =>
+      heads.map(({ l, head, rest, total }) => ({
+        id: l.id,
+        name: l.name ?? names.get(l.id) ?? "",
+        // A card deleted between the two requests is simply absent; the count stays the skeleton's.
+        items: head.map((c) => fetched.get(c.id) ?? held.get(c.id)).filter((x): x is AtlasItem => !!x),
+        total,
+        more: rest,
+      })),
+  }
 }
 
 export interface HiveNode {
@@ -736,7 +874,9 @@ export function nodeAiOf(n: any, now = Date.now()): Pick<HiveNode, "gpu" | "mode
   const fresh = inf?.updated_at ? now - Date.parse(inf.updated_at) < 180_000 : false
   const listed = new Set<string>(Array.isArray(inf?.models) ? inf.models : [])
   const serving =
-    inf?.enabled === true && online && !!inf?.url && fresh ? installed.filter((m) => listed.has(m)).map((m) => `hive/${m}`) : []
+    inf?.enabled === true && online && !!inf?.url && fresh
+      ? installed.filter((m) => listed.has(m)).map((m) => `hive/${m}`)
+      : []
   return {
     ...(gpu ? { gpu } : {}),
     ...(installed.length ? { modelsInstalled: [...installed].sort() } : {}),
@@ -1051,7 +1191,8 @@ export async function createCheckout(slug: string): Promise<CheckoutResult> {
     } | null
     const url = body?.data?.url ?? body?.url
     if (res.ok && url) return { ok: true, url }
-    if (res.status === 401) return { ok: false, reason: "Your sign-in has expired. Sign in again, then choose the plan." }
+    if (res.status === 401)
+      return { ok: false, reason: "Your sign-in has expired. Sign in again, then choose the plan." }
     return { ok: false, reason: `Checkout refused (${res.status})${body?.message ? `: ${body.message}` : ""}` }
   } catch (e) {
     return { ok: false, reason: `Couldn't reach checkout: ${e instanceof Error ? e.message : String(e)}` }
@@ -1120,7 +1261,14 @@ export interface SecurityState {
 }
 
 export interface SecurityPlatform {
-  rollout: { enabled: boolean; mode: string; percent: number; newUserDays: number; tiers: string[]; allowUsers: number } | null
+  rollout: {
+    enabled: boolean
+    mode: string
+    percent: number
+    newUserDays: number
+    tiers: string[]
+    allowUsers: number
+  } | null
   keySource: string
   last24h: {
     scanned: number
@@ -1313,7 +1461,11 @@ export async function setGateChoice(
     )
     if (!res.ok) {
       const j = (await res.json().catch(() => null)) as any
-      return { measured: false, reason: typeof j?.explanation === "string" ? j.explanation : `iris-api ${res.status}`, data: EMPTY_SECURITY }
+      return {
+        measured: false,
+        reason: typeof j?.explanation === "string" ? j.explanation : `iris-api ${res.status}`,
+        data: EMPTY_SECURITY,
+      }
     }
     return { measured: true, data: securityFrom(await res.json()) }
   } catch (e) {
@@ -1352,7 +1504,17 @@ export async function reportGateEvent(
 export async function fetchPlan(
   opts: { token?: string | null; signal?: AbortSignal } = {},
 ): Promise<PlatformResult<Plan>> {
-  const empty: Plan = { plan: null, paid: null, label: null, trialEndsAt: null, fraction: null, tokensUsed: null, resetsAt: null, uncapped: false, upgradeUrl: null }
+  const empty: Plan = {
+    plan: null,
+    paid: null,
+    label: null,
+    trialEndsAt: null,
+    fraction: null,
+    tokensUsed: null,
+    resetsAt: null,
+    uncapped: false,
+    upgradeUrl: null,
+  }
   try {
     const res = await irisFetch(
       "/api/v6/allowance/me?peek=1",
@@ -1732,7 +1894,10 @@ export function readInboxMessage(index: number, id?: string, dir = inboxDir()): 
   if (!row) return { measured: false, reason: "that message is no longer in the inbox", message: null }
   // Never follow a manifest path out of the inbox directory.
   const file = row.file ? path.join(dir, path.basename(row.file)) : undefined
-  const body = file && existsSync(file) ? readBody(file) : { body: null, state: (row.file ? "missing" : "none") as InboxMessage["bodyState"] }
+  const body =
+    file && existsSync(file)
+      ? readBody(file)
+      : { body: null, state: (row.file ? "missing" : "none") as InboxMessage["bodyState"] }
   return { measured: true, message: inboxMessageOf(row, at + 1, body) }
 }
 
@@ -1755,7 +1920,8 @@ export async function markInboxRead(
   dir = inboxDir(),
 ): Promise<{ measured: boolean; reason?: string; read: boolean; burned: boolean }> {
   const lines = readManifestLines(dir)
-  if (lines === null) return { measured: false, reason: "the inbox manifest could not be read", read: false, burned: false }
+  if (lines === null)
+    return { measured: false, reason: "the inbox manifest could not be read", read: false, burned: false }
   const at = locateInboxRow(lines, index, id)
   const row = at >= 0 ? lines[at].row : null
   if (!row) return { measured: false, reason: "that message is no longer in the inbox", read: false, burned: false }
@@ -1778,7 +1944,12 @@ export async function markInboxRead(
       )
     }
   } catch (e) {
-    return { measured: false, reason: `could not update the inbox: ${e instanceof Error ? e.message : String(e)}`, read: wasRead, burned: false }
+    return {
+      measured: false,
+      reason: `could not update the inbox: ${e instanceof Error ? e.message : String(e)}`,
+      read: wasRead,
+      burned: false,
+    }
   }
   // Best-effort, like the CLI: the sender learns it was read; failing to tell them changes nothing here.
   if (!wasRead && row.task_id) {
@@ -1821,7 +1992,9 @@ export interface Agent {
  * lets a card be assigned any agent that belongs to the board OR to the board's owner. A board
  * with no agents of its own otherwise offered none, which read as "you cannot add agents".
  */
-export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: number; name: string }[]; total?: number }>> {
+export async function fetchMyAgents(): Promise<
+  PlatformResult<{ agents: { id: number; name: string }[]; total?: number }>
+> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: notSignedIn(), data: { agents: [] } }
   try {
@@ -3459,7 +3632,10 @@ export function itemPatchBody(patch: ItemPatch): Record<string, unknown> {
   return body
 }
 
-export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
+export async function saveItem(
+  id: number,
+  patch: ItemPatch,
+): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
 
@@ -3475,7 +3651,8 @@ export async function saveItem(id: number, patch: ItemPatch): Promise<{ ok: bool
       body: JSON.stringify(body),
     })
     const j = (await res.json().catch(() => ({}))) as any
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
+    if (!res.ok)
+      return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     return { ok: true }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e), offline: true }
@@ -3512,7 +3689,8 @@ export async function createItem(
       body: JSON.stringify({ title, content: input.body?.trim() || title, type: "default", list_id: listId }),
     })
     const j = (await res.json().catch(() => ({}))) as any
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
+    if (!res.ok)
+      return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     const id = Number(j?.data?.id ?? j?.data?.data?.id ?? j?.id)
     return Number.isFinite(id) ? { ok: true, id } : { ok: true }
   } catch (e) {
@@ -3553,10 +3731,15 @@ export async function createList(
  * The route answers 404 for a card on a board you do not own — including one shared WITH you —
  * so that is said in words: "item not found" about a card on screen reads as a broken app.
  */
-export async function moveItem(id: number, listId: number, position: number): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
+export async function moveItem(
+  id: number,
+  listId: number,
+  position: number,
+): Promise<{ ok: boolean; reason?: string; offline?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: `not signed in (token: ${tokenSource()})` }
-  if (!Number.isInteger(position) || position < 0) return { ok: false, reason: "position must be a whole number, 0 or more" }
+  if (!Number.isInteger(position) || position < 0)
+    return { ok: false, reason: "position must be a whole number, 0 or more" }
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${id}/position`, FL_API, {
       method: "PATCH",
@@ -3566,7 +3749,8 @@ export async function moveItem(id: number, listId: number, position: number): Pr
     if (res.status === 404) {
       return { ok: false, reason: "Atlas would not move this card — only the board's owner can rearrange it" }
     }
-    if (!res.ok) return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
+    if (!res.ok)
+      return { ok: false, reason: apiFailure(j, res.status), ...(unreachable(res.status) ? { offline: true } : {}) }
     return { ok: true }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e), offline: true }
@@ -3964,7 +4148,9 @@ export async function fetchBoardMembers(
       const d = ((await usersRes.json()) as any)?.data
       rows = Array.isArray(d) ? d : (d?.shared_users ?? [])
     } else if (Array.isArray(board.shared_users)) rows = board.shared_users
-    const members = rows.map((r) => readShareMember({ ...r, permission: r?.permission ?? r?.pivot?.permission })).filter((m) => m.userId)
+    const members = rows
+      .map((r) => readShareMember({ ...r, permission: r?.permission ?? r?.pivot?.permission }))
+      .filter((m) => m.userId)
     return { measured: true, data: { ownerId, youAreOwner: ownerId === userId, members } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
@@ -4056,7 +4242,12 @@ const NOTIFY_WIRE: Record<keyof NotifySettings, string> = {
 }
 export function readNotifySettings(raw: any): NotifySettings {
   const on = (k: string) => raw?.[k] !== false
-  return { emailAssign: on("email_assign"), emailMention: on("email_mention"), emailDue: on("email_due"), push: on("push") }
+  return {
+    emailAssign: on("email_assign"),
+    emailMention: on("email_mention"),
+    emailDue: on("email_due"),
+    push: on("push"),
+  }
 }
 
 export async function notifySettings(
@@ -4067,7 +4258,8 @@ export async function notifySettings(
   if (!userId) return { measured: false, reason: notSignedIn(), data: fallback }
   try {
     const body: Record<string, boolean> = {}
-    for (const [k, v] of Object.entries(change ?? {})) if (typeof v === "boolean") body[NOTIFY_WIRE[k as keyof NotifySettings]] = v
+    for (const [k, v] of Object.entries(change ?? {}))
+      if (typeof v === "boolean") body[NOTIFY_WIRE[k as keyof NotifySettings]] = v
     const res = await irisFetch(
       `/api/v1/user/${userId}/bloqs/notification-settings`,
       FL_API,
@@ -4120,10 +4312,17 @@ export async function assign(
   return { ok: true, assignees: readAssignees(d?.assignees), accessGranted: d?.access_granted === true }
 }
 
-export async function unassign(itemId: number, assigneeId: number): Promise<Ok & { assignees?: AtlasAssignee[]; accessRemoved?: boolean }> {
+export async function unassign(
+  itemId: number,
+  assigneeId: number,
+): Promise<Ok & { assignees?: AtlasAssignee[]; accessRemoved?: boolean }> {
   const userId = await resolveUserId()
   if (!userId) return { ok: false, reason: notSignedIn() }
-  const r = await postJson(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees/${assigneeId}`, undefined, "DELETE")
+  const r = await postJson(
+    `/api/v1/user/${userId}/bloqs/list/item/${itemId}/assignees/${assigneeId}`,
+    undefined,
+    "DELETE",
+  )
   if (!r.ok) return { ok: false, reason: r.reason }
   const d = r.data?.data ?? r.data
   return { ok: true, assignees: readAssignees(d?.assignees), accessRemoved: d?.access_removed === true }
@@ -5220,7 +5419,18 @@ export async function runReachrAction(a: ReachrAction): Promise<PlatformResult<u
 // ─── Leads, the way ELON works them (#190553) ────────────────────────────────
 
 export type LeadsOp = {
-  op: "list" | "get" | "meta" | "update" | "addNote" | "tasks" | "addTask" | "saveTask" | "messages" | "steps" | "readiness"
+  op:
+    | "list"
+    | "get"
+    | "meta"
+    | "update"
+    | "addNote"
+    | "tasks"
+    | "addTask"
+    | "saveTask"
+    | "messages"
+    | "steps"
+    | "readiness"
   leadId?: number
   taskId?: number
   query?: Record<string, string>
@@ -5242,7 +5452,8 @@ async function leadsCall(path: string, init?: RequestInit): Promise<PlatformResu
 export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
   const send = (method: string) => ({ method, body: JSON.stringify(a.body ?? {}) })
   const lead = `/api/v1/leads/${a.leadId}`
-  if (a.op !== "list" && a.op !== "meta" && !a.leadId) return { measured: false, reason: `${a.op} needs a lead`, data: null }
+  if (a.op !== "list" && a.op !== "meta" && !a.leadId)
+    return { measured: false, reason: `${a.op} needs a lead`, data: null }
   switch (a.op) {
     case "list": {
       const userId = await resolveUserId()
@@ -5262,7 +5473,9 @@ export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
     case "addTask":
       return leadsCall(`${lead}/tasks`, send("POST"))
     case "saveTask":
-      return a.taskId ? leadsCall(`${lead}/tasks/${a.taskId}`, send("PUT")) : { measured: false, reason: "saveTask needs a task", data: null }
+      return a.taskId
+        ? leadsCall(`${lead}/tasks/${a.taskId}`, send("PUT"))
+        : { measured: false, reason: "saveTask needs a task", data: null }
     case "messages":
       return leadsCall(`${lead}/messages`)
     case "steps":

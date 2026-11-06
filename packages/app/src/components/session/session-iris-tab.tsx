@@ -193,6 +193,8 @@ interface AtlasList {
   id: number
   name: string
   items: AtlasItem[]
+  /** How many cards the list holds when a big board was read a page per list (#192670); else items.length. */
+  total?: number
 }
 
 /** Whatever the active surface returned, beside its measured flags. */
@@ -2014,13 +2016,33 @@ export function SessionIrisTab() {
   // Board and List, and reset when the board changes, so a big board always opens light.
   const [shownCards, setShownCards] = createSignal<Record<number, number>>({})
   createEffect(on(activeBloq, () => setShownCards({}), { defer: true }))
-  const showMoreCards = (listId: number) =>
-    setShownCards((s) => ({ ...s, [listId]: (s[listId] ?? ATLAS_PAGE) + ATLAS_PAGE }))
-  const MoreCards = (p: { listId: number; total: number }) => (
+  // On a big board (#192670) the engine read only each list's first page: the next cards are read
+  // by id first, then the board is re-read — it answers from the engine's copy, so nothing else moves.
+  const [loadingMore, setLoadingMore] = createSignal<number>()
+  /** Read `count` more cards of a paged list through the engine, then re-read the board (Board, List and Timeline). */
+  const loadMoreCards = async (listId: number, count: number) => {
+    setLoadingMore(listId)
+    try {
+      await doFetch(`/iris/atlas/${activeBloq()}/more?list=${listId}&count=${count}`)
+      await refetchSurface()
+    } catch {}
+    setLoadingMore(undefined)
+  }
+  const showMoreCards = async (listId: number, loaded: number, total: number) => {
+    const next = (shownCards()[listId] ?? ATLAS_PAGE) + ATLAS_PAGE
+    if (next > loaded && total > loaded) await loadMoreCards(listId, next - loaded)
+    setShownCards((s) => ({ ...s, [listId]: next }))
+  }
+  const MoreCards = (p: { listId: number; total: number; loaded: number }) => (
     <Show when={moreOf(p.total, shownCards()[p.listId])}>
       {(m) => (
-        <button type="button" class="iris-atlas-more" onClick={() => showMoreCards(p.listId)}>
-          {moreLabel(m())}
+        <button
+          type="button"
+          class="iris-atlas-more"
+          disabled={loadingMore() === p.listId}
+          onClick={() => void showMoreCards(p.listId, p.loaded, p.total)}
+        >
+          {loadingMore() === p.listId ? "Loading…" : moreLabel(m())}
         </button>
       )}
     </Show>
@@ -4558,7 +4580,9 @@ export function SessionIrisTab() {
                               <header class="iris-board__head">
                                 {/* Same heading as List view (#189764): a column title is not a card. */}
                                 <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
-                                <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
+                                <span class="iris-atlas-list__count font-mono tabular-nums">
+                                  {(list.total ?? list.items.length).toLocaleString("en-US")}
+                                </span>
                               </header>
                               <div class="iris-board__cards">
                                 <For each={windowOf(list.items, shownCards()[list.id])}>
@@ -4709,7 +4733,11 @@ export function SessionIrisTab() {
                                     </>
                                   )}
                                 </For>
-                                <MoreCards listId={list.id} total={list.items.length} />
+                                <MoreCards
+                                  listId={list.id}
+                                  total={list.total ?? list.items.length}
+                                  loaded={list.items.length}
+                                />
                                 <Show when={ghostAt(list.id, null)}>
                                   <div
                                     class="iris-board__ghost"
@@ -4780,6 +4808,8 @@ export function SessionIrisTab() {
                   <Show when={atlasLayout() === "timeline"}>
                     <IrisAtlasTimeline
                       lists={atlasRows()}
+                      loadingMore={loadingMore()}
+                      onLoadMore={(id) => void loadMoreCards(id, ATLAS_PAGE)}
                       now={now()}
                       isFolded={(row) => {
                         const list = atlasRows().find((l) => l.id === row.id)
@@ -4825,7 +4855,9 @@ export function SessionIrisTab() {
                                 ›
                               </span>
                               <h3 class="iris-atlas-list__title">{list.name}</h3>
-                              <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
+                              <span class="iris-atlas-list__count font-mono tabular-nums">
+                                {(list.total ?? list.items.length).toLocaleString("en-US")}
+                              </span>
                             </button>
                             <button
                               type="button"
@@ -4926,7 +4958,11 @@ export function SessionIrisTab() {
                                   )
                                 }}
                               </For>
-                              <MoreCards listId={list.id} total={list.items.length} />
+                              <MoreCards
+                                listId={list.id}
+                                total={list.total ?? list.items.length}
+                                loaded={list.items.length}
+                              />
                               <For each={pendingCards().filter((p) => p.listId === list.id)}>
                                 {(p) => (
                                   <div class="iris-atlas-row iris-atlas-row--pending" aria-busy="true">
