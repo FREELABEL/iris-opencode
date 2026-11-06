@@ -32,7 +32,8 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = {
   // Leads (#192544, which took in Outreach #192483) and Marketing (#192481) are shown: approvals and
   // ads review wait there, and a hidden tab is the problem they fix. After the file tree, so for a
   // saved layout they land after what the person arranged.
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "marketing", "playbooks", "hive", "integrations", "mcp"],
+  // Inbox (#192688) is shown, after Leads: replies wait there, with an unread count on the tab.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "inbox", "marketing", "playbooks", "hive", "integrations", "mcp"],
   hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
 }
 

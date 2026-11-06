@@ -88,6 +88,11 @@ const SCALE: Shape[] = [
   ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
 ]
 
+// lucide "inbox" — Inbox (#192688).
+const INBOX: Shape[] = [
+  ["path", { d: "M22 12h-6l-2 3h-4l-2-3H2" }],
+  ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
+]
 /** Surface id → glyph and colour. Colours are Tailwind's, as the site uses them. */
 export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
   atlas: { shapes: CHART_COLUMN, color: "#f59e0b" }, // amber-500
@@ -96,6 +101,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
   pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
+  inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
   marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow

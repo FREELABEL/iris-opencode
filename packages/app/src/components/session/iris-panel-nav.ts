@@ -4,7 +4,7 @@
  */
 
 /** Products that belong to the account or machine, not to a project. */
-export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon"])
+export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon", "inbox"])
 
 /**
  * Product ids that were retired into another product (#192544). Outreach (#192483) is Leads'
@@ -14,8 +14,18 @@ export const SURFACE_ALIASES: Record<string, { surface: string; sub: string }> =
   outreach: { surface: "leads", sub: "review" },
 }
 
+/**
+ * Sub-views that moved to another product (#192688): Hive › Inbox is Inbox › Computers. A stored
+ * view, the titlebar's Hive inbox pill, a deep link or an agent asking for `hive/inbox` lands there.
+ */
+export const MOVED_SUBVIEWS: Record<string, { surface: string; sub: string }> = {
+  "hive/inbox": { surface: "inbox", sub: "computers" },
+}
+
 /** The product and view an id means today. A sub-view asked for explicitly is kept. */
 export function resolveSurfaceAlias(surface: string, sub?: string): { surface: string; sub?: string } {
+  const moved = sub ? MOVED_SUBVIEWS[`${surface}/${sub}`] : undefined
+  if (moved) return { ...moved }
   const a = SURFACE_ALIASES[surface]
   return a ? { surface: a.surface, sub: sub ?? a.sub } : { surface, sub }
 }
