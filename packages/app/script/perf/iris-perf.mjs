@@ -504,6 +504,39 @@ const scenarios = {
     await browser.close()
   },
 
+  // A board with thousands of cards (#192670), in Board, List and Timeline: light, responsive, true counts.
+  // Set IRIS_PERF_BIG_BLOQ to a board with a list of 1,000+ cards (IRIS CLI Bug Reports is #297).
+  async atlasbig() {
+    const bloq = process.env.IRIS_PERF_BIG_BLOQ
+    if (!bloq) return check("atlasbig", "IRIS_PERF_BIG_BLOQ set", "unset", "a board id", true, "skipped")
+    for (const layout of ["board", "list", "timeline"]) {
+      const { browser, context, page, cdp, errors } = await launch({ panel: true })
+      await context.addInitScript(
+        ({ bloq, layout }) => {
+          try {
+            localStorage.setItem("iris.panel.bloq", bloq)
+            localStorage.setItem(`iris.atlas.layout.${bloq}`, layout)
+          } catch {}
+        },
+        { bloq, layout },
+      )
+      await openApp(page)
+      const since = await now(page)
+      await page.locator("aside[aria-label=IRIS] [role=tab]", { hasText: "Atlas" }).first().click()
+      await page
+        .locator("aside[aria-label=IRIS] .iris-atlas-list__count, aside[aria-label=IRIS] .iris-board__head")
+        .first()
+        .waitFor({ timeout: 60000 })
+      await sleep(6000)
+      const nodes = (await memory(cdp)).nodes
+      const worst = Math.max(0, ...(await longTasks(page, since)))
+      check("atlasbig", `${layout}: DOM nodes`, nodes, "≤ 20,000", nodes <= 20000)
+      check("atlasbig", `${layout}: worst freeze ms`, worst, 400, worst <= 400)
+      check("atlasbig", `${layout}: page errors`, errors.length, 0, errors.length === 0, errors[0] ?? "")
+      await browser.close()
+    }
+  },
+
   // Split view: 2 columns, each with its own panel; the shell steps aside; survives a resize.
   async split() {
     const before = await sessionIds()
@@ -550,7 +583,8 @@ const scenarios = {
 }
 
 // ---------- run ----------
-const order = WHICH === "all" ? ["setup", "cold", "nav", "drag", "churn", "tabs", "slow", "split"] : WHICH.split(",")
+const order =
+  WHICH === "all" ? ["setup", "cold", "nav", "drag", "churn", "tabs", "slow", "split", "atlasbig"] : WHICH.split(",")
 for (const name of order) {
   const t0 = Date.now()
   try {

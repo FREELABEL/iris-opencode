@@ -7,6 +7,7 @@
  * scroller, so a board refresh that rebuilds the rows mid-drag cannot lose it.
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
+import { ATLAS_PAGE, moreLabel, moreOf, windowOf } from "./iris-atlas-window"
 import {
   buildTimeline,
   DAY_WIDTH,
@@ -124,7 +125,20 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
 
   const [opened, setOpened] = createSignal<Record<number, boolean>>({})
   // With nothing scheduled there is nothing else to look at, so the cards to schedule start open.
-  const undatedOpen = (id: number) => opened()[id] ?? !hasBars()
+  // Open by itself only when it is small: a board with no dates used to open every "No dates" group,
+  // and 6,899 undated rows crashed the app (#192670).
+  const undatedOpen = (id: number, count: number) => opened()[id] ?? (!hasBars() && count <= ATLAS_PAGE)
+  const [shownRows, setShownRows] = createSignal<Record<string, number>>({})
+  const showMoreRows = (key: string) => setShownRows((s) => ({ ...s, [key]: (s[key] ?? ATLAS_PAGE) + ATLAS_PAGE }))
+  const MoreRows = (p: { rowKey: string; total: number }) => (
+    <Show when={moreOf(p.total, shownRows()[p.rowKey])}>
+      {(m) => (
+        <button type="button" class="iris-atlas-tl__undated" onClick={() => showMoreRows(p.rowKey)}>
+          {moreLabel(m())}
+        </button>
+      )}
+    </Show>
+  )
 
   const grid = () => (
     <div class="iris-atlas-tl__grid" aria-hidden="true">
@@ -277,18 +291,25 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
                     </button>
                   </div>
                   <Show when={!folded()}>
-                    <For each={r.bars}>{(bar) => row(bar.item, bar) as JSX.Element}</For>
+                    <For each={windowOf(r.bars, shownRows()[`b${r.id}`])}>
+                      {(bar) => row(bar.item, bar) as JSX.Element}
+                    </For>
+                    <MoreRows rowKey={`b${r.id}`} total={r.bars.length} />
                     <Show when={r.undated.length > 0}>
                       <button
                         type="button"
                         class="iris-atlas-tl__undated"
-                        aria-expanded={undatedOpen(r.id)}
-                        onClick={() => setOpened({ ...opened(), [r.id]: !undatedOpen(r.id) })}
+                        aria-expanded={undatedOpen(r.id, r.undated.length)}
+                        onClick={() => setOpened({ ...opened(), [r.id]: !undatedOpen(r.id, r.undated.length) })}
                       >
-                        {undatedOpen(r.id) ? "▾" : "▸"} No dates ({r.undated.length})
+                        {undatedOpen(r.id, r.undated.length) ? "▾" : "▸"} No dates (
+                        {r.undated.length.toLocaleString("en-US")})
                       </button>
-                      <Show when={undatedOpen(r.id)}>
-                        <For each={r.undated}>{(item) => row(item) as JSX.Element}</For>
+                      <Show when={undatedOpen(r.id, r.undated.length)}>
+                        <For each={windowOf(r.undated, shownRows()[`u${r.id}`])}>
+                          {(item) => row(item) as JSX.Element}
+                        </For>
+                        <MoreRows rowKey={`u${r.id}`} total={r.undated.length} />
                       </Show>
                     </Show>
                   </Show>

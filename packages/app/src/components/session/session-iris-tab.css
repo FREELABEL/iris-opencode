@@ -901,6 +901,22 @@
 .iris-atlas-tl__undated:hover {
   color: var(--text-base);
 }
+/* "Show 50 more · N left" under a list in Board and List view (#192670) — quiet, like the toggle above. */
+.iris-atlas-more {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 24px;
+  padding: 2px 8px;
+  color: var(--text-weak);
+  cursor: pointer;
+  text-align: left;
+}
+.iris-atlas-more:hover {
+  color: var(--text-base);
+}
 .iris-atlas-tl__track--open {
   cursor: crosshair;
   touch-action: none;

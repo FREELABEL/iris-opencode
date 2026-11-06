@@ -20,26 +20,28 @@ node script/perf/iris-perf.mjs "http://127.0.0.1:5276/?auth_token=<token>" all 3
 
 It prints a PASS/FAIL table and writes `perf-<scenario>.json` to `$IRIS_PERF_OUT`.
 
-| Scenario | What it does                                                                 | Pass if                                                                                 |
-| -------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `setup`  | opens a throwaway project with the two test chats, saves the signed-in state | the project is open                                                                     |
-| `cold`   | launch → Home, panel open and closed, 5 runs                                 | Home ≤ 2.5 s, worst freeze ≤ 400 ms                                                     |
-| `nav`    | Home → chat → Home → chat, N loops                                           | shell never rebuilt; switches ≤ 300 / 800 ms (p50/p95); heap and DOM nodes flat (≤ 15%) |
-| `drag`   | 200 rapid divider drags                                                      | worst freeze ≤ 150 ms; saved split matches screen; layout/style time reported           |
-| `churn`  | open/close the panel and switch products 50×                                 | closed = unmounted; no Atlas requests while closed; no page errors                      |
-| `tabs`   | 20 restored chat tabs, then launch                                           | Home ≤ 3 s, stays on Home, all chats in the strip                                       |
-| `slow`   | every engine call +2 s                                                       | Home ≤ 6 s; nothing navigates on its own                                                |
-| `split`  | split view, 2 columns, window resize                                         | 2 columns; shell panel steps aside; no "too narrow"                                     |
+| Scenario   | What it does                                                                                | Pass if                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `setup`    | opens a throwaway project with the two test chats, saves the signed-in state                | the project is open                                                                     |
+| `cold`     | launch → Home, panel open and closed, 5 runs                                                | Home ≤ 2.5 s, worst freeze ≤ 400 ms                                                     |
+| `nav`      | Home → chat → Home → chat, N loops                                                          | shell never rebuilt; switches ≤ 300 / 800 ms (p50/p95); heap and DOM nodes flat (≤ 15%) |
+| `drag`     | 200 rapid divider drags                                                                     | worst freeze ≤ 150 ms; saved split matches screen; layout/style time reported           |
+| `churn`    | open/close the panel and switch products 50×                                                | closed = unmounted; no Atlas requests while closed; no page errors                      |
+| `tabs`     | 20 restored chat tabs, then launch                                                          | Home ≤ 3 s, stays on Home, all chats in the strip                                       |
+| `slow`     | every engine call +2 s                                                                      | Home ≤ 6 s; nothing navigates on its own                                                |
+| `split`    | split view, 2 columns, window resize                                                        | 2 columns; shell panel steps aside; no "too narrow"                                     |
+| `atlasbig` | Atlas on a board with a 1,000+ card list (`IRIS_PERF_BIG_BLOQ`), in Board / List / Timeline | DOM nodes ≤ 20k; worst freeze ≤ 400 ms; no page errors                                  |
 
 ## Environment
 
-| Variable             | Default               |                                                               |
-| -------------------- | --------------------- | ------------------------------------------------------------- |
-| `IRIS_PERF_ENGINE`   | app host, port 4096   | engine the app talks to (setup creates test chats through it) |
-| `IRIS_PERF_PROJECT`  | `$IRIS_PERF_OUT/proj` | **throwaway** folder for test chats; never real work          |
-| `IRIS_PERF_OUT`      | `$TMPDIR/iris-perf`   | results and saved state                                       |
-| `IRIS_PERF_CHROME`   | macOS Google Chrome   | the Chrome binary                                             |
-| `IRIS_PERF_WORKTREE` | the repo root         | where bun installed Playwright                                |
+| Variable             | Default                  |                                                               |
+| -------------------- | ------------------------ | ------------------------------------------------------------- |
+| `IRIS_PERF_ENGINE`   | app host, port 4096      | engine the app talks to (setup creates test chats through it) |
+| `IRIS_PERF_PROJECT`  | `$IRIS_PERF_OUT/proj`    | **throwaway** folder for test chats; never real work          |
+| `IRIS_PERF_OUT`      | `$TMPDIR/iris-perf`      | results and saved state                                       |
+| `IRIS_PERF_CHROME`   | macOS Google Chrome      | the Chrome binary                                             |
+| `IRIS_PERF_WORKTREE` | the repo root            | where bun installed Playwright                                |
+| `IRIS_PERF_BIG_BLOQ` | unset (`atlasbig` skips) | a board with a very large list (IRIS CLI Bug Reports is #297) |
 
 ## Rules this suite learned the hard way
 
