@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { brandContract, brandContractCss, MOTION_PRESETS, parseDurationMs, safeEase, type BrandMotion } from "./brand-contract"
 import { fetchSite, parseDesignMd, siteImport } from "./brand-import"
+import { checkLogoUrls, logoFor, logoVariants, missingVariants, VARIANTS } from "./brand-logo"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
@@ -184,6 +185,7 @@ const BrandsShowCommand = cmd({
         console.log(bold("Design Tokens:"))
         console.log(`  ${groups.join(", ")}  ${dim(`(${groups.length} groups)`)}`)
         console.log()
+        printLogoSummary(dt)
       }
 
       printDivider()
@@ -1075,6 +1077,43 @@ function tokensToMarkdown(tokens: Record<string, unknown>, brandName: string): s
   return lines.join("\n") + "\n"
 }
 
+/**
+ * The logo block (#192664, #184167): every variant, what a light and a dark page would show, and
+ * what is missing. Printed where people already look — `brands show` and `brands dt get`.
+ */
+function printLogoSummary(tokens: unknown): void {
+  const v = logoVariants(tokens)
+  console.log(bold("Logo:"))
+  for (const k of VARIANTS) console.log(`  ${bold(k.padEnd(8))}  ${v[k] ?? dim("— missing")}`)
+  for (const ground of ["light", "dark"] as const) {
+    const pick = logoFor(tokens, ground)
+    console.log(`  ${dim(`on a ${ground} page →`)} ${pick ? `${pick.variant}${pick.tile ? ` on a ${pick.tile} tile` : ""}` : dim("no logo")}`)
+  }
+  const missing = missingVariants(tokens)
+  for (const m of missing) console.log(`  ${dim("⚠")} ${m}`)
+  if (missing.length) console.log(`  ${dim("set them in brand.logo, then: iris brands dt push <slug>")}`)
+  console.log()
+}
+
+/**
+ * Refuse a push whose logo URLs would not show (#192664): each must answer 200 with an image.
+ * Returns true when the push may go ahead. --skip-logo-check overrides, loudly.
+ */
+async function logoGate(tokens: unknown, skip: boolean): Promise<boolean> {
+  const checks = await checkLogoUrls(tokens)
+  const bad = checks.filter((c) => !c.ok)
+  if (checks.length) prompts.log.info(`Logo URLs: ${checks.length - bad.length}/${checks.length} answer 200 with an image`)
+  for (const c of bad) prompts.log.error(`brand.logo.${c.variant} ${c.url} ${c.problem}`)
+  if (!bad.length) return true
+  if (skip) {
+    prompts.log.warn("Pushing anyway (--skip-logo-check): every surface that reads this kit will show a broken or blank mark.")
+    return true
+  }
+  prompts.log.error("Not pushed. Fix the URL(s), or pass --skip-logo-check to push anyway.")
+  process.exitCode = 1
+  return false
+}
+
 function printTokenSummary(tokens: Record<string, unknown>): void {
   if (tokens.colors && typeof tokens.colors === "object") {
     console.log(bold("Colors:"))
@@ -1161,6 +1200,7 @@ const DesignTokensGetCommand = cmd({
 
       printDivider()
       printTokenSummary(tokens)
+      printLogoSummary(tokens)
       printDivider()
       prompts.outro(`${dim(`iris brands design-tokens export ${args.slug} --format css`)}`)
     } catch (err) {
@@ -1177,7 +1217,8 @@ const DesignTokensSetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
-      .option("file", { describe: "path to tokens JSON file", type: "string", demandOption: true }),
+      .option("file", { describe: "path to tokens JSON file", type: "string", demandOption: true })
+      .option("skip-logo-check", { describe: "push even if a brand.logo URL does not answer 200 with an image", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Set Design Tokens — ${args.slug}`)
@@ -1201,6 +1242,10 @@ const DesignTokensSetCommand = cmd({
       const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
+
+      spinner.message("Checking logo URLs…")
+      const passed = await logoGate(tokens, !!args["skip-logo-check"])
+      if (!passed) { spinner.stop("Not pushed", 1); prompts.outro("Done"); return }
 
       spinner.message("Updating tokens…")
       const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, {
@@ -1570,7 +1615,8 @@ const DesignTokensPushCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
-      .option("file", { alias: "f", describe: "local JSON file (default: brands/<slug>-tokens.json)", type: "string" }),
+      .option("file", { alias: "f", describe: "local JSON file (default: brands/<slug>-tokens.json)", type: "string" })
+      .option("skip-logo-check", { describe: "push even if a brand.logo URL does not answer 200 with an image", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Push Design Tokens — ${args.slug}`)
@@ -1599,6 +1645,10 @@ const DesignTokensPushCommand = cmd({
       const listData = (await listRes.json()) as { data?: any }
       const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      spinner.message("Checking logo URLs…")
+      const passed = await logoGate(tokens, !!args["skip-logo-check"])
+      if (!passed) { spinner.stop("Not pushed", 1); prompts.outro("Done"); return }
 
       spinner.message("Pushing tokens…")
       const res = await irisFetch(`/api/v1/brands/${brands[0].id}/design-tokens`, {
@@ -1833,6 +1883,62 @@ const DesignTokensGroup = cmd({
 // Root command
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// brands logo — the direct answer to "what is our logo" (#192664, #184167)
+// ----------------------------------------------------------------------------
+const BrandsLogoCommand = cmd({
+  command: "logo <slug>",
+  describe: "the brand's logo variants, which one a light/dark page shows, and whether each URL loads",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("on", { describe: "print only the URL to use on this background (hex, light or dark)", type: "string" })
+      .option("check", { describe: "fetch each URL: must answer 200 with an image", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const quiet = !!args.json || args.on !== undefined
+    if (!quiet) { UI.empty(); prompts.intro(`◈  Logo — ${args.slug}`) }
+    const result = await fetchPublicTokens(String(args.slug)).catch(() => null)
+    if (!result) {
+      process.exitCode = 1
+      if (args.json) console.log(JSON.stringify({ success: false, error: `Brand "${args.slug}" not found` }))
+      else { prompts.log.error(`Brand "${args.slug}" not found`); if (!quiet) prompts.outro("Done") }
+      return
+    }
+    const tokens = result.tokens
+    if (args.on !== undefined) {
+      const pick = logoFor(tokens, String(args.on))
+      if (!pick) { process.exitCode = 1; console.error(`${args.slug} has no logo in its kit`); return }
+      console.log(pick.url)
+      if (pick.tile) console.error(`note: show it on a ${pick.tile} tile — ${pick.reason}`)
+      return
+    }
+    const checks = args.check ? await checkLogoUrls(tokens) : null
+    if (checks?.some((c) => !c.ok)) process.exitCode = 1
+    if (args.json) {
+      console.log(JSON.stringify({
+        success: true,
+        brand: args.slug,
+        variants: logoVariants(tokens),
+        on_light: logoFor(tokens, "light"),
+        on_dark: logoFor(tokens, "dark"),
+        missing: missingVariants(tokens),
+        checks,
+      }, null, 2))
+      return
+    }
+    printDivider()
+    printLogoSummary(tokens)
+    if (checks) {
+      console.log(bold("Check:"))
+      for (const c of checks) console.log(`  ${c.ok ? success("✓") : "✗"} ${c.variant.padEnd(8)} ${c.ok ? dim(`${c.status} ${c.type}`) : c.problem}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(dim(`iris brands logo ${args.slug} --on '#ffffff'  ·  iris brands logo ${args.slug} --check`))
+  },
+})
+
 export const PlatformBrandsCommand = cmd({
   command: "brands",
   aliases: ["brand"],
@@ -1841,6 +1947,7 @@ export const PlatformBrandsCommand = cmd({
     yargs
       .command(BrandsListCommand)
       .command(BrandsShowCommand)
+      .command(BrandsLogoCommand)
       .command(BrandsCreateCommand)
       .command(BrandsUpdateCommand)
       .command(BrandsDeleteCommand)
