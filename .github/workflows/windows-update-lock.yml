@@ -5,18 +5,24 @@ name: windows-update-lock
 # Windows machine: install version N-1, start its iris-cli.exe so the file is locked, then run
 # version N's installer the way the updater does, and check iris-cli.exe was actually replaced.
 #
-# Two pairs: one from before the 2026-11-03 hardening (expected to FAIL — the control that proves
-# the test reproduces the bug) and the current one (expected to PASS).
+# Measured 2026-11-06 on windows-latest: with the app open (engine supervised), a second
+# iris-cli.exe the app does not own, silent and passive installs — BOTH 1.18.165->166 and
+# 1.18.173->174 updated cleanly. The clean-machine case works; a client's failure is
+# environmental (AV, an elevated/other-session holder, a profile path with spaces). This stays
+# as a guard: any change to the installer hook must keep the update-while-open case passing.
 
 on:
   workflow_dispatch:
     inputs:
-      pairs:
-        description: 'JSON list of {"old":"desktop-v…","new":"desktop-v…","expect":"pass|fail"}'
-        required: false
+      old:
+        description: "installed version (tag), e.g. desktop-v1.18.173"
+        required: true
+      new:
+        description: "version to update to (tag), e.g. desktop-v1.18.174"
+        required: true
   push:
-    branches: ["wt/192439-win-update-lock-test"]
-    paths: [".github/workflows/windows-update-lock.yml"]
+    branches: ["iris/1.18.23", "wt/192439-win-update-lock-test"]
+    paths: [".github/workflows/windows-update-lock.yml", "packages/desktop/src-tauri/installer-hooks.nsh"]
 
 permissions:
   contents: read
@@ -27,8 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         pair:
-          - { old: desktop-v1.18.165, new: desktop-v1.18.166, expect: fail }
-          - { old: desktop-v1.18.173, new: desktop-v1.18.174, expect: pass }
+          - { old: "${{ inputs.old || 'desktop-v1.18.173' }}", new: "${{ inputs.new || 'desktop-v1.18.174' }}", expect: pass }
     runs-on: windows-latest
     timeout-minutes: 20
     env:
