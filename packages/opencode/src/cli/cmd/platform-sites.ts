@@ -2,10 +2,21 @@ import { readFileSync } from "node:fs"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, warn, FL_API, writeJson, emitJsonError } from "./iris-api"
 import { getBySlug, createPageFromJson } from "./platform-pages"
 import { profileFromBrand, rebrandJsonContent } from "./rebrand"
 import { firstArray } from "../../util/array"
+import {
+  buildReport,
+  describeList,
+  flagList,
+  hasList,
+  mergeGate,
+  readGate,
+  sameGate,
+  type PageInput,
+  type SiteReport,
+} from "./platform-sites-access-model"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
@@ -687,12 +698,269 @@ const ReplyCmd = cmd({
 })
 
 // ============================================================================
+// Doctor / Access — one sign-in policy per site (#192662)
+// ============================================================================
+//
+// Why: each Genesis page used to carry its own sign-in list and its own owner board, and nothing
+// showed the drift — a client's staff were locked out of their own pages. The site now owns the
+// policy (settings.gate); member pages inherit it and may only narrow it. `doctor` shows what
+// every page actually enforces; `access` sets the site's list. Pure rules live in
+// platform-sites-access-model.ts.
+
+async function readSiteSettings(siteId: number | string): Promise<{ ok: boolean; settings: Record<string, any> }> {
+  const res = await pagesFetch(`/api/v1/sites/${siteId}/settings`)
+  if (!res.ok) return { ok: false, settings: {} }
+  const body = (await res.json()) as any
+  const data = body?.data ?? body
+  return { ok: true, settings: data && typeof data === "object" && !Array.isArray(data) ? data : {} }
+}
+
+function parseJsonContent(v: unknown): Record<string, any> | null {
+  if (!v) return null
+  if (typeof v === "string") {
+    try { return JSON.parse(v) } catch { return null }
+  }
+  return typeof v === "object" ? (v as Record<string, any>) : null
+}
+
+async function loadMemberPages(site: any): Promise<PageInput[]> {
+  const listed: any[] = firstArray(site.pages)
+  const out: PageInput[] = []
+  // Sequential on purpose: by-slug with include_json is the slow path on fl-api, and a site has
+  // a handful of pages — parallel bursts are what 502 it (#150147).
+  for (const p of listed) {
+    if (!p?.slug) { out.push({ id: p?.id ?? "?", slug: String(p?.id ?? "?"), error: "no slug" }); continue }
+    const full = await getBySlug(p.slug, true, { quiet404: true }).catch(() => null)
+    if (!full) { out.push({ id: p.id, slug: p.slug, title: p.title, error: "not found or no access" }); continue }
+    out.push({
+      id: full.id ?? p.id,
+      slug: full.slug ?? p.slug,
+      title: full.title ?? p.title,
+      owner_type: full.owner_type ?? null,
+      owner_id: full.owner_id ?? null,
+      requires_auth: full.requires_auth ?? null,
+      json_content: parseJsonContent(full.json_content),
+    })
+  }
+  return out
+}
+
+function pad(s: string, n: number): string {
+  // pad on visible width (strip ANSI) so coloured cells line up
+  const visible = s.replace(/\x1b\[[0-9;]*m/g, "").length
+  return visible >= n ? s : s + " ".repeat(n - visible)
+}
+
+function printDoctor(r: SiteReport, email?: string): void {
+  printDivider(72)
+  printKV("Site", `#${r.site.id}  ${r.site.slug ?? ""}  ${r.site.name ? dim(r.site.name) : ""}`)
+  printKV("Site owner", r.site.owner ?? dim("none"))
+  printKV("Expected page owner", r.expectedOwner ?? dim("none"))
+  printKV("Site sign-in", r.siteRequireOtp ? "required (OTP)" : dim("not required by the site"))
+  printKV(
+    "Site allow-list",
+    r.siteGateStoredAsString ? warn("STORED AS A STRING — fix with `iris sites access`") : hasList(r.siteGate) ? describeList(r.siteGate) : dim("(none set — pages use their own)"),
+  )
+  printDivider(72)
+
+  const head = [pad("PAGE", 30), pad("OWNER", 14), pad("OTP", 5), pad("GATE", 8), "EFFECTIVE LIST"]
+  if (email) head.splice(4, 0, pad("EMAIL", 9))
+  console.log(`  ${bold(head.join(" "))}`)
+  for (const p of r.pages) {
+    const mark = p.flags.length ? warn("!") : success("✓")
+    if (p.error) {
+      console.log(`${mark} ${pad(`#${p.id} ${p.slug}`, 30)} ${warn(p.error)}`)
+      continue
+    }
+    const gate = p.gateStoredAsString ? warn("STRING") : hasList(p.pageList) ? (p.differsFromSite ? warn("own≠site") : "own") : dim("inherit")
+    const owner = p.ownerMismatch ? warn(p.owner ?? "none") : (p.owner ?? dim("none"))
+    const cells = [
+      pad(`#${p.id} ${p.slug}`.slice(0, 30), 30),
+      pad(owner, 14),
+      pad(p.requireOtp ? "yes" : dim("no"), 5),
+      pad(gate, 8),
+      hasList(p.effective) ? describeList(p.effective) : p.requireOtp ? warn("(no list — anyone with a code)") : dim("(public — no sign-in)"),
+    ]
+    if (p.email) cells.splice(4, 0, pad(p.email.allowed ? success("allowed") : warn("refused"), 9))
+    console.log(`${mark} ${cells.join(" ")}`)
+  }
+  printDivider(72)
+
+  const notes = [...r.flags.map((f) => `site: ${f}`)]
+  for (const p of r.pages) for (const f of p.flags) notes.push(`#${p.id} ${p.slug}: ${f}`)
+  for (const p of r.pages) {
+    if (p.differsFromSite && (p.diff.onlySite.length || p.diff.onlyPage.length)) {
+      const parts = []
+      if (p.diff.onlySite.length) parts.push(`site only: ${p.diff.onlySite.join(", ")}`)
+      if (p.diff.onlyPage.length) parts.push(`page only: ${p.diff.onlyPage.join(", ")}`)
+      notes.push(`#${p.id} ${p.slug}: ${parts.join(" · ")}`)
+    }
+    if (p.gateStoredAsString && p.gateRecovered) notes.push(`#${p.id} ${p.slug}: string seems to mean ${describeList(p.gateRecovered)}`)
+    if (p.email) notes.push(`#${p.id} ${p.slug}: ${p.email.address} ${p.email.allowed ? "allowed" : "refused"} — ${p.email.reason}`)
+  }
+  for (const n of notes) console.log(`  ${dim("·")} ${n}`)
+  if (notes.length) printDivider(72)
+}
+
+const DoctorCmd = cmd({
+  command: "doctor <site>",
+  describe: "check a site's sign-in policy: owner board, OTP, each page's gate and effective allow-list (exits 1 on any problem)",
+  builder: (y) =>
+    y
+      .positional("site", { type: "string", demandOption: true, describe: "site id or slug" })
+      .option("email", { type: "string", describe: "check whether this address may sign in on each page, and why" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const asJson = !!args.json
+    UI.empty()
+    if (!asJson) prompts.intro(`◈  Site doctor: ${args.site}`)
+    if (!(await requireAuth())) { process.exitCode = 1; if (!asJson) prompts.outro("Done"); return }
+    const sp = asJson ? null : prompts.spinner()
+    sp?.start("Loading site…")
+    try {
+      const site = await resolveSite(String(args.site))
+      if (!site) {
+        sp?.stop("Not found", 1)
+        process.exitCode = 1
+        if (asJson) emitJsonError(`No site matched "${args.site}"`)
+        else { prompts.log.error(`No site matched "${args.site}".`); prompts.outro("Done") }
+        return
+      }
+      const settingsRead = await readSiteSettings(site.id)
+      // Fall back to the settings embedded on the site record if the settings endpoint refuses.
+      const settings = settingsRead.ok ? settingsRead.settings : (site.settings ?? {})
+      sp?.message(`Reading ${firstArray(site.pages).length} page(s)…`)
+      const pages = await loadMemberPages(site)
+      const report = buildReport({ site, settings, pages, email: args.email ? String(args.email) : undefined })
+      if (!report.ok) process.exitCode = 1
+
+      if (asJson) { await writeJson(report); return }
+      const nFlag = report.flags.length + report.pages.filter((p) => p.flags.length).length
+      sp?.stop(report.ok ? success(`${pages.length} page(s) — no problems`) : warn(`${nFlag} problem(s) across ${pages.length} page(s)`))
+      printDoctor(report, args.email ? String(args.email) : undefined)
+      prompts.outro(report.ok ? "Done" : dim(`iris sites access ${site.id} --allow-domain <d> --require-otp   ·   then re-run doctor`))
+    } catch (err) {
+      sp?.stop("Error", 1)
+      process.exitCode = 1
+      const msg = err instanceof Error ? err.message : String(err)
+      if (asJson) emitJsonError(msg)
+      else { prompts.log.error(msg); prompts.outro("Done") }
+    }
+  },
+})
+
+const AccessCmd = cmd({
+  command: "access <site>",
+  describe: "view or set a site's sign-in policy (settings.gate) that member pages inherit",
+  builder: (y) =>
+    y
+      .positional("site", { type: "string", demandOption: true, describe: "site id or slug" })
+      .option("allow-domain", { type: "string", array: true, describe: "admit every address at this domain (repeatable)" })
+      .option("allow-email", { type: "string", array: true, describe: "admit this exact address (repeatable)" })
+      .option("remove-domain", { type: "string", array: true, describe: "take a domain off the list (repeatable)" })
+      .option("remove-email", { type: "string", array: true, describe: "take an address off the list (repeatable)" })
+      .option("require-otp", { type: "boolean", describe: "require an emailed sign-in code (--no-require-otp to turn off)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show the change without saving it" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const asJson = !!args.json
+    UI.empty()
+    if (!asJson) prompts.intro(`◈  Site access: ${args.site}`)
+    const fail = (msg: string, extra?: Record<string, unknown>) => {
+      process.exitCode = 1
+      if (asJson) emitJsonError(msg, extra)
+      else { prompts.log.error(msg); prompts.outro("Nothing saved") }
+    }
+    if (!(await requireAuth())) { process.exitCode = 1; if (!asJson) prompts.outro("Done"); return }
+
+    const site = await resolveSite(String(args.site))
+    if (!site) return fail(`No site matched "${args.site}".`)
+    const current = await readSiteSettings(site.id)
+    if (!current.ok) return fail(`Could not read settings for site #${site.id} — do you own it?`)
+    const gateNow = current.settings.gate
+
+    const edit = {
+      allowDomains: flagList(args["allow-domain"]),
+      allowEmails: flagList(args["allow-email"]),
+      removeDomains: flagList(args["remove-domain"]),
+      removeEmails: flagList(args["remove-email"]),
+      requireOtp: args["require-otp"] as boolean | undefined,
+    }
+    const isEdit =
+      edit.allowDomains.length + edit.allowEmails.length + edit.removeDomains.length + edit.removeEmails.length > 0 ||
+      edit.requireOtp !== undefined
+
+    if (!isEdit) {
+      const read = readGate(gateNow)
+      if (asJson) { await writeJson({ site: { id: site.id, slug: site.slug }, gate: read.gate, storedAsString: read.storedAsString, raw: read.storedAsString ? read.raw : undefined }); return }
+      printDivider()
+      printKV("Site", `#${site.id}  ${site.slug}`)
+      if (read.storedAsString) printKV("Gate", warn(`STORED AS A STRING: ${String(read.raw)}`))
+      printKV("Allow-list", hasList(read.gate) ? describeList(read.gate) : dim("(none)"))
+      printKV("Sign-in code", read.gate?.requireOtp ? "required" : dim("not required"))
+      printDivider()
+      prompts.outro(dim(`iris sites access ${site.id} --allow-domain example.com --require-otp   ·   iris sites doctor ${site.id}`))
+      return
+    }
+
+    const merged = mergeGate(gateNow, edit)
+    if (!merged.ok) return fail(merged.errors.join("\n"), { errors: merged.errors })
+    if (merged.changes.length === 0) {
+      if (asJson) { await writeJson({ success: true, changed: false, gate: merged.after }); return }
+      prompts.log.info("Already set — nothing to change.")
+      prompts.outro("Done")
+      return
+    }
+
+    if (!asJson) {
+      printDivider()
+      printKV("Site", `#${site.id}  ${site.slug}`)
+      for (const c of merged.changes) console.log(`  ${c.startsWith("+") ? success(c) : c.startsWith("-") ? warn(c) : dim(c)}`)
+      printKV("New list", describeList(merged.after))
+      printKV("Sign-in code", merged.after.requireOtp ? "required" : dim("not required"))
+      printDivider()
+    }
+
+    if (args["dry-run"]) {
+      if (asJson) await writeJson({ success: true, dryRun: true, before: merged.before, after: merged.after, changes: merged.changes })
+      else prompts.outro(dim("Dry run — nothing saved"))
+      return
+    }
+
+    // Send ONLY the gate key: the endpoint replaces the keys it is given and keeps the rest,
+    // so every other setting (notification emails…) is left exactly as it was.
+    const res = await pagesFetch(`/api/v1/sites/${site.id}/settings`, {
+      method: "PATCH",
+      body: JSON.stringify({ gate: merged.after }),
+    })
+    if (!(await handleApiError(res, "Update site access"))) { process.exitCode = 1; if (!asJson) prompts.outro("Nothing saved"); return }
+
+    // Read back — a 200 is not proof the key landed (an endpoint can silently drop unknown keys).
+    const back = await readSiteSettings(site.id)
+    const landed = back.ok && sameGate(back.settings.gate, merged.after)
+    const othersKept = back.ok && Object.keys(current.settings).filter((k) => k !== "gate").every((k) => k in back.settings)
+    if (!landed || !othersKept) {
+      process.exitCode = 1
+      const msg = !landed
+        ? "The server answered OK but the gate did not read back as sent — the site settings endpoint may not store `gate` yet."
+        : "The gate saved but another settings key went missing on read-back — check `iris sites config`."
+      if (asJson) { emitJsonError(msg, { sent: merged.after, readBack: back.settings.gate ?? null }); return }
+      prompts.log.error(msg)
+      prompts.outro("Check failed")
+      return
+    }
+    if (asJson) { await writeJson({ success: true, changed: true, before: merged.before, after: back.settings.gate, changes: merged.changes }); return }
+    prompts.outro(success(`Saved and read back — run: iris sites doctor ${site.id}`))
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformSitesCommand = cmd({
   command: "sites",
-  describe: "manage Genesis sites — list, show, create, attach, nav, settings",
+  describe: "manage Genesis sites — list, show, create, attach, nav, settings, sign-in policy (doctor, access)",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -705,6 +973,8 @@ export const PlatformSitesCommand = cmd({
       .command(ConfigCmd)
       .command(InboxCmd)
       .command(ReplyCmd)
+      .command(DoctorCmd)
+      .command(AccessCmd)
       .demandCommand(),
   async handler() {},
 })
