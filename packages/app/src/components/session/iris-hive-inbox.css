@@ -302,3 +302,7 @@
 .hib-state[data-tone="wait"], .hib-sub[data-tone="wait"] { color: var(--hsc-amber); }
 .hib-state[data-tone="fail"], .hib-sub[data-tone="fail"] { color: var(--hsc-coral); }
 .hib-retry { color: var(--hsc-coral); border-color: color-mix(in srgb, var(--hsc-coral) 40%, var(--hsc-rule)); }
+
+/* #192660 — the one-click way back when this computer's Hive connection is down. */
+.hib-reconnect { margin-left: 6px; padding: 1px 8px; border-radius: 6px; border: 1px solid currentColor; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.hib-reconnect:disabled { opacity: 0.6; cursor: default; }

@@ -213,7 +213,7 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
         </span>
         <span class="iris-lex-spacer" />
         <button type="button" class="iris-lex-icon-btn" title="Refresh" aria-label="Refresh" disabled={list.loading} onClick={() => refetchList()}>
-          <Show when={list.loading} fallback={<Icon name="reset" size="small" />}>
+          <Show when={list.loading} fallback={<Icon name="refresh" size="small" />}>
             <Spinner class="iris-lex-spin" />
           </Show>
         </button>
