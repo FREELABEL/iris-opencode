@@ -166,6 +166,10 @@ export const AtlasResponse = Schema.Struct({
       id: Schema.Finite,
       name: Schema.String,
       items: Schema.Array(AtlasItem),
+      total: described(
+        Schema.optional(Schema.Finite),
+        "How many cards the list holds, when that is more than `items` (#192670): a board past 1,000 cards is read a page per list; GET .../atlas/:bloqID/more reads the next ones.",
+      ),
     }).annotate({ identifier: "IrisAtlasList" }),
   ),
 }).annotate({ identifier: "IrisAtlasResponse" })
@@ -1937,6 +1941,7 @@ export const IrisPaths = {
   inboxSent: `${root}/inbox-sent`,
   atlas: `${root}/atlas/:bloqID`,
   atlasLive: `${root}/atlas/:bloqID/live`,
+  atlasMore: `${root}/atlas/:bloqID/more`,
   atlasItemCreate: `${root}/atlas/:bloqID/lists/:listID/items`,
   atlasListCreate: `${root}/atlas/:bloqID/lists`,
   atlasMembers: `${root}/atlas/:bloqID/members`,
@@ -2444,6 +2449,29 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Get Atlas for a bloq",
           description:
             "Lists and items for one bloq, fetched from fl-api with the signed-in user's token. Check `measured` before rendering: false means the fetch failed, not that the bloq is empty.",
+        }),
+      ),
+      HttpApiEndpoint.get("atlasMore", IrisPaths.atlasMore, {
+        params: { bloqID: Schema.NumberFromString },
+        query: Schema.Struct({
+          list: described(Schema.NumberFromString, "The list to read more of."),
+          count: described(Schema.optional(Schema.NumberFromString), "How many more cards (default 50, at most 500)."),
+        }),
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            added: described(Schema.Finite, "Cards read and added to the held board."),
+            total: described(Schema.Finite, "Cards the list holds."),
+            left: described(Schema.Finite, "Cards of the list still not read."),
+          }).annotate({ identifier: "IrisAtlasMoreResult" }),
+          "The next cards of one list on a paged board, added to the board this engine holds; re-read the board to draw them",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.atlasMore",
+          summary: "Read more cards of one list on a big board",
+          description:
+            "A board past 1,000 cards is read a page per list (#192670). This reads the next cards of one list by id and adds them to the held board (memory, and the saved copy when it may be kept). Re-read GET .../atlas/:bloqID to draw them.",
         }),
       ),
       HttpApiEndpoint.post("atlasItemCreate", IrisPaths.atlasItemCreate, {
