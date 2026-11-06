@@ -38,6 +38,7 @@ import {
   type SentRow,
 } from "./iris-hive-inbox-model"
 import { bumpIrisInbox } from "./iris-nav"
+import { usePlatform } from "@/context/platform"
 
 /**
  * Hive › Inbox — v2 (#190917, "Make the Hive inbox a place people work").
@@ -106,6 +107,27 @@ export function IrisHiveInbox(props: {
     void refetch()
     void refetchSent()
   }
+  // ── reconnect (#192660) ─────────────────────────────────────────────────
+  // When this computer's Hive connection is down the inbox cannot be read, and the only way back
+  // used to be a terminal (or, on macOS, a menu item). One click restarts it from here.
+  const platform = usePlatform()
+  const [reconnecting, setReconnecting] = createSignal(false)
+  const offline = createMemo(() => !!list.latest && !list.latest.measured)
+  const reconnect = async () => {
+    if (!platform.irisAction || reconnecting()) return
+    setReconnecting(true)
+    try {
+      await platform.irisAction("daemon-restart")
+      say("ok", "Reconnecting this computer to Hive…")
+      // The daemon needs a moment to come back before the inbox answers.
+      setTimeout(reload, 3000)
+    } catch (e) {
+      say("warn", `Could not reconnect — ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setReconnecting(false)
+    }
+  }
+
   // New messages are a file the daemon appends to; 20s keeps the list honest without a watcher.
   const timer = setInterval(reload, 20_000)
   onCleanup(() => clearInterval(timer))
@@ -544,11 +566,38 @@ export function IrisHiveInbox(props: {
               Activity
             </button>
           </div>
-          <button type="button" class="hib-ib" title="Check for new messages" onClick={reload}>
-            <Ic name="reset" />
+          <button type="button" class="hib-ib" title="Check for new messages" aria-label="Check for new messages" onClick={reload}>
+            <Ic name="refresh" />
           </button>
+          <Show when={platform.irisAction}>
+            <button
+              type="button"
+              class="hib-ib"
+              title="Reconnect this computer to Hive"
+              aria-label="Reconnect this computer to Hive"
+              disabled={reconnecting()}
+              onClick={() => void reconnect()}
+            >
+              <Ic name="link" />
+            </button>
+          </Show>
         </header>
 
+        <Show when={offline()}>
+          <p class="hib-notice" data-tone="warn" role="status">
+            Hive isn't answering on this computer
+            {list.latest?.reason ? ` — ${list.latest.reason}` : ""}.
+            <Show
+              when={platform.irisAction}
+              fallback={<span> Run <code>iris-daemon restart</code> in a terminal, then check again.</span>}
+            >
+              {" "}
+              <button type="button" class="hib-reconnect" disabled={reconnecting()} onClick={() => void reconnect()}>
+                {reconnecting() ? "Reconnecting…" : "Reconnect"}
+              </button>
+            </Show>
+          </p>
+        </Show>
         <Show when={notice()}>
           {(n) => (
             <p class="hib-notice" data-tone={n().tone} role="status">
