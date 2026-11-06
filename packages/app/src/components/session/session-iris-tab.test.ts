@@ -91,9 +91,18 @@ describe("resolvePane", () => {
   })
 
   test("the hive inbox is a different endpoint AND a different renderer", () => {
-    const r = resolvePane("hive", "inbox")
+    // Inbox › Computers since #192688 (it was Hive › Inbox).
+    const r = resolvePane("inbox", "computers")
     expect(r.pane).toBe("inbox")
     expect(r.path(674)).toBe("/iris/inbox")
+  })
+
+  test("the people inbox is the Inbox tab's first view, and draws itself (#192688)", () => {
+    const r = resolvePane("inbox", undefined)
+    expect(r.sub?.id).toBe("messages")
+    expect(r.pane).toBe("comms-inbox")
+    expect(r.path(674)).toBe("/iris/comms")
+    expect(resolvePane("hive", "inbox").pane).toBe("hive")
   })
 })
 

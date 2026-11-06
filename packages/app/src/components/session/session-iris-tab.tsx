@@ -105,7 +105,8 @@ import { IrisMarketing } from "./iris-marketing"
 import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
-import { IrisLeadsTab } from "./iris-leads-tab"
+import { IrisLeadsTab, requestLeadOpen } from "./iris-leads-tab"
+import { IrisInbox, watchInboxBadge } from "./iris-inbox"
 import { IrisGenesisPages } from "./iris-genesis-pages"
 import { SitePagesEditor } from "./iris-genesis-sites"
 import { ownerBoard } from "./iris-genesis-sites-model"
@@ -677,6 +678,10 @@ const SURFACES = [
   // queue is Leads › Needs approval. The `outreach` id (#192483) is an alias now (SURFACE_ALIASES),
   // so old links, pins and stored panels still land there.
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
+  // #192688: conversations with leads across channels (Elon's unified inbox), and the Hive inbox —
+  // messages between your computers — as Inbox › Computers (it was Hive › Inbox; that id is an alias).
+  // Account-wide: a conversation is the lead's, not a board's.
+  { id: "inbox", label: "Inbox", path: () => `/iris/comms` },
   // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
   // #192624: the pages are the signed-in ACCOUNT's own pins, never pages named in code. With no
   // sub-views here the surface draws `marketing-pins`, which owns its pane and its empty state —
@@ -737,6 +742,8 @@ SELF_PANES.add("lexicon-agreements")
 SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
+// The people inbox (#192688) fetches for itself.
+SELF_PANES.add("comms-inbox")
 
 interface SubView {
   id: string
@@ -883,12 +890,16 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "sessions", label: "Sessions", pane: "hive-sessions", path: () => `/iris/hive/sessions` },
     // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
     { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
-    // The inbox was the original ask — "I want to see the inbox and all of the other machines
-    // on the network in this tab". It belongs under Hive, not beside it: it is Hive traffic.
-    { id: "inbox", label: "Inbox", pane: "inbox", path: () => `/iris/inbox` },
+    // Hive › Inbox moved to Inbox › Computers (#192688): one place for everything waiting on you.
+    // `hive/inbox` still lands there (MOVED_SUBVIEWS in iris-panel-nav.ts).
     // THE OTHER HALF OF HIVE. The tab showed your own machines only; a peer connection — the
     // person whose agents can carry your work — had no surface at all.
     { id: "peers", label: "Peers", pane: "peers", path: () => `/iris/hive/peers` },
+  ],
+  inbox: [
+    { id: "messages", label: "Messages", pane: "comms-inbox", path: () => `/iris/comms`, default: true, countOf: "inbox" },
+    // The Hive inbox (#189279): job results, files, links and handoffs sent to this computer.
+    { id: "computers", label: "Computers", pane: "inbox", path: () => `/iris/inbox` },
   ],
   lexicon: [
     {
@@ -1172,7 +1183,6 @@ const PANEL_HINTS: Record<string, string> = {
   hive: "The user's computers (Hive) and tasks that run on them",
   "hive/machines": "Computers connected to the account; send one a task",
   "hive/scripts": "Saved scripts to run on a machine",
-  "hive/inbox": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
   "hive/peers": "Other machines on the mesh",
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
@@ -1180,6 +1190,9 @@ const PANEL_HINTS: Record<string, string> = {
   leads: "Leads — what needs approval, who replied, leads by stage; open one to work it",
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Needs approval: review exact messages, approve some, hold others, and schedule the send",
+  inbox: "Inbox — conversations with leads across email, Instagram, SMS and forms; reply, draft with AI, and messages sent to this computer",
+  "inbox/messages": "Conversations with leads: unread, needs reply, assigned to me, by channel; open one to read and reply",
+  "inbox/computers": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
   marketing: "Marketing — the review pages this account pinned from its own Genesis pages",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
@@ -1273,6 +1286,15 @@ windowIrisPanelScope.setSurface(
 )
 // Last on Outreach (#192483): that is Leads › Needs approval now (#192544). Rewritten once, so the
 // stored panel opens there this launch and on Leads, where the person leaves it, after.
+// Last on Hive › Inbox: that is Inbox › Computers now (#192688). The stored sub-view moves with it.
+try {
+  const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.hive === "inbox") {
+    const { hive: _moved, ...rest } = raw
+    localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify({ ...rest, inbox: "computers" }))
+    if (storage(LAST_SURFACE_KEY) === "hive") localStorage.setItem(LAST_SURFACE_KEY, "inbox")
+  }
+} catch {}
 if (storage(LAST_SURFACE_KEY) === "outreach") {
   try {
     const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
@@ -1589,6 +1611,8 @@ export function SessionIrisTab() {
     shown: () => irisPinnedSig().includes("leads"),
     paneOpen: () => pane() === "leads-crm" || pane() === "reachr",
   })
+  // #192688: the Inbox tab's unread count, for the strip. The tab counts for itself while it is open.
+  watchInboxBadge({ doFetch, shown: () => irisPinnedSig().includes("inbox"), paneOpen: () => pane() === "comms-inbox" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
@@ -4333,6 +4357,16 @@ export function SessionIrisTab() {
                 doFetch={doFetch}
                 bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
                 onNeedsApproval={() => chooseSub("review", "leads")}
+              />
+            </Match>
+            <Match when={pane() === "comms-inbox"}>
+              <IrisInbox
+                doFetch={doFetch}
+                onOpenLead={(id) => {
+                  requestLeadOpen(id)
+                  chooseSurface("leads")
+                  chooseSub("all", "leads")
+                }}
               />
             </Match>
             <Match when={pane() === "reachr"}>

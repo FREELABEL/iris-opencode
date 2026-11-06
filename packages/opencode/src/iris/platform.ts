@@ -5266,8 +5266,10 @@ export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
       return leadsCall(`${lead}/tasks`, send("POST"))
     case "saveTask":
       return a.taskId ? leadsCall(`${lead}/tasks/${a.taskId}`, send("PUT")) : { measured: false, reason: "saveTask needs a task", data: null }
+    // `/leads/{id}/messages` is not a route (404, measured 2026-11-06) — the panel said "No messages
+    // logged" for every lead. The outreach thread is `/outreach/messages` (#192688).
     case "messages":
-      return leadsCall(`${lead}/messages`)
+      return leadsCall(`${lead}/outreach/messages?limit=50`)
     case "steps":
       return leadsCall(`${lead}/outreach-steps`)
     case "readiness":

@@ -814,6 +814,7 @@ const PagesResponse = Schema.Struct({
       ownerType: described(Schema.optional(Schema.String), '"bloq" or "user" — with ownerId, which board owns it.'),
       ownerId: Schema.optional(Schema.Finite),
       siteId: Schema.optional(Schema.Finite),
+      brandId: described(Schema.optional(Schema.Finite), "The brand the page stores (pages.brand_id). Absent when none is stored."),
     }).annotate({ identifier: "IrisPage" }),
   ),
   counts: Schema.optional(
@@ -1018,15 +1019,33 @@ const BrandKitSchema = Schema.Struct({
     }),
   ),
   fonts: Schema.Array(Schema.Struct({ role: Schema.String, family: Schema.String })),
+  fontSection: described(
+    Schema.Literals(["typography", "fonts", "font"]),
+    "#192667. Which section the font stacks were read from — a save writes them back there.",
+  ),
   typeScale: Schema.Array(Schema.Struct({ role: Schema.String, value: Schema.String })),
   logoUrl: Schema.optional(Schema.String),
+  logos: described(
+    Schema.Struct({
+      primary: Schema.optional(Schema.String),
+      on_dark: Schema.optional(Schema.String),
+      on_light: Schema.optional(Schema.String),
+      icon: Schema.optional(Schema.String),
+      social: Schema.optional(Schema.String),
+    }),
+    "#192667. Every logo variant the kit names, in the #192664 shape (brand.logo), falling back to the older logos.*.url.",
+  ),
   motion: Schema.optional(
     Schema.Struct({
       ease: Schema.optional(Schema.String),
       durationMs: Schema.optional(Schema.Finite),
       character: Schema.optional(Schema.String),
+      stiffness: Schema.optional(Schema.Finite),
+      damping: Schema.optional(Schema.Finite),
     }),
   ),
+  voice: described(Schema.optional(Schema.String), "#192667. brand.voice — how the brand speaks."),
+  tone: described(Schema.optional(Schema.String), "#192667. brand.tone."),
   personas: Schema.Array(
     Schema.Struct({ name: Schema.String, isDefault: Schema.Boolean, tone: Schema.optional(Schema.String) }),
   ),
@@ -1704,6 +1723,127 @@ const ReachrResponse = Schema.Struct({
 }).annotate({ identifier: "IrisReachrResponse" })
 
 /*
+ * The people inbox (#192688) — conversations with leads from fl-api's comms log. EVERY FIELD THE
+ * PANEL READS IS DECLARED: Schema strips what it was not told about, silently (PR #459).
+ * src/iris/comms.ts builds exactly these.
+ */
+const CommsDirection = Schema.Literals(["inbound", "outbound"])
+const CommsMessage = Schema.Struct({
+  id: Schema.Finite,
+  leadId: Schema.optional(Schema.Finite),
+  bloqId: Schema.optional(Schema.Finite),
+  channel: described(Schema.String, "fl-api's channel: instagram, gmail, gmail_api, email, apple_mail, imessage, whatsapp, sms, contact_form, …"),
+  direction: CommsDirection,
+  from: Schema.optional(Schema.String),
+  to: Schema.Array(Schema.String),
+  subject: Schema.optional(Schema.String),
+  body: Schema.String,
+  sentAt: Schema.String,
+  senderName: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCommsMessage" })
+const CommsConversation = Schema.Struct({
+  key: described(Schema.String, "`lead:<id>`, or `from:<identifier>` for a sender who is not a lead yet."),
+  leadId: Schema.optional(Schema.Finite),
+  bloqId: Schema.optional(Schema.Finite),
+  name: Schema.String,
+  channel: Schema.String,
+  channels: Schema.Array(Schema.String),
+  lastAt: Schema.String,
+  lastDirection: CommsDirection,
+  preview: Schema.String,
+  subject: Schema.optional(Schema.String),
+  lastInboundAt: described(Schema.optional(Schema.String), "Their newest message — what 'unread on this computer' is measured against."),
+  inbound: Schema.Finite,
+  outbound: Schema.Finite,
+  needsReply: described(Schema.Boolean, "Their message is the last one in the conversation."),
+  assigned: described(Schema.Boolean, "The lead is assigned to the signed-in person (lead assignees)."),
+  status: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCommsConversation" })
+const CommsResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  conversations: Schema.Array(CommsConversation),
+  total: described(Schema.Finite, "Conversations found in the window, before the list was capped."),
+  days: Schema.Finite,
+  truncated: described(Schema.Boolean, "The inbound scan hit its page cap; older messages in the window were not read."),
+  counts: Schema.Struct({
+    all: Schema.Finite,
+    needsReply: Schema.Finite,
+    assigned: Schema.Finite,
+    channels: Schema.Record(Schema.String, Schema.Finite),
+  }),
+}).annotate({ identifier: "IrisCommsResponse" })
+const CommsStep = Schema.Struct({
+  id: Schema.Finite,
+  title: Schema.String,
+  type: Schema.optional(Schema.String),
+  order: Schema.optional(Schema.Finite),
+  done: Schema.Boolean,
+  dueDate: Schema.optional(Schema.String),
+  completedAt: Schema.optional(Schema.String),
+  automation: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCommsStep" })
+const CommsThreadResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  lead: Schema.optional(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      status: Schema.optional(Schema.String),
+      email: Schema.optional(Schema.String),
+      phone: Schema.optional(Schema.String),
+      company: Schema.optional(Schema.String),
+      website: Schema.optional(Schema.String),
+      instagram: Schema.optional(Schema.String),
+      city: Schema.optional(Schema.String),
+      country: Schema.optional(Schema.String),
+      hasReplied: Schema.Boolean,
+      repliedAt: Schema.optional(Schema.String),
+      score: Schema.optional(Schema.Finite),
+      value: Schema.optional(Schema.Finite),
+      source: Schema.optional(Schema.String),
+      createdAt: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisCommsLeadCard" }),
+  ),
+  messages: Schema.Array(CommsMessage),
+  steps: Schema.Array(CommsStep),
+  progress: Schema.optional(Schema.Struct({ total: Schema.Finite, completed: Schema.Finite, percent: Schema.Finite })),
+  currentStep: described(Schema.optional(CommsStep), "The first step of the lead's sequence not done yet."),
+  aiHistory: described(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        type: Schema.optional(Schema.String),
+        direction: CommsDirection,
+        status: Schema.optional(Schema.String),
+        text: Schema.String,
+        subject: Schema.optional(Schema.String),
+        at: Schema.optional(Schema.String),
+        account: Schema.optional(Schema.String),
+      }).annotate({ identifier: "IrisCommsAiMessage" }),
+    ),
+    "Outreach messages the platform records as written by AI, newest first.",
+  ),
+  outreachStats: Schema.optional(Schema.Struct({ total: Schema.Finite, outbound: Schema.Finite, inbound: Schema.Finite, replied: Schema.Finite })),
+  replyTo: Schema.Struct({ email: Schema.optional(Schema.String), sms: Schema.optional(Schema.String), instagram: Schema.optional(Schema.String) }),
+}).annotate({ identifier: "IrisCommsThreadResponse" })
+const ReplyChannel = Schema.Literals(["email", "sms", "instagram"])
+const CommsDraftResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  drafts: Schema.Array(Schema.Struct({ tone: Schema.optional(Schema.String), subject: Schema.optional(Schema.String), text: Schema.String })),
+  fallback: described(Schema.Boolean, "The platform could not reach its model and answered with canned lines."),
+}).annotate({ identifier: "IrisCommsDraftResponse" })
+const CommsSendResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  ok: described(Schema.Boolean, "The platform accepted the send. Not delivered, not read."),
+  channel: ReplyChannel,
+  detail: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisCommsSendResponse" })
+
+/*
  * Lexicon › Agreements (#192484). EVERY FIELD THE PANEL READS IS DECLARED. Schema strips what it was
  * not told about, silently — the lesson of PR #459. src/iris/agreements.ts builds exactly these
  * names and coerces their types, and test/server/httpapi-iris-agreements.test.ts proves each one
@@ -1828,6 +1968,8 @@ export const IrisPaths = {
   brands: `${root}/brands`,
   brandKit: `${root}/brands/:brandID`,
   brandSave: `${root}/brands/:brandID/save`,
+  brandLogoUpload: `${root}/brands/:brandID/logo`,
+  brandLogoProbe: `${root}/brand-logo/probe`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   agentLive: `${root}/agents/:agentID/live`,
   heartbeats: `${root}/heartbeats`,
@@ -1857,6 +1999,10 @@ export const IrisPaths = {
   agreementIssue: `${root}/agreements/:agreementID/issue`,
   agreementRevoke: `${root}/agreements/:agreementID/revoke`,
   leadsApi: `${root}/leads-api`,
+  comms: `${root}/comms`,
+  commsThread: `${root}/comms/thread/:leadID`,
+  commsDraft: `${root}/comms/draft`,
+  commsSend: `${root}/comms/send`,
   pulseContact: `${root}/pulse/contacts/:leadID`,
   runTakeOver: `${root}/runs/:runID/take-over`,
   runHandBack: `${root}/runs/:runID/hand-back`,
@@ -3908,6 +4054,60 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
         success: described(ReachrResponse, "What fl-api answered"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.leadsApi", summary: "Search and manage leads" })),
+      HttpApiEndpoint.get("comms", IrisPaths.comms, {
+        query: {
+          days: Schema.optional(Schema.NumberFromString),
+          bloqId: Schema.optional(Schema.NumberFromString),
+          refresh: Schema.optional(Schema.String),
+        },
+        success: described(CommsResponse, "Conversations with leads, newest first"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.comms",
+          summary: "The people inbox: conversations across channels",
+          description:
+            "#192688. fl-api's unified comms log (`/api/v1/atlas/comms`), inbound messages in the window grouped by lead, each with its latest messages in both directions (needs reply) and the lead's name. Cached a minute; `refresh=1` asks again. Not the Hive inbox (`/iris/inbox`).",
+        }),
+      ),
+      HttpApiEndpoint.get("commsThread", IrisPaths.commsThread, {
+        params: { leadID: Schema.NumberFromString },
+        success: described(CommsThreadResponse, "One lead's conversation, card, sequence and AI history"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.commsThread", summary: "Read one conversation" })),
+      HttpApiEndpoint.post("commsDraft", IrisPaths.commsDraft, {
+        payload: Schema.Struct({
+          leadId: Schema.Finite,
+          channel: ReplyChannel,
+          prompt: Schema.optional(Schema.String),
+        }),
+        success: described(CommsDraftResponse, "AI-drafted replies. Nothing is sent."),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.commsDraft",
+          summary: "Draft a reply with AI",
+          description: "#192688. fl-api's generate-email / generate-sms / reply-suggestions. Drafting sends nothing and stores nothing; the person approves a draft, edits it, and sends it themselves.",
+        }),
+      ),
+      HttpApiEndpoint.post("commsSend", IrisPaths.commsSend, {
+        payload: Schema.Struct({
+          leadId: Schema.Finite,
+          channel: ReplyChannel,
+          text: Schema.String,
+          to: Schema.optional(Schema.String),
+          subject: Schema.optional(Schema.String),
+          origin: Schema.Literals(["person", "ai"]),
+          approved: described(Schema.optional(Schema.Boolean), "Required true when `origin` is ai: the person approved the draft."),
+          confirm: described(Schema.optional(Schema.Boolean), "Required true: the person said yes in a confirm. Without it nothing is sent."),
+          bloqId: Schema.optional(Schema.Finite),
+        }),
+        success: described(CommsSendResponse, "Whether the platform accepted it"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.commsSend",
+          summary: "Send a reply to a lead",
+          description:
+            "#192688. A real message to a real person: email (send-email), SMS (send-sms) or an Instagram DM (send-dm-reply). Refused without `confirm: true`, and an AI draft is refused without `approved: true`.",
+        }),
+      ),
       HttpApiEndpoint.post("reachrAction", IrisPaths.reachrAction, {
         payload: Schema.Struct({
           action: Schema.Literals(["approve", "schedule", "stop", "edit", "hold", "release", "audit"]),
@@ -4144,24 +4344,76 @@ export const IrisApi = HttpApi.make("iris").add(
       HttpApiEndpoint.post("brandSave", IrisPaths.brandSave, {
         params: { brandID: Schema.NumberFromString },
         payload: Schema.Struct({
-          section: Schema.Literals(["colors", "typography", "motion"]),
-          value: Schema.Unknown,
-          expected: described(Schema.String, "The section as read (kit.sections[section])"),
+          changes: described(
+            Schema.Record(Schema.String, Schema.Unknown),
+            "Section (colors, typography, fonts, font, motion, brand) → its whole new value. fl-api replaces sections whole.",
+          ),
+          expected: described(
+            Schema.Record(Schema.String, Schema.String),
+            "Section → that section as read (kit.sections[section]), for every section in `changes`",
+          ),
         }),
         success: described(
           Schema.Struct({
             ok: Schema.Boolean,
             reason: Schema.optional(Schema.String),
             kit: Schema.optional(BrandKitSchema),
+            saved: described(Schema.optional(Schema.Array(Schema.String)), "The sections written"),
           }).annotate({ identifier: "IrisBrandSaveResult" }),
           "Whether the save landed, and the kit as the server now holds it",
         ),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.brandSave",
-          summary: "Save one section of a brand kit",
+          summary: "Save a brand kit's changed sections",
           description:
-            "PINNED to what was read. fl-api's PATCH design-tokens replaces a whole section with no version check, so a second editor would silently win. This re-reads the section and refuses when it moved since `expected`, then writes and reads back.",
+            "#192667. Every changed section in ONE PATCH design-tokens (the `iris brands dt push` call), PINNED to what was read: fl-api replaces whole sections with no version check, so a second editor would silently win. This re-reads and refuses the whole save when any section moved since `expected`, then writes and reads back.",
+        }),
+      ),
+      HttpApiEndpoint.post("brandLogoUpload", IrisPaths.brandLogoUpload, {
+        params: { brandID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          name: Schema.String,
+          type: described(Schema.String, "image/png, image/jpeg, image/webp, image/gif or image/svg+xml"),
+          data: described(Schema.String, "The file, base64. A data: URL prefix is tolerated."),
+          variant: Schema.optional(Schema.String),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            url: Schema.optional(Schema.String),
+            fileId: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisBrandLogoUploaded" }),
+          "The uploaded file's URL. The kit is NOT changed — the URL goes into the editor's draft.",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandLogoUpload",
+          summary: "Upload a logo file for a brand",
+          description:
+            "#192667. JSON with the file base64, forwarded as multipart to fl-api /cloud-files/upload (the `iris cloud:upload` call) with the brand's id. Images only, up to 5 MB. Writes no design tokens.",
+        }),
+      ),
+      HttpApiEndpoint.get("brandLogoProbe", IrisPaths.brandLogoProbe, {
+        query: Schema.Struct({ url: described(Schema.String, "The logo's public http(s) URL") }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            status: Schema.optional(Schema.Finite),
+            contentType: Schema.optional(Schema.String),
+            bytes: Schema.optional(Schema.Finite),
+            dataUrl: described(Schema.optional(Schema.String), "The image as a data: URL, so the editor can read its pixels"),
+          }).annotate({ identifier: "IrisBrandLogoProbe" }),
+          "Whether the URL is a working image, and the image itself",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandLogoProbe",
+          summary: "Fetch a logo for the editor to measure",
+          description:
+            "#192667. The editor flags a logo that would vanish on its tile, which needs the image's pixels — a canvas cannot read a cross-origin image without CORS headers. The engine fetches it (public http(s) hosts only, images only, up to 3 MB) and returns it as a data URL.",
         }),
       ),
       HttpApiEndpoint.get("records", IrisPaths.records, {

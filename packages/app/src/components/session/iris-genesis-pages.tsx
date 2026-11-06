@@ -6,6 +6,8 @@ import "./iris-panel-ui.css"
 import "./iris-genesis-pages.css"
 import {
   BRAND_BY,
+  BRAND_BY_SHORT,
+  isGuessed,
   confirmFor,
   DEVICES,
   exactTime,
@@ -1188,6 +1190,9 @@ function PageCard(props: {
             <div class="iris-gp-brand" title={`${b().brand.name} — ${BRAND_BY[b().by]}`} data-by={b().by}>
               <BrandMark brand={b().brand} />
               <span class="iris-gp-brandname">{b().brand.name}</span>
+              <Show when={isGuessed(b())}>
+                <span class="iris-gp-guessed">guessed</span>
+              </Show>
               <Swatches brand={b().brand} max={5} />
             </div>
           )}
@@ -1324,7 +1329,7 @@ function SideCard(props: {
             <BrandMark brand={b().brand} size="lg" />
             <div class="iris-gp-grow">
               <div class="iris-gp-strong">{b().brand.name}</div>
-              <div class="iris-gp-muted">{b().by === "page" ? "named by the page" : b().by === "board" ? "the board's brand" : "matched by address"}</div>
+              <div class="iris-gp-muted">{BRAND_BY_SHORT[b().by]}</div>
             </div>
             <Swatches brand={b().brand} max={6} />
           </div>
