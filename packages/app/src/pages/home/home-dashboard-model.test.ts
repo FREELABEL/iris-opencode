@@ -67,3 +67,33 @@ describe("#192251 Home › resting", () => {
     expect(overviewOf([resting, stuck], NOW, DAY)).toMatchObject({ resting: 1, stopped: 1 })
   })
 })
+
+describe("#192647 the Agents list shows every agent, not only scheduled ones", () => {
+  const { listRows, emptyText } = require("./home-dashboard-model")
+  const agents = Array.from({ length: 56 }, (_, i) => ({ id: 1000 + i, name: `Agent ${String(i).padStart(2, "0")}` }))
+
+  test("56 agents and no heartbeats: All lists all 56 as No schedule, not 'nothing here'", () => {
+    const list = listRows([], agents, "all", NOW)
+    expect(list).toHaveLength(56)
+    expect(new Set(list.map((r: any) => r.indicator))).toEqual(new Set(["idle"]))
+    expect(list[0].name).toBe("Agent 00")
+    expect(listRows([], agents, "attention", NOW)).toHaveLength(0)
+    expect(emptyText("attention", 0, 56)).toBe("None of your 56 agents runs on a schedule yet — give one a heartbeat to see it here.")
+    expect(emptyText("all", 0, 56)).not.toContain("beating")
+  })
+
+  test("scheduled agents first, with their state; an agent with a heartbeat is not listed twice", () => {
+    const h = beat({ agentName: "Agent 03", agentId: 1003 })
+    const list = listRows([h], agents, "all", NOW)
+    expect(list).toHaveLength(56)
+    expect(list[0]).toMatchObject({ name: "Agent 03", indicator: "ok" })
+    expect(list.filter((r: any) => r.agentId === 1003)).toHaveLength(1)
+    expect(list.slice(1).every((r: any) => r.indicator === "idle")).toBe(true)
+  })
+
+  test("the other tabs stay about schedules, and say the truth when empty", () => {
+    expect(listRows(rows, agents, "attention", NOW).map((r: any) => r.name)).toEqual(["Stuck", "Failed"])
+    expect(emptyText("attention", 4, 56)).toBe("Nothing needs attention — every scheduled agent is beating.")
+    expect(emptyText("all", 0, 0)).toBe("No agents yet — create one and it shows here.")
+  })
+})

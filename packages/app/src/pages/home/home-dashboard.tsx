@@ -10,9 +10,8 @@ import {
   greetingOf,
   overviewOf,
   pageOf,
-  rowOf,
-  tabCount,
-  tabRows,
+  emptyText,
+  listRows,
   type Indicator,
   type Tab,
 } from "./home-dashboard-model"
@@ -91,6 +90,8 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
       return <Icon name="warn" color={AMBER} />
     case "paused":
       return <Icon name="pause" color="var(--ihd-faint)" />
+    case "idle":
+      return <i class="ihd-idle" />
   }
 }
 
@@ -212,7 +213,12 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     day.setHours(0, 0, 0, 0)
     return overviewOf(beats(), now(), day.getTime())
   })
-  const rows = createMemo(() => pageOf(tabRows(beats(), tab(), now()), page()))
+  // #192647: every agent, not only the scheduled ones — the card counts all of them.
+  const agentList = () => (data()?.agents.measured ? data()!.agents.agents : [])
+  const agentTotal = () => data()?.agents.total ?? agentList().length
+  const all = createMemo(() => listRows(beats(), agentList(), tab(), now()))
+  const rows = createMemo(() => pageOf(all(), page()))
+  const openAgents = () => openIrisPanel({ surface: "agents" })
   const hive = () => data()?.hive
   const online = () => hive()?.nodes.filter((n) => n.online) ?? []
   const freeSlots = () => online().reduce((s, n) => s + Math.max(0, (n.maxConcurrent ?? 0) - (n.activeTasks ?? 0)), 0)
@@ -485,7 +491,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                           onClick={() => pick(t)}
                         >
                           {TAB_LABEL[t]}
-                          <span>{tabCount(beats(), t, now())}</span>
+                          <span>{listRows(beats(), agentList(), t, now()).length}</span>
                         </button>
                       )}
                     </For>
@@ -504,20 +510,25 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                   </div>
                   <Show
                     when={rows().total}
-                    fallback={<div class="ihd-empty">Nothing here — every agent is beating.</div>}
+                    fallback={<div class="ihd-empty">{emptyText(tab(), beats().length, agentTotal())}</div>}
                   >
                     <For each={rows().items}>
                       {(r) => {
-                        const a = () => rowOf(r, now())
+                        const a = () => r
+                        const open = () => (r.indicator === "idle" ? openAgents() : openHeartbeats())
                         return (
                           <div
                             class="ihd-tr"
                             data-indicator={a().indicator}
-                            title={`${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)`}
+                            title={
+                              a().indicator === "idle"
+                                ? `${a().why}\nClick to open Agents`
+                                : `${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)`
+                            }
                             role="button"
                             tabIndex={0}
-                            onClick={openHeartbeats}
-                            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openHeartbeats()}
+                            onClick={open}
+                            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && open()}
                           >
                             <span class="ihd-st">
                               <Indicate kind={a().indicator} />
@@ -576,6 +587,10 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                     </button>
                   </div>
                   <div class="ihd-legend">
+                    <span>
+                      <i class="ihd-idle" />
+                      no schedule
+                    </span>
                     <span>
                       <i class="ihd-live" />
                       healthy

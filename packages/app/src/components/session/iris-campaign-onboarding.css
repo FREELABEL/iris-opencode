@@ -1,0 +1,132 @@
+/* "Create your campaign board" (#192627). Tint, text colour and icon only — no edge bars. */
+.iris-camp {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+.iris-camp--compact {
+  align-items: stretch;
+  max-width: 560px;
+  margin: 0 auto 6px;
+}
+
+.iris-camp__card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 8px;
+  background: var(--background-element);
+  text-align: left;
+}
+.iris-camp--compact .iris-camp__card {
+  max-width: none;
+}
+.iris-camp__card--error {
+  background: var(--surface-critical-weak, var(--background-element));
+}
+.iris-camp__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+.iris-camp__warn {
+  flex: none;
+  color: var(--icon-critical-base, var(--text-weak));
+}
+.iris-camp__text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-weak);
+}
+.iris-camp__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.iris-camp__busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-weak);
+}
+.iris-camp__spin {
+  width: 14px;
+  height: 14px;
+  color: var(--text-interactive-base);
+}
+
+.iris-camp__boards {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.iris-camp__board {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+}
+.iris-camp__board:hover {
+  background: var(--surface-raised-base-hover, var(--background-base));
+}
+.iris-camp__board-name {
+  font-size: 12px;
+  color: var(--text-strong);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.iris-camp__tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: var(--text-weak);
+  background: var(--background-base);
+}
+
+/* The "+" picker's entry: a row like a page row, with a hint. */
+.iris-camp__entry {
+  appearance: none;
+  border: 1px dashed var(--border-weaker-base);
+  background: none;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text-interactive-base);
+}
+.iris-camp__entry:hover {
+  background: var(--surface-raised-base-hover, var(--background-element));
+}
+.iris-camp__entry-title {
+  font-size: 12px;
+  color: var(--text-strong);
+}
+.iris-camp__entry-hint {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--text-weaker);
+}

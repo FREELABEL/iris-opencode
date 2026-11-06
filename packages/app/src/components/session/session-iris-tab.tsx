@@ -86,6 +86,7 @@ import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
+import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisLeadsTab } from "./iris-leads-tab"
@@ -4236,7 +4237,12 @@ export function SessionIrisTab() {
           </Match>
           {/* Marketing (#192624): the account's own pins. Nothing pinned → this, never someone else's pages. */}
           <Match when={pane() === "marketing-pins"}>
-            <IrisMarketing doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+            <IrisMarketing
+              doFetch={doFetch}
+              openExternal={(url) => platform.openExternal(url)}
+              emptyActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} />}
+              pickerActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} compact />}
+            />
           </Match>
           <Match when={pane() === "lexicon-agreements"}>
             <IrisLexiconAgreements doFetch={doFetch} />
