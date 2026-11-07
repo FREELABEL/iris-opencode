@@ -35,6 +35,7 @@ export type RunPart = {
     title?: string
     output?: string
     error?: string
+    metadata?: Record<string, unknown>
     time?: { start: number; end?: number }
   }
 }
@@ -115,8 +116,12 @@ function tail(text: string | undefined): string {
 export function toCall(part: RunPart): RunCall | undefined {
   if (part.type !== "tool" || !part.tool || !part.state) return undefined
   const s = part.state
+  // A shell command that exits non-zero is "completed" to the engine but failed to the person
+  // watching: `ls ./missing` printing "No such file" is not a success.
+  const exit = s.metadata?.exit
+  const nonZero = s.status === "completed" && typeof exit === "number" && exit !== 0
   const status: CallStatus =
-    s.status === "completed" ? "done" : s.status === "error" ? "failed" : s.status === "running" ? "running" : "pending"
+    s.status === "completed" ? (nonZero ? "failed" : "done") : s.status === "error" ? "failed" : s.status === "running" ? "running" : "pending"
   return {
     id: part.id,
     tool: part.tool,
@@ -125,7 +130,7 @@ export function toCall(part: RunPart): RunCall | undefined {
     start: s.time?.start,
     end: s.time?.end,
     args: callArgs(s.input),
-    result: status === "failed" ? tail(s.error) : tail(s.output),
+    result: s.status === "error" ? tail(s.error) : tail(s.output),
   }
 }
 
@@ -226,6 +231,7 @@ export function elapsed(start: number | undefined, end: number | undefined, now:
 
 export function money(n: number): string {
   if (!n) return "$0"
+  if (n < 0.001) return "<$0.001"
   return n < 0.01 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`
 }
 
@@ -260,6 +266,36 @@ export function runRoots(input: {
   }
   const ids = [...input.working, ...(input.current ? [input.current] : [])]
   return [...new Set(ids.map(top))]
+}
+
+/** How far back Inactive looks for runs that finished before the pane was opened. */
+export const RECENT_MS = 24 * 60 * 60 * 1000
+export const RECENT_MAX = 10
+
+/**
+ * Runs that finished while nobody had this pane open: the top ancestor of every sub-agent touched
+ * in the window, newest first. A chat that never started an agent is just a chat, not a run.
+ */
+export function recentRoots(sessions: RunSession[], now: number, windowMs = RECENT_MS): string[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]))
+  const top = (id: string) => {
+    let at = id
+    for (let i = 0; i < 20; i++) {
+      const parent = byId.get(at)?.parentID
+      if (!parent) return at
+      at = parent
+    }
+    return at
+  }
+  const touched = (s: RunSession) => s.time?.updated ?? s.time?.created ?? 0
+  return [
+    ...new Set(
+      sessions
+        .filter((s) => s.parentID && now - touched(s) <= windowMs)
+        .sort((a, b) => touched(b) - touched(a))
+        .map((s) => top(s.id)),
+    ),
+  ].slice(0, RECENT_MAX)
 }
 
 /**

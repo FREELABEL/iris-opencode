@@ -6,6 +6,8 @@ import {
   folded,
   FOLD_AFTER_MS,
   isActive,
+  money,
+  recentRoots,
   runRoots,
   runStats,
   splitRuns,
@@ -31,6 +33,12 @@ describe("toCall / callLabel", () => {
   test("a failed call carries its error as the result", () => {
     const c = toCall(tool("p2", "bash", { status: "error", input: { command: "npm test" }, error: "2 of 31 failing", time: { start: 1, end: 2 } }))
     expect(c).toMatchObject({ status: "failed", label: "npm test", result: "2 of 31 failing" })
+  })
+  test("a shell command that exits non-zero is failed, with its output as the result", () => {
+    const c = toCall(tool("p3", "bash", { status: "completed", title: "ls ./missing-folder", input: { command: "ls ./missing-folder" }, output: "No such file or directory", metadata: { exit: 1 }, time: { start: 1, end: 12 } }))
+    expect(c).toMatchObject({ status: "failed", result: "No such file or directory" })
+    const ok = toCall(tool("p4", "bash", { status: "completed", title: "ls", input: {}, output: "a b", metadata: { exit: 0 }, time: { start: 1, end: 2 } }))
+    expect(ok?.status).toBe("done")
   })
   test("text and step parts are not calls", () => {
     expect(toCall({ id: "t", type: "text" })).toBeUndefined()
@@ -103,6 +111,21 @@ describe("runs", () => {
     expect(active.map((r) => r.id)).toEqual(["new", "old"])
     expect(inactive.map((r) => r.id)).toEqual(["gone"])
   })
+  test("recent runs: top ancestors of sub-agents touched in the window, newest first; plain chats are not runs", () => {
+    const day = 24 * 60 * 60 * 1000
+    const now = 10 * day
+    const sessions = [
+      { id: "chat", time: { created: now - 1000, updated: now - 1000 } },
+      { id: "run1", time: { created: now - 5000 } },
+      { id: "kid1", parentID: "run1", time: { created: now - 4000, updated: now - 3000 } },
+      { id: "grand", parentID: "kid1", time: { created: now - 2000, updated: now - 2000 } },
+      { id: "run2", time: { created: now - 9000 } },
+      { id: "kid2", parentID: "run2", time: { created: now - 8000, updated: now - 8000 } },
+      { id: "old", time: { created: now - 3 * day } },
+      { id: "oldkid", parentID: "old", time: { created: now - 3 * day, updated: now - 2 * day } },
+    ]
+    expect(recentRoots(sessions, now)).toEqual(["run1", "run2"])
+  })
   test("roots are the top ancestors of working sessions, plus the open chat, without duplicates", () => {
     const info = (id: string) => ({ a: { id: "a" }, b: { id: "b", parentID: "a" }, c: { id: "c", parentID: "b" }, me: { id: "me" } })[id]
     expect(runRoots({ working: ["c", "b"], info, current: "me" })).toEqual(["a", "me"])
@@ -134,6 +157,9 @@ describe("display rules", () => {
     const n = node("a", "running", { start: 0 })
     const call = { id: "c", tool: "bash", label: "", status: "running" as const, args: "", result: "", start: 500 }
     expect(bar(call, n, 1000)).toEqual({ left: 50, width: 50 })
+  })
+  test("money never shows a run that cost something as $0.000", () => {
+    expect([money(0), money(0.0004), money(0.004), money(0.58)]).toEqual(["$0", "<$0.001", "$0.004", "$0.58"])
   })
   test("the sub-agent tag is stripped; an empty title says so", () => {
     expect(taskTitle("Lay out the pane (@general subagent)")).toBe("Lay out the pane")

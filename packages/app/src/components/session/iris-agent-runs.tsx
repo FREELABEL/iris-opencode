@@ -13,6 +13,8 @@ import {
   elapsed,
   folded,
   money,
+  recentRoots,
+  RECENT_MS,
   runRoots,
   runStats,
   splitRuns,
@@ -34,6 +36,8 @@ const POLL_MS = 2000
 /** Newest messages read per agent — a long chat's earlier calls fold behind "+N earlier" anyway. */
 const MESSAGE_LIMIT = 80
 const MAX_DEPTH = 4
+/** How often Inactive looks for runs that finished while the pane was closed. */
+const DISCOVER_MS = 30000
 
 /** Runs seen this launch, so a finished one stays in Inactive when you switch tabs and come back. */
 const memory = new Map<string, RunNode>()
@@ -78,6 +82,21 @@ export function IrisAgentRuns() {
 
   const client = (directory?: string) => serverSDK().createClient({ directory, throwOnError: true })
 
+  // Runs that finished before the pane was opened: this project's sessions from the last day.
+  const [recent, setRecent] = createSignal<string[]>([])
+  const listed = new Map<string, RunSession>()
+  async function discover() {
+    const directory = params.id ? serverSync().session.get(params.id)?.directory : undefined
+    if (!directory) return
+    const list = await client(directory)
+      .session.list({ directory, start: Date.now() - RECENT_MS, limit: 200 })
+      .then((r) => (r.data ?? []) as RunSession[])
+      .catch(() => [] as RunSession[])
+    for (const s of list) listed.set(s.id, { ...s, directory: s.directory ?? directory })
+    setRecent(recentRoots(list, Date.now()))
+  }
+  const candidates = createMemo(() => [...new Set([...roots(), ...recent()])])
+
   async function load(session: RunSession, depth: number): Promise<RunNode> {
     const sdk = client(session.directory)
     const [messages, kids] = await Promise.all([
@@ -101,12 +120,12 @@ export function IrisAgentRuns() {
     if (busy) return
     busy = true
     try {
-      for (const id of roots()) {
+      for (const id of candidates()) {
         const known = store.runs[id]
         const live = known ? isLive(known) : true
         // A finished run does not change; read it once and leave it alone.
         if (known && !live && !working().includes(id)) continue
-        const session = serverSync().session.get(id) ?? (await serverSync().session.resolve(id).catch(() => undefined))
+        const session = serverSync().session.get(id) ?? listed.get(id) ?? (await serverSync().session.resolve(id).catch(() => undefined))
         if (!session) continue
         const node = await load(session as RunSession, 0)
         // The open chat with no agents and nothing running is just a chat — not a run.
@@ -116,8 +135,8 @@ export function IrisAgentRuns() {
       }
       // Anything we were watching that is no longer working gets one last read so it lands as finished.
       for (const id of Object.keys(store.runs)) {
-        if (roots().includes(id) || !isLive(store.runs[id])) continue
-        const session = serverSync().session.get(id)
+        if (candidates().includes(id) || !isLive(store.runs[id])) continue
+        const session = serverSync().session.get(id) ?? listed.get(id)
         if (!session) continue
         const node = await load(session as RunSession, 0)
         memory.set(id, node)
@@ -133,9 +152,12 @@ export function IrisAgentRuns() {
   const isLive = (n: RunNode): boolean => n.state === "running" || n.state === "retry" || n.children.some(isLive)
 
   createEffect(() => {
-    roots()
+    candidates()
     void refresh()
   })
+  void discover()
+  const finder = setInterval(() => void discover(), DISCOVER_MS)
+  onCleanup(() => clearInterval(finder))
   const timer = setInterval(() => {
     setNow(Date.now())
     if (Object.values(store.runs).some(isLive) || working().length) void refresh()
