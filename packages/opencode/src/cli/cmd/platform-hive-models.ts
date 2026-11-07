@@ -18,7 +18,8 @@ import { join } from "path"
  * not an open model server. Then `hive/<model>` works anywhere IRIS takes a model: the CLI,
  * Desktop, agents, the OpenAI-compatible API — at $0, on your hardware.
  *
- * Phase 1 is owner only: nobody else's requests reach your machine.
+ * Owner only by default: nobody else's requests reach your machine. `share on <connection>` lets
+ * one connected person use them as `hive/@<you>/<model>` (#192752).
  */
 
 export const DEFAULT_INFERENCE_PORT = 3290
@@ -153,6 +154,140 @@ export function checkedAgo(at: string | null | undefined, now = Date.now()): str
   return s < 60 ? `checked ${s}s ago` : `checked ${Math.round(s / 60)}m ago`
 }
 
+/**
+ * Sharing your machines' models with someone you are connected to (#192752, phase 2).
+ *
+ * Directional: each person shares THEIR OWN machines. The server keeps the list on the connection
+ * (permissions.inference_sharers) and only lets you add or remove yourself. The person you share
+ * with uses `hive/@<your user id>/<model>` — and can be read by you, so they are told so.
+ */
+export const INFERENCE_SHARERS = "inference_sharers"
+
+export interface ShareState {
+  id: string
+  peer: string
+  peerUserId: number | null
+  active: boolean
+  iShare: boolean
+  theyShare: boolean
+}
+
+/** Pure: who shares with whom on each connection, from `GET /api/v6/nodes/connections`. */
+export function shareStates(conns: any[], me: number): ShareState[] {
+  return conns.map((c) => {
+    const sharers = (Array.isArray(c?.permissions?.[INFERENCE_SHARERS]) ? c.permissions[INFERENCE_SHARERS] : []).map(Number)
+    const peerUserId = c?.peer_user_id != null ? Number(c.peer_user_id) : null
+    return {
+      id: String(c?.id ?? ""),
+      peer: String(c?.peer_name ?? (peerUserId != null ? `user ${peerUserId}` : "pending invite")),
+      peerUserId,
+      active: c?.status === "active" && peerUserId != null,
+      iShare: sharers.includes(me),
+      theyShare: peerUserId != null && sharers.includes(peerUserId),
+    }
+  })
+}
+
+/** Pure: the connection a person means, by full id, unique id prefix, or peer name. */
+export function pickConnection(states: ShareState[], ref: string): ShareState | { error: string } {
+  const r = ref.trim().toLowerCase()
+  const hits = states.filter((s) => s.id.toLowerCase() === r || s.id.toLowerCase().startsWith(r) || s.peer.toLowerCase() === r)
+  if (hits.length === 1) return hits[0]
+  if (!hits.length) return { error: `no connection matches "${ref}" — see them with: iris hive models share` }
+  return { error: `"${ref}" matches ${hits.length} connections — use more of the id` }
+}
+
+/** Models other people share with you, from the gateway's model list (entries carrying `shared_by`). */
+export async function sharedWithMe(): Promise<any[]> {
+  try {
+    const res = await hiveFetch(`/api/v6/openai/models`)
+    if (!res.ok) return []
+    const body: any = await res.json().catch(() => null)
+    return (Array.isArray(body?.data) ? body.data : []).filter((m: any) => m?.shared_by != null)
+  } catch {
+    return []
+  }
+}
+
+async function connections(userId: number): Promise<any[]> {
+  const res = await hiveFetch(`/api/v6/nodes/connections?user_id=${userId}`)
+  const body: any = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body?.error || body?.message || `HTTP ${res.status}`)
+  return body.connections || []
+}
+
+const ShareCommand = cmd({
+  command: "share [state] [connection]",
+  describe: "share this account's serving machines with someone you are connected to (on), stop (off), or see who shares what",
+  builder: (yargs) =>
+    yargs
+      .positional("state", { type: "string", choices: ["on", "off"] })
+      .positional("connection", { type: "string", describe: "connection id (or its start), or the person's name" })
+      .option("yes", { type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false })
+      .option("user-id", { type: "number" })
+      .example("$0 hive models share", "who you share with, and who shares with you")
+      .example("$0 hive models share on 01a1b2", "let that person run models on your serving machines")
+      .example('$0 run -m iris/hive/@<their user id>/llama3.2:3b "…"', "use a model someone shares with you"),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const states = shareStates(await connections(userId), userId)
+
+    if (!argv.state) {
+      const shared = await sharedWithMe()
+      if (argv.json) return void (await writeJson({ connections: states, shared_with_you: shared }))
+      console.log()
+      if (!states.length) {
+        console.log(dim("  No connections yet. Invite someone: iris hive invite   ·   accept one: iris hive accept <code>"))
+        return
+      }
+      for (const s of states)
+        console.log(
+          `  ${s.active ? success("●") : dim("○")} ${bold(s.peer.padEnd(24))} ${dim(s.id.slice(0, 8))}  you share: ${s.iShare ? success("on") : dim("off")}   they share: ${s.theyShare ? success("on") : dim("off")}${s.active ? "" : dim("  (not active)")}`,
+        )
+      console.log()
+      if (shared.length) {
+        console.log(bold("  Shared with you"))
+        for (const m of shared) console.log(`    ${bold(String(m.id).replace(/^iris\//, ""))}  ${dim(String(m.name ?? ""))}`)
+        console.log(dim(`  Use one: iris run -m <id> "…"   ·   the owner can read what you send`))
+      } else console.log(dim("  Nobody is sharing a serving machine with you right now."))
+      return
+    }
+
+    const pick = pickConnection(states, String(argv.connection ?? ""))
+    if ("error" in pick) {
+      console.log(`\n${highlight("✗")} ${argv.connection ? pick.error : "say which connection — see them with: iris hive models share"}`)
+      process.exitCode = 1
+      return
+    }
+    const share = argv.state === "on"
+    if (share && !argv.yes) {
+      console.log()
+      console.log(`${highlight("!")} ${bold(`${pick.peer} will be able to run models on your serving machines.`)}`)
+      console.log(dim("  You can read every prompt they send, and it runs at your electricity. Patient data is refused on shared machines."))
+      const ok = await prompts.confirm({ message: `Share with ${pick.peer}?`, initialValue: true })
+      if (ok !== true) return void console.log(dim("\n  Not shared."))
+    }
+    const res = await hiveFetch(`/api/v6/nodes/connections/${pick.id}/inference?user_id=${userId}`, {
+      method: "POST",
+      body: JSON.stringify({ share }),
+    })
+    const body: any = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const why = res.status === 404 ? "this IRIS server does not support sharing yet (it needs #192752 deployed)" : body?.message || body?.error || `HTTP ${res.status}`
+      console.log(`\n${highlight("✗")} could not change sharing: ${why}`)
+      process.exitCode = 1
+      return
+    }
+    if (!share) return void console.log(`\n${success("✓")} ${pick.peer} can no longer run models on your machines`)
+    console.log(`\n${success("●")} shared with ${bold(pick.peer)}`)
+    console.log(dim(`  They use: iris run -m iris/hive/@${userId}/<model> "…"   ·   see what you serve: iris hive models`))
+    if (!readSettings().enabled) console.log(warn("  ! this machine is not serving. Start: ") + bold("iris hive models serve on"))
+  },
+})
+
 const ListCommand = cmd({
   command: "$0",
   describe: "the models your machines can serve to your IRIS gateway, and whether each is reachable now",
@@ -189,6 +324,13 @@ const ListCommand = cmd({
           : "  This machine is not serving. Start: iris hive models serve on",
       ),
     )
+    const shared = await sharedWithMe()
+    if (shared.length) {
+      console.log()
+      console.log(bold("  Shared with you"))
+      for (const m of shared) console.log(`    ${bold(String(m.id).replace(/^iris\//, "").padEnd(34))} ${dim(String(m.name ?? ""))}`)
+    }
+    console.log(dim("  Share yours with someone you are connected to: iris hive models share"))
   },
 })
 
@@ -305,7 +447,7 @@ const PhiLocalCommand = cmd({
 
 export const HiveModelsCommand = cmd({
   command: "models",
-  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on|off, phi-local on|off",
-  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand).command(PhiLocalCommand),
+  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on|off, share, phi-local on|off",
+  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand).command(ShareCommand).command(PhiLocalCommand),
   handler: () => {},
 })
