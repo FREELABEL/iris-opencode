@@ -36,6 +36,8 @@ describe("the project row tells the truth about scope", () => {
   test("account-wide products say so", () => {
     for (const s of ["hive", "integrations", "mcp"]) expect(panelScope(s, s)).toBe("account")
     expect(panelScope("atlas", "graph")).toBe("account")
+    // Agents › Running (#192855) shows every chat on this engine, not one project's.
+    expect(panelScope("agents", "agent-runs")).toBe("account")
   })
   test("artifacts belong to the session", () => {
     expect(panelScope("pages", "artifacts")).toBe("session")

@@ -235,6 +235,13 @@ button.iris-glow__chip[data-inline] {
   align-items: center;
   gap: 8px;
 }
+/* The last row: the same list as the side panel's Agents › Running tree (#192855). */
+.iris-bg-menu__all {
+  margin-top: 4px;
+  border-top: 1px solid var(--v2-border-border-weak, rgba(127, 127, 127, 0.18));
+  font-size: 12px;
+  color: var(--v2-text-text-weak, #a39fae);
+}
 .iris-bg-menu__dot {
   flex: none;
   width: 6px;
