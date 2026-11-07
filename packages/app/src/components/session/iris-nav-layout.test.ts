@@ -140,7 +140,8 @@ describe("Outreach folded into Leads (#192544)", () => {
   }
   test("a pinned Outreach becomes a shown Leads, in Outreach's slot, once", () => {
     const l = merged(migrateNavLayout(withOutreach))
-    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "leads", "marketing"])
+    // Inbox (#192688) is new to this layout, so it lands where the default puts it: after Leads.
+    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing"])
     expect(l.order.filter((x) => x === "leads")).toHaveLength(1)
     expect(l.order).not.toContain("outreach")
     expect(l.hidden).not.toContain("outreach")

@@ -65,6 +65,7 @@
 .ihd-st svg { width: 14px; height: 14px; }
 @keyframes ihd-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, .55); } 70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
 @keyframes ihd-spin { to { transform: rotate(360deg); } }
+.ihd-idle { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ihd-faint); display: inline-block; box-sizing: border-box; }
 .ihd-live { width: 8px; height: 8px; border-radius: 50%; background: var(--ihd-em); display: inline-block; animation: ihd-pulse 2s infinite; }
 .ihd-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--ihd-em) 25%, transparent); border-top-color: var(--ihd-em); animation: ihd-spin .8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .ihd-live, .ihd-spin { animation: none; } }
@@ -95,3 +96,14 @@
 .ihd-fr:not([data-unread]) .ihd-name { color: var(--ihd-ink); }
 .ihd-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ihd-age { text-align: right; font-family: var(--ihd-mono); }
+/* On your machines (#192626) */
+.ihd-card-h { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; }
+.ihd-card-h h2 { font-size: 13px; font-weight: 600; color: var(--ihd-ink); }
+.ihd-card-h .ihd-sum { margin: 0; }
+.ihd-card-h .ihd-more { margin-left: auto; font-size: 12px; color: var(--ihd-mute); }
+.ihd-card-h .ihd-more:hover { color: var(--ihd-ink); }
+.ihd-sr { display: grid; grid-template-columns: 22px minmax(0, 1.8fr) 108px minmax(0, 0.9fr) 44px; gap: 10px; align-items: center; padding: 7px 6px; border-bottom: 1px solid var(--ihd-line); font-size: 13px; cursor: pointer; border-radius: 6px; }
+.ihd-sr:hover { background: color-mix(in srgb, var(--ihd-line) 35%, transparent); }
+.ihd-sr .ihd-name small { font: 11.5px var(--ihd-mono); color: var(--ihd-faint); margin-left: 8px; font-weight: 400; }
+@container (max-width: 560px) { .ihd-sr { grid-template-columns: 22px minmax(0, 1fr) minmax(0, 96px) 40px; } .ihd-sr .ihd-tool { display: none; } }
+.ihd-hidden { font-size: 12px; color: var(--ihd-faint); padding: 8px 6px 0; }

@@ -47,6 +47,12 @@ type PlatformBase = {
   /** Restart the app  */
   restart(): Promise<void>
 
+  /**
+   * Run one of the desktop's allowlisted IRIS maintenance actions and return its output
+   * (#192660). Desktop only — the Tauri command maps the name to argv, never to a shell.
+   */
+  irisAction?(action: "daemon-status" | "daemon-restart" | "daemon-register"): Promise<string>
+
   /** Open the IRIS sign-in window (desktop). Absent where there is nothing to open. */
   openSignIn?(): void
 

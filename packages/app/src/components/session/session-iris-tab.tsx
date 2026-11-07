@@ -19,7 +19,14 @@ import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
-import { matchesHands, playbookDocBody, playbookSlugLine, playbookSources, playbookTitle, type HandsFilter } from "./playbook-flow"
+import {
+  matchesHands,
+  playbookDocBody,
+  playbookSlugLine,
+  playbookSources,
+  playbookTitle,
+  type HandsFilter,
+} from "./playbook-flow"
 import { Ic, PlaybookFilters, PlaybookFlowInfo, PlaybookFlowList } from "./iris-playbook-flow"
 import { IrisPager } from "./iris-pager"
 import { pageSummary, type PageEnvelope } from "./use-paged-surface"
@@ -39,6 +46,7 @@ import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
 import { showToast } from "@opencode-ai/ui/toast"
 import { IrisAtlasTimeline } from "./iris-atlas-timeline"
+import { ATLAS_PAGE, moreLabel, moreOf, windowOf } from "./iris-atlas-window"
 import { timelineDatesLabel } from "./iris-atlas-timeline-model"
 import { IrisCardEditor } from "./iris-card-editor"
 import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
@@ -73,7 +81,15 @@ import {
   type NavLayout,
 } from "./iris-nav-layout"
 import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
-import { heldPayload, holdPayload, setSurfaceSync, surfaceCount, surfaceSync, syncLabel, syncOfPayload } from "./iris-surface-store"
+import {
+  heldPayload,
+  holdPayload,
+  setSurfaceSync,
+  surfaceCount,
+  surfaceSync,
+  syncLabel,
+  syncOfPayload,
+} from "./iris-surface-store"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisAgentGallery } from "./iris-agent-gallery"
@@ -88,9 +104,14 @@ import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
+import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
-import { IrisLeadsTab } from "./iris-leads-tab"
+import { IrisLeadsTab, requestLeadOpen } from "./iris-leads-tab"
+import { IrisInbox, watchInboxBadge } from "./iris-inbox"
+import { IrisGenesisPages } from "./iris-genesis-pages"
+import { SitePagesEditor } from "./iris-genesis-sites"
+import { ownerBoard } from "./iris-genesis-sites-model"
 import { itemCommands, renderMarkdown } from "./iris-item"
 import {
   ATLAS_ASSIGNED,
@@ -177,6 +198,8 @@ interface AtlasList {
   id: number
   name: string
   items: AtlasItem[]
+  /** How many cards the list holds when a big board was read a page per list (#192670); else items.length. */
+  total?: number
 }
 
 /** Whatever the active surface returned, beside its measured flags. */
@@ -659,6 +682,10 @@ const SURFACES = [
   // queue is Leads › Needs approval. The `outreach` id (#192483) is an alias now (SURFACE_ALIASES),
   // so old links, pins and stored panels still land there.
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
+  // #192688: conversations with leads across channels (Elon's unified inbox), and the Hive inbox —
+  // messages between your computers — as Inbox › Computers (it was Hive › Inbox; that id is an alias).
+  // Account-wide: a conversation is the lead's, not a board's.
+  { id: "inbox", label: "Inbox", path: () => `/iris/comms` },
   // #192481: ads review, as pinned Genesis pages (#192480) until the native panel (#192320).
   // #192624: the pages are the signed-in ACCOUNT's own pins, never pages named in code. With no
   // sub-views here the surface draws `marketing-pins`, which owns its pane and its empty state —
@@ -698,12 +725,32 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
 /** Panes with an All / This project switch beside the search box; the server takes scope=all. */
 const SCOPED_PANES = new Set(["pages", "agents"])
-const SELF_PANES = new Set(["agent-gallery", "rooms", "artifacts", "atlas-artifacts", "agent-live", "brands", "hive", "hive-sessions", "hive-scripts", "heartbeats", "pulse-topic", "pulse-contact", "reachr", "leads-crm", "inbox", "page"])
+const SELF_PANES = new Set([
+  "agent-gallery",
+  "rooms",
+  "artifacts",
+  "atlas-artifacts",
+  "agent-live",
+  "brands",
+  "hive",
+  "hive-sessions",
+  "hive-scripts",
+  "heartbeats",
+  "pulse-topic",
+  "pulse-contact",
+  "reachr",
+  "leads-crm",
+  "inbox",
+  "page",
+])
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
+SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
+// The people inbox (#192688) fetches for itself.
+SELF_PANES.add("comms-inbox")
 
 interface SubView {
   id: string
@@ -767,7 +814,9 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "heartbeats", label: "Heartbeats", pane: "heartbeats", path: () => `/iris/heartbeats` },
   ],
   pages: [
-    { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
+    // Cards with a live look, a preview-first detail and the page's own controls (#192632). It
+    // fetches for itself; the record list and its Info/Preview/Edit/JSON tabs no longer draw pages.
+    { id: "pages", label: "Pages", pane: "genesis-pages", path: (b) => `/iris/pages/${b}` },
     // A SITE IS NOT A PAGE. It groups pages under shared navigation and owns settings, a
     // contact-form inbox and a comms thread that a page does not have at all. Showing only
     // pages made every one of those invisible and made a nine-page site look like nine
@@ -846,15 +895,25 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "sessions", label: "Sessions", pane: "hive-sessions", path: () => `/iris/hive/sessions` },
     // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
     { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
-    // The inbox was the original ask — "I want to see the inbox and all of the other machines
-    // on the network in this tab". It belongs under Hive, not beside it: it is Hive traffic.
-    { id: "inbox", label: "Inbox", pane: "inbox", path: () => `/iris/inbox` },
+    // Hive › Inbox moved to Inbox › Computers (#192688): one place for everything waiting on you.
+    // `hive/inbox` still lands there (MOVED_SUBVIEWS in iris-panel-nav.ts).
     // THE OTHER HALF OF HIVE. The tab showed your own machines only; a peer connection — the
     // person whose agents can carry your work — had no surface at all.
     { id: "peers", label: "Peers", pane: "peers", path: () => `/iris/hive/peers` },
   ],
+  inbox: [
+    { id: "messages", label: "Messages", pane: "comms-inbox", path: () => `/iris/comms`, default: true, countOf: "inbox" },
+    // The Hive inbox (#189279): job results, files, links and handoffs sent to this computer.
+    { id: "computers", label: "Computers", pane: "inbox", path: () => `/iris/inbox` },
+  ],
   lexicon: [
-    { id: "agreements", label: "Agreements", pane: "lexicon-agreements", path: () => `/iris/agreements`, default: true },
+    {
+      id: "agreements",
+      label: "Agreements",
+      pane: "lexicon-agreements",
+      path: () => `/iris/agreements`,
+      default: true,
+    },
     // The lexicon-console Genesis page, signed in (#192482). Its emailed-code sign-in cannot work in
     // a frame (the cookie is third-party here), so the sidecar mints a one-time code and the page's
     // SDK trades it for a session held in memory. Needs fl-iris-api's page codes live first.
@@ -1126,7 +1185,6 @@ const PANEL_HINTS: Record<string, string> = {
   hive: "The user's computers (Hive) and tasks that run on them",
   "hive/machines": "Computers connected to the account; send one a task",
   "hive/scripts": "Saved scripts to run on a machine",
-  "hive/inbox": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
   "hive/peers": "Other machines on the mesh",
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
@@ -1134,6 +1192,9 @@ const PANEL_HINTS: Record<string, string> = {
   leads: "Leads — what needs approval, who replied, leads by stage; open one to work it",
   "leads/all": "Search, follow up on and manage leads",
   "leads/review": "Needs approval: review exact messages, approve some, hold others, and schedule the send",
+  inbox: "Inbox — conversations with leads across email, Instagram, SMS and forms; reply, draft with AI, and messages sent to this computer",
+  "inbox/messages": "Conversations with leads: unread, needs reply, assigned to me, by channel; open one to read and reply",
+  "inbox/computers": "Messages sent to this computer — job results, files, links, handoffs; open one to read it",
   marketing: "Marketing — the review pages this account pinned from its own Genesis pages",
   playbooks: "Playbooks (skills): repeatable procedures the agent can run",
   "playbooks/all": "Every playbook available here",
@@ -1207,12 +1268,13 @@ const initialSaved = savedNavLayout()
 const [navLayoutSig, setNavLayoutSig] = createSignal<NavLayout>(mergeNavLayout(NAV_DEFAULT, initialSaved))
 /** The products the person themselves chose to show — the default set is not a choice (#189766). */
 const chosenPins = (saved: NavLayout | null) =>
-  saved ? JSON.stringify(visibleNavItems(mergeNavLayout(NAV_DEFAULT, saved)).filter((id) => PRODUCT_IDS.includes(id))) : null
+  saved
+    ? JSON.stringify(visibleNavItems(mergeNavLayout(NAV_DEFAULT, saved)).filter((id) => PRODUCT_IDS.includes(id)))
+    : null
 const [pinsRawSig, setPinsRawSig] = createSignal<string | null>(chosenPins(initialSaved))
 /** The layout the strip draws, for the strip and the agent-facing panel state alike. */
 export const irisNavLayout = navLayoutSig
-const irisPinnedSig = () =>
-  visibleNavItems(navLayoutSig()).filter((id): id is SurfaceId => PRODUCT_IDS.includes(id))
+const irisPinnedSig = () => visibleNavItems(navLayoutSig()).filter((id): id is SurfaceId => PRODUCT_IDS.includes(id))
 
 /**
  * SHARED with the side panel's tab strip (#186509 nav): each pinned product is a top-level tab
@@ -1226,6 +1288,15 @@ windowIrisPanelScope.setSurface(
 )
 // Last on Outreach (#192483): that is Leads › Needs approval now (#192544). Rewritten once, so the
 // stored panel opens there this launch and on Leads, where the person leaves it, after.
+// Last on Hive › Inbox: that is Inbox › Computers now (#192688). The stored sub-view moves with it.
+try {
+  const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.hive === "inbox") {
+    const { hive: _moved, ...rest } = raw
+    localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify({ ...rest, inbox: "computers" }))
+    if (storage(LAST_SURFACE_KEY) === "hive") localStorage.setItem(LAST_SURFACE_KEY, "inbox")
+  }
+} catch {}
 if (storage(LAST_SURFACE_KEY) === "outreach") {
   try {
     const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
@@ -1285,7 +1356,6 @@ export function toggleIrisFilesPin(): boolean {
  */
 export type { IrisScopeChip } from "@/context/iris-panel-scope"
 
-
 /**
  * Open the panel on a surface, and optionally on one of its SUB-VIEWS.
  *
@@ -1342,7 +1412,11 @@ export function SessionIrisTab() {
   const continueSessionHere = async (c: { text: string }) => {
     const sdk = dirSdk!()
     const created = await sdk.api.session.create({ location: { directory: sdk.directory } })
-    await sdk.client.session.promptAsync({ sessionID: created.id, noReply: true, parts: [{ type: "text", text: c.text }] })
+    await sdk.client.session.promptAsync({
+      sessionID: created.id,
+      noReply: true,
+      parts: [{ type: "text", text: c.text }],
+    })
     navigate(`/${base64Encode(sdk.directory)}/session/${created.id}`)
   }
   const projectDir = (): string | undefined => {
@@ -1534,7 +1608,13 @@ export function SessionIrisTab() {
   /** Which renderer draws the rows, and which array key they arrive under. */
   const pane = createMemo(() => resolved().pane)
   // #192483, #192544: the Leads tab's in-review count, for the strip. The console counts for itself.
-  watchOutreachBadge({ doFetch, shown: () => irisPinnedSig().includes("leads"), paneOpen: () => pane() === "leads-crm" || pane() === "reachr" })
+  watchOutreachBadge({
+    doFetch,
+    shown: () => irisPinnedSig().includes("leads"),
+    paneOpen: () => pane() === "leads-crm" || pane() === "reachr",
+  })
+  // #192688: the Inbox tab's unread count, for the strip. The tab counts for itself while it is open.
+  watchInboxBadge({ doFetch, shown: () => irisPinnedSig().includes("inbox"), paneOpen: () => pane() === "comms-inbox" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
@@ -1554,7 +1634,15 @@ export function SessionIrisTab() {
   const scopeOf = (which: string) => scopes()[which] ?? "project"
   const setScopeOf = (which: string, v: "project" | "all") => setScopes((m) => ({ ...m, [which]: v }))
 
-  type SurfaceKey = readonly [string, NonNullable<ReturnType<typeof activeBloq>>, SurfaceId, string, number, string, string]
+  type SurfaceKey = readonly [
+    string,
+    NonNullable<ReturnType<typeof activeBloq>>,
+    SurfaceId,
+    string,
+    number,
+    string,
+    string,
+  ]
   // Typed explicitly: left to inference, the fetcher's `info` argument made the resource's own
   // value type circular and every reader of data() saw {}.
   const [data, { refetch: refetchSurface }] = createResource<SurfacePayload, SurfaceKey>(
@@ -1564,7 +1652,9 @@ export function SessionIrisTab() {
       // changes nothing the resource can see and the old rows stay on screen under the new tab.
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
-      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), scopeOf(resolved().pane)] as SurfaceKey) : undefined
+      return id
+        ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), scopeOf(resolved().pane)] as SurfaceKey)
+        : undefined
     },
     async ([b, id, surf, sub, pageNo, q, scope], info): Promise<SurfacePayload> => {
       const { pane: which, path } = resolved()
@@ -1636,7 +1726,8 @@ export function SessionIrisTab() {
       // answer about what is currently on screen. See surfaceView.
       const next = { ...((await res.json()) as SurfacePayload), __pane: which, __at: Date.now() } as SurfacePayload
       // Only an answer worth coming back to is held: data, not an error, not an offline copy.
-      if (pageNo === 1 && !whole && (next as any).measured !== false && !(next as any).offline) holdPayload(heldKey, next)
+      if (pageNo === 1 && !whole && (next as any).measured !== false && !(next as any).offline)
+        holdPayload(heldKey, next)
 
       // APPEND rather than replace when we asked for a later page of the same surface. The
       // previous value is the earlier pages; dropping it would make "Load more" a "Replace".
@@ -1951,6 +2042,39 @@ export function SessionIrisTab() {
    * header. Stored as the lists you OPENED or CLOSED against that default, so a list that
    * fills up later opens without anyone touching it.
    */
+  // HOW MANY CARDS EACH LIST SHOWS (#192670): one page by default, more on request. Shared by
+  // Board and List, and reset when the board changes, so a big board always opens light.
+  const [shownCards, setShownCards] = createSignal<Record<number, number>>({})
+  createEffect(on(activeBloq, () => setShownCards({}), { defer: true }))
+  // On a big board (#192670) the engine read only each list's first page: the next cards are read
+  // by id first, then the board is re-read — it answers from the engine's copy, so nothing else moves.
+  const [loadingMore, setLoadingMore] = createSignal<number>()
+  const showMoreCards = async (listId: number, loaded: number, total: number) => {
+    const next = (shownCards()[listId] ?? ATLAS_PAGE) + ATLAS_PAGE
+    if (next > loaded && total > loaded) {
+      setLoadingMore(listId)
+      try {
+        await doFetch(`/iris/atlas/${activeBloq()}/more?list=${listId}&count=${next - loaded}`)
+        await refetchSurface()
+      } catch {}
+      setLoadingMore(undefined)
+    }
+    setShownCards((s) => ({ ...s, [listId]: next }))
+  }
+  const MoreCards = (p: { listId: number; total: number; loaded: number }) => (
+    <Show when={moreOf(p.total, shownCards()[p.listId])}>
+      {(m) => (
+        <button
+          type="button"
+          class="iris-atlas-more"
+          disabled={loadingMore() === p.listId}
+          onClick={() => void showMoreCards(p.listId, p.loaded, p.total)}
+        >
+          {loadingMore() === p.listId ? "Loading…" : moreLabel(m())}
+        </button>
+      )}
+    </Show>
+  )
   const foldKey = () => `iris.atlas.fold.${activeBloq() ?? "none"}`
   const [folds, setFolds] = createSignal<Record<string, boolean>>({})
   createEffect(
@@ -2074,7 +2198,11 @@ export function SessionIrisTab() {
     liveRefresh(false)
   }
   /** The face editor (#189806): which card, where it is on screen, and the field a key named. */
-  const [quick, setQuick] = createSignal<{ itemId: number; anchor: { left: number; top: number; bottom: number }; field?: QuickField } | null>(null)
+  const [quick, setQuick] = createSignal<{
+    itemId: number
+    anchor: { left: number; top: number; bottom: number }
+    field?: QuickField
+  } | null>(null)
   const [quickNote, setQuickNote] = createSignal<string | null>(null)
   /*
    * The board's status/priority vocabulary, fetched the first time the editor opens on a board.
@@ -2102,7 +2230,11 @@ export function SessionIrisTab() {
   function openQuick(itemId: number, el: HTMLElement, field?: QuickField, at?: { x: number; y: number }) {
     const r = el.getBoundingClientRect()
     setQuickNote(null)
-    setQuick({ itemId, field, anchor: at ? { left: at.x, top: at.y, bottom: at.y } : { left: r.left, top: r.top, bottom: r.bottom } })
+    setQuick({
+      itemId,
+      field,
+      anchor: at ? { left: at.x, top: at.y, bottom: at.y } : { left: r.left, top: r.top, bottom: r.bottom },
+    })
   }
   function closeQuick() {
     const q = quick()
@@ -2135,7 +2267,12 @@ export function SessionIrisTab() {
           }),
         )
       for (const res of await Promise.all(writes)) {
-        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; message?: string; queued?: boolean }
+        const j = (await res.json().catch(() => ({}))) as {
+          ok?: boolean
+          reason?: string
+          message?: string
+          queued?: boolean
+        }
         if (!res.ok || j.ok === false) reason ??= j.reason ?? j.message ?? `request failed (${res.status})`
         else if (j.queued) setMoveNote(QUEUED_NOTE)
       }
@@ -2181,7 +2318,8 @@ export function SessionIrisTab() {
       setFileOver(itemId)
     },
     onDragLeave: (e: DragEvent) => {
-      if (fileOver() === itemId && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setFileOver(null)
+      if (fileOver() === itemId && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))
+        setFileOver(null)
     },
   })
   function atlasKeys(e: KeyboardEvent) {
@@ -2298,7 +2436,10 @@ export function SessionIrisTab() {
 
   createEffect(
     on(
-      () => (pane() === "atlas" && activeBloq() != null ? ([String(activeBloq()), rows() as AtlasList[]] as const) : undefined),
+      () =>
+        pane() === "atlas" && activeBloq() != null
+          ? ([String(activeBloq()), rows() as AtlasList[]] as const)
+          : undefined,
       (cur) => {
         if (!cur) return
         const [board, lists] = cur
@@ -2955,7 +3096,13 @@ export function SessionIrisTab() {
       let columns: { key: string; label: string; type: string }[] = []
       for (let page = 1; page <= 50; page++) {
         const res = await doFetch(`/iris/records/${b}/${encodeURIComponent(String(slug))}?page=${page}&perPage=200`)
-        const j = (await res.json()) as { measured?: boolean; reason?: string; columns?: typeof columns; rows?: typeof all; hasMore?: boolean }
+        const j = (await res.json()) as {
+          measured?: boolean
+          reason?: string
+          columns?: typeof columns
+          rows?: typeof all
+          hasMore?: boolean
+        }
         if (!res.ok || j.measured === false) throw new Error(j.reason ?? `HTTP ${res.status}`)
         if (page === 1) columns = j.columns ?? []
         all.push(...(j.rows ?? []))
@@ -3033,8 +3180,7 @@ export function SessionIrisTab() {
     // The Graph pane never loads the Atlas payload, so reading lists from `data` there gives the
     // List picker nothing. The graph already holds every list as a `list-<id>` node.
     const lists =
-      fromGraph ??
-      ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
+      fromGraph ?? ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
     // The card's microphone records through this same server, with the SDK's credentials (#190041).
     setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
     dialog.show(() => {
@@ -3184,9 +3330,7 @@ export function SessionIrisTab() {
               {/* AFTER the name, muted and mono. Leading with the number would make
                 every row start with noise and wreck scanning; trailing keeps the
                 names left-aligned and the ids in a column of their own. */}
-              <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                {b.ref}
-              </span>
+              <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">{b.ref}</span>
             </div>
           )}
         </List>
@@ -3235,8 +3379,7 @@ export function SessionIrisTab() {
           panel's product row as a chip (context/iris-panel-scope). What is left is the product's own views.
           The ⤢ focus toggle that ended this row is gone (#191484): it cluttered every product's
           row, and nothing else enters focus mode, so no one can be left in it. */}
-      <Show when={!focus() && SUBVIEWS[surface()]}
-      >
+      <Show when={!focus() && SUBVIEWS[surface()]}>
         {(list) => (
           <div class="iris-subrow shrink-0">
             <div class="iris-subnav" role="tablist" aria-label={`${paneLabel()} views`}>
@@ -3296,7 +3439,14 @@ export function SessionIrisTab() {
           />
           <Show when={SCOPED_PANES.has(pane())}>
             <div class="iris-scope-toggle" role="tablist" aria-label={`Which ${pane()}`}>
-              <For each={[["all", "All"], ["project", "This project"]] as const}>
+              <For
+                each={
+                  [
+                    ["all", "All"],
+                    ["project", "This project"],
+                  ] as const
+                }
+              >
                 {([value, label]) => (
                   <button
                     type="button"
@@ -3360,7 +3510,8 @@ export function SessionIrisTab() {
               onSaved={(a) => {
                 void refetchSurface()
                 setAgentsVersion((v) => v + 1)
-                if (a.created) setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
+                if (a.created)
+                  setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
               }}
               onDetails={
                 ed().row
@@ -3468,12 +3619,19 @@ export function SessionIrisTab() {
           </label>
           <label class="iris-atlas-tools__field">
             <span>Due</span>
-            <select value={atlasView().due} onChange={(e) => setAtlasView({ due: e.currentTarget.value as AtlasViewOptions["due"] })}>
+            <select
+              value={atlasView().due}
+              onChange={(e) => setAtlasView({ due: e.currentTarget.value as AtlasViewOptions["due"] })}
+            >
               <For each={ATLAS_DUE}>{(o) => <option value={o.id}>{o.label}</option>}</For>
             </select>
           </label>
           <label class="iris-atlas-tools__check">
-            <input type="checkbox" checked={atlasView().hasFiles} onChange={(e) => setAtlasView({ hasFiles: e.currentTarget.checked })} />
+            <input
+              type="checkbox"
+              checked={atlasView().hasFiles}
+              onChange={(e) => setAtlasView({ hasFiles: e.currentTarget.checked })}
+            />
             <span>Has files</span>
           </label>
           <Show when={!isDefaultView(atlasView())}>
@@ -3532,7 +3690,9 @@ export function SessionIrisTab() {
             class="iris-atlas-bell"
             title="Offline copy — boards kept on this machine"
             aria-label="Offline copy settings"
-            onClick={() => dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)}
+            onClick={() =>
+              dialog.show(() => <IrisLocalCopySettings doFetch={doFetch} onChanged={() => void refetchSurface()} />)
+            }
           >
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
               <path
@@ -3626,488 +3786,490 @@ export function SessionIrisTab() {
                 as long as the fetch took (`.latest` still suspends before the first value). Here
                 only the body waits; the title, tabs and back link stay put. */}
             <Suspense fallback={<p class="text-12-regular text-text-weak py-2">Reading…</p>}>
-            <Switch>
-              <Match when={detailTab() === "info"}>
-                {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
+              <Switch>
+                <Match when={detailTab() === "info"}>
+                  {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
                     Shown above the fields because "has this been flapping" is a shape, not a
                     value, and a column of dates cannot answer it. */}
-                <Show when={openRow()!.raw?.health?.bars?.length}>
-                  <div class="pb-3">
-                    <div class="iris-bars">
-                      <For each={openRow()!.raw.health.bars}>
-                        {(b: any) => (
-                          <span
-                            class="iris-bars__bar"
-                            classList={{
-                              "iris-bars__bar--up": b.state === "up",
-                              "iris-bars__bar--down": b.state === "down",
-                            }}
-                            title={`${b.state}${b.from ? ` · from ${b.from}` : ""}`}
-                          />
-                        )}
-                      </For>
+                  <Show when={openRow()!.raw?.health?.bars?.length}>
+                    <div class="pb-3">
+                      <div class="iris-bars">
+                        <For each={openRow()!.raw.health.bars}>
+                          {(b: any) => (
+                            <span
+                              class="iris-bars__bar"
+                              classList={{
+                                "iris-bars__bar--up": b.state === "up",
+                                "iris-bars__bar--down": b.state === "down",
+                              }}
+                              title={`${b.state}${b.from ? ` · from ${b.from}` : ""}`}
+                            />
+                          )}
+                        </For>
+                      </div>
+                      <p class="text-11-regular text-text-weaker pt-1">
+                        Provider {openRow()!.raw.health.state}
+                        {openRow()!.raw.health.basis ? ` · by ${openRow()!.raw.health.basis}` : ""}
+                        {/* Said plainly, because this is the sentence people get wrong. */}
+                        {openRow()!.raw.status === "error" && openRow()!.raw.health.state === "operational"
+                          ? " — the service is fine; it is your credential that is failing"
+                          : ""}
+                      </p>
                     </div>
-                    <p class="text-11-regular text-text-weaker pt-1">
-                      Provider {openRow()!.raw.health.state}
-                      {openRow()!.raw.health.basis ? ` · by ${openRow()!.raw.health.basis}` : ""}
-                      {/* Said plainly, because this is the sentence people get wrong. */}
-                      {openRow()!.raw.status === "error" && openRow()!.raw.health.state === "operational"
-                        ? " — the service is fine; it is your credential that is failing"
-                        : ""}
-                    </p>
-                  </div>
-                </Show>
-                {/* A PLAYBOOK IS NOT A RECORD EITHER (03 Flow). What it will do, whether it will
+                  </Show>
+                  {/* A PLAYBOOK IS NOT A RECORD EITHER (03 Flow). What it will do, whether it will
                     ask you anything, and whether anyone uses it — then the steps, coloured by who
                     does them. The CLI line and the raw fields move into "For developers". */}
-                <Show when={openRow()!.pane === "playbooks" && openRow()!.raw}>
-                  <PlaybookFlowInfo
-                    row={openRow()!.raw}
-                    button={playbookButton(openRow()!.raw)}
-                    command={playbookCommand(openRow()!.raw)}
-                    installing={installing()}
-                    installResult={installResult()}
-                    projectDir={projectDir()}
-                    onInstall={installOpenPlaybook}
-                  />
-                </Show>
-                {/* A CONNECTOR IS NOT A RECORD. Rendering it through the generic key/value list
+                  <Show when={openRow()!.pane === "playbooks" && openRow()!.raw}>
+                    <PlaybookFlowInfo
+                      row={openRow()!.raw}
+                      button={playbookButton(openRow()!.raw)}
+                      command={playbookCommand(openRow()!.raw)}
+                      installing={installing()}
+                      installResult={installResult()}
+                      projectDir={projectDir()}
+                      onInstall={installOpenPlaybook}
+                    />
+                  </Show>
+                  {/* A CONNECTOR IS NOT A RECORD. Rendering it through the generic key/value list
                     below turned the registry's page into a database row: a full-width green slab
                     for uptime, a raw ISO timestamp, the basis sentence in a value cell. Same
                     data, drawn with the page's hierarchy. */}
-                <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
-                  <IrisIntegrationDetail
-                    row={openRow()!.raw}
-                    connect={
-                      connect()?.type === openRow()!.raw.type
-                        ? { state: connect()!.state, message: connect()!.message }
-                        : undefined
-                    }
-                    onConnect={() => void startConnect(String(openRow()!.raw.type))}
-                  />
-                </Show>
-                <Show when={openRow()!.command && openRow()!.pane !== "catalog" && openRow()!.pane !== "playbooks"}>
-                  <button
-                    type="button"
-                    class="iris-command"
-                    title="Click to copy"
-                    onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
+                  <Show when={openRow()!.pane === "catalog" && openRow()!.raw?.type}>
+                    <IrisIntegrationDetail
+                      row={openRow()!.raw}
+                      connect={
+                        connect()?.type === openRow()!.raw.type
+                          ? { state: connect()!.state, message: connect()!.message }
+                          : undefined
+                      }
+                      onConnect={() => void startConnect(String(openRow()!.raw.type))}
+                    />
+                  </Show>
+                  <Show when={openRow()!.command && openRow()!.pane !== "catalog" && openRow()!.pane !== "playbooks"}>
+                    <button
+                      type="button"
+                      class="iris-command"
+                      title="Click to copy"
+                      onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
+                    >
+                      {openRow()!.command}
+                    </button>
+                  </Show>
+                  <dl
+                    class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
+                    classList={{ hidden: openRow()!.pane === "catalog" || openRow()!.pane === "playbooks" }}
                   >
-                    {openRow()!.command}
-                  </button>
-                </Show>
-                <dl
-                  class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
-                  classList={{ hidden: openRow()!.pane === "catalog" || openRow()!.pane === "playbooks" }}
-                >
-                  <For each={openRow()!.fields}>
-                    {([k, v]) => (
-                      <>
-                        <dt class="text-11-regular text-text-weaker">{k}</dt>
-                        <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
-                      </>
-                    )}
-                  </For>
-                </dl>
-              </Match>
+                    <For each={openRow()!.fields}>
+                      {([k, v]) => (
+                        <>
+                          <dt class="text-11-regular text-text-weaker">{k}</dt>
+                          <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
+                        </>
+                      )}
+                    </For>
+                  </dl>
+                </Match>
 
-              {/* The raw record. What the info tab flattens, in the shape the API actually
+                {/* The raw record. What the info tab flattens, in the shape the API actually
                   returned — the thing you need when a field is missing and you want to know
                   whether the server omitted it or this panel dropped it. */}
-              <Match when={detailTab() === "json"}>
-                <button
-                  type="button"
-                  class="mb-2 px-2 py-0.5 rounded text-11-regular text-text-weak hover:text-text-base hover:bg-background-element cursor-pointer"
-                  onClick={() => navigator.clipboard?.writeText(JSON.stringify(openRow()!.raw, null, 2))}
-                >
-                  Copy JSON
-                </button>
-                <pre class="iris-json text-11-regular" innerHTML={highlightJson(openRow()!.raw)} />
-              </Match>
+                <Match when={detailTab() === "json"}>
+                  <button
+                    type="button"
+                    class="mb-2 px-2 py-0.5 rounded text-11-regular text-text-weak hover:text-text-base hover:bg-background-element cursor-pointer"
+                    onClick={() => navigator.clipboard?.writeText(JSON.stringify(openRow()!.raw, null, 2))}
+                  >
+                    Copy JSON
+                  </button>
+                  <pre class="iris-json text-11-regular" innerHTML={highlightJson(openRow()!.raw)} />
+                </Match>
 
-              {/* The page itself. An unpublished page has no URL to show, and saying so beats
+                {/* The page itself. An unpublished page has no URL to show, and saying so beats
                   an iframe pointed at nothing. */}
-              <Match when={detailTab() === "preview"}>
-                <Show
-                  when={openRow()!.raw?.url}
-                  fallback={
-                    <p class="text-12-regular text-text-weak py-2">
-                      No public URL yet — this page is {openRow()!.raw?.status ?? "unpublished"}.
-                    </p>
-                  }
-                >
-                  <div class="flex items-baseline gap-2 pb-2">
-                    <a
-                      href={openRow()!.raw.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      class="text-11-regular text-text-interactive-base hover:underline truncate"
-                    >
-                      {openRow()!.raw.url}
-                    </a>
-                  </div>
-                  <iframe
-                    src={openRow()!.raw.url}
-                    class="iris-preview"
-                    title={openRow()!.title}
-                    sandbox="allow-scripts allow-same-origin"
-                  />
-                </Show>
-              </Match>
-
-              {/* EDIT THE PAGE. The document itself, saved back pinned to the version it was
-                  read at — see /iris/page/:id/save. */}
-              <Match when={detailTab() === "edit"}>
-                <Switch>
-                  <Match when={pageDoc.loading && !pageDoc.latest}>
-                    <p class="text-12-regular text-text-weak py-2">Loading page…</p>
-                  </Match>
-                  <Match when={pageDoc.latest && !pageDoc.latest!.measured}>
-                    <p class="text-12-regular text-text-weak py-2">
-                      Could not load this page — {pageDoc.latest!.reason ?? "unknown"}.
-                    </p>
-                  </Match>
-                  <Match when={pageDoc.latest}>
+                <Match when={detailTab() === "preview"}>
+                  <Show
+                    when={openRow()!.raw?.url}
+                    fallback={
+                      <p class="text-12-regular text-text-weak py-2">
+                        No public URL yet — this page is {openRow()!.raw?.status ?? "unpublished"}.
+                      </p>
+                    }
+                  >
                     <div class="flex items-baseline gap-2 pb-2">
-                      <span class="font-mono text-11-regular text-text-weaker">
-                        {pageDoc.latest!.status}
-                        {pageDoc.latest!.currentVersion != null ? ` · v${pageDoc.latest!.currentVersion}` : ""}
-                      </span>
-                      {/* The save is PINNED. Said on screen, because "why did my save fail" is
-                          otherwise a mystery and the answer is a good one. */}
-                      <Show when={pageDoc.latest!.currentVersion == null}>
-                        <span class="text-11-regular text-text-weaker">
-                          no version — a save here cannot detect a conflict
-                        </span>
-                      </Show>
-                      <button
-                        type="button"
-                        class="ms-auto px-2 py-0.5 rounded text-11-regular cursor-pointer disabled:cursor-default"
-                        classList={{
-                          "text-text-weaker": draft() == null || saving(),
-                          "text-text-strong hover:bg-background-element": draft() != null && !saving(),
-                        }}
-                        disabled={draft() == null || saving()}
-                        onClick={savePage}
+                      <a
+                        href={openRow()!.raw.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        class="text-11-regular text-text-interactive-base hover:underline truncate"
                       >
-                        {saving() ? "Saving…" : draft() == null ? "No changes" : "Save"}
-                      </button>
+                        {openRow()!.raw.url}
+                      </a>
                     </div>
-                    <Show when={saveNote()}>
-                      {(n) => (
-                        <p
-                          class="text-11-regular pb-2"
-                          classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}
-                        >
-                          {n().text}
-                        </p>
-                      )}
-                    </Show>
-                    <textarea
-                      class="iris-editor"
-                      spellcheck={false}
-                      value={draft() ?? pageDoc.latest!.json}
-                      onInput={(e) => setDraft(e.currentTarget.value)}
+                    <iframe
+                      src={openRow()!.raw.url}
+                      class="iris-preview"
+                      title={openRow()!.title}
+                      sandbox="allow-scripts allow-same-origin"
                     />
-                  </Match>
-                </Switch>
-              </Match>
+                  </Show>
+                </Match>
 
-              {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}
-              {/* THE TOOLS an MCP server gives an agent. Empty is an answer: a server that is
+                {/* EDIT THE PAGE. The document itself, saved back pinned to the version it was
+                  read at — see /iris/page/:id/save. */}
+                <Match when={detailTab() === "edit"}>
+                  <Switch>
+                    <Match when={pageDoc.loading && !pageDoc.latest}>
+                      <p class="text-12-regular text-text-weak py-2">Loading page…</p>
+                    </Match>
+                    <Match when={pageDoc.latest && !pageDoc.latest!.measured}>
+                      <p class="text-12-regular text-text-weak py-2">
+                        Could not load this page — {pageDoc.latest!.reason ?? "unknown"}.
+                      </p>
+                    </Match>
+                    <Match when={pageDoc.latest}>
+                      <div class="flex items-baseline gap-2 pb-2">
+                        <span class="font-mono text-11-regular text-text-weaker">
+                          {pageDoc.latest!.status}
+                          {pageDoc.latest!.currentVersion != null ? ` · v${pageDoc.latest!.currentVersion}` : ""}
+                        </span>
+                        {/* The save is PINNED. Said on screen, because "why did my save fail" is
+                          otherwise a mystery and the answer is a good one. */}
+                        <Show when={pageDoc.latest!.currentVersion == null}>
+                          <span class="text-11-regular text-text-weaker">
+                            no version — a save here cannot detect a conflict
+                          </span>
+                        </Show>
+                        <button
+                          type="button"
+                          class="ms-auto px-2 py-0.5 rounded text-11-regular cursor-pointer disabled:cursor-default"
+                          classList={{
+                            "text-text-weaker": draft() == null || saving(),
+                            "text-text-strong hover:bg-background-element": draft() != null && !saving(),
+                          }}
+                          disabled={draft() == null || saving()}
+                          onClick={savePage}
+                        >
+                          {saving() ? "Saving…" : draft() == null ? "No changes" : "Save"}
+                        </button>
+                      </div>
+                      <Show when={saveNote()}>
+                        {(n) => (
+                          <p
+                            class="text-11-regular pb-2"
+                            classList={{ "text-text-base": n().ok, "text-text-weak": !n().ok }}
+                          >
+                            {n().text}
+                          </p>
+                        )}
+                      </Show>
+                      <textarea
+                        class="iris-editor"
+                        spellcheck={false}
+                        value={draft() ?? pageDoc.latest!.json}
+                        onInput={(e) => setDraft(e.currentTarget.value)}
+                      />
+                    </Match>
+                  </Switch>
+                </Match>
+
+                {/* THE STEPS. What the playbook will actually do, and what it needs from you. */}
+                {/* THE TOOLS an MCP server gives an agent. Empty is an answer: a server that is
                   not connected exposes none, and that is what the status field is for. */}
-              <Match when={detailTab() === "tools"}>
-                <Switch>
-                  <Match when={mcpTools.loading && !mcpTools.latest}>
-                    <p class="text-12-regular text-text-weak py-2">Reading…</p>
-                  </Match>
-                  <Match when={mcpTools.error}>
-                    <p class="text-12-regular text-text-danger-base py-2">
-                      {String(mcpTools.error?.message ?? mcpTools.error)}
-                    </p>
-                  </Match>
-                  <Match when={(mcpTools.latest?.length ?? 0) === 0}>
-                    <p class="text-12-regular text-text-weak py-2">
-                      No tools.
-                      {openRow()!.raw?.status === "connected"
-                        ? ""
-                        : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
-                    </p>
-                  </Match>
-                  <Match when={mcpTools.latest}>
-                    <p class="text-11-regular text-text-weaker pb-1">Tools · {mcpTools.latest!.length}</p>
-                    <For each={mcpTools.latest}>
-                      {(t) => (
-                        <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                          <div class="font-mono text-12-regular text-text-base">{t.name}</div>
-                          <Show when={t.description}>
-                            {/* Clamped: some descriptions are a page of prose (iris_agent), and one
+                <Match when={detailTab() === "tools"}>
+                  <Switch>
+                    <Match when={mcpTools.loading && !mcpTools.latest}>
+                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                    </Match>
+                    <Match when={mcpTools.error}>
+                      <p class="text-12-regular text-text-danger-base py-2">
+                        {String(mcpTools.error?.message ?? mcpTools.error)}
+                      </p>
+                    </Match>
+                    <Match when={(mcpTools.latest?.length ?? 0) === 0}>
+                      <p class="text-12-regular text-text-weak py-2">
+                        No tools.
+                        {openRow()!.raw?.status === "connected"
+                          ? ""
+                          : ` This server is ${String(openRow()!.raw?.status ?? "not connected").replace("_", " ")}.`}
+                      </p>
+                    </Match>
+                    <Match when={mcpTools.latest}>
+                      <p class="text-11-regular text-text-weaker pb-1">Tools · {mcpTools.latest!.length}</p>
+                      <For each={mcpTools.latest}>
+                        {(t) => (
+                          <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                            <div class="font-mono text-12-regular text-text-base">{t.name}</div>
+                            <Show when={t.description}>
+                              {/* Clamped: some descriptions are a page of prose (iris_agent), and one
                                 of those pushes every other tool off the screen. Full text on hover. */}
-                            <div class="text-11-regular text-text-weak line-clamp-2" title={t.description}>
-                              {t.description}
-                            </div>
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </Match>
-                </Switch>
-              </Match>
-
-              <Match when={detailTab() === "steps"}>
-                <Show
-                  when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
-                  fallback={
-                    <p class="text-12-regular text-text-weak py-2">
-                      This playbook publishes no step summary. The Document tab has the real thing when it is installed
-                      on this machine.
-                    </p>
-                  }
-                >
-                  <Show when={(openRow()!.raw?.args?.length ?? 0) > 0}>
-                    <h4 class="text-11-regular text-text-weaker pb-1">Arguments</h4>
-                    <For each={openRow()!.raw.args}>
-                      {(a: any) => (
-                        <div class="flex items-baseline gap-2 px-2 py-1 border-b border-border-weaker-base last:border-0">
-                          <span class="font-mono text-11-regular text-text-base shrink-0">{a.name}</span>
-                          <span class="font-mono text-11-regular text-text-weaker shrink-0">{a.type ?? "?"}</span>
-                          {/* Required is said out loud — a missing required arg is the most
-                              common reason a run dies on its first step. */}
-                          <Show when={a.required}>
-                            <span class="iris-table__phi shrink-0">required</span>
-                          </Show>
-                          <span class="text-11-regular text-text-weak min-w-0 flex-1 truncate" title={a.description}>
-                            {a.description}
-                          </span>
-                        </div>
-                      )}
-                    </For>
-                  </Show>
-                  <Show when={(openRow()!.raw?.steps?.length ?? 0) > 0}>
-                    <h4 class="text-11-regular text-text-weaker pt-3 pb-1">Steps · {openRow()!.raw.steps.length}</h4>
-                    <For each={openRow()!.raw.steps}>
-                      {(st: any, i) => (
-                        <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                          <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
-                            {i() + 1}
-                          </span>
-                          <div class="min-w-0 flex-1">
-                            <p class="text-12-regular text-text-base">{st.title}</p>
-                            <p class="font-mono text-11-regular text-text-weaker truncate">
-                              {st.id}
-                              {st.integrations?.length ? ` · ${st.integrations.join(", ")}` : ""}
-                            </p>
+                              <div class="text-11-regular text-text-weak line-clamp-2" title={t.description}>
+                                {t.description}
+                              </div>
+                            </Show>
                           </div>
-                          {/* shell vs prompt is the difference between running a command and
-                              asking a model, which is the whole character of a step. */}
-                          <span class="shrink-0 font-mono text-11-regular text-text-weaker">{st.mode ?? "?"}</span>
-                        </div>
-                      )}
-                    </For>
-                  </Show>
-                </Show>
-              </Match>
+                        )}
+                      </For>
+                    </Match>
+                  </Switch>
+                </Match>
 
-              {/* THE DOCUMENT itself, rendered. */}
-              <Match when={detailTab() === "doc"}>
-                <Switch>
-                  <Match when={playbookDoc.loading && !playbookDoc.latest}>
-                    <p class="text-12-regular text-text-weak py-2">Reading…</p>
-                  </Match>
-                  <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
-                    {/* Neither copy exists: not installed here AND not published. */}
-                    <p class="text-12-regular text-text-weak py-2">
-                      No document — this playbook is not installed on this machine and has not been published.
-                      <br />
-                      <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
-                    </p>
-                  </Match>
-                  <Match when={playbookDoc.latest?.found}>
-                    {/* WHICH COPY you are reading. The local file and the published one can
+                <Match when={detailTab() === "steps"}>
+                  <Show
+                    when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
+                    fallback={
+                      <p class="text-12-regular text-text-weak py-2">
+                        This playbook publishes no step summary. The Document tab has the real thing when it is
+                        installed on this machine.
+                      </p>
+                    }
+                  >
+                    <Show when={(openRow()!.raw?.args?.length ?? 0) > 0}>
+                      <h4 class="text-11-regular text-text-weaker pb-1">Arguments</h4>
+                      <For each={openRow()!.raw.args}>
+                        {(a: any) => (
+                          <div class="flex items-baseline gap-2 px-2 py-1 border-b border-border-weaker-base last:border-0">
+                            <span class="font-mono text-11-regular text-text-base shrink-0">{a.name}</span>
+                            <span class="font-mono text-11-regular text-text-weaker shrink-0">{a.type ?? "?"}</span>
+                            {/* Required is said out loud — a missing required arg is the most
+                              common reason a run dies on its first step. */}
+                            <Show when={a.required}>
+                              <span class="iris-table__phi shrink-0">required</span>
+                            </Show>
+                            <span class="text-11-regular text-text-weak min-w-0 flex-1 truncate" title={a.description}>
+                              {a.description}
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                    </Show>
+                    <Show when={(openRow()!.raw?.steps?.length ?? 0) > 0}>
+                      <h4 class="text-11-regular text-text-weaker pt-3 pb-1">Steps · {openRow()!.raw.steps.length}</h4>
+                      <For each={openRow()!.raw.steps}>
+                        {(st: any, i) => (
+                          <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                            <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
+                              {i() + 1}
+                            </span>
+                            <div class="min-w-0 flex-1">
+                              <p class="text-12-regular text-text-base">{st.title}</p>
+                              <p class="font-mono text-11-regular text-text-weaker truncate">
+                                {st.id}
+                                {st.integrations?.length ? ` · ${st.integrations.join(", ")}` : ""}
+                              </p>
+                            </div>
+                            {/* shell vs prompt is the difference between running a command and
+                              asking a model, which is the whole character of a step. */}
+                            <span class="shrink-0 font-mono text-11-regular text-text-weaker">{st.mode ?? "?"}</span>
+                          </div>
+                        )}
+                      </For>
+                    </Show>
+                  </Show>
+                </Match>
+
+                {/* THE DOCUMENT itself, rendered. */}
+                <Match when={detailTab() === "doc"}>
+                  <Switch>
+                    <Match when={playbookDoc.loading && !playbookDoc.latest}>
+                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                    </Match>
+                    <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
+                      {/* Neither copy exists: not installed here AND not published. */}
+                      <p class="text-12-regular text-text-weak py-2">
+                        No document — this playbook is not installed on this machine and has not been published.
+                        <br />
+                        <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
+                      </p>
+                    </Match>
+                    <Match when={playbookDoc.latest?.found}>
+                      {/* WHICH COPY you are reading. The local file and the published one can
                         differ — that is the whole reason `playbook publish` can lie — so the
                         source is stated rather than left to be assumed. */}
-                    <p
-                      class="font-mono text-11-regular text-text-weaker pb-2 truncate"
-                      title={playbookDoc.latest!.path}
-                    >
-                      {playbookDoc.latest!.source === "local" ? "local · " : "published · "}
-                      {playbookDoc.latest!.path}
-                    </p>
-                    <div
-                      class="iris-markdown text-12-regular"
-                      innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
-                    />
-                  </Match>
-                </Switch>
-              </Match>
+                      <p
+                        class="font-mono text-11-regular text-text-weaker pb-2 truncate"
+                        title={playbookDoc.latest!.path}
+                      >
+                        {playbookDoc.latest!.source === "local" ? "local · " : "published · "}
+                        {playbookDoc.latest!.path}
+                      </p>
+                      <div
+                        class="iris-markdown text-12-regular"
+                        innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
+                      />
+                    </Match>
+                  </Switch>
+                </Match>
 
-              {/* WHAT THIS AGENT IS HOLDING. Four sources in one list — a task on a bloq item,
+                {/* WHAT THIS AGENT IS HOLDING. Four sources in one list — a task on a bloq item,
                   a task on a lead, a scheduled job, or a whole board it heartbeats. The last is
                   the one most likely to be forgotten, because nothing about the board mentions
                   it, so it is shown alongside the rest rather than inferred. */}
-              <Match when={detailTab() === "tasks"}>
-                <Switch>
-                  <Match when={agentTasks.loading && !agentTasks.latest}>
-                    <p class="text-12-regular text-text-weak py-2">Loading tasks…</p>
-                  </Match>
-                  <Match when={agentTasks.latest && !agentTasks.latest!.measured}>
-                    <p class="text-12-regular text-text-weak py-2">
-                      Could not load tasks — {agentTasks.latest!.reason ?? "unknown"}.
-                    </p>
-                  </Match>
-                  <Match when={(agentTasks.latest?.tasks?.length ?? 0) === 0}>
-                    {/* A GENUINE zero, and it says what it means: attached to a board is not
+                <Match when={detailTab() === "tasks"}>
+                  <Switch>
+                    <Match when={agentTasks.loading && !agentTasks.latest}>
+                      <p class="text-12-regular text-text-weak py-2">Loading tasks…</p>
+                    </Match>
+                    <Match when={agentTasks.latest && !agentTasks.latest!.measured}>
+                      <p class="text-12-regular text-text-weak py-2">
+                        Could not load tasks — {agentTasks.latest!.reason ?? "unknown"}.
+                      </p>
+                    </Match>
+                    <Match when={(agentTasks.latest?.tasks?.length ?? 0) === 0}>
+                      {/* A GENUINE zero, and it says what it means: attached to a board is not
                         the same as given something to do. */}
-                    <p class="text-12-regular text-text-weak py-2">
-                      Nothing assigned. This agent belongs to a board but has not been handed any work — assign an item
-                      with <span class="font-mono text-11-regular">iris agents assign</span>.
-                    </p>
-                  </Match>
-                  <Match when={agentTasks.latest}>
-                    <div class="flex items-baseline gap-2 pb-2 text-11-regular text-text-weaker">
-                      <span class="font-mono tabular-nums">{agentTasks.latest!.counts.total} assigned</span>
-                      <Show when={agentTasks.latest!.counts.heartbeatBloqs > 0}>
-                        <span>· {agentTasks.latest!.counts.heartbeatBloqs} board heartbeat</span>
-                      </Show>
-                    </div>
-                    <For each={agentTasks.latest!.tasks}>
-                      {(t) => (
-                        <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                          <span class="shrink-0" classList={{ "text-text-weaker": t.done, "text-text-base": !t.done }}>
-                            {t.done ? "✓" : "·"}
-                          </span>
-                          <div class="min-w-0 flex-1">
-                            <p
-                              class="text-12-regular"
-                              classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}
+                      <p class="text-12-regular text-text-weak py-2">
+                        Nothing assigned. This agent belongs to a board but has not been handed any work — assign an
+                        item with <span class="font-mono text-11-regular">iris agents assign</span>.
+                      </p>
+                    </Match>
+                    <Match when={agentTasks.latest}>
+                      <div class="flex items-baseline gap-2 pb-2 text-11-regular text-text-weaker">
+                        <span class="font-mono tabular-nums">{agentTasks.latest!.counts.total} assigned</span>
+                        <Show when={agentTasks.latest!.counts.heartbeatBloqs > 0}>
+                          <span>· {agentTasks.latest!.counts.heartbeatBloqs} board heartbeat</span>
+                        </Show>
+                      </div>
+                      <For each={agentTasks.latest!.tasks}>
+                        {(t) => (
+                          <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                            <span
+                              class="shrink-0"
+                              classList={{ "text-text-weaker": t.done, "text-text-base": !t.done }}
                             >
-                              {t.title}
-                            </p>
-                            {/* WHERE the work lives. A task title with no context is the same
+                              {t.done ? "✓" : "·"}
+                            </span>
+                            <div class="min-w-0 flex-1">
+                              <p
+                                class="text-12-regular"
+                                classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}
+                              >
+                                {t.title}
+                              </p>
+                              {/* WHERE the work lives. A task title with no context is the same
                                 problem as an attached agent with no assignment. */}
-                            <p class="text-11-regular text-text-weaker truncate">
-                              {t.source === "bloq_item_task" && t.itemTitle ? `on ${t.itemTitle}` : ""}
-                              {t.source === "lead_task" ? `lead #${t.leadId}` : ""}
-                              {t.source === "scheduled_job"
-                                ? `${t.frequency ?? "scheduled"}${t.nextRunAt ? ` · next ${relativeAge(t.nextRunAt) ?? t.nextRunAt}` : ""}`
-                                : ""}
-                              {t.source === "heartbeat_bloq" ? "runs on this whole board" : ""}
-                              {t.dueDate ? ` · due ${t.dueDate}` : ""}
-                            </p>
+                              <p class="text-11-regular text-text-weaker truncate">
+                                {t.source === "bloq_item_task" && t.itemTitle ? `on ${t.itemTitle}` : ""}
+                                {t.source === "lead_task" ? `lead #${t.leadId}` : ""}
+                                {t.source === "scheduled_job"
+                                  ? `${t.frequency ?? "scheduled"}${t.nextRunAt ? ` · next ${relativeAge(t.nextRunAt) ?? t.nextRunAt}` : ""}`
+                                  : ""}
+                                {t.source === "heartbeat_bloq" ? "runs on this whole board" : ""}
+                                {t.dueDate ? ` · due ${t.dueDate}` : ""}
+                              </p>
+                            </div>
+                            <span class="shrink-0 font-mono text-11-regular text-text-weaker">
+                              {t.status ?? t.source.replace(/_/g, " ")}
+                            </span>
                           </div>
-                          <span class="shrink-0 font-mono text-11-regular text-text-weaker">
-                            {t.status ?? t.source.replace(/_/g, " ")}
-                          </span>
-                        </div>
-                      )}
-                    </For>
-                  </Match>
-                </Switch>
-              </Match>
+                        )}
+                      </For>
+                    </Match>
+                  </Switch>
+                </Match>
 
-              {/* The site's navigation, as links you can actually open. Each entry is a
+                {/* The site's navigation, as links you can actually open. Each entry is a
                   /p/<slug> page, which serves fine — it is the site route itself that does not. */}
-              <Match when={detailTab() === "sitepages"}>
-                <Show
-                  when={(openRow()!.raw?.navItems?.length ?? 0) > 0}
-                  fallback={
-                    <p class="text-12-regular text-text-weak py-2">
-                      This site has {openRow()!.raw?.pagesCount ?? 0} page(s) attached but no navigation defined.
-                    </p>
-                  }
-                >
-                  <For each={openRow()!.raw.navItems}>
-                    {(n: any) => (
-                      <a
-                        href={`https://heyiris.io${n.url}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 hover:bg-background-element"
-                      >
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{n.label}</span>
-                        <span class="shrink-0 font-mono text-11-regular text-text-weaker">{n.url}</span>
-                      </a>
-                    )}
-                  </For>
-                </Show>
-              </Match>
+                <Match when={detailTab() === "sitepages"}>
+                  {/* #192672: the site's pages in order, with Add pages / remove / move — not only
+                    its navigation links. The board whose pages can be added is the site's owner. */}
+                  <SitePagesEditor
+                    siteId={Number(openRow()!.raw?.id)}
+                    board={ownerBoard(openRow()!.raw?.owner) ?? (activeBloq() != null ? Number(activeBloq()) : undefined)}
+                    doFetch={doFetch}
+                    navItems={openRow()!.raw?.navItems}
+                    onChanged={() => void refetchSurface()}
+                  />
+                </Match>
 
-              {/* THE TABLE. Columns from the schema, rows from the dataset, paged upstream. */}
-              <Match when={detailTab() === "records"}>
-                <Switch>
-                  <Match when={records.loading && !records.latest}>
-                    <p class="text-12-regular text-text-weak py-2">Loading records…</p>
-                  </Match>
-                  <Match when={records.latest && !records.latest!.measured}>
-                    <p class="text-12-regular text-text-weak py-2">
-                      Could not load records — {records.latest!.reason ?? "unknown"}.
-                    </p>
-                  </Match>
-                  <Match when={(records.latest?.rows?.length ?? 0) === 0}>
-                    <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
-                  </Match>
-                  <Match when={records.latest}>
-                    {/* ABSENCE OF A PHI FLAG IS NOT A CLAIM OF SAFETY.
+                {/* THE TABLE. Columns from the schema, rows from the dataset, paged upstream. */}
+                <Match when={detailTab() === "records"}>
+                  <Switch>
+                    <Match when={records.loading && !records.latest}>
+                      <p class="text-12-regular text-text-weak py-2">Loading records…</p>
+                    </Match>
+                    <Match when={records.latest && !records.latest!.measured}>
+                      <p class="text-12-regular text-text-weak py-2">
+                        Could not load records — {records.latest!.reason ?? "unknown"}.
+                      </p>
+                    </Match>
+                    <Match when={(records.latest?.rows?.length ?? 0) === 0}>
+                      <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
+                    </Match>
+                    <Match when={records.latest}>
+                      {/* ABSENCE OF A PHI FLAG IS NOT A CLAIM OF SAFETY.
                         `cases` declares no visibility on any column, and one of them is
                         patient_name. Rendering those identically to columns that explicitly
                         declare "public" turns "nobody said" into "it is fine", which is the
                         exact three-states-as-two mistake this panel exists to avoid. */}
-                    <Show when={records.latest!.columns.some((c) => !c.visibility)}>
-                      <p class="text-11-regular text-text-weaker pb-2">
-                        {records.latest!.columns.filter((c) => !c.visibility).length} of{" "}
-                        {records.latest!.columns.length} columns declare no visibility — unlabelled is not the same as
-                        safe to share.
-                      </p>
-                    </Show>
-                    <div class="iris-records-tools">
-                      <input
-                        class="iris-records-tools__filter"
-                        type="search"
-                        placeholder="Filter this page…"
-                        value={recordQuery()}
-                        onInput={(e) => setRecordQuery(e.currentTarget.value)}
-                      />
-                      <Show when={recordQuery() || recordSort()}>
-                        <span class="font-mono tabular-nums">
-                          {recordRows().length} of {records.latest!.rows.length} on this page
-                        </span>
+                      <Show when={records.latest!.columns.some((c) => !c.visibility)}>
+                        <p class="text-11-regular text-text-weaker pb-2">
+                          {records.latest!.columns.filter((c) => !c.visibility).length} of{" "}
+                          {records.latest!.columns.length} columns declare no visibility — unlabelled is not the same as
+                          safe to share.
+                        </p>
                       </Show>
-                      <button
-                        type="button"
-                        class="iris-records-tools__btn"
-                        disabled={!!exporting()?.startsWith("Reading")}
-                        title="Every record in this dataset, not just this page"
-                        onClick={() => void exportRecords()}
-                      >
-                        {exporting() ?? "Export CSV"}
-                      </button>
-                    </div>
-                    <div class="iris-table-wrap">
-                      <table class="iris-table">
-                        <thead>
-                          <tr>
-                            <th
-                              class="iris-table__num iris-table__sort"
-                              aria-sort={recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
-                              onClick={() => cycleSort("id")}
-                            >
-                              id{recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
-                            </th>
-                            <For each={records.latest!.columns}>
-                              {(c) => (
-                                <th
-                                  class="iris-table__sort"
-                                  aria-sort={recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? "ascending" : "descending") : "none"}
-                                  onClick={() => cycleSort(c.key)}
-                                  title={
-                                    c.visibility
-                                      ? `${c.key} · ${c.type} · visibility: ${c.visibility}`
-                                      : `${c.key} · ${c.type} · no visibility declared — nobody has said what this column is, which is not the same as saying it is safe to share`
-                                  }
-                                >
-                                  {c.label}
-                                  {recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
-                                  {/* THREE STATES, DRAWN AS THREE (#185139).
+                      <div class="iris-records-tools">
+                        <input
+                          class="iris-records-tools__filter"
+                          type="search"
+                          placeholder="Filter this page…"
+                          value={recordQuery()}
+                          onInput={(e) => setRecordQuery(e.currentTarget.value)}
+                        />
+                        <Show when={recordQuery() || recordSort()}>
+                          <span class="font-mono tabular-nums">
+                            {recordRows().length} of {records.latest!.rows.length} on this page
+                          </span>
+                        </Show>
+                        <button
+                          type="button"
+                          class="iris-records-tools__btn"
+                          disabled={!!exporting()?.startsWith("Reading")}
+                          title="Every record in this dataset, not just this page"
+                          onClick={() => void exportRecords()}
+                        >
+                          {exporting() ?? "Export CSV"}
+                        </button>
+                      </div>
+                      <div class="iris-table-wrap">
+                        <table class="iris-table">
+                          <thead>
+                            <tr>
+                              <th
+                                class="iris-table__num iris-table__sort"
+                                aria-sort={
+                                  recordSort()?.key === "id"
+                                    ? recordSort()!.dir === "asc"
+                                      ? "ascending"
+                                      : "descending"
+                                    : "none"
+                                }
+                                onClick={() => cycleSort("id")}
+                              >
+                                id{recordSort()?.key === "id" ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
+                              </th>
+                              <For each={records.latest!.columns}>
+                                {(c) => (
+                                  <th
+                                    class="iris-table__sort"
+                                    aria-sort={
+                                      recordSort()?.key === c.key
+                                        ? recordSort()!.dir === "asc"
+                                          ? "ascending"
+                                          : "descending"
+                                        : "none"
+                                    }
+                                    onClick={() => cycleSort(c.key)}
+                                    title={
+                                      c.visibility
+                                        ? `${c.key} · ${c.type} · visibility: ${c.visibility}`
+                                        : `${c.key} · ${c.type} · no visibility declared — nobody has said what this column is, which is not the same as saying it is safe to share`
+                                    }
+                                  >
+                                    {c.label}
+                                    {recordSort()?.key === c.key ? (recordSort()!.dir === "asc" ? " ▲" : " ▼") : ""}
+                                    {/* THREE STATES, DRAWN AS THREE (#185139).
                                       Declared phi, declared something else, and nobody said.
                                       Only the first two were ever drawn, so silence rendered
                                       identically to an explicit "public" — and silence is the
@@ -4118,57 +4280,57 @@ export function SessionIrisTab() {
                                       The undeclared mark is quiet on purpose. It is not an
                                       accusation that the column is sensitive; it is the
                                       absence of a claim either way, and the tooltip says so. */}
-                                  <Show when={c.visibility === "phi"}>
-                                    <span class="iris-table__phi">phi</span>
-                                  </Show>
-                                  <Show when={!c.visibility}>
-                                    <span class="iris-table__undeclared" aria-label="no visibility declared">
-                                      ?
-                                    </span>
-                                  </Show>
-                                </th>
+                                    <Show when={c.visibility === "phi"}>
+                                      <span class="iris-table__phi">phi</span>
+                                    </Show>
+                                    <Show when={!c.visibility}>
+                                      <span class="iris-table__undeclared" aria-label="no visibility declared">
+                                        ?
+                                      </span>
+                                    </Show>
+                                  </th>
+                                )}
+                              </For>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <For each={recordRows()}>
+                              {(r) => (
+                                <tr>
+                                  <td class="iris-table__num">{r.id}</td>
+                                  <For each={records.latest!.columns}>
+                                    {(c) => (
+                                      <td
+                                        class="iris-table__cell"
+                                        classList={{ "iris-table__num": c.type === "number" || c.type === "integer" }}
+                                        title={cellText(r.data[c.key])}
+                                      >
+                                        {cellText(r.data[c.key])}
+                                      </td>
+                                    )}
+                                  </For>
+                                </tr>
                               )}
                             </For>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <For each={recordRows()}>
-                            {(r) => (
-                              <tr>
-                                <td class="iris-table__num">{r.id}</td>
-                                <For each={records.latest!.columns}>
-                                  {(c) => (
-                                    <td
-                                      class="iris-table__cell"
-                                      classList={{ "iris-table__num": c.type === "number" || c.type === "integer" }}
-                                      title={cellText(r.data[c.key])}
-                                    >
-                                      {cellText(r.data[c.key])}
-                                    </td>
-                                  )}
-                                </For>
-                              </tr>
-                            )}
-                          </For>
-                        </tbody>
-                      </table>
-                    </div>
-                    <IrisPager
-                      summary={pageSummary({
-                        shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
-                        env: records.latest as unknown as PageEnvelope,
-                        noun: "records",
-                      })}
-                      loading={records.loading}
-                      hasMore={records.latest!.hasMore}
-                      hasPrevious={recordPage() > 1}
-                      onPrevious={() => setRecordPage((n) => Math.max(1, n - 1))}
-                      onNext={() => setRecordPage((n) => n + 1)}
-                    />
-                  </Match>
-                </Switch>
-              </Match>
-            </Switch>
+                          </tbody>
+                        </table>
+                      </div>
+                      <IrisPager
+                        summary={pageSummary({
+                          shown: (recordPage() - 1) * RECORDS_PER_PAGE + records.latest!.rows.length,
+                          env: records.latest as unknown as PageEnvelope,
+                          noun: "records",
+                        })}
+                        loading={records.loading}
+                        hasMore={records.latest!.hasMore}
+                        hasPrevious={recordPage() > 1}
+                        onPrevious={() => setRecordPage((n) => Math.max(1, n - 1))}
+                        onNext={() => setRecordPage((n) => n + 1)}
+                      />
+                    </Match>
+                  </Switch>
+                </Match>
+              </Switch>
             </Suspense>
           </div>
         </div>
@@ -4190,1111 +4352,1202 @@ export function SessionIrisTab() {
             switch is immediate and only this box waits. See chooseSurface. */}
         <Suspense
           fallback={
-            <div data-slot="iris-pane-loading" class="flex h-full items-center justify-center text-12-regular text-text-weak py-6">
+            <div
+              data-slot="iris-pane-loading"
+              class="flex h-full items-center justify-center text-12-regular text-text-weak py-6"
+            >
               Loading…
             </div>
           }
         >
-        <Switch>
-          {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
+          <Switch>
+            {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
               rooms, and "empty" must still show the New room button. */}
-          <Match when={pane() === "rooms"}>
-            <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
-          </Match>
-          <Match when={pane() === "hive"}>
-            <IrisHiveMachines doFetch={doFetch} />
-          </Match>
-          <Match when={pane() === "inbox"}>
-            <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
-          </Match>
-          <Match when={pane() === "hive-sessions"}>
-            <IrisHiveSessions
-              doFetch={doFetch}
-              openExternal={(url) => platform.openExternal(url)}
-              onContinue={dirSdk ? continueSessionHere : undefined}
-            />
-          </Match>
-          <Match when={pane() === "heartbeats"}>
-            <IrisHeartbeats doFetch={doFetch} />
-          </Match>
-          <Match when={pane() === "leads-crm"}>
-            <IrisLeadsTab doFetch={doFetch} bloqId={activeBloq() != null ? Number(activeBloq()) : undefined} onNeedsApproval={() => chooseSub("review", "leads")} />
-          </Match>
-          <Match when={pane() === "reachr"}>
-            <IrisReachrReview doFetch={doFetch} />
-          </Match>
-          {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug. */}
-          <Match when={pane() === "page" && resolved().slug}>
-            {(slug) => (
-              <IrisPinnedPage
-                slug={slug()}
-                signIn={resolved().sub?.signIn === true}
-                label={resolved().sub?.label ?? paneLabel()}
+            <Match when={pane() === "rooms"}>
+              <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
+            </Match>
+            <Match when={pane() === "hive"}>
+              <IrisHiveMachines doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "inbox"}>
+              <IrisHiveInbox doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
+            </Match>
+            <Match when={pane() === "hive-sessions"}>
+              <IrisHiveSessions
                 doFetch={doFetch}
                 openExternal={(url) => platform.openExternal(url)}
+                onContinue={dirSdk ? continueSessionHere : undefined}
               />
-            )}
-          </Match>
-          {/* Marketing (#192624): the account's own pins. Nothing pinned → this, never someone else's pages. */}
-          <Match when={pane() === "marketing-pins"}>
-            <IrisMarketing doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
-          </Match>
-          <Match when={pane() === "lexicon-agreements"}>
-            <IrisLexiconAgreements doFetch={doFetch} />
-          </Match>
-          <Match when={pane() === "pulse-topic"}>
-            <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
-          </Match>
-          <Match when={pane() === "pulse-contact"}>
-            <IrisPulseContact doFetch={doFetch} />
-          </Match>
-          <Match when={pane() === "hive-scripts"}>
-            <IrisHiveScripts
-              doFetch={doFetch}
-              bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
-              bloqName={activeBloq() != null ? activeBloqName() : undefined}
-              boards={settled(bloqs)?.bloqs}
-            />
-          </Match>
-          <Match when={pane() === "agent-live"}>
-            <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
-          </Match>
-          <Match when={pane() === "agent-gallery"}>
-            <IrisAgentGallery
-              doFetch={doFetch}
-              bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
-              reload={agentsVersion()}
-              onNew={() => setAgentEditor({})}
-              onConfigure={(a) => setAgentEditor({ agentId: a.id, row: a })}
-              onTrain={(a) => setAgentEditor({ agentId: a.id, row: a, step: "memory" })}
-              openExternal={(url) => platform.openExternal(url)}
-            />
-          </Match>
-          {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
-              session, not the board, and must render with no board chosen. */}
-          <Match when={pane() === "atlas-artifacts"}>
-            <IrisAtlasArtifacts
-              sessionId={navParams.id}
-              doFetch={doFetch}
-              notes={sessionNotes}
-              openExternal={(url) => platform.openExternal(url)}
-            />
-          </Match>
-          <Match when={pane() === "brands"}>
-            <IrisBrandKits doFetch={doFetch} />
-          </Match>
-          <Match when={pane() === "artifacts"}>
-            <IrisArtifacts
-              doFetch={doFetch}
-              sessionId={navParams.id}
-              projectParam={projectParam()}
-              project={projectDir()}
-              bloqId={activeBloq()}
-              bloqName={activeBloqName()}
-              boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
-              listen={(fn) => serverSDK().event.listen(fn as any)}
-              files={sessionFiles}
-              readFile={readSessionFile}
-              openPath={
-                platform.openPath
-                  ? (rel) => {
-                      const abs = absolute(rel)
-                      if (abs) void platform.openPath!(abs)
-                    }
-                  : undefined
-              }
-              revealPath={
-                platform.revealPath
-                  ? (rel) => {
-                      const abs = absolute(rel)
-                      if (abs) void platform.revealPath!(abs)
-                    }
-                  : undefined
-              }
-            />
-          </Match>
-          <Match when={view() === "loading"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
-          </Match>
-
-          {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
-          <Match when={view() === "unreachable"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">
-              Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
-            </p>
-          </Match>
-          <Match when={view() === "surface-error"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">
-              Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.
-            </p>
-          </Match>
-
-          <Match when={view() === "rows"}>
-            {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
-                says Offline and what is waiting (#191003). */}
-            <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
-              <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
-            </Show>
-
-            <Switch>
-              <Match when={pane() === "atlas"}>
-                <Show when={atlasRows().length === 0 && rows().length > 0}>
-                  <p class="px-2 py-2 text-12-regular text-text-weak">
-                    Nothing matches these filters.{" "}
-                    <button
-                      type="button"
-                      class="underline cursor-pointer"
-                      onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}
-                    >
-                      Reset
-                    </button>
-                  </p>
-                </Show>
-                <IrisOutboxHeld
-                  items={heldItems()}
-                  cardTitle={(id) => (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === id)?.title}
-                  listName={(id) => (rows() as AtlasList[]).find((l) => l.id === id)?.name}
-                  resolve={resolveHeld}
+            </Match>
+            <Match when={pane() === "heartbeats"}>
+              <IrisHeartbeats doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "leads-crm"}>
+              <IrisLeadsTab
+                doFetch={doFetch}
+                bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                onNeedsApproval={() => chooseSub("review", "leads")}
+              />
+            </Match>
+            <Match when={pane() === "comms-inbox"}>
+              <IrisInbox
+                doFetch={doFetch}
+                onOpenLead={(id) => {
+                  requestLeadOpen(id)
+                  chooseSurface("leads")
+                  chooseSub("all", "leads")
+                }}
+              />
+            </Match>
+            <Match when={pane() === "reachr"}>
+              <IrisReachrReview doFetch={doFetch} />
+            </Match>
+            {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug.
+              KEYED (#192623): the page reads its slug inside promise callbacks (a frame check, a
+              sign-in mint). Unkeyed, that slug was an accessor into this Match, and a request that
+              landed after you switched tabs read it once the Match was false: "Stale read from
+              <Match>", thrown inside a promise. A keyed slug is a plain string; a new slug remounts. */}
+            <Match when={pane() === "page" && resolved().slug} keyed>
+              {(slug) => (
+                <IrisPinnedPage
+                  slug={slug}
+                  signIn={resolved().sub?.signIn === true}
+                  label={resolved().sub?.label ?? paneLabel()}
+                  doFetch={doFetch}
+                  openExternal={(url) => platform.openExternal(url)}
                 />
-                <Show when={moveNote()}>
-                  {(note) => (
-                    <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
-                      {note()}{" "}
-                      <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
-                        Dismiss
+              )}
+            </Match>
+            {/* Marketing (#192624): the account's own pins. Nothing pinned → this, never someone else's pages. */}
+            <Match when={pane() === "marketing-pins"}>
+              <IrisMarketing
+                doFetch={doFetch}
+                openExternal={(url) => platform.openExternal(url)}
+                emptyActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} />}
+                pickerActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} compact />}
+              />
+            </Match>
+            <Match when={pane() === "lexicon-agreements"}>
+              <IrisLexiconAgreements doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "pulse-topic"}>
+              <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
+            </Match>
+            <Match when={pane() === "pulse-contact"}>
+              <IrisPulseContact doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "hive-scripts"}>
+              <IrisHiveScripts
+                doFetch={doFetch}
+                bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                bloqName={activeBloq() != null ? activeBloqName() : undefined}
+                boards={settled(bloqs)?.bloqs}
+              />
+            </Match>
+            <Match when={pane() === "agent-live"}>
+              <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
+            </Match>
+            <Match when={pane() === "agent-gallery"}>
+              <IrisAgentGallery
+                doFetch={doFetch}
+                bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                reload={agentsVersion()}
+                onNew={() => setAgentEditor({})}
+                onConfigure={(a) => setAgentEditor({ agentId: a.id, row: a })}
+                onTrain={(a) => setAgentEditor({ agentId: a.id, row: a, step: "memory" })}
+                openExternal={(url) => platform.openExternal(url)}
+              />
+            </Match>
+            {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
+              session, not the board, and must render with no board chosen. */}
+            <Match when={pane() === "atlas-artifacts"}>
+              <IrisAtlasArtifacts
+                sessionId={navParams.id}
+                doFetch={doFetch}
+                notes={sessionNotes}
+                openExternal={(url) => platform.openExternal(url)}
+              />
+            </Match>
+            <Match when={pane() === "brands"}>
+              <IrisBrandKits doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "genesis-pages"}>
+              <IrisGenesisPages
+                doFetch={doFetch}
+                bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                bloqName={activeBloq() != null ? activeBloqName() : undefined}
+                boards={settled(bloqs)?.bloqs}
+                openExternal={(url) => platform.openExternal(url)}
+              />
+            </Match>
+            <Match when={pane() === "artifacts"}>
+              <IrisArtifacts
+                doFetch={doFetch}
+                sessionId={navParams.id}
+                projectParam={projectParam()}
+                project={projectDir()}
+                bloqId={activeBloq()}
+                bloqName={activeBloqName()}
+                boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+                listen={(fn) => serverSDK().event.listen(fn as any)}
+                files={sessionFiles}
+                readFile={readSessionFile}
+                openPath={
+                  platform.openPath
+                    ? (rel) => {
+                        const abs = absolute(rel)
+                        if (abs) void platform.openPath!(abs)
+                      }
+                    : undefined
+                }
+                revealPath={
+                  platform.revealPath
+                    ? (rel) => {
+                        const abs = absolute(rel)
+                        if (abs) void platform.revealPath!(abs)
+                      }
+                    : undefined
+                }
+              />
+            </Match>
+            <Match when={view() === "loading"}>
+              <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
+            </Match>
+
+            {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
+            <Match when={view() === "unreachable"}>
+              <p class="px-2 py-2 text-12-regular text-text-weak">
+                Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
+              </p>
+            </Match>
+            <Match when={view() === "surface-error"}>
+              <p class="px-2 py-2 text-12-regular text-text-weak">
+                Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.
+              </p>
+            </Match>
+
+            <Match when={view() === "rows"}>
+              {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
+                says Offline and what is waiting (#191003). */}
+              <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
+                <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
+              </Show>
+
+              <Switch>
+                <Match when={pane() === "atlas"}>
+                  <Show when={atlasRows().length === 0 && rows().length > 0}>
+                    <p class="px-2 py-2 text-12-regular text-text-weak">
+                      Nothing matches these filters.{" "}
+                      <button
+                        type="button"
+                        class="underline cursor-pointer"
+                        onClick={() => setAtlasView({ ...ATLAS_VIEW_DEFAULT })}
+                      >
+                        Reset
                       </button>
                     </p>
-                  )}
-                </Show>
-                <Show when={atlasLayout() === "board"}>
-                  <Show when={!canDrag() && !delegateOpen()}>
-                    <p class="px-2 pb-2 text-11-regular text-text-weak">
-                      Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
-                      Board order to drag cards.
-                    </p>
                   </Show>
-                  <Show when={!canDrag() && delegateOpen()}>
-                    <p class="px-2 pb-2 text-11-regular text-text-weak">{language.t("iris.delegate.sort")}</p>
+                  <IrisOutboxHeld
+                    items={heldItems()}
+                    cardTitle={(id) => (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === id)?.title}
+                    listName={(id) => (rows() as AtlasList[]).find((l) => l.id === id)?.name}
+                    resolve={resolveHeld}
+                  />
+                  <Show when={moveNote()}>
+                    {(note) => (
+                      <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
+                        {note()}{" "}
+                        <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
+                          Dismiss
+                        </button>
+                      </p>
+                    )}
                   </Show>
-                  <div
-                    class="iris-board-wrap"
-                    onDragOver={(e) => {
-                      // Held over the Delegate rail: the card is not going into the board, so the
-                      // placeholder leaves it. Letting go on the rail puts the card back.
-                      if (dragging() !== null && (e.target as HTMLElement).closest(".iris-delegate")) moveDropAt(null)
-                    }}
-                  >
-                  <div class="iris-board" aria-label="Board" ref={boardEl}>
-                    <For each={atlasRows()}>
-                      {(list) => (
-                        <section
-                          class="iris-board__col"
-                          classList={{
-                            "iris-board__col--over": lifted() && dropAt()?.listId === list.id,
-                          }}
-                          onDragOver={(e) => {
-                            if (dragging() === null || !canDrag()) return
-                            e.preventDefault()
-                            if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
-                            // In a gap between cards, or on the placeholder: stay put. Below the
-                            // last card, or arriving from another list: the end of this one.
-                            const cards = Array.from(
-                              e.currentTarget.querySelectorAll<HTMLElement>("[data-board-card]:not(.iris-board__card--source)"),
-                            )
-                            const last = cards.at(-1)?.getBoundingClientRect()
-                            if (dropAt()?.listId === list.id && last && e.clientY < last.bottom) return
-                            moveDropAt({ listId: list.id, beforeId: null })
-                          }}
-                          onDrop={(e) => {
-                            if (!canDrag()) return
-                            e.preventDefault()
-                            const itemId = dragging()
-                            const at = dropAt()
-                            endDrag(() => {
-                              if (itemId !== null)
-                                void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : null })
-                            })
-                          }}
-                        >
-                          <header class="iris-board__head">
-                            {/* Same heading as List view (#189764): a column title is not a card. */}
-                            <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
-                            <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
-                          </header>
-                          <div class="iris-board__cards">
-                            <For each={list.items}>
-                              {(item) => (
-                                <>
-                                <Show when={ghostAt(list.id, item.id)}>
-                                  <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
-                                </Show>
-                                <div
-                                  role="button"
-                                  tabindex="0"
-                                  class="iris-board__card"
-                                  data-board-card={item.id}
-                                  classList={{
-                                    "iris-board__card--dragging": dragging() === item.id && !lifted(),
-                                    "iris-board__card--source": dragging() === item.id && lifted(),
-                                    "iris-card--fileover": fileOver() === item.id,
-                                  }}
-                                  {...fileDropHandlers(item.id)}
-                                  draggable={canDrag() || delegateOpen()}
-                                  title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
-                                  onClick={() => openCard(item.id)}
-                                  onContextMenu={(e) => {
-                                    e.preventDefault()
-                                    openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault()
-                                      openCard(item.id)
-                                    } else if (!e.metaKey && !e.ctrlKey && !e.altKey && quickFieldFor(e.key)) {
-                                      e.preventDefault()
-                                      e.stopPropagation()
-                                      openQuick(item.id, e.currentTarget, quickFieldFor(e.key))
-                                    }
-                                  }}
-                                  onDragStart={(e) => {
-                                    setDragging(item.id)
-                                    setMoveNote(null)
-                                    setDragHeight(e.currentTarget.getBoundingClientRect().height)
-                                    if (e.dataTransfer) {
-                                      e.dataTransfer.effectAllowed = "move"
-                                      e.dataTransfer.setData("text/plain", `atlas-item:${item.id}`)
-                                    }
-                                    // Moving between lists needs board order; delegating does not,
-                                    // and then the card stays where it is, dimmed.
-                                    if (!canDrag()) return
-                                    const id = item.id
-                                    requestAnimationFrame(() => {
-                                      if (dragging() !== id) return
-                                      slideCards(boardEl, () => {
-                                        setLifted(true)
-                                        setDropAt({ listId: list.id, beforeId: dropBeforeId(list.items, id, true, -1) })
-                                      })
+                  <Show when={atlasLayout() === "board"}>
+                    <Show when={!canDrag() && !delegateOpen()}>
+                      <p class="px-2 pb-2 text-11-regular text-text-weak">
+                        Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
+                        Board order to drag cards.
+                      </p>
+                    </Show>
+                    <Show when={!canDrag() && delegateOpen()}>
+                      <p class="px-2 pb-2 text-11-regular text-text-weak">{language.t("iris.delegate.sort")}</p>
+                    </Show>
+                    <div
+                      class="iris-board-wrap"
+                      onDragOver={(e) => {
+                        // Held over the Delegate rail: the card is not going into the board, so the
+                        // placeholder leaves it. Letting go on the rail puts the card back.
+                        if (dragging() !== null && (e.target as HTMLElement).closest(".iris-delegate")) moveDropAt(null)
+                      }}
+                    >
+                      <div class="iris-board" aria-label="Board" ref={boardEl}>
+                        <For each={atlasRows()}>
+                          {(list) => (
+                            <section
+                              class="iris-board__col"
+                              classList={{
+                                "iris-board__col--over": lifted() && dropAt()?.listId === list.id,
+                              }}
+                              onDragOver={(e) => {
+                                if (dragging() === null || !canDrag()) return
+                                e.preventDefault()
+                                if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                                // In a gap between cards, or on the placeholder: stay put. Below the
+                                // last card, or arriving from another list: the end of this one.
+                                const cards = Array.from(
+                                  e.currentTarget.querySelectorAll<HTMLElement>(
+                                    "[data-board-card]:not(.iris-board__card--source)",
+                                  ),
+                                )
+                                const last = cards.at(-1)?.getBoundingClientRect()
+                                if (dropAt()?.listId === list.id && last && e.clientY < last.bottom) return
+                                moveDropAt({ listId: list.id, beforeId: null })
+                              }}
+                              onDrop={(e) => {
+                                if (!canDrag()) return
+                                e.preventDefault()
+                                const itemId = dragging()
+                                const at = dropAt()
+                                endDrag(() => {
+                                  if (itemId !== null)
+                                    void dropCard({
+                                      itemId,
+                                      toListId: list.id,
+                                      beforeId: at?.listId === list.id ? at.beforeId : null,
                                     })
-                                  }}
-                                  onDragEnd={() => {
-                                    if (dragging() !== null) endDrag()
-                                  }}
-                                  onDragOver={(e) => {
-                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
-                                      e.preventDefault()
-                                      e.stopPropagation()
-                                      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
-                                      return
-                                    }
-                                    if (dragging() === null || !canDrag()) return
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
-                                    const r = e.currentTarget.getBoundingClientRect()
-                                    moveDropAt({
-                                      listId: list.id,
-                                      beforeId: dropBeforeId(list.items, item.id, e.clientY > r.top + r.height / 2, dragging()!),
-                                    })
-                                  }}
-                                  onDrop={(e) => {
-                                    if (dragging() === null && dragHasFiles(e.dataTransfer)) {
-                                      e.preventDefault()
-                                      e.stopPropagation()
-                                      void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
-                                      return
-                                    }
-                                    if (!canDrag()) return
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    const itemId = dragging()
-                                    const at = dropAt()
-                                    endDrag(() => {
-                                      if (itemId !== null)
-                                        void dropCard({ itemId, toListId: list.id, beforeId: at?.listId === list.id ? at.beforeId : item.id })
-                                    })
-                                  }}
-                                >
-                                  <Show when={item.cover}>
-                                    {(src) => <img class="iris-board__cover" src={src()} alt="" loading="lazy" draggable={false} />}
-                                  </Show>
-                                  <span class="text-12-regular text-text-base">{item.title}</span>
-                                  <CardBadges item={item} now={now()} />
-                                  <Show when={fileDrop()?.itemId === item.id}>
-                                    <span class="iris-card__uploading" role="status">{fileDrop()!.text}</span>
-                                  </Show>
-                                  <span class="iris-board__meta">
-                                    <Show when={isDone(item.status)}>
-                                      <span>✓ done</span>
-                                    </Show>
-                                    <Show when={item.updatedAt ?? item.createdAt}>
-                                      {(ts) => (
-                                        <span
-                                          class="font-mono tabular-nums"
-                                          title={`Last edited ${new Date(ts()).toLocaleString()}`}
-                                        >
-                                          {relativeTime(ts(), now())}
+                                })
+                              }}
+                            >
+                              <header class="iris-board__head">
+                                {/* Same heading as List view (#189764): a column title is not a card. */}
+                                <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
+                                <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                              </header>
+                              <div class="iris-board__cards">
+                                <For each={windowOf(list.items, shownCards()[list.id])}>
+                                  {(item) => (
+                                    <>
+                                      <Show when={ghostAt(list.id, item.id)}>
+                                        <div
+                                          class="iris-board__ghost"
+                                          style={{ height: `${dragHeight()}px` }}
+                                          aria-hidden="true"
+                                        />
+                                      </Show>
+                                      <div
+                                        role="button"
+                                        tabindex="0"
+                                        class="iris-board__card"
+                                        data-board-card={item.id}
+                                        classList={{
+                                          "iris-board__card--dragging": dragging() === item.id && !lifted(),
+                                          "iris-board__card--source": dragging() === item.id && lifted(),
+                                          "iris-card--fileover": fileOver() === item.id,
+                                        }}
+                                        {...fileDropHandlers(item.id)}
+                                        draggable={canDrag() || delegateOpen()}
+                                        title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
+                                        onClick={() => openCard(item.id)}
+                                        onContextMenu={(e) => {
+                                          e.preventDefault()
+                                          openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault()
+                                            openCard(item.id)
+                                          } else if (!e.metaKey && !e.ctrlKey && !e.altKey && quickFieldFor(e.key)) {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            openQuick(item.id, e.currentTarget, quickFieldFor(e.key))
+                                          }
+                                        }}
+                                        onDragStart={(e) => {
+                                          setDragging(item.id)
+                                          setMoveNote(null)
+                                          setDragHeight(e.currentTarget.getBoundingClientRect().height)
+                                          if (e.dataTransfer) {
+                                            e.dataTransfer.effectAllowed = "move"
+                                            e.dataTransfer.setData("text/plain", `atlas-item:${item.id}`)
+                                          }
+                                          // Moving between lists needs board order; delegating does not,
+                                          // and then the card stays where it is, dimmed.
+                                          if (!canDrag()) return
+                                          const id = item.id
+                                          requestAnimationFrame(() => {
+                                            if (dragging() !== id) return
+                                            slideCards(boardEl, () => {
+                                              setLifted(true)
+                                              setDropAt({
+                                                listId: list.id,
+                                                beforeId: dropBeforeId(list.items, id, true, -1),
+                                              })
+                                            })
+                                          })
+                                        }}
+                                        onDragEnd={() => {
+                                          if (dragging() !== null) endDrag()
+                                        }}
+                                        onDragOver={(e) => {
+                                          if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                            return
+                                          }
+                                          if (dragging() === null || !canDrag()) return
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+                                          const r = e.currentTarget.getBoundingClientRect()
+                                          moveDropAt({
+                                            listId: list.id,
+                                            beforeId: dropBeforeId(
+                                              list.items,
+                                              item.id,
+                                              e.clientY > r.top + r.height / 2,
+                                              dragging()!,
+                                            ),
+                                          })
+                                        }}
+                                        onDrop={(e) => {
+                                          if (dragging() === null && dragHasFiles(e.dataTransfer)) {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                            return
+                                          }
+                                          if (!canDrag()) return
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          const itemId = dragging()
+                                          const at = dropAt()
+                                          endDrag(() => {
+                                            if (itemId !== null)
+                                              void dropCard({
+                                                itemId,
+                                                toListId: list.id,
+                                                beforeId: at?.listId === list.id ? at.beforeId : item.id,
+                                              })
+                                          })
+                                        }}
+                                      >
+                                        <Show when={item.cover}>
+                                          {(src) => (
+                                            <img
+                                              class="iris-board__cover"
+                                              src={src()}
+                                              alt=""
+                                              loading="lazy"
+                                              draggable={false}
+                                            />
+                                          )}
+                                        </Show>
+                                        <span class="text-12-regular text-text-base">{item.title}</span>
+                                        <CardBadges item={item} now={now()} />
+                                        <Show when={fileDrop()?.itemId === item.id}>
+                                          <span class="iris-card__uploading" role="status">
+                                            {fileDrop()!.text}
+                                          </span>
+                                        </Show>
+                                        <span class="iris-board__meta">
+                                          <Show when={isDone(item.status)}>
+                                            <span>✓ done</span>
+                                          </Show>
+                                          <Show when={item.updatedAt ?? item.createdAt}>
+                                            {(ts) => (
+                                              <span
+                                                class="font-mono tabular-nums"
+                                                title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                              >
+                                                {relativeTime(ts(), now())}
+                                              </span>
+                                            )}
+                                          </Show>
+                                          <span class="font-mono tabular-nums text-text-weaker ml-auto">
+                                            {item.id < 0 ? "new" : `#${item.id}`}
+                                          </span>
                                         </span>
-                                      )}
-                                    </Show>
-                                    <span class="font-mono tabular-nums text-text-weaker ml-auto">{item.id < 0 ? "new" : `#${item.id}`}</span>
-                                  </span>
-                                </div>
-                                </>
-                              )}
-                            </For>
-                            <Show when={ghostAt(list.id, null)}>
-                              <div class="iris-board__ghost" style={{ height: `${dragHeight()}px` }} aria-hidden="true" />
-                            </Show>
-                            <Show when={list.items.length === 0 && !ghostAt(list.id, null)}>
-                              <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
-                            </Show>
-                            {/* Quick add on the board too (#189768) — Board is the primary view now,
+                                      </div>
+                                    </>
+                                  )}
+                                </For>
+                                <MoreCards listId={list.id} total={list.total ?? list.items.length} loaded={list.items.length} />
+                                <Show when={ghostAt(list.id, null)}>
+                                  <div
+                                    class="iris-board__ghost"
+                                    style={{ height: `${dragHeight()}px` }}
+                                    aria-hidden="true"
+                                  />
+                                </Show>
+                                <Show when={list.items.length === 0 && !ghostAt(list.id, null)}>
+                                  <p class="iris-board__empty">{dragging() !== null ? "Drop here" : "No cards"}</p>
+                                </Show>
+                                {/* Quick add on the board too (#189768) — Board is the primary view now,
                                 so adding a card must not mean switching to List. Same composer,
                                 same Enter-adds / Esc-closes, same optimistic card. */}
-                            <For each={pendingCards().filter((p) => p.listId === list.id)}>
-                              {(p) => (
-                                <div class="iris-board__card iris-board__card--pending" aria-busy="true">
-                                  <span class="text-12-regular text-text-base">{p.title}</span>
-                                  <span class="iris-board__meta">saving…</span>
-                                </div>
-                              )}
-                            </For>
-                            <Show
-                              when={composer() === list.id}
-                              fallback={
-                                <button type="button" class="iris-atlas-addcard iris-board__add" onClick={() => openComposer(list.id)}>
-                                  + Add card
-                                </button>
-                              }
-                            >
-                              <div class="iris-board__composer">
-                                <input
-                                  ref={(el) => queueMicrotask(() => el.focus())}
-                                  type="text"
-                                  placeholder="Card title — Enter to add, Esc to close"
-                                  value={composerText()}
-                                  onInput={(e) => setComposerText(e.currentTarget.value)}
-                                  onKeyDown={composerKeys}
-                                />
-                                <Show when={composerError()}>
-                                  <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
-                                </Show>
-                              </div>
-                            </Show>
-                          </div>
-                        </section>
-                      )}
-                    </For>
-                  </div>
-                  <Show when={delegateOpen()}>
-                    <IrisDelegateRail
-                      doFetch={doFetch}
-                      bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
-                      dragging={dragging}
-                      card={delegateCard}
-                      sessions={delegateSessions}
-                      sessionBusy={sessionBusy}
-                      sendToSession={sendToSession}
-                      onDropped={() => endDrag()}
-                      onChanged={() => void refetchSurface()}
-                    />
-                  </Show>
-                  </div>
-                </Show>
-                <Show when={atlasLayout() === "timeline"}>
-                  <IrisAtlasTimeline
-                    lists={atlasRows()}
-                    now={now()}
-                    isFolded={(row) => {
-                      const list = atlasRows().find((l) => l.id === row.id)
-                      return list ? isFolded(list) : false
-                    }}
-                    onToggleFold={(id) => {
-                      const list = atlasRows().find((l) => l.id === id)
-                      if (list) toggleFold(list)
-                    }}
-                    onOpen={(id) => openCard(id)}
-                    onSchedule={(item, dates) => {
-                      const before = { startDate: item.startDate ?? null, dueDate: item.dueDate ?? null }
-                      void saveFace(item.id, dates)
-                      showToast({
-                        description: `${item.title} · ${timelineDatesLabel(dates)}`,
-                        actions: [{ label: "Undo", onClick: () => void saveFace(item.id, before) }],
-                      })
-                    }}
-                  />
-                </Show>
-                <Show when={atlasLayout() === "list"}>
-                <For each={atlasRows()}>
-                  {(list) => (
-                    // data-prevent-autofocus: the session page sends any printable key to the chat
-                    // box (pages/session.tsx handleKeyDown) unless it comes from inside one of
-                    // these — on a card, j/k/x/c/n are this board's keys (#189771).
-                    <section
-                      class="iris-atlas-list"
-                      classList={{ "iris-atlas-list--folded": isFolded(list) }}
-                      data-prevent-autofocus
-                    >
-                      {/* The header folds the list. Counts in mono + tabular, so columns of numbers
-                          line up and read as data. */}
-                      <div class="iris-atlas-list__bar">
-                        <button
-                          type="button"
-                          class="iris-atlas-list__head"
-                          aria-expanded={!isFolded(list)}
-                          title={isFolded(list) ? "Show this list" : "Fold this list"}
-                          onClick={() => toggleFold(list)}
-                        >
-                          <span class="iris-atlas-list__chev" aria-hidden="true">
-                            ›
-                          </span>
-                          <h3 class="iris-atlas-list__title">{list.name}</h3>
-                          <span class="iris-atlas-list__count font-mono tabular-nums">{list.items.length}</span>
-                        </button>
-                        <button
-                          type="button"
-                          class="iris-atlas-list__add"
-                          title={`Add a card to ${list.name}`}
-                          aria-label={`Add a card to ${list.name}`}
-                          onClick={() => {
-                            if (isFolded(list)) toggleFold(list)
-                            openComposer(list.id)
-                          }}
-                        >
-                          +
-                        </button>
-                      </div>
-                      <Show when={!isFolded(list)}>
-                        <div class="iris-atlas-list__items">
-                        <For each={list.items}>
-                          {(item) => {
-                            // The board is read without bodies (#190231 0d): the row's line is fl-api's preview, or the
-                            // body when there is one (a search reads bodies).
-                            const preview = createMemo(() => cardPreview(item.content ?? item.preview, item.title))
-                            return (
-                              <div
-                                role="button"
-                                tabindex="0"
-                                data-item-id={item.id}
-                                data-list-id={list.id}
-                                aria-keyshortcuts="Enter x s p d l c n"
-                                class="iris-atlas-row"
-                                {...fileDropHandlers(item.id)}
-                                onDragOver={(e) => {
-                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
-                                  e.preventDefault()
-                                  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
-                                }}
-                                onDrop={(e) => {
-                                  if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
-                                  e.preventDefault()
-                                  void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
-                                }}
-                                classList={{
-                                  "iris-card--fileover": fileOver() === item.id,
-                                  "iris-atlas-row--done": isDone(item.status),
-                                  "iris-atlas-row--live": liveIds().has(item.id),
-                                  "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
-                                }}
-                                title="Open this card — keys: j/k move · Enter open · x done · s status · p priority · d due · l labels · c copy #id · n new card · / search · right-click to change"
-                                onClick={() => openCard(item.id)}
-                                onContextMenu={(e) => {
-                                  e.preventDefault()
-                                  openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.target !== e.currentTarget) return
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault()
-                                    openCard(item.id)
-                                  }
-                                }}
-                              >
-                                <span class="iris-atlas-row__mark" aria-hidden="true">
-                                  {isDone(item.status) ? "✓" : "·"}
-                                </span>
-                                <span class="iris-atlas-row__text">
-                                  <span class="iris-atlas-row__title">{item.title}</span>
-                                  <Show when={preview()}>
-                                    <span class="iris-atlas-row__preview">{preview()}</span>
-                                  </Show>
-                                  <CardBadges item={item} now={now()} />
-                                </span>
-                                <Show when={liveIds().has(item.id) || awayIds().has(item.id)}>
-                                  <span class="iris-atlas-row__changed" title="Changed since you last looked" />
-                                </Show>
-                                <Show when={item.updatedAt ?? item.createdAt}>
-                                  {(ts) => (
-                                    <span
-                                      class="iris-atlas-row__meta font-mono tabular-nums text-11-regular text-text-weak"
-                                      title={`Last edited ${new Date(ts()).toLocaleString()}`}
-                                    >
-                                      {relativeTime(ts(), now())}
-                                    </span>
+                                <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                                  {(p) => (
+                                    <div class="iris-board__card iris-board__card--pending" aria-busy="true">
+                                      <span class="text-12-regular text-text-base">{p.title}</span>
+                                      <span class="iris-board__meta">saving…</span>
+                                    </div>
                                   )}
-                                </Show>
-                                <button
-                                  type="button"
-                                  class="iris-atlas-row__id font-mono tabular-nums text-11-regular"
-                                  title={`Copy #${item.id}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    copyItemId(item.id)
-                                  }}
+                                </For>
+                                <Show
+                                  when={composer() === list.id}
+                                  fallback={
+                                    <button
+                                      type="button"
+                                      class="iris-atlas-addcard iris-board__add"
+                                      onClick={() => openComposer(list.id)}
+                                    >
+                                      + Add card
+                                    </button>
+                                  }
                                 >
-                                  {copiedId() === item.id ? "copied" : item.id < 0 ? "new" : `#${item.id}`}
-                                </button>
+                                  <div class="iris-board__composer">
+                                    <input
+                                      ref={(el) => queueMicrotask(() => el.focus())}
+                                      type="text"
+                                      placeholder="Card title — Enter to add, Esc to close"
+                                      value={composerText()}
+                                      onInput={(e) => setComposerText(e.currentTarget.value)}
+                                      onKeyDown={composerKeys}
+                                    />
+                                    <Show when={composerError()}>
+                                      <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                                    </Show>
+                                  </div>
+                                </Show>
                               </div>
-                            )
-                          }}
-                        </For>
-                        <For each={pendingCards().filter((p) => p.listId === list.id)}>
-                          {(p) => (
-                            <div class="iris-atlas-row iris-atlas-row--pending" aria-busy="true">
-                              <span class="iris-atlas-row__mark" aria-hidden="true">
-                                ·
-                              </span>
-                              <span class="iris-atlas-row__text">
-                                <span class="iris-atlas-row__title">{p.title}</span>
-                              </span>
-                              <span class="iris-atlas-row__meta font-mono text-11-regular text-text-weaker">saving…</span>
-                            </div>
+                            </section>
                           )}
                         </For>
-                        <Show
-                          when={composer() === list.id}
-                          fallback={
-                            <button type="button" class="iris-atlas-addcard" onClick={() => openComposer(list.id)}>
-                              + Add card
-                            </button>
-                          }
-                        >
-                          <div class="iris-atlas-composer">
-                            <input
-                              ref={(el) => queueMicrotask(() => el.focus())}
-                              type="text"
-                              placeholder="Card title — Enter to add, Esc to close"
-                              value={composerText()}
-                              onInput={(e) => setComposerText(e.currentTarget.value)}
-                              onKeyDown={composerKeys}
-                            />
-                            <Show when={composerError()}>
-                              <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
-                            </Show>
-                          </div>
-                        </Show>
-                        </div>
-                      </Show>
-                    </section>
-                  )}
-                </For>
-                <Show when={rows().length > 0 || current()?.measured}>
-                  <Show
-                    when={composer() === "list"}
-                    fallback={
-                      <button type="button" class="iris-atlas-addcard iris-atlas-addlist" onClick={() => openComposer("list")}>
-                        + Add list
-                      </button>
-                    }
-                  >
-                    <div class="iris-atlas-composer">
-                      <input
-                        ref={(el) => queueMicrotask(() => el.focus())}
-                        type="text"
-                        placeholder="List name — Enter to add, Esc to close"
-                        value={composerText()}
-                        onInput={(e) => setComposerText(e.currentTarget.value)}
-                        onKeyDown={composerKeys}
-                      />
-                      <Show when={composerError()}>
-                        <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                      </div>
+                      <Show when={delegateOpen()}>
+                        <IrisDelegateRail
+                          doFetch={doFetch}
+                          bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                          dragging={dragging}
+                          card={delegateCard}
+                          sessions={delegateSessions}
+                          sessionBusy={sessionBusy}
+                          sendToSession={sendToSession}
+                          onDropped={() => endDrag()}
+                          onChanged={() => void refetchSurface()}
+                        />
                       </Show>
                     </div>
                   </Show>
-                </Show>
-                </Show>
-              </Match>
-
-              <Match when={pane() === "agents"}>
-                <For each={rows()}>
-                  {(a) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      data-testid="iris-agent-row"
-                      data-agent-id={a.id}
-                      onClick={() => setAgentEditor({ agentId: Number(a.id), row: a })}
-                    >
-                      <span
-                        class="shrink-0"
-                        classList={{
-                          "text-text-base": a.status === "healthy",
-                          "text-text-weak": a.status !== "healthy",
-                        }}
+                  <Show when={atlasLayout() === "timeline"}>
+                    <IrisAtlasTimeline
+                      lists={atlasRows()}
+                      now={now()}
+                      isFolded={(row) => {
+                        const list = atlasRows().find((l) => l.id === row.id)
+                        return list ? isFolded(list) : false
+                      }}
+                      onToggleFold={(id) => {
+                        const list = atlasRows().find((l) => l.id === id)
+                        if (list) toggleFold(list)
+                      }}
+                      onOpen={(id) => openCard(id)}
+                      onSchedule={(item, dates) => {
+                        const before = { startDate: item.startDate ?? null, dueDate: item.dueDate ?? null }
+                        void saveFace(item.id, dates)
+                        showToast({
+                          description: `${item.title} · ${timelineDatesLabel(dates)}`,
+                          actions: [{ label: "Undo", onClick: () => void saveFace(item.id, before) }],
+                        })
+                      }}
+                    />
+                  </Show>
+                  <Show when={atlasLayout() === "list"}>
+                    <For each={atlasRows()}>
+                      {(list) => (
+                        // data-prevent-autofocus: the session page sends any printable key to the chat
+                        // box (pages/session.tsx handleKeyDown) unless it comes from inside one of
+                        // these — on a card, j/k/x/c/n are this board's keys (#189771).
+                        <section
+                          class="iris-atlas-list"
+                          classList={{ "iris-atlas-list--folded": isFolded(list) }}
+                          data-prevent-autofocus
+                        >
+                          {/* The header folds the list. Counts in mono + tabular, so columns of numbers
+                          line up and read as data. */}
+                          <div class="iris-atlas-list__bar">
+                            <button
+                              type="button"
+                              class="iris-atlas-list__head"
+                              aria-expanded={!isFolded(list)}
+                              title={isFolded(list) ? "Show this list" : "Fold this list"}
+                              onClick={() => toggleFold(list)}
+                            >
+                              <span class="iris-atlas-list__chev" aria-hidden="true">
+                                ›
+                              </span>
+                              <h3 class="iris-atlas-list__title">{list.name}</h3>
+                              <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                            </button>
+                            <button
+                              type="button"
+                              class="iris-atlas-list__add"
+                              title={`Add a card to ${list.name}`}
+                              aria-label={`Add a card to ${list.name}`}
+                              onClick={() => {
+                                if (isFolded(list)) toggleFold(list)
+                                openComposer(list.id)
+                              }}
+                            >
+                              +
+                            </button>
+                          </div>
+                          <Show when={!isFolded(list)}>
+                            <div class="iris-atlas-list__items">
+                              <For each={windowOf(list.items, shownCards()[list.id])}>
+                                {(item) => {
+                                  // The board is read without bodies (#190231 0d): the row's line is fl-api's preview, or the
+                                  // body when there is one (a search reads bodies).
+                                  const preview = createMemo(() =>
+                                    cardPreview(item.content ?? item.preview, item.title),
+                                  )
+                                  return (
+                                    <div
+                                      role="button"
+                                      tabindex="0"
+                                      data-item-id={item.id}
+                                      data-list-id={list.id}
+                                      aria-keyshortcuts="Enter x s p d l c n"
+                                      class="iris-atlas-row"
+                                      {...fileDropHandlers(item.id)}
+                                      onDragOver={(e) => {
+                                        if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                        e.preventDefault()
+                                        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+                                      }}
+                                      onDrop={(e) => {
+                                        if (dragging() !== null || !dragHasFiles(e.dataTransfer)) return
+                                        e.preventDefault()
+                                        void dropFiles(item.id, Array.from(e.dataTransfer?.files ?? []))
+                                      }}
+                                      classList={{
+                                        "iris-card--fileover": fileOver() === item.id,
+                                        "iris-atlas-row--done": isDone(item.status),
+                                        "iris-atlas-row--live": liveIds().has(item.id),
+                                        "iris-atlas-row--new": awayIds().has(item.id) && !liveIds().has(item.id),
+                                      }}
+                                      title="Open this card — keys: j/k move · Enter open · x done · s status · p priority · d due · l labels · c copy #id · n new card · / search · right-click to change"
+                                      onClick={() => openCard(item.id)}
+                                      onContextMenu={(e) => {
+                                        e.preventDefault()
+                                        openQuick(item.id, e.currentTarget, undefined, { x: e.clientX, y: e.clientY })
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.target !== e.currentTarget) return
+                                        if (e.key === "Enter" || e.key === " ") {
+                                          e.preventDefault()
+                                          openCard(item.id)
+                                        }
+                                      }}
+                                    >
+                                      <span class="iris-atlas-row__mark" aria-hidden="true">
+                                        {isDone(item.status) ? "✓" : "·"}
+                                      </span>
+                                      <span class="iris-atlas-row__text">
+                                        <span class="iris-atlas-row__title">{item.title}</span>
+                                        <Show when={preview()}>
+                                          <span class="iris-atlas-row__preview">{preview()}</span>
+                                        </Show>
+                                        <CardBadges item={item} now={now()} />
+                                      </span>
+                                      <Show when={liveIds().has(item.id) || awayIds().has(item.id)}>
+                                        <span class="iris-atlas-row__changed" title="Changed since you last looked" />
+                                      </Show>
+                                      <Show when={item.updatedAt ?? item.createdAt}>
+                                        {(ts) => (
+                                          <span
+                                            class="iris-atlas-row__meta font-mono tabular-nums text-11-regular text-text-weak"
+                                            title={`Last edited ${new Date(ts()).toLocaleString()}`}
+                                          >
+                                            {relativeTime(ts(), now())}
+                                          </span>
+                                        )}
+                                      </Show>
+                                      <button
+                                        type="button"
+                                        class="iris-atlas-row__id font-mono tabular-nums text-11-regular"
+                                        title={`Copy #${item.id}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          copyItemId(item.id)
+                                        }}
+                                      >
+                                        {copiedId() === item.id ? "copied" : item.id < 0 ? "new" : `#${item.id}`}
+                                      </button>
+                                    </div>
+                                  )
+                                }}
+                              </For>
+                              <MoreCards listId={list.id} total={list.total ?? list.items.length} loaded={list.items.length} />
+                              <For each={pendingCards().filter((p) => p.listId === list.id)}>
+                                {(p) => (
+                                  <div class="iris-atlas-row iris-atlas-row--pending" aria-busy="true">
+                                    <span class="iris-atlas-row__mark" aria-hidden="true">
+                                      ·
+                                    </span>
+                                    <span class="iris-atlas-row__text">
+                                      <span class="iris-atlas-row__title">{p.title}</span>
+                                    </span>
+                                    <span class="iris-atlas-row__meta font-mono text-11-regular text-text-weaker">
+                                      saving…
+                                    </span>
+                                  </div>
+                                )}
+                              </For>
+                              <Show
+                                when={composer() === list.id}
+                                fallback={
+                                  <button
+                                    type="button"
+                                    class="iris-atlas-addcard"
+                                    onClick={() => openComposer(list.id)}
+                                  >
+                                    + Add card
+                                  </button>
+                                }
+                              >
+                                <div class="iris-atlas-composer">
+                                  <input
+                                    ref={(el) => queueMicrotask(() => el.focus())}
+                                    type="text"
+                                    placeholder="Card title — Enter to add, Esc to close"
+                                    value={composerText()}
+                                    onInput={(e) => setComposerText(e.currentTarget.value)}
+                                    onKeyDown={composerKeys}
+                                  />
+                                  <Show when={composerError()}>
+                                    <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                                  </Show>
+                                </div>
+                              </Show>
+                            </div>
+                          </Show>
+                        </section>
+                      )}
+                    </For>
+                    <Show when={rows().length > 0 || current()?.measured}>
+                      <Show
+                        when={composer() === "list"}
+                        fallback={
+                          <button
+                            type="button"
+                            class="iris-atlas-addcard iris-atlas-addlist"
+                            onClick={() => openComposer("list")}
+                          >
+                            + Add list
+                          </button>
+                        }
                       >
-                        ●
-                      </span>
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
-                      <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
-                        {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </Match>
-
-              <Match when={pane() === "leads"}>
-                <For each={rows()}>
-                  {(l) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), l))}
-                    >
-                      <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
-                      <Show when={l.status}>
-                        <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
+                        <div class="iris-atlas-composer">
+                          <input
+                            ref={(el) => queueMicrotask(() => el.focus())}
+                            type="text"
+                            placeholder="List name — Enter to add, Esc to close"
+                            value={composerText()}
+                            onInput={(e) => setComposerText(e.currentTarget.value)}
+                            onKeyDown={composerKeys}
+                          />
+                          <Show when={composerError()}>
+                            <p class="iris-atlas-composer__error">Not added — {composerError()}</p>
+                          </Show>
+                        </div>
                       </Show>
-                    </button>
-                  )}
-                </For>
-              </Match>
+                    </Show>
+                  </Show>
+                </Match>
 
-              <Match when={pane() === "mcp"}>
-                <For each={rows()}>
-                  {(m) => (
-                    <button
-                      type="button"
-                      data-slot="iris-mcp-row"
-                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), m))}
-                    >
-                      <span
-                        class="shrink-0"
-                        classList={{
-                          "text-text-base": m.status === "connected",
-                          "text-text-weak": m.status !== "connected",
-                        }}
+                <Match when={pane() === "agents"}>
+                  <For each={rows()}>
+                    {(a) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        data-testid="iris-agent-row"
+                        data-agent-id={a.id}
+                        onClick={() => setAgentEditor({ agentId: Number(a.id), row: a })}
                       >
-                        {m.status === "connected" ? "●" : "○"}
-                      </span>
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
-                      {/* The status is the whole point of the row — "failed" and "needs_auth" are
-                          the two a person acts on. */}
-                      <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                        {m.status === "connected" ? (m.type ?? "") : m.status.replace("_", " ")}
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </Match>
-
-
-              <Match when={pane() === "peers"}>
-                <For each={rows()}>
-                  {(p) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), p))}
-                    >
-                      <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
-                      <span class="min-w-0 flex-1">
-                        <span class="block text-12-regular text-text-base truncate">{p.name}</span>
-                        <span class="block text-11-regular text-text-weaker truncate">
-                          {p.inviter ? "you invited" : "invited you"}
-                          {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
-                        </span>
-                      </span>
-                      {/* A pending invite is only useful WITH its code, so the code is on the row. */}
-                      <Show when={p.inviteCode}>
-                        <span class="font-mono text-11-regular text-text-weaker shrink-0">{p.inviteCode}</span>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </Match>
-
-              <Match when={pane() === "sites"}>
-                <For each={rows()}>
-                  {(st) => (
-                    <button
-                      type="button"
-                      data-slot="iris-site-row"
-                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow("sites", st))}
-                    >
-                      <div class="flex items-baseline gap-2">
                         <span
                           class="shrink-0"
                           classList={{
-                            "text-text-base": st.status === "published",
-                            "text-text-weak": st.status !== "published",
+                            "text-text-base": a.status === "healthy",
+                            "text-text-weak": a.status !== "healthy",
                           }}
                         >
-                          {st.status === "published" ? "●" : "○"}
+                          ●
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
-                        {/* The page count IS the reason a site exists. Leading with it says
-                            what kind of thing this row is at a glance. */}
-                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                          {st.pagesCount}p
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
+                        <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
+                          {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
                         </span>
-                      </div>
-                      <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
-                        /{st.slug}
-                        {st.owner ? ` · ${st.owner}` : ""}
-                        {st.requiresAuth ? " · gated" : ""}
-                      </p>
-                    </button>
-                  )}
-                </For>
-              </Match>
+                      </button>
+                    )}
+                  </For>
+                </Match>
 
-              {/* WHAT YOU COULD ADD. Same mark treatment as the connected list, greyed —
+                <Match when={pane() === "leads"}>
+                  <For each={rows()}>
+                    {(l) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), l))}
+                      >
+                        <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
+                        <Show when={l.status}>
+                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </Match>
+
+                <Match when={pane() === "mcp"}>
+                  <For each={rows()}>
+                    {(m) => (
+                      <button
+                        type="button"
+                        data-slot="iris-mcp-row"
+                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), m))}
+                      >
+                        <span
+                          class="shrink-0"
+                          classList={{
+                            "text-text-base": m.status === "connected",
+                            "text-text-weak": m.status !== "connected",
+                          }}
+                        >
+                          {m.status === "connected" ? "●" : "○"}
+                        </span>
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
+                        {/* The status is the whole point of the row — "failed" and "needs_auth" are
+                          the two a person acts on. */}
+                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                          {m.status === "connected" ? (m.type ?? "") : m.status.replace("_", " ")}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </Match>
+
+                <Match when={pane() === "peers"}>
+                  <For each={rows()}>
+                    {(p) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), p))}
+                      >
+                        <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
+                        <span class="min-w-0 flex-1">
+                          <span class="block text-12-regular text-text-base truncate">{p.name}</span>
+                          <span class="block text-11-regular text-text-weaker truncate">
+                            {p.inviter ? "you invited" : "invited you"}
+                            {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
+                          </span>
+                        </span>
+                        {/* A pending invite is only useful WITH its code, so the code is on the row. */}
+                        <Show when={p.inviteCode}>
+                          <span class="font-mono text-11-regular text-text-weaker shrink-0">{p.inviteCode}</span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </Match>
+
+                <Match when={pane() === "sites"}>
+                  <For each={rows()}>
+                    {(st) => (
+                      <button
+                        type="button"
+                        data-slot="iris-site-row"
+                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow("sites", st))}
+                      >
+                        <div class="flex items-baseline gap-2">
+                          <span
+                            class="shrink-0"
+                            classList={{
+                              "text-text-base": st.status === "published",
+                              "text-text-weak": st.status !== "published",
+                            }}
+                          >
+                            {st.status === "published" ? "●" : "○"}
+                          </span>
+                          <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
+                          {/* The page count IS the reason a site exists. Leading with it says
+                            what kind of thing this row is at a glance. */}
+                          <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                            {st.pagesCount}p
+                          </span>
+                        </div>
+                        <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
+                          /{st.slug}
+                          {st.owner ? ` · ${st.owner}` : ""}
+                          {st.requiresAuth ? " · gated" : ""}
+                        </p>
+                      </button>
+                    )}
+                  </For>
+                </Match>
+
+                {/* WHAT YOU COULD ADD. Same mark treatment as the connected list, greyed —
                   these are real services you do not have yet, not a different kind of thing. */}
-              {/* THE GRAPH, as rows rather than a drawing.
+                {/* THE GRAPH, as rows rather than a drawing.
                   160 nodes and 41 edges in a 500px column is a hairball that answers nothing,
                   and 123 of those nodes have no edge at all — a force layout would spend its
                   whole area rendering that fact. Sorted by degree, the same data answers "what
                   is central here" at a glance, and the isolated count is stated instead. */}
-              <Match when={pane() === "graph"}>
-                {/* WHOSE graph. Chips, not a plate: this narrows the pane you are already on,
+                <Match when={pane() === "graph"}>
+                  {/* WHOSE graph. Chips, not a plate: this narrows the pane you are already on,
                     it does not change the subject — the same reason sub-views get a rule and
                     surfaces get a plate. */}
-                <div class="iris-scope shrink-0" role="tablist" aria-label="Graph scope">
-                  <For each={GRAPH_SCOPES}>
-                    {(sc) => (
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={graphScope() === sc.id}
-                        title={sc.hint}
-                        class="iris-detailnav__item"
-                        classList={{ "iris-detailnav__item--active": graphScope() === sc.id }}
-                        onClick={() => chooseGraphScope(sc.id)}
-                      >
-                        {sc.label}
-                      </button>
-                    )}
-                  </For>
-                </div>
+                  <div class="iris-scope shrink-0" role="tablist" aria-label="Graph scope">
+                    <For each={GRAPH_SCOPES}>
+                      {(sc) => (
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={graphScope() === sc.id}
+                          title={sc.hint}
+                          class="iris-detailnav__item"
+                          classList={{ "iris-detailnav__item--active": graphScope() === sc.id }}
+                          onClick={() => chooseGraphScope(sc.id)}
+                        >
+                          {sc.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
 
-                {/* Counts row removed — the legend chips under the graph now carry the same
+                  {/* Counts row removed — the legend chips under the graph now carry the same
                     numbers, and the isolated-board case is handled by its own block below. */}
-                {/* THE PICTURE, then the list.
+                  {/* THE PICTURE, then the list.
                     Both, because they answer different halves: the layout shows how the
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
-                <Show when={projectScope() && !project() && projectInterior.loading}>
-                  <p class="px-2 py-6 text-12-regular text-text-weak">Loading this board's graph…</p>
-                </Show>
-                <Show when={projectScope() && project()?.measured === false}>
-                  <p class="px-2 py-6 text-12-regular text-text-weak">
-                    Not connected — this board's graph could not be read
-                    {(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
-                  </p>
-                </Show>
-                <Show when={projectScope() ? (project()?.nodes?.length ?? 0) > 0 : graphScopedRows().length}>
-                  <IrisForceGraph
-                    nodes={graphNodes()}
-                    edges={graphEdges()}
-                    rootId={projectScope() ? `bloq-${activeBloq()}` : undefined}
-                    outerTypes={["bloq"]}
-                    /* Only a BOARD selects a board. Interior nodes carry namespaced string ids
+                  <Show when={projectScope() && !project() && projectInterior.loading}>
+                    <p class="px-2 py-6 text-12-regular text-text-weak">Loading this board's graph…</p>
+                  </Show>
+                  <Show when={projectScope() && project()?.measured === false}>
+                    <p class="px-2 py-6 text-12-regular text-text-weak">
+                      Not connected — this board's graph could not be read
+                      {(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
+                    </p>
+                  </Show>
+                  <Show when={projectScope() ? (project()?.nodes?.length ?? 0) > 0 : graphScopedRows().length}>
+                    <IrisForceGraph
+                      nodes={graphNodes()}
+                      edges={graphEdges()}
+                      rootId={projectScope() ? `bloq-${activeBloq()}` : undefined}
+                      outerTypes={["bloq"]}
+                      /* Only a BOARD selects a board. Interior nodes carry namespaced string ids
                        (`hub-agents-12`), and `choose` takes a board id — passing one through
                        would select nothing and clear the pane you were reading. */
-                    /*
+                      /*
                       A BOARD NODE EXPANDS; it does not navigate.
                       Selecting a board is what the picker above is for, and it replaces the
                       whole pane — doing that on a graph click means one misplaced tap loses the
                       layout you were reading. Expanding is reversible and keeps you where you
                       are. Interior nodes carry namespaced string ids and are inert for now.
                     */
-                    onNodeClick={(n) => {
-                      /*
-                       * A "+N MORE" NODE OPENS THE CARDS IT STANDS FOR.
-                       *
-                       * Only a card responds to a click, and only a card that HAS a node can be
-                       * clicked — so the six-per-list cap quietly put most of a real board out
-                       * of reach (board 517: 101 of 167 cards). Clicking the placeholder draws
-                       * its list in full; clicking that list again puts the cap back. Expanding
-                       * is reversible and keeps you where you are, which is the same reason a
-                       * board node expands rather than navigating.
-                       */
-                      const collapsed =
-                        typeof n.id === "string" ? /^list-(\d+)-more$/.exec(n.id) : null
-                      if (collapsed) {
-                        const listId = Number(collapsed[1])
-                        setExpandedLists((prev) => (prev.includes(listId) ? prev : [...prev, listId]))
-                        return
-                      }
-                      const listNode = typeof n.id === "string" ? /^list-(\d+)$/.exec(n.id) : null
-                      if (listNode) {
-                        // Only an EXPANDED list responds; a capped one stays inert, as before.
-                        const listId = Number(listNode[1])
-                        setExpandedLists((prev) => prev.filter((id) => id !== listId))
-                        return
-                      }
-                      // ELON's rule, exactly: only a CARD responds, and it opens that card's
-                      // editor. Hubs and related boards are inert (Board.vue onGraphNodeClick
-                      // returns unless the id starts with `item-`).
-                      if (typeof n.id === "string" && n.id.startsWith("item-")) {
-                        const itemId = Number(n.id.slice("item-".length))
-                        if (Number.isFinite(itemId)) openCard(itemId, projectScope() ? projectLists() : undefined)
-                        return
-                      }
-                      // The account-wide webs keep expand-on-click.
-                      if (!projectScope() && typeof n.id === "number") void toggleExpand(n.id)
-                    }}
-                  />
-                </Show>
-                {/* An isolated board would otherwise leave the canvas blank, which reads as a
+                      onNodeClick={(n) => {
+                        /*
+                         * A "+N MORE" NODE OPENS THE CARDS IT STANDS FOR.
+                         *
+                         * Only a card responds to a click, and only a card that HAS a node can be
+                         * clicked — so the six-per-list cap quietly put most of a real board out
+                         * of reach (board 517: 101 of 167 cards). Clicking the placeholder draws
+                         * its list in full; clicking that list again puts the cap back. Expanding
+                         * is reversible and keeps you where you are, which is the same reason a
+                         * board node expands rather than navigating.
+                         */
+                        const collapsed = typeof n.id === "string" ? /^list-(\d+)-more$/.exec(n.id) : null
+                        if (collapsed) {
+                          const listId = Number(collapsed[1])
+                          setExpandedLists((prev) => (prev.includes(listId) ? prev : [...prev, listId]))
+                          return
+                        }
+                        const listNode = typeof n.id === "string" ? /^list-(\d+)$/.exec(n.id) : null
+                        if (listNode) {
+                          // Only an EXPANDED list responds; a capped one stays inert, as before.
+                          const listId = Number(listNode[1])
+                          setExpandedLists((prev) => prev.filter((id) => id !== listId))
+                          return
+                        }
+                        // ELON's rule, exactly: only a CARD responds, and it opens that card's
+                        // editor. Hubs and related boards are inert (Board.vue onGraphNodeClick
+                        // returns unless the id starts with `item-`).
+                        if (typeof n.id === "string" && n.id.startsWith("item-")) {
+                          const itemId = Number(n.id.slice("item-".length))
+                          if (Number.isFinite(itemId)) openCard(itemId, projectScope() ? projectLists() : undefined)
+                          return
+                        }
+                        // The account-wide webs keep expand-on-click.
+                        if (!projectScope() && typeof n.id === "number") void toggleExpand(n.id)
+                      }}
+                    />
+                  </Show>
+                  {/* An isolated board would otherwise leave the canvas blank, which reads as a
                     failed load rather than the finding it is. Offer the way out instead. */}
-                <Show when={!projectScope() && graphBoardIsolated()}>
-                  <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
-                    <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
-                    <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
-                      Show the full atlas
-                    </button>
-                  </div>
-                </Show>
-                <details class="iris-rows shrink-0">
-                  <summary class="iris-rows__summary">
-                    {graphScopedRows().length} connected {graphScopedRows().length === 1 ? "board" : "boards"}, as a
-                    list
-                  </summary>
-                  <div class="iris-rows__body">
-                    <For each={graphScopedRows()}>
-                      {(n) => (
-                        <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                          <div class="flex items-baseline gap-2">
-                            <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
-                            <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                              {n.degree}
-                            </span>
-                          </div>
-                          <For each={n.links}>
-                            {(l: any) => (
-                              <p class="text-11-regular text-text-weaker ps-3 pt-0.5 truncate">
-                                {/* Direction is drawn, because feeds_into read backwards is a
+                  <Show when={!projectScope() && graphBoardIsolated()}>
+                    <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
+                      <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
+                      <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
+                        Show the full atlas
+                      </button>
+                    </div>
+                  </Show>
+                  <details class="iris-rows shrink-0">
+                    <summary class="iris-rows__summary">
+                      {graphScopedRows().length} connected {graphScopedRows().length === 1 ? "board" : "boards"}, as a
+                      list
+                    </summary>
+                    <div class="iris-rows__body">
+                      <For each={graphScopedRows()}>
+                        {(n) => (
+                          <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                            <div class="flex items-baseline gap-2">
+                              <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
+                              <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                                {n.degree}
+                              </span>
+                            </div>
+                            <For each={n.links}>
+                              {(l: any) => (
+                                <p class="text-11-regular text-text-weaker ps-3 pt-0.5 truncate">
+                                  {/* Direction is drawn, because feeds_into read backwards is a
                                     different claim about the same pair. */}
-                                <span class="font-mono">{l.direction === "out" ? "→" : "←"}</span> {l.name}
-                                <span class="font-mono"> · {l.type}</span>
-                              </p>
-                            )}
-                          </For>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </details>
-              </Match>
+                                  <span class="font-mono">{l.direction === "out" ? "→" : "←"}</span> {l.name}
+                                  <span class="font-mono"> · {l.type}</span>
+                                </p>
+                              )}
+                            </For>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </details>
+                </Match>
 
-              <Match when={pane() === "catalog"}>
-                <For each={rows()}>
-                  {(c) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow("catalog", c))}
-                    >
-                      <span class="iris-int__mark iris-int__mark--off shrink-0" title={c.type}>
-                        {/* A LOADED logo hides the monogram behind it. Most brand marks are
+                <Match when={pane() === "catalog"}>
+                  <For each={rows()}>
+                    {(c) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow("catalog", c))}
+                      >
+                        <span class="iris-int__mark iris-int__mark--off shrink-0" title={c.type}>
+                          {/* A LOADED logo hides the monogram behind it. Most brand marks are
                             transparent PNGs, so the letters showed THROUGH the logo — a "G"
                             stamped across the Google mark. onError removes the image and the
                             monogram returns: a row that loses its logo to a dropped request
                             must still say which service it is. */}
-                        <Show when={c.logoUrl}>
-                          <img
-                            class="iris-int__logo"
-                            src={c.logoUrl}
-                            alt=""
-                            aria-hidden="true"
-                            loading="lazy"
-                            decoding="async"
-                            onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
-                            onError={(e) => {
-                              e.currentTarget.parentElement?.removeAttribute("data-logo")
-                              e.currentTarget.remove()
-                            }}
-                          />
-                        </Show>
-                        <span class="iris-int__fallback">{providerMark(c.type, c.name)}</span>
-                      </span>
-                      <span class="min-w-0 flex-1">
-                        <span class="block text-12-regular text-text-base truncate">{c.name}</span>
-                        {/* The one-line description the registry leads with. Without it the list
-                            is 79 brand names and no way to tell what any of them would do. */}
-                        <Show when={c.description}>
-                          <span class="block text-11-regular text-text-weak truncate">{c.description}</span>
-                        </Show>
-                        <span class="block text-11-regular text-text-weaker truncate">
-                          {metaLine({
-                            category: c.category,
-                            mode: c.mode,
-                            oauthRequired: c.oauthRequired,
-                            functionsCount: c.functionsCount,
-                            usageBand: c.usage?.band,
-                          })}
+                          <Show when={c.logoUrl}>
+                            <img
+                              class="iris-int__logo"
+                              src={c.logoUrl}
+                              alt=""
+                              aria-hidden="true"
+                              loading="lazy"
+                              decoding="async"
+                              onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
+                              onError={(e) => {
+                                e.currentTarget.parentElement?.removeAttribute("data-logo")
+                                e.currentTarget.remove()
+                              }}
+                            />
+                          </Show>
+                          <span class="iris-int__fallback">{providerMark(c.type, c.name)}</span>
                         </span>
-                      </span>
-                      {/* PROVIDER reachability, not yours — the title carries the claim so the
+                        <span class="min-w-0 flex-1">
+                          <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                          {/* The one-line description the registry leads with. Without it the list
+                            is 79 brand names and no way to tell what any of them would do. */}
+                          <Show when={c.description}>
+                            <span class="block text-11-regular text-text-weak truncate">{c.description}</span>
+                          </Show>
+                          <span class="block text-11-regular text-text-weaker truncate">
+                            {metaLine({
+                              category: c.category,
+                              mode: c.mode,
+                              oauthRequired: c.oauthRequired,
+                              functionsCount: c.functionsCount,
+                              usageBand: c.usage?.band,
+                            })}
+                          </span>
+                        </span>
+                        {/* PROVIDER reachability, not yours — the title carries the claim so the
                           dot cannot be read as "your connection is fine". Unmeasured is grey. */}
-                      <span
-                        class="iris-cat__dot shrink-0"
-                        data-tone={healthRead(c.health?.state).tone}
-                        title={`${healthRead(c.health?.state).label} — ${healthRead(c.health?.state).basis}`}
-                        aria-label={healthRead(c.health?.state).label}
-                      />
-                    </button>
-                  )}
-                </For>
-              </Match>
+                        <span
+                          class="iris-cat__dot shrink-0"
+                          data-tone={healthRead(c.health?.state).tone}
+                          title={`${healthRead(c.health?.state).label} — ${healthRead(c.health?.state).basis}`}
+                          aria-label={healthRead(c.health?.state).label}
+                        />
+                      </button>
+                    )}
+                  </For>
+                </Match>
 
-              <Match when={pane() === "playbooks"}>
-                <PlaybookFlowList
-                  rows={playbookRows()}
-                  total={rows().length}
-                  filter={handsFilter()}
-                  onOpen={(pb) => void startTransition(() => setOpenRow(describeRow(pane(), pb)))}
-                  onReset={() => setHandsFilter("any")}
-                />
-              </Match>
+                <Match when={pane() === "playbooks"}>
+                  <PlaybookFlowList
+                    rows={playbookRows()}
+                    total={rows().length}
+                    filter={handsFilter()}
+                    onOpen={(pb) => void startTransition(() => setOpenRow(describeRow(pane(), pb)))}
+                    onReset={() => setHandsFilter("any")}
+                  />
+                </Match>
 
-              <Match when={pane() === "integrations"}>
-                <For each={rows()}>
-                  {(i) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), i))}
-                    >
-                      {/* The provider mark carries the identity; the ring carries the state.
+                <Match when={pane() === "integrations"}>
+                  <For each={rows()}>
+                    {(i) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), i))}
+                      >
+                        {/* The provider mark carries the identity; the ring carries the state.
                           Twenty-five identical grey dots was a list you could not scan and
                           could not triage. */}
-                      <span
-                        class="iris-int__mark shrink-0"
-                        classList={{
-                          "iris-int__mark--live": integrationHealth(i) === "live",
-                          "iris-int__mark--error": integrationHealth(i) === "error",
-                          "iris-int__mark--off": integrationHealth(i) === "off",
-                        }}
-                        title={i.type ?? i.name}
-                      >
-                        {/* The real brand mark when the platform has one, the monogram when it
+                        <span
+                          class="iris-int__mark shrink-0"
+                          classList={{
+                            "iris-int__mark--live": integrationHealth(i) === "live",
+                            "iris-int__mark--error": integrationHealth(i) === "error",
+                            "iris-int__mark--off": integrationHealth(i) === "off",
+                          }}
+                          title={i.type ?? i.name}
+                        >
+                          {/* The real brand mark when the platform has one, the monogram when it
                             does not. The monogram sits UNDERNEATH rather than being replaced:
                             logo.dev answers 200 with its own generic glyph for an unknown name,
                             so `onerror` fires only on a network failure — and a row that loses
                             its mark to a dropped request should still say which service it is. */}
-                        <Show when={i.logoUrl}>
-                          <img
-                            class="iris-int__logo"
-                            src={i.logoUrl}
-                            alt=""
-                            aria-hidden="true"
-                            loading="lazy"
-                            decoding="async"
-                            onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
-                            onError={(e) => {
-                              e.currentTarget.parentElement?.removeAttribute("data-logo")
-                              e.currentTarget.remove()
-                            }}
-                          />
-                        </Show>
-                        <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
-                      </span>
-                      <span class="min-w-0 flex-1">
-                        <span class="block text-12-regular text-text-base truncate">{i.name}</span>
-                        {/* An error says WHY here. A red mark with no reason is not actionable. */}
-                        <Show when={i.lastError}>
-                          <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
-                            {i.lastError}
-                          </span>
-                        </Show>
-                      </span>
-                      <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                        {i.account || i.category || i.status}
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </Match>
+                          <Show when={i.logoUrl}>
+                            <img
+                              class="iris-int__logo"
+                              src={i.logoUrl}
+                              alt=""
+                              aria-hidden="true"
+                              loading="lazy"
+                              decoding="async"
+                              onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
+                              onError={(e) => {
+                                e.currentTarget.parentElement?.removeAttribute("data-logo")
+                                e.currentTarget.remove()
+                              }}
+                            />
+                          </Show>
+                          <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
+                        </span>
+                        <span class="min-w-0 flex-1">
+                          <span class="block text-12-regular text-text-base truncate">{i.name}</span>
+                          {/* An error says WHY here. A red mark with no reason is not actionable. */}
+                          <Show when={i.lastError}>
+                            <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
+                              {i.lastError}
+                            </span>
+                          </Show>
+                        </span>
+                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                          {i.account || i.category || i.status}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </Match>
 
-              <Match when={pane() === "schemas"}>
-                <For each={rows()}>
-                  {(sc) => (
-                    <button
-                      type="button"
-                      class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), sc))}
-                    >
-                      <div class="flex items-baseline gap-2">
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
-                        {/* Scope is shown because 40 of these belong to the account, not the
+                <Match when={pane() === "schemas"}>
+                  <For each={rows()}>
+                    {(sc) => (
+                      <button
+                        type="button"
+                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), sc))}
+                      >
+                        <div class="flex items-baseline gap-2">
+                          <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
+                          {/* Scope is shown because 40 of these belong to the account, not the
                             board — hiding that would put account-wide schemas under a board
                             heading, which is the Pages bug again. */}
-                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                          {sc.scope === "account" ? "account" : "board"} · {sc.fields.length}f
-                        </span>
-                      </div>
-                      <Show when={sc.fields.length}>
-                        <p class="font-mono text-11-regular text-text-weak ps-2 pt-0.5 truncate">
-                          {/* `key`, not `name`. The server parse was fixed so fields arrive as
+                          <span class="font-mono text-11-regular text-text-weaker shrink-0">
+                            {sc.scope === "account" ? "account" : "board"} · {sc.fields.length}f
+                          </span>
+                        </div>
+                        <Show when={sc.fields.length}>
+                          <p class="font-mono text-11-regular text-text-weak ps-2 pt-0.5 truncate">
+                            {/* `key`, not `name`. The server parse was fixed so fields arrive as
                               {key,label,type,visibility}; this line still read f.name, and
                               undefined joined by " · " is a row of separators with nothing
                               between them. The fix and the regression were the same change. */}
-                          {sc.fields.map((f: any) => f.label || f.key).join(" · ")}
-                        </p>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </Match>
+                            {sc.fields.map((f: any) => f.label || f.key).join(" · ")}
+                          </p>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </Match>
 
-              <Match when={pane() === "pages"}>
-                <For each={rows()}>
-                  {(pg) => (
-                    <button
-                      type="button"
-                      class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                      onClick={() => setOpenRow(describeRow(pane(), pg))}
-                    >
-                      <span
-                        class="shrink-0"
-                        classList={{
-                          "text-text-base": pg.status === "published",
-                          "text-text-weak": pg.status !== "published",
-                        }}
+                <Match when={pane() === "pages"}>
+                  <For each={rows()}>
+                    {(pg) => (
+                      <button
+                        type="button"
+                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        onClick={() => setOpenRow(describeRow(pane(), pg))}
                       >
-                        {pg.status === "published" ? "●" : "○"}
-                      </span>
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
-                      <Show when={pg.slug}>
-                        <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </Match>
-            </Switch>
-          </Match>
+                        <span
+                          class="shrink-0"
+                          classList={{
+                            "text-text-base": pg.status === "published",
+                            "text-text-weak": pg.status !== "published",
+                          }}
+                        >
+                          {pg.status === "published" ? "●" : "○"}
+                        </span>
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
+                        <Show when={pg.slug}>
+                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </Match>
+              </Switch>
+            </Match>
 
-          {/* Only reachable when measured===true — a genuine empty surface. */}
-          <Match when={view() === "empty"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">
-              {/* "This board is empty" and "your search matched nothing" are different facts,
+            {/* Only reachable when measured===true — a genuine empty surface. */}
+            <Match when={view() === "empty"}>
+              <p class="px-2 py-2 text-12-regular text-text-weak">
+                {/* "This board is empty" and "your search matched nothing" are different facts,
                   and the first one is alarming when it is not true. */}
-              <Show
-                when={applied() && SEARCH_PLACEHOLDER[pane()]}
-                fallback={resolved().sub?.empty ?? `Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`}
-              >
-                Nothing in {paneLabel()} matches “{applied()}”.
-              </Show>
-            </p>
-          </Match>
-        </Switch>
+                <Show
+                  when={applied() && SEARCH_PLACEHOLDER[pane()]}
+                  fallback={
+                    resolved().sub?.empty ?? `Nothing in ${paneLabel()}${boardScoped() ? " on this board" : ""}.`
+                  }
+                >
+                  Nothing in {paneLabel()} matches “{applied()}”.
+                </Show>
+              </p>
+            </Match>
+          </Switch>
         </Suspense>
 
         {/* Logo.dev attribution. A CONDITION of the free tier, so it renders from the same
@@ -5311,7 +5564,11 @@ export function SessionIrisTab() {
         <Show when={view() === "rows" && pane() !== "graph" && !SELF_PANES.has(pane())}>
           <IrisPager
             class="px-2 py-2"
-            summary={pane() === "atlas" ? undefined : pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}
+            summary={
+              pane() === "atlas"
+                ? undefined
+                : pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })
+            }
             loading={data.loading}
             hasMore={(current() as PageEnvelope | undefined)?.hasMore}
             onNext={() => setPage((p) => p + 1)}

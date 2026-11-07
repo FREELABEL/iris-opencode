@@ -1,9 +1,11 @@
-import { fetchBrandKit, fetchBrands, saveBrandSection } from "@/iris/brand-kits"
+import { fetchBrandKit, fetchBrands, probeLogo, saveBrandKit, uploadBrandLogo } from "@/iris/brand-kits"
 import { Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
 import * as Sse from "effect/unstable/encoding/Sse"
-import { filterRows, paginate } from "@/iris/pagination"
+import { clampPaging, filterRows, paginate } from "@/iris/pagination"
+import { addPageToSite, createSite, fetchSiteDetail, removePageFromSite, reorderSite } from "@/iris/genesis-sites"
+import { fetchPageInfo, fetchPagesListing, fetchPageVersions, fetchVersionRender, rollbackPage, setPagePublished, setPageVisibility } from "@/iris/genesis-pages"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   filterAtlas,
@@ -17,7 +19,7 @@ import {
   markInboxRead,
   fetchLeads,
   fetchIntegrations,
-  fetchPages, fetchRecentItems,
+  fetchRecentItems,
   fetchPlaybooks,
   fetchRecords,
   fetchSchemas,
@@ -106,8 +108,9 @@ import { atlasNoteUrl, probeAtlasNote, type NoteProbe } from "@/iris/atlas-note"
 import { frameTarget, probeFrame } from "@/iris/frame-check"
 import { mintPageSignIn } from "@/iris/page-signin"
 import { checkPagePin } from "@/iris/page-pin"
+import { listCampaignBoards, runCampaignSetup } from "@/iris/campaign-setup"
 import { startIntegrationConnect } from "@/iris/platform"
-import { readAtlasBoardWithEdits, readBoardList, readCard } from "@/iris/atlas-board-read"
+import { readAtlasBoardWithEdits, loadMoreCards, readBoardList, readCard } from "@/iris/atlas-board-read"
 import { createCard, moveCard, saveCard } from "@/iris/atlas-write"
 import { resolveUserId } from "@/iris/platform"
 import { counts as outboxCounts, replay as replayOutbox, resolve as resolveOutbox } from "@/iris/atlas-outbox"
@@ -118,6 +121,7 @@ import * as Capabilities from "@/iris/onboarding-capabilities"
 import { searchCliCommands } from "@/iris/cli-commands"
 import { fetchHivePeers } from "@/iris/platform"
 import { fetchReachrBatch, fetchReachrBatches, runLeadsOp, runReachrAction, type LeadsOp, type ReachrAction } from "@/iris/platform"
+import { draftReply, fetchConversations, fetchThread, sendReply, type ReplyChannel, type SendInput } from "@/iris/comms"
 import { fetchAgreement, fetchAgreements, issueAgreement, raiseAgreement, revokeAgreement, type AgreementsQuery, type RaiseInput } from "@/iris/agreements"
 import { watchAtlas, watchMe, type AtlasLiveEvent, type MeLiveEvent } from "@/iris/atlas-live"
 import { publishArtifact } from "@/iris/artifact-publish"
@@ -264,7 +268,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
             const { items, meta } = pageOf(r, lists, ctx.query)
             return {
               ...meta,
-              lists: items,
+              // A paged list's unread ids (#192670) stay in the engine; the panel needs only the count.
+              lists: items.map((l: any) => (Array.isArray(l.more) ? { id: l.id, name: l.name, items: l.items, total: l.total } : l)),
               source,
               ...(copiedAt ? { copiedAt } : {}),
               ...(offline ? { offline } : {}),
@@ -273,6 +278,11 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
             }
           }),
         ),
+    )
+
+    const atlasMore = Effect.fn("IrisHttpApi.atlasMore")(
+      (ctx: { params: { bloqID: number }; query: { list: number; count?: number } }) =>
+        Effect.promise(() => loadMoreCards(ctx.params.bloqID, ctx.query.list, ctx.query.count)),
     )
 
     /**
@@ -353,15 +363,53 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
+    // Paged and filtered BY THE PLATFORM (#192632): the count is iris-api's, not the first 50 rows'.
     const pages = Effect.fn("IrisHttpApi.pages")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number; q?: string; scope?: "project" | "all" } }) =>
-        Effect.promise(() => fetchPages(ctx.params.bloqID, { all: ctx.query.scope === "all", q: ctx.query.q })).pipe(
-          Effect.map((r) => {
-            const rows = filterRows(r.data.pages, ctx.query.q, (p) => [p.title, p.slug, p.status, p.category])
-            const { items, meta } = pageOf(r, rows, ctx.query)
-            return { ...meta, pages: items }
-          }),
-        ),
+      (ctx: {
+        params: { bloqID: number }
+        query: { page?: number; perPage?: number; q?: string; scope?: "project" | "all"; filter?: "all" | "published" | "draft" | "private" }
+      }) => {
+        const paging = clampPaging(ctx.query)
+        return Effect.promise(() =>
+          fetchPagesListing({ bloqId: ctx.params.bloqID, all: ctx.query.scope === "all", q: ctx.query.q, filter: ctx.query.filter ?? "all", ...paging }),
+        ).pipe(
+          Effect.map((r) => ({
+            measured: r.measured,
+            reason: r.reason,
+            ...paging,
+            total: r.measured ? r.data.total : null,
+            totalIsExact: r.measured && r.data.totalIsExact,
+            hasMore: r.measured && r.data.hasMore,
+            pages: r.data.pages,
+            counts: r.data.counts,
+          })),
+        )
+      },
+    )
+    const pageInfo = Effect.fn("IrisHttpApi.pageInfo")((ctx: { params: { pageID: number } }) =>
+      Effect.promise(() => fetchPageInfo(ctx.params.pageID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...(r.data ?? {}) })),
+      ),
+    )
+    const pageVersions = Effect.fn("IrisHttpApi.pageVersions")((ctx: { params: { pageID: number }; query: { page?: number } }) =>
+      Effect.promise(() => fetchPageVersions(ctx.params.pageID, ctx.query.page ?? 1)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const pageVersion = Effect.fn("IrisHttpApi.pageVersion")((ctx: { params: { pageID: number; version: number } }) =>
+      Effect.promise(() => fetchVersionRender(ctx.params.pageID, ctx.params.version)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const pagePublish = Effect.fn("IrisHttpApi.pagePublish")((ctx: { params: { pageID: number }; payload: { publish: boolean; confirm?: boolean } }) =>
+      Effect.promise(() => setPagePublished({ id: ctx.params.pageID, ...ctx.payload })),
+    )
+    const pageVisibility = Effect.fn("IrisHttpApi.pageVisibility")(
+      (ctx: { params: { pageID: number }; payload: { mode: "public" | "unlisted" | "private"; confirm?: boolean } }) =>
+        Effect.promise(() => setPageVisibility({ id: ctx.params.pageID, ...ctx.payload })),
+    )
+    const pageRollback = Effect.fn("IrisHttpApi.pageRollback")((ctx: { params: { pageID: number }; payload: { version: number; confirm?: boolean } }) =>
+      Effect.promise(() => rollbackPage({ id: ctx.params.pageID, ...ctx.payload })),
     )
 
     const schemas = Effect.fn("IrisHttpApi.schemas")(
@@ -1124,6 +1172,26 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.promise(() => revokeAgreement(ctx.params.agreementID, ctx.payload.reason)).pipe(Effect.map(agreementBody)),
     )
     const leadsApi = Effect.fn("IrisHttpApi.leadsApi")((ctx: { payload: LeadsOp }) => Effect.promise(() => runLeadsOp(ctx.payload)))
+    // The people inbox (#192688). Reads, an AI draft that sends nothing, and the one send — refused by
+    // sendReply without `confirm: true` (and `approved: true` for an AI draft). Absent fields stay
+    // absent: an optional left `undefined` would reach the panel as null.
+    const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
+    const comms = Effect.fn("IrisHttpApi.comms")((ctx: { query: { days?: number; bloqId?: number; refresh?: string } }) =>
+      Effect.promise(() => fetchConversations({ days: ctx.query.days, bloqId: ctx.query.bloqId, refresh: !!ctx.query.refresh })).pipe(
+        Effect.map((r) => plain({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const commsThread = Effect.fn("IrisHttpApi.commsThread")((ctx: { params: { leadID: number } }) =>
+      Effect.promise(() => fetchThread(ctx.params.leadID)).pipe(Effect.map((r) => plain({ measured: r.measured, reason: r.reason, ...r.data }))),
+    )
+    const commsDraft = Effect.fn("IrisHttpApi.commsDraft")((ctx: { payload: { leadId: number; channel: ReplyChannel; prompt?: string } }) =>
+      Effect.promise(() => draftReply(ctx.payload)).pipe(Effect.map((r) => plain({ measured: r.measured, reason: r.reason, ...r.data }))),
+    )
+    const commsSend = Effect.fn("IrisHttpApi.commsSend")((ctx: { payload: SendInput }) =>
+      Effect.promise(() => sendReply(ctx.payload)).pipe(
+        Effect.map((r) => plain({ measured: r.measured, ...r.data, reason: r.data.reason ?? r.reason })),
+      ),
+    )
     const pulseContacts = Effect.fn("IrisHttpApi.pulseContacts")((ctx: { query: { q?: string } }) =>
       Effect.promise(() => fetchPulseContacts(ctx.query.q ?? "")),
     )
@@ -1143,15 +1211,15 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
     const brandSave = Effect.fn("IrisHttpApi.brandSave")(
-      (ctx: { params: { brandID: number }; payload: { section: string; value: unknown; expected: string } }) =>
-        Effect.promise(() =>
-          saveBrandSection({
-            id: ctx.params.brandID,
-            section: ctx.payload.section,
-            value: ctx.payload.value,
-            expected: ctx.payload.expected,
-          }),
-        ),
+      (ctx: { params: { brandID: number }; payload: { changes: Record<string, unknown>; expected: Record<string, string> } }) =>
+        Effect.promise(() => saveBrandKit({ id: ctx.params.brandID, changes: ctx.payload.changes, expected: ctx.payload.expected })),
+    )
+    const brandLogoUpload = Effect.fn("IrisHttpApi.brandLogoUpload")(
+      (ctx: { params: { brandID: number }; payload: { name: string; type: string; data: string; variant?: string } }) =>
+        Effect.promise(() => uploadBrandLogo(ctx.params.brandID, ctx.payload)),
+    )
+    const brandLogoProbe = Effect.fn("IrisHttpApi.brandLogoProbe")((ctx: { query: { url: string } }) =>
+      Effect.promise(() => probeLogo(ctx.query.url)),
     )
 
     const sites = Effect.fn("IrisHttpApi.sites")(
@@ -1162,6 +1230,23 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
             return { ...meta, sites: items }
           }),
         ),
+    )
+
+    // Genesis › Sites, writing (#192672).
+    const site = Effect.fn("IrisHttpApi.site")((ctx: { params: { siteID: number } }) =>
+      Effect.promise(() => fetchSiteDetail(ctx.params.siteID)).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, site: r.data }))),
+    )
+    const siteCreate = Effect.fn("IrisHttpApi.siteCreate")((ctx: { payload: { name: string; description?: string; bloqId: number } }) =>
+      Effect.promise(() => createSite(ctx.payload)),
+    )
+    const sitePageAdd = Effect.fn("IrisHttpApi.sitePageAdd")((ctx: { params: { siteID: number; pageID: number }; payload: { fromSiteId?: number } }) =>
+      Effect.promise(() => addPageToSite({ siteId: ctx.params.siteID, pageId: ctx.params.pageID, fromSiteId: ctx.payload.fromSiteId })),
+    )
+    const sitePageRemove = Effect.fn("IrisHttpApi.sitePageRemove")((ctx: { params: { siteID: number; pageID: number } }) =>
+      Effect.promise(() => removePageFromSite({ siteId: ctx.params.siteID, pageId: ctx.params.pageID })),
+    )
+    const siteReorder = Effect.fn("IrisHttpApi.siteReorder")((ctx: { params: { siteID: number }; payload: { pageIds: readonly number[] } }) =>
+      Effect.promise(() => reorderSite({ siteId: ctx.params.siteID, pageIds: ctx.payload.pageIds })),
     )
 
     const records = Effect.fn("IrisHttpApi.records")(
@@ -1320,6 +1405,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     // May this account pin a page as a Marketing sub-tab (#192624): its own pages only.
     const pagePin = Effect.fn("IrisHttpApi.pagePin")((ctx: { payload: { slug: string } }) =>
       Effect.promise(() => checkPagePin(ctx.payload.slug)),
+    )
+
+    // Desktop › Marketing's "Create your campaign board" (#192627): fl-api's setup, in client terms.
+    const campaignBoards = Effect.fn("IrisHttpApi.campaignBoards")(() => Effect.promise(() => listCampaignBoards()))
+    const campaignSetup = Effect.fn("IrisHttpApi.campaignSetup")((ctx: { payload: { bloq_id: number } }) =>
+      Effect.promise(() => runCampaignSetup(ctx.payload.bloq_id)),
     )
 
     const atlasNote = Effect.fn("IrisHttpApi.atlasNote")((ctx: { query: { url: string } }) =>
@@ -1511,6 +1602,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("pageSignIn", pageSignIn).handle("pagePin", pagePin).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGate", securityGate).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("recent", recent).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("inboxState", inboxState).handle("inboxSend", inboxSend).handle("inboxSent", inboxSent).handle("atlas", atlas).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("atlasOutboxResolve", atlasOutboxResolve).handle("atlasOutboxSend", atlasOutboxSend).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("agentEditorAgent", agentEditorAgent).handle("agentEditorSave", agentEditorSave).handle("agentEditorHeartbeat", agentEditorHeartbeat).handle("agentEditorPolicy", agentEditorPolicy).handle("agentEditorPolicySave", agentEditorPolicySave).handle("agentEditorTools", agentEditorTools).handle("agentEditorToolsSave", agentEditorToolsSave).handle("agentEditorModels", agentEditorModels).handle("agentEditorToolCatalog", agentEditorToolCatalog).handle("agentEditorAlerts", agentEditorAlerts).handle("agentEditorAlertsSave", agentEditorAlertsSave).handle("agentEditorAlertsTest", agentEditorAlertsTest).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("leadsApi", leadsApi).handle("reachrBatches", reachrBatches).handle("reachrBatch", reachrBatch).handle("reachrAction", reachrAction).handle("agreements", agreements).handle("agreement", agreement).handle("agreementRaise", agreementRaise).handle("agreementIssue", agreementIssue).handle("agreementRevoke", agreementRevoke).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveSessionAnswer", hiveSessionAnswer).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall).handle("hiveSharedScripts", hiveSharedScripts).handle("hiveScriptAccess", hiveScriptAccess)
+    return handlers.handle("frameCheck", frameCheck).handle("pageSignIn", pageSignIn).handle("pagePin", pagePin).handle("campaignBoards", campaignBoards).handle("campaignSetup", campaignSetup).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGate", securityGate).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("recent", recent).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("inboxState", inboxState).handle("inboxSend", inboxSend).handle("inboxSent", inboxSent).handle("atlas", atlas).handle("atlasMore", atlasMore).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("atlasOutboxResolve", atlasOutboxResolve).handle("atlasOutboxSend", atlasOutboxSend).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("pageInfo", pageInfo).handle("pageVersions", pageVersions).handle("pageVersion", pageVersion).handle("pagePublish", pagePublish).handle("pageVisibility", pageVisibility).handle("pageRollback", pageRollback).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("agentEditorAgent", agentEditorAgent).handle("agentEditorSave", agentEditorSave).handle("agentEditorHeartbeat", agentEditorHeartbeat).handle("agentEditorPolicy", agentEditorPolicy).handle("agentEditorPolicySave", agentEditorPolicySave).handle("agentEditorTools", agentEditorTools).handle("agentEditorToolsSave", agentEditorToolsSave).handle("agentEditorModels", agentEditorModels).handle("agentEditorToolCatalog", agentEditorToolCatalog).handle("agentEditorAlerts", agentEditorAlerts).handle("agentEditorAlertsSave", agentEditorAlertsSave).handle("agentEditorAlertsTest", agentEditorAlertsTest).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("leadsApi", leadsApi).handle("comms", comms).handle("commsThread", commsThread).handle("commsDraft", commsDraft).handle("commsSend", commsSend).handle("reachrBatches", reachrBatches).handle("reachrBatch", reachrBatch).handle("reachrAction", reachrAction).handle("agreements", agreements).handle("agreement", agreement).handle("agreementRaise", agreementRaise).handle("agreementIssue", agreementIssue).handle("agreementRevoke", agreementRevoke).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("site", site).handle("siteCreate", siteCreate).handle("sitePageAdd", sitePageAdd).handle("sitePageRemove", sitePageRemove).handle("siteReorder", siteReorder).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("brandLogoUpload", brandLogoUpload).handle("brandLogoProbe", brandLogoProbe).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveSessionAnswer", hiveSessionAnswer).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall).handle("hiveSharedScripts", hiveSharedScripts).handle("hiveScriptAccess", hiveScriptAccess)
   }),
 )
