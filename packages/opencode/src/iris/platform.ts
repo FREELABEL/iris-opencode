@@ -1901,6 +1901,77 @@ export interface Agent {
   active?: boolean
   failures?: number
   createdAt?: string
+  /** What the agents gallery's card reads (#192619, ELON BaseAgentCard). */
+  type?: string
+  isHuman?: boolean
+  isVirtual?: boolean
+  email?: string
+  linkedUserId?: number
+  workspaceId?: number
+  workspaceMatch?: string
+  lastUsedAt?: string
+  files?: number
+  /** settings booleans the card turns into capabilities (webAccess, useKnowledgeBase, …). */
+  flags?: string[]
+  /** settings.functions[].name. */
+  functions?: string[]
+  /** settings.agentIntegrations, enabled ones only. */
+  integrations?: string[]
+}
+
+/** settings arrives as an object or a JSON string; anything else is no settings. */
+function agentSettings(a: any): Record<string, any> {
+  const s = a?.settings
+  if (s && typeof s === "object") return s
+  if (typeof s === "string") {
+    try {
+      const v = JSON.parse(s)
+      return v && typeof v === "object" ? v : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+const CARD_FLAGS = ["webAccess", "canCreateContent", "useKnowledgeBase", "functionCalling", "memoryPersistence", "canManageTasks", "canAnalyzeData", "pipeline_flow", "writing_styles"]
+
+function agentCard(a: any): Partial<Agent> {
+  const s = agentSettings(a)
+  const num = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v))
+  const files = [a?.file_attachments, a?.fileAttachments, s.file_attachments, s.fileAttachments].find(Array.isArray)
+  const ai = s.agentIntegrations
+  const integrations = Array.isArray(ai)
+    ? ai.filter((x: unknown): x is string => typeof x === "string" && !!x)
+    : ai && typeof ai === "object"
+      ? Object.entries(ai).filter(([, on]) => on).map(([k]) => k)
+      : []
+  return {
+    type: typeof a?.type === "string" ? a.type : undefined,
+    isHuman: a?.isHuman === true || s.isHuman === true || s.isHuman === "true" || a?.type === "human",
+    isVirtual: a?.isVirtual === true || s.isVirtual === true,
+    email: typeof a?.email === "string" && a.email ? a.email : undefined,
+    linkedUserId: num(a?.linked_user_id),
+    workspaceId: num(a?.workspace_id),
+    workspaceMatch: typeof a?.google_workspace_match_state === "string" ? a.google_workspace_match_state : undefined,
+    // fl-api's column is last_active_at; ELON's card reads last_used_at — take either.
+    lastUsedAt: a?.last_used_at ?? a?.last_active_at ?? undefined,
+    files: files ? files.length : 0,
+    flags: CARD_FLAGS.filter((k) => s[k] === true || (k === "pipeline_flow" || k === "writing_styles" ? !!s[k] : false)),
+    functions: Array.isArray(s.functions) ? s.functions.map((f: any) => f?.name).filter((n: unknown): n is string => typeof n === "string" && !!n) : [],
+    integrations,
+  }
+}
+
+/** ELON's model order (BaseAgentCard.getAgentModel), after the row's own model field. */
+function agentModel(a: any, s: Record<string, any>): string | undefined {
+  const c = a?.config && typeof a.config === "object" ? a.config : {}
+  if (s.preferredModel && s.preferredModel !== "cloud" && s.preferredModel !== "ollama" && s.preferredModel !== "openrouter") return String(s.preferredModel)
+  const m = a.model ?? s.model ?? c.model ?? c.modelName
+  if (m) return String(m)
+  if (s.preferredModel === "ollama" && s.ollamaConfig?.modelName) return `${s.ollamaConfig.modelName} (Local)`
+  if (s.preferredModel === "openrouter" && s.openRouterConfig?.modelName) return String(s.openRouterConfig.modelName)
+  return undefined
 }
 
 /**
@@ -1938,17 +2009,31 @@ export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: nu
   }
 }
 
-export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
+/**
+ * A bloq's agents, or with `all` every agent the account can see (own, owned boards, shared) —
+ * searched by fl-api (`search`), since 50 rows of an account are not the account.
+ */
+export async function fetchAgents(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ agents: Agent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  }
 
   try {
+    // All reads fl-api's maximum (500), not 50: Scheduled / On demand narrow AFTER this fetch, so
+    // a 50-row slice of a 358-agent account would undercount both and call the rest absent.
+    const scope = opts.all ? "" : `bloq_id=${bloqId}&`
+    const rows = opts.all ? 500 : 50
+    const search = opts.all && opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""
     const [agentsRes, jobsRes] = await Promise.all([
-      irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/agents?${scope}per_page=${rows}${search}`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${scope}per_page=${rows}`),
     ])
     if (!agentsRes.ok) return { measured: false, reason: `fl-api ${agentsRes.status}`, data: { agents: [] } }
 
@@ -1975,7 +2060,7 @@ export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agen
         id: Number(a.id),
         name: String(a.name ?? "unnamed"),
         status: String(a.health_status ?? (a.active === false ? "paused" : "idle")),
-        model: a.model ?? a.config?.model ?? a.config?.modelName ?? undefined,
+        model: agentModel(a, agentSettings(a)),
         heartbeat: hb,
         schedule: job?.interval_minutes ? `${job.interval_minutes}m` : undefined,
         lastRun: job?.last_run_at ?? undefined,
@@ -1983,6 +2068,7 @@ export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agen
         active: typeof a.active === "boolean" ? a.active : undefined,
         failures: typeof a.consecutive_failures === "number" ? a.consecutive_failures : undefined,
         createdAt: a.created_at ?? undefined,
+        ...agentCard(a),
       }
     })
     return {

@@ -92,12 +92,14 @@ import {
 } from "./iris-surface-store"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
+import { IrisAgentGallery } from "./iris-agent-gallery"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
 import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
+import type { StepId } from "./iris-agent-editor-model"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
 import { watchOutreachBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
@@ -721,7 +723,10 @@ type SurfaceId = (typeof SURFACES)[number]["id"]
 
 /** Panes that draw and fetch for themselves; the generic row list has nothing to show for them. */
 // "inbox" draws itself since #189279 — the generic record list showed everything but the message.
+/** Panes with an All / This project switch beside the search box; the server takes scope=all. */
+const SCOPED_PANES = new Set(["pages", "agents"])
 const SELF_PANES = new Set([
+  "agent-gallery",
   "rooms",
   "artifacts",
   "atlas-artifacts",
@@ -796,15 +801,13 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "artifacts", label: "Artifacts", pane: "atlas-artifacts", path: () => `/iris/artifacts` },
   ],
   agents: [
-    { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
-    { id: "scheduled", label: "Scheduled", pane: "agents", path: (b) => `/iris/agents/${b}?mode=scheduled` },
-    { id: "ondemand", label: "On demand", pane: "agents", path: (b) => `/iris/agents/${b}?mode=ondemand` },
+    // ELON's agents gallery (#192619): one view for what All / Scheduled / On demand / Live were —
+    // People · Agents, workspace, sort, this project or the account; a card opens Live. Owns its
+    // pane: IrisAgentGallery fetches every agent in scope, since ELON filters the whole roster.
+    { id: "all", label: "Agents", pane: "agent-gallery", path: () => `/iris/agents/gallery` },
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
-    // "Is it stuck?" (#187921): the picked agent's current step and last tool calls, live, with
-    // Take over / Hand back. Owns its pane: IrisAgentLive polls for itself.
-    { id: "live", label: "Live", pane: "agent-live", path: () => `/iris/agents/live` },
     // Every agent that runs on its own schedule (#189110): is it beating, did the last beat work,
     // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
     // agent's, and an agent can watch several boards), and it owns its pane.
@@ -1170,11 +1173,8 @@ const PANEL_HINTS: Record<string, string> = {
   "atlas/graph": "How boards relate to each other, across the account",
   "atlas/artifacts": "Atlas notes this conversation produced",
   agents: "The account's AI agents",
-  "agents/all": "Every agent",
-  "agents/scheduled": "Agents that run on a schedule",
-  "agents/ondemand": "Agents that run when asked",
+  "agents/all": "Every agent and person — filter, sort, open one to see it live",
   "agents/rooms": "Group chats with several agents (@mention them)",
-  "agents/live": "What an agent is doing right now — take over or hand back",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
   pages: "Genesis — web pages, sites, drafts and brand kits",
   "pages/pages": "Published and draft Genesis pages",
@@ -1628,8 +1628,11 @@ export function SessionIrisTab() {
    * that the crash needs a remembered board to reach the `page()` call at all.
    */
   const [page, setPage] = createSignal(1)
-  // Genesis › Pages: this project's pages, or every page on the account (2026-11-04).
-  const [pagesScope, setPagesScope] = createSignal<"project" | "all">("project")
+  // Genesis › Pages and Agents: this project's rows, or every one on the account (2026-11-04,
+  // agents #192619). Held per pane, so choosing All for pages does not widen agents too.
+  const [scopes, setScopes] = createSignal<Record<string, "project" | "all">>({})
+  const scopeOf = (which: string) => scopes()[which] ?? "project"
+  const setScopeOf = (which: string, v: "project" | "all") => setScopes((m) => ({ ...m, [which]: v }))
 
   type SurfaceKey = readonly [
     string,
@@ -1650,7 +1653,7 @@ export function SessionIrisTab() {
       // Rooms and Artifacts fetch for themselves; the generic row list has nothing to draw.
       if (SELF_PANES.has(resolved().pane)) return undefined
       return id
-        ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), pagesScope()] as SurfaceKey)
+        ? ([base(), id, surface(), resolved().sub?.id ?? "", page(), applied(), scopeOf(resolved().pane)] as SurfaceKey)
         : undefined
     },
     async ([b, id, surf, sub, pageNo, q, scope], info): Promise<SurfacePayload> => {
@@ -1665,7 +1668,8 @@ export function SessionIrisTab() {
         const h = heldPayload<SurfacePayload>(heldKey)
         if (h) return { ...h, __held: true, __pane: which } as SurfacePayload
       }
-      const url = which === "pages" && scope === "all" ? `${path(id)}?scope=all` : path(id)
+      const bare = path(id)
+      const url = SCOPED_PANES.has(which) && scope === "all" ? `${bare}${bare.includes("?") ? "&" : "?"}scope=all` : bare
       const sep = url.includes("?") ? "&" : "?"
       // The query goes to the SERVER, which filters the whole board before paging. Filtering
       // the rows already on screen would leave the footer counting a set it never searched.
@@ -2882,7 +2886,9 @@ export function SessionIrisTab() {
    * the open board; `{agentId}` = that agent. Clicking an agent opens it here; the read-only
    * record (Info · Tasks · JSON) is one click away under "Details".
    */
-  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any } | null>(null)
+  const [agentEditor, setAgentEditor] = createSignal<{ agentId?: number; row?: any; step?: StepId } | null>(null)
+  // Bumped after the editor saves, so the agents gallery (which fetches for itself) reloads.
+  const [agentsVersion, setAgentsVersion] = createSignal(0)
   // A different product, sub-view or board is a different list: the editor belongs to the one it was opened from.
   createEffect(on([pane, () => activeBloq()], () => setAgentEditor(null), { defer: true }))
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
@@ -3275,7 +3281,9 @@ export function SessionIrisTab() {
       surface() !== "integrations" &&
       pane() !== "graph" &&
       pane() !== "catalog" &&
-      !SELF_PANES.has(pane()),
+      !SELF_PANES.has(pane()) &&
+      // "All" is the account, so "on this board" would be false (#192619).
+      !(SCOPED_PANES.has(pane()) && scopeOf(pane()) === "all"),
   )
 
   function choose(id: number) {
@@ -3429,8 +3437,8 @@ export function SessionIrisTab() {
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
-          <Show when={pane() === "pages"}>
-            <div class="iris-scope-toggle" role="tablist" aria-label="Which pages">
+          <Show when={SCOPED_PANES.has(pane())}>
+            <div class="iris-scope-toggle" role="tablist" aria-label={`Which ${pane()}`}>
               <For
                 each={
                   [
@@ -3443,9 +3451,9 @@ export function SessionIrisTab() {
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={pagesScope() === value}
+                    aria-selected={scopeOf(pane()) === value}
                     onClick={() => {
-                      setPagesScope(value)
+                      setScopeOf(pane(), value)
                       setPage(1)
                     }}
                   >
@@ -3497,9 +3505,11 @@ export function SessionIrisTab() {
               bloqId={activeBloq() != null ? Number(activeBloq()) : null}
               bloqName={activeBloqName()}
               boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+              step={ed().step}
               onClose={() => setAgentEditor(null)}
               onSaved={(a) => {
                 void refetchSurface()
+                setAgentsVersion((v) => v + 1)
                 if (a.created)
                   setAgentEditor({ agentId: a.id, row: { id: a.id, name: a.name, status: "idle", heartbeat: false } })
               }}
@@ -4436,6 +4446,17 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "agent-live"}>
               <IrisAgentLive doFetch={doFetch} bloqId={activeBloq()} />
+            </Match>
+            <Match when={pane() === "agent-gallery"}>
+              <IrisAgentGallery
+                doFetch={doFetch}
+                bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
+                reload={agentsVersion()}
+                onNew={() => setAgentEditor({})}
+                onConfigure={(a) => setAgentEditor({ agentId: a.id, row: a })}
+                onTrain={(a) => setAgentEditor({ agentId: a.id, row: a, step: "memory" })}
+                openExternal={(url) => platform.openExternal(url)}
+              />
             </Match>
             {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the
               session, not the board, and must render with no board chosen. */}
