@@ -126,6 +126,18 @@ jobs:
           key: desktop-test-x86_64-windows
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Fetch Bun baseline (no-AVX2) runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          V=$(bun --version)
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/bun-baseline.zip" \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$V/bun-windows-x64-baseline.zip"
+          7z x -y -o"$RUNNER_TEMP" "$RUNNER_TEMP/bun-baseline.zip" >/dev/null
+          EXE="$RUNNER_TEMP/bun-windows-x64-baseline/bun.exe"
+          test -s "$EXE"
+          echo "BUN_BASELINE_EXECUTABLE=$(cygpath -w "$EXE")" >> "$GITHUB_ENV"
+
       - name: Build the iris CLI (sidecar binary)
         run: |
           cd packages/opencode
