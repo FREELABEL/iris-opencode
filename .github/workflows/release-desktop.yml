@@ -370,10 +370,24 @@ jobs:
             console.log('desktop version stamped ->', j.version);
           " "${{ steps.version.outputs.version }}"
 
+      - name: Fetch Bun baseline (no-AVX2) runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          V=$(bun --version)
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/bun-baseline.zip" \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$V/bun-windows-x64-baseline.zip"
+          7z x -y -o"$RUNNER_TEMP" "$RUNNER_TEMP/bun-baseline.zip" >/dev/null
+          EXE="$RUNNER_TEMP/bun-windows-x64-baseline/bun.exe"
+          test -s "$EXE"
+          echo "BUN_BASELINE_EXECUTABLE=$(cygpath -w "$EXE")" >> "$GITHUB_ENV"
+
       - name: Build the iris CLI (sidecar binary)
         run: |
           cd packages/opencode
-          bun run script/build.ts --single
+          # --baseline: also build the no-AVX2 engine. Bun's default x64 build needs AVX2 and
+          # dies on older CPUs with "panic: Illegal instruction" (support ticket, 2026-11-08).
+          bun run script/build.ts --single --baseline
         env:
           OPENCODE_VERSION: ${{ steps.version.outputs.version }}
           OPENCODE_CHANNEL: latest
@@ -382,7 +396,8 @@ jobs:
         run: |
           set -euo pipefail
           EXPECT=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          BIN=$(ls packages/opencode/dist/opencode-windows-x64/bin/iris* | head -1)
+          # Ship the baseline (no-AVX2) engine: runs on every x64 CPU, AVX2 or not.
+          BIN=$(ls packages/opencode/dist/opencode-windows-x64-baseline/bin/iris* | head -1)
           mkdir -p packages/desktop/src-tauri/sidecars
           cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-pc-windows-msvc.exe"
 
