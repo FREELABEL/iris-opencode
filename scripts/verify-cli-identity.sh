@@ -253,7 +253,9 @@ step "4. Is the published CLI release asset actually our CLI?"
 if ! command -v gh >/dev/null 2>&1; then
   warn release_asset_identity "gh is not installed — cannot audit the published release"
 else
-  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 30 --json tagName \
+  # --limit 200, not 30: desktop-v* releases are frequent enough that the newest v1.* CLI
+  # release fell past #30 on 2026-11-08 and blocked desktop-v1.18.182 from promotion.
+  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 200 --json tagName \
         --jq '[.[] | select(.tagName | startswith("v1."))] | .[0].tagName' 2>/dev/null)"
   if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
     warn release_asset_identity "could not resolve the newest v1.* CLI release"
