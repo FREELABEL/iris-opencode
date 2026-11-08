@@ -129,7 +129,9 @@ jobs:
       - name: Build the iris CLI (sidecar binary)
         run: |
           cd packages/opencode
-          bun run script/build.ts --single
+          # --baseline: also build the no-AVX2 engine. Bun's default x64 build needs AVX2 and
+          # dies on older CPUs with "panic: Illegal instruction" (support ticket, 2026-11-08).
+          bun run script/build.ts --single --baseline
         env:
           OPENCODE_VERSION: 0.0.0-test
           OPENCODE_CHANNEL: latest
@@ -140,7 +142,8 @@ jobs:
       - name: Stage sidecar binary
         run: |
           set -euo pipefail
-          BIN=$(ls packages/opencode/dist/opencode-windows-x64/bin/iris* | head -1)
+          # Ship the baseline (no-AVX2) engine: runs on every x64 CPU, AVX2 or not.
+          BIN=$(ls packages/opencode/dist/opencode-windows-x64-baseline/bin/iris* | head -1)
           echo "found CLI binary: $BIN"
           mkdir -p packages/desktop/src-tauri/sidecars
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-x86_64-pc-windows-msvc.exe
