@@ -1,0 +1,81 @@
+name: Verify desktop engine on a no-AVX2 CPU
+# Runs the engine bundled in the real Windows installers under Intel SDE emulating
+# Sandy Bridge (-snb: AVX, no AVX2) -- the CPU class that crashed with
+# "panic: Illegal instruction" (support ticket 2026-11-08).
+# OLD (1.18.181) is the control and must crash; NEW must start and serve HTTP.
+on:
+  push:
+    branches: [verify/no-avx2]
+  workflow_dispatch:
+    inputs:
+      new_tag:
+        description: "desktop release tag to test (empty = latest fix test build)"
+        required: false
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+      NEW_TAG: ${{ inputs.new_tag || 'desktop-v1.18.182' }}
+    steps:
+      - name: Fetch Intel SDE
+        run: |
+          curl -fsSL --retry 5 -o sde.tar.xz https://downloadmirror.intel.com/859732/sde-external-9.58.0-2025-06-16-win.tar.xz
+          tar xJf sde.tar.xz
+          echo "SDE=$(cygpath -w "$(ls -d $PWD/sde-external-*/)sde.exe")" >> "$GITHUB_ENV"
+      - name: Fetch installers
+        run: |
+          set -euo pipefail
+          mkdir -p old new
+          gh release download desktop-v1.18.181 -R "$R" -p 'IRIS-tauri-windows-x64-setup.exe' -D old
+          if gh release download "$NEW_TAG" -R "$R" -p 'IRIS-tauri-windows-x64-setup.exe' -D new 2>/dev/null; then
+            echo "NEW from release $NEW_TAG"
+          else
+            gh run download 42501766885 -R "$R" -n IRIS-windows-x64-installer -D new
+            echo "NEW from fix test build 42501766885 (release $NEW_TAG not published yet)"
+          fi
+          ls -la old new
+      - name: Extract engines
+        run: |
+          set -euo pipefail
+          for d in old new; do
+            7z x -y -o"$d/x" "$(ls $d/*.exe | head -1)" >/dev/null
+            find "$d/x" -iname '*.exe' | grep -vi -E 'uninstall|IRIS\.exe$' || true
+            cp "$(find "$d/x" -iname 'iris-cli*.exe' | head -1)" "$d/engine.exe"
+            ls -la "$d/engine.exe"
+          done
+      - name: "Control: OLD engine (1.18.181) on no-AVX2 CPU must crash"
+        run: |
+          set +e
+          timeout 600 "$SDE" -snb -- old/engine.exe --version > old.log 2>&1; rc=$?
+          tail -20 old.log; echo "exit=$rc"
+          if [ $rc -eq 0 ] && ! grep -qi "illegal" old.log; then echo "::error::control did not crash -- the test cannot tell broken from fixed"; exit 1; fi
+          echo "CONTROL OK: old engine fails on a no-AVX2 CPU, like the customer's"
+      - name: "NEW engine on no-AVX2 CPU: --version"
+        run: |
+          set -euo pipefail
+          timeout 900 "$SDE" -snb -- new/engine.exe --version 2>&1 | tee new.log
+          grep -qi "illegal" new.log && { echo "::error::illegal instruction"; exit 1; }
+          echo "NEW --version OK on no-AVX2 CPU"
+      - name: "NEW engine on no-AVX2 CPU: serve answers HTTP"
+        run: |
+          set +e
+          ("$SDE" -snb -- new/engine.exe serve --port 4097 --hostname 127.0.0.1 > serve.log 2>&1 &)
+          ok=0
+          for i in $(seq 1 120); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4097/ 2>/dev/null)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then echo "HTTP $code after ${i}x5s"; ok=1; break; fi
+            grep -qi "illegal\|panic" serve.log && break
+            sleep 5
+          done
+          tail -30 serve.log
+          taskkill //F //IM engine.exe >/dev/null 2>&1; taskkill //F //IM sde.exe >/dev/null 2>&1
+          [ $ok = 1 ] || { echo "::error::engine did not serve on no-AVX2 CPU"; exit 1; }
+          echo "VERIFIED: new engine runs and serves on a no-AVX2 (AVX-only) CPU"
