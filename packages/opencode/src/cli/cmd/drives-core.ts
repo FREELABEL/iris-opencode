@@ -338,7 +338,7 @@ export function diskFactsFromPlist(p: any): DiskFacts {
   const uuid = p?.VolumeUUID || p?.DiskUUID || null
   return {
     // Linux's lsblk prints filesystem UUIDs lowercase and the existing Atlas ids are lowercase
-    // (fs:e6a91d1f-…), while diskutil prints them uppercase. Same volume, same id.
+    // (fs:abcd1234-…), while diskutil prints them uppercase. Same volume, same id.
     uuid: uuid ? String(uuid).toLowerCase() : null,
     filesystem: String(p?.FilesystemType || p?.FilesystemName || "?"),
     label: p?.VolumeName ? String(p.VolumeName) : null,

@@ -335,7 +335,7 @@ function liveDeps(userId: number, bloq: number): ManifestDeps {
  *
  * Platform bug (2026-11-09): attachments are stored at cloud-files/<unix-second>_<filename> with
  * no owner or random part, so two uploads of one filename in the same second share ONE object —
- * the second reads back as the first, and deleting either deletes both. That destroyed BK-03's
+ * the second reads back as the first, and deleting either deletes both. That destroyed a real drive's
  * manifest. So: a random filename per upload, and anything short of `verified === true` is a
  * failed upload — no record points at it and nothing older is removed.
  */
