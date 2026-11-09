@@ -1828,11 +1828,13 @@ if [ "$ACTION" = "whoami" ]; then
         exit 1
     fi
     # Fetch user info from API
+    # /api/v1/cli/auth/me, not /api/v1/me: that route does not exist (404), so whoami showed no
+    # email and --token always failed (#187775). It answers {user_id, email, subscription_active}.
     ME_RESP=$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -s --max-time 10 -H @- -H "Accept: application/json" \
-        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
-    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
-    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
-    ME_ID=$(json_nested "$ME_RESP" "data.id")
+        "$API_BASE/api/v1/cli/auth/me" 2>/dev/null || echo '{}')
+    ME_NAME=$(json_field "$ME_RESP" "full_name")
+    ME_EMAIL=$(json_field "$ME_RESP" "email")
+    ME_ID=$(json_field "$ME_RESP" "user_id")
     if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
         ME_ID="$USERID"
     fi
@@ -1856,8 +1858,8 @@ if [ -n "$PRE_TOKEN" ]; then
     # Validate token against API
     echo -e "${MUTED}  Validating token...${NC}"
     VALIDATE_RESP=$(printf 'Authorization: Bearer %s\n' "$PRE_TOKEN" | curl -s --max-time 10 -H @- -H "Accept: application/json" \
-        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
-    VALIDATE_ID=$(json_nested "$VALIDATE_RESP" "data.id")
+        "$API_BASE/api/v1/cli/auth/me" 2>/dev/null || echo '{}')
+    VALIDATE_ID=$(json_field "$VALIDATE_RESP" "user_id")
     if [ -z "$VALIDATE_ID" ] || [ "$VALIDATE_ID" = "" ] || [ "$VALIDATE_ID" = "null" ]; then
         echo -e "${RED}Token validation failed — API rejected the token.${NC}"
         echo -e "${MUTED}Check that the token is correct and not expired.${NC}"
