@@ -93,6 +93,17 @@ pub fn save_iris_token(app: AppHandle, token: String, identity: Option<crate::ac
     Ok(())
 }
 
+/// Settings → Hive → "Allow access to this computer" is OFF: ~/.iris/remote-access.json says
+/// `"allow": false`. Absent or unreadable is ON, as the daemon reads it (epic #192964).
+fn remote_access_off() -> bool {
+    let Some(home) = dirs_next_home() else { return false };
+    let Ok(text) = std::fs::read_to_string(home.join(".iris").join("remote-access.json")) else { return false };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("allow").and_then(|a| a.as_bool()))
+        == Some(false)
+}
+
 fn setup_marker(home: &std::path::Path) -> std::path::PathBuf {
     home.join(".iris").join("setup-pending")
 }
@@ -237,34 +248,38 @@ fn run_setup_steps(app: &AppHandle) -> SetupOutcome {
         println!(
             "setup: Hive daemon steps skipped on Windows — the PowerShell installer sets up the bridge (needs Node.js); see `iris-daemon status`"
         );
+    } else if remote_access_off() {
+        // "Allow access to this computer" is OFF (Settings → Hive, epic #192964). Signing in again
+        // must not quietly turn it back on.
+        println!("setup: Hive -> skipped, access to this computer is switched off in Settings → Hive");
     } else {
-        for (label, args) in [
-            ("Installing the Hive daemon", ["daemon", "install"]),
-            ("Registering this machine", ["daemon", "register"]),
-        ] {
-            step(label);
-            // Bounded: this thread holds the restart, so a step that never returns would hold
-            // the credential back with it.
-            match crate::cli::run_with_timeout(
-                std::process::Command::new(&iris).args(args),
-                std::time::Duration::from_secs(180),
-            ) {
-                Ok(out) => {
-                    let text = String::from_utf8_lossy(if out.status.success() {
-                        &out.stdout
-                    } else {
-                        &out.stderr
-                    });
-                    // Name the step. "setup failed" with no step is the error shape this whole
-                    // week was spent removing.
-                    println!(
-                        "setup: {label} -> {} {}",
-                        if out.status.success() { "ok" } else { "FAILED" },
-                        text.trim().lines().last().unwrap_or("")
-                    );
-                }
-                Err(e) => eprintln!("setup: {label} could not run: {e}"),
+        // SIGN-IN BRINGS THIS MACHINE ONLINE IN HIVE — the same call `iris auth login` makes
+        // (healNodeKeyAfterLogin → wakeHiveNode, #185896), so there is one path, not two. This was
+        // `daemon install` then `daemon register`: it enrolled a Mac whose daemon could install,
+        // but nothing waited for the node to come online, autostart was never registered
+        // (#186663), and `register` ran the restart under a 10 s timeout. `hive connect` installs
+        // the daemon when it is missing, restarts it, waits for the node id, and registers
+        // autostart. (epic #192964, R5)
+        step("Connecting this computer to your Hive");
+        // Bounded, and long enough for a first install: on a machine with no daemon, connect runs
+        // `iris node install` (download, deps, autostart) under its own 600 s ceiling. This runs
+        // after the restart, in the background (D3 #188249), so nobody is waiting on it.
+        match crate::cli::run_with_timeout(
+            std::process::Command::new(&iris).args(["hive", "connect", "--json"]),
+            std::time::Duration::from_secs(660),
+        ) {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let last = text.trim().lines().last().unwrap_or("");
+                // Name the step. "setup failed" with no step is the error shape this whole
+                // week was spent removing.
+                println!(
+                    "setup: Hive connect -> {} {}",
+                    if out.status.success() && last.contains("\"online\":true") { "online" } else { "NOT ONLINE" },
+                    last
+                );
             }
+            Err(e) => eprintln!("setup: Hive connect could not run: {e}"),
         }
     }
 

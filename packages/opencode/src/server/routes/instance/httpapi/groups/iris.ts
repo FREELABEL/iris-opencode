@@ -2077,6 +2077,7 @@ export const IrisPaths = {
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
+  hiveRemoteAccess: `${root}/hive/remote-access`,
   hiveSessionTranscript: `${root}/hive/sessions/:sessionID/transcript`,
   hiveSessionReply: `${root}/hive/sessions/:sessionID/reply`,
   hiveSessionAnswer: `${root}/hive/sessions/:sessionID/answer`,
@@ -4717,6 +4718,39 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.hiveSessionAnswer",
           summary: "Answer the question a session is waiting on",
           description: "The same `session_message` task as `iris hive answer`, then waits up to 45 s for the node to say whether it was delivered.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveRemoteAccess", IrisPaths.hiveRemoteAccess, {
+        success: described(Schema.Struct({
+          ...Measured,
+          allow: described(Schema.Boolean, "The switch. Absent file = true, matching the CLI."),
+          explicit: described(Schema.Boolean, "False until someone has used the switch; `allow` is then the default."),
+          daemon: described(Schema.Literals(["online", "not-enrolled", "not-running"]), "What this machine's Hive daemon says now."),
+          nodeId: Schema.NullOr(Schema.String),
+        }).annotate({ identifier: "IrisHiveRemoteAccess" }), "Allow access to this computer"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveRemoteAccess",
+          summary: "Allow access to this computer (#192964)",
+          description:
+            "Whether other machines in your Hive can see and steer this one. ~/.iris/remote-access.json, read by this machine's daemon on every heartbeat.",
+        }),
+      ),
+      HttpApiEndpoint.post("hiveRemoteAccessSave", IrisPaths.hiveRemoteAccess, {
+        payload: Schema.Struct({ allow: Schema.Boolean }),
+        success: described(Schema.Struct({
+          ...Measured,
+          allow: described(Schema.Boolean, "The switch. Absent file = true, matching the CLI."),
+          explicit: described(Schema.Boolean, "False until someone has used the switch; `allow` is then the default."),
+          daemon: described(Schema.Literals(["online", "not-enrolled", "not-running"]), "What this machine's Hive daemon says now."),
+          nodeId: Schema.NullOr(Schema.String),
+        }), "The switch and the daemon after the change"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveRemoteAccessSave",
+          summary: "Turn access to this computer on or off",
+          description:
+            "ON runs `iris hive connect` (the path sign-in takes) and waits for this machine to come online. OFF: the daemon tells the hub it is offline within seconds and refuses send-input/answer; its own scheduled work keeps running.",
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {

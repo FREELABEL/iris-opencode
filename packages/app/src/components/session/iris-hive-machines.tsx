@@ -19,6 +19,7 @@ import {
   type MachinesView,
 } from "./iris-hive-machines-model"
 import { focusHiveNode, requestIrisNav } from "./iris-nav"
+import { remoteAccessView, type RemoteAccessState } from "../settings-v2/hive-remote-access"
 
 /**
  * Hive › Machines (heyiris.io/p/hive-panel-directions#pick): your computers as a team — who is
@@ -57,6 +58,12 @@ export function IrisHiveMachines(props: {
     getJson<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
   )
   const [peerData] = createResource(() => getJson<PeersPayload>("/iris/hive/peers?perPage=100", { measured: false, peers: [] }))
+  // This computer's "Allow access" switch (Settings → Hive, epic #192964). Shown in place of the old
+  // "run `iris hive connect`" hint: the switch is that command, and it lives one click away.
+  const [here] = createResource(() =>
+    getJson<RemoteAccessState>("/iris/hive/remote-access", { measured: false, allow: true, explicit: false, daemon: "not-running", nodeId: null }),
+  )
+  const hereView = () => remoteAccessView(here(), here.loading)
   // Heartbeats move; a minute is fine-grained enough for "online" and "last seen".
   const timer = setInterval(() => void refetch(), 60_000)
   onCleanup(() => clearInterval(timer))
@@ -131,10 +138,13 @@ export function IrisHiveMachines(props: {
             <p class="hsc-warn">Could not read your computers{hive.latest!.reason ? ` — ${hive.latest!.reason}` : ""}</p>
           </Show>
           <Show when={hive.latest?.measured && computers().length === 0}>
-            <p class="hsc-muted hmc-empty">
-              No computers on this account yet. Run <code class="hsc-mono">iris hive connect</code> on one to add it.
-            </p>
+            <p class="hsc-muted hmc-empty">No computers on this account yet.</p>
           </Show>
+          <p class="hsc-muted hmc-here" data-action="hive-remote-access-state" data-tone={hereView().tone}>
+            This computer: <b>{hereView().short}</b>
+            {" — "}
+            {hereView().description} Change it in <b>Settings → Hive</b>.
+          </p>
 
           <Show when={view() === "list"}>
             <ul class="hmc-cards" role="listbox" aria-label="Computers">

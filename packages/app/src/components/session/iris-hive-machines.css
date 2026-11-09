@@ -20,6 +20,8 @@
 .hmc-main { min-width: 0; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; }
 .hmc-faint { color: var(--hsc-faint); }
 .hmc-empty { padding: 10px 2px; line-height: 1.5; }
+.hmc-here { padding: 2px 2px 8px; line-height: 1.5; }
+.hmc-here[data-tone="warn"] b { color: var(--hsc-amber); }
 
 /* triage on top */
 .hmc-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
