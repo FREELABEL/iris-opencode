@@ -23,7 +23,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       R: ${{ github.repository }}
-      NEW_TAG: ${{ inputs.new_tag || 'desktop-v1.18.182' }}
+      NEW_TAG: ${{ inputs.new_tag || 'desktop-v1.18.183' }}
     steps:
       - name: Fetch Intel SDE
         run: |
