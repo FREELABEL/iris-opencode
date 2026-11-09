@@ -93,6 +93,7 @@ import {
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisAgentGallery } from "./iris-agent-gallery"
+import { IrisAgentRuns } from "./iris-agent-runs"
 import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
@@ -751,6 +752,8 @@ SELF_PANES.add("genesis-pages")
 SELF_PANES.add("marketing-pins")
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
+// Agents › Running (#192855) reads the engine's sessions for itself.
+SELF_PANES.add("agent-runs")
 
 interface SubView {
   id: string
@@ -812,6 +815,9 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
     // agent's, and an agent can watch several boards), and it owns its pane.
     { id: "heartbeats", label: "Heartbeats", pane: "heartbeats", path: () => `/iris/heartbeats` },
+    // Every agent working right now (#192855): a box per agent, lines for who started whom, each
+    // call as it happens; finished runs fold into Inactive. Reads this engine's sessions, not a board.
+    { id: "running", label: "Running", pane: "agent-runs", path: () => `/iris/agents/running` },
   ],
   pages: [
     // Cards with a live look, a preview-first detail and the page's own controls (#192632). It
@@ -1176,6 +1182,7 @@ const PANEL_HINTS: Record<string, string> = {
   "agents/all": "Every agent and person — filter, sort, open one to see it live",
   "agents/rooms": "Group chats with several agents (@mention them)",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
+  "agents/running": "Every agent working right now — who started whom, and each call it makes",
   pages: "Genesis — web pages, sites, drafts and brand kits",
   "pages/pages": "Published and draft Genesis pages",
   "pages/sites": "Sites: pages under shared navigation, with a form inbox",
@@ -4381,6 +4388,9 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "heartbeats"}>
               <IrisHeartbeats doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "agent-runs"}>
+              <IrisAgentRuns />
             </Match>
             <Match when={pane() === "leads-crm"}>
               <IrisLeadsTab
