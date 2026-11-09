@@ -41,6 +41,8 @@ import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
+import { askComposer } from "@/components/prompt-input/chat-with"
+import { chatUrl } from "./iris-agent-gallery-model"
 import { useSync } from "@/context/sync"
 import { promotedFiles } from "./iris-promote"
 import type { FileContent } from "./iris-file-artifact"
@@ -1395,6 +1397,36 @@ export function SessionIrisTab() {
   const language = useLanguage()
   const serverSDK = useServerSDK()
   const platform = usePlatform()
+  /**
+   * Agents › Chat (#192931): make the card's agent the one the composer talks to. The panel belongs to
+   * the shell and cannot reach the composer, so it asks (chat-with.ts). Not in the picker (it holds
+   * 25, recent + pinned): add it through the engine (synced and pinned), reload as the settings screens
+   * do, then ask again until the picker lists it. People are never synced; with no chat open, or anything that cannot be
+   * added, Chat opens the chat page as it did before.
+   */
+  async function chatWith(a: { id: number; name: string; isHuman?: boolean }): Promise<string | undefined> {
+    const page = (why: string) => {
+      platform.openExternal(chatUrl(a.id))
+      return why
+    }
+    if (a.isHuman) return page(`${a.name} is a person, not an agent — opened their chat page.`)
+    const first = await askComposer(a.id)
+    if (first === undefined) return page(`Open a chat to talk to ${a.name} there — opened its chat page for now.`)
+    if (first) return `${a.name} is the chat agent now — type below.`
+    const out = (await doFetch(`/iris/agents/${a.id}/desktop`, { method: "POST" })
+      .then((r) => r.json())
+      .catch(() => null)) as { ok?: boolean; changed?: number; reason?: string } | null
+    if (out?.ok) {
+      // The same reload the settings screens do after a change: the engine re-reads its agents.
+      await doFetch("/global/dispose", { method: "POST" }).catch(() => undefined)
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 700))
+        if (await askComposer(a.id, { refresh: true })) return `${a.name} added to your agents and selected — type below.`
+      }
+    }
+    return page(`${a.name} could not be added on this computer${out?.reason ? ` (${out.reason})` : ""} — opened its chat page instead.`)
+  }
+
 
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
   /**
@@ -4466,6 +4498,7 @@ export function SessionIrisTab() {
                 onConfigure={(a) => setAgentEditor({ agentId: a.id, row: a })}
                 onTrain={(a) => setAgentEditor({ agentId: a.id, row: a, step: "memory" })}
                 openExternal={(url) => platform.openExternal(url)}
+                onChat={chatWith}
               />
             </Match>
             {/* Artifacts own the pane, ahead of the loading/empty states: they belong to the

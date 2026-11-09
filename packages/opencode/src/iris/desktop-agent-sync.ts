@@ -27,6 +27,11 @@ export interface SyncDeps {
   env: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   timeoutMs?: number
+  /**
+   * One agent, on purpose (#192931): the agents gallery's Chat on an agent the picker does not
+   * hold. Synced alone (deletes nothing) and pinned, so the next launch sync keeps it.
+   */
+  agent?: number
   /** Injected for tests. Defaults to Bun.spawn. */
   spawn?: (cmd: string[], env: NodeJS.ProcessEnv) => { exited: Promise<number | null>; kill(): void; stdout?: Promise<string> }
   exists?: (p: string) => boolean
@@ -53,7 +58,8 @@ export async function syncDesktopAgents(deps: SyncDeps): Promise<SyncOutcome> {
   const started = Date.now()
   let child: ReturnType<NonNullable<SyncDeps["spawn"]>>
   try {
-    child = spawn([bin, "agents", "desktop-sync", "--json"], deps.env)
+    const one = deps.agent ? ["--agent", String(deps.agent), "--pin", String(deps.agent)] : []
+    child = spawn([bin, "agents", "desktop-sync", ...one, "--json"], deps.env)
   } catch {
     return { ran: true, ok: false, reason: "spawn-error", ms: Date.now() - started }
   }

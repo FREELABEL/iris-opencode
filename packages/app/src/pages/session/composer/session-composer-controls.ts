@@ -1,7 +1,8 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
-import { createQuery } from "@tanstack/solid-query"
+import { createQuery, useQueryClient } from "@tanstack/solid-query"
 import { useNavigate, useSearchParams } from "@solidjs/router"
-import { type Accessor, createMemo } from "solid-js"
+import { type Accessor, createMemo, onCleanup } from "solid-js"
+import { CHAT_WITH, agentForIrisId, type ChatWithDetail } from "@/components/prompt-input/chat-with"
 import type { PromptInputControls } from "@/components/prompt-input/contracts"
 import type { PromptProjectControls } from "@/components/prompt-project-selector"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -35,6 +36,27 @@ export function createPromptInputController(input: {
   const agentsQuery = createQuery(() => input.queryOptions.agents(pathKey(sdk().directory)))
   const globalProvidersQuery = createQuery(() => input.queryOptions.providers(null))
   const providersQuery = createQuery(() => input.queryOptions.providers(pathKey(sdk().directory)))
+
+  // The agents gallery's Chat (#192931): the panel cannot reach this state, so it asks here.
+  const queryClient = useQueryClient()
+  let refreshing: Promise<void> | undefined
+  const refreshAgents = () =>
+    (refreshing ??= queryClient
+      .fetchQuery({ ...input.queryOptions.agents(pathKey(sdk().directory)), staleTime: 0 })
+      .then((fresh) => void sync().set("agent", fresh))
+      .catch(() => undefined)
+      .finally(() => (refreshing = undefined)))
+  if (typeof window !== "undefined") {
+    const onChatWith = (event: Event) => {
+      const detail = (event as CustomEvent<ChatWithDetail>).detail
+      const agent = agentForIrisId(local.agent.list(), detail.id)
+      if (agent) local.agent.set(agent.name)
+      if (!agent && detail.refresh) void refreshAgents()
+      detail.reply(agent?.name ?? null)
+    }
+    window.addEventListener(CHAT_WITH, onChatWith)
+    onCleanup(() => window.removeEventListener(CHAT_WITH, onChatWith))
+  }
 
   return createMemo<PromptInputControls>(() => {
     const labels = agentLabels(local.agent.list())

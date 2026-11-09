@@ -22,6 +22,13 @@ describe("syncDesktopAgents", () => {
     expect(seen[0]).toEqual(["/home/u/.iris/bin/iris", "agents", "desktop-sync", "--json"])
   })
 
+  test("one agent: synced alone and pinned, so the next launch keeps it (#192931)", async () => {
+    const seen: string[][] = []
+    const out = await syncDesktopAgents({ home, env: {}, platform: "darwin", exists: () => true, agent: 702, spawn: fakeSpawn(0, seen) })
+    expect(out).toMatchObject({ ran: true, ok: true })
+    expect(seen[0]).toEqual(["/home/u/.iris/bin/iris", "agents", "desktop-sync", "--agent", "702", "--pin", "702", "--json"])
+  })
+
   test("no CLI installed: skipped, not an error", async () => {
     const out = await syncDesktopAgents({ home, env: {}, exists: () => false, spawn: fakeSpawn(0) })
     expect(out).toEqual({ ran: false, reason: "no-cli" })

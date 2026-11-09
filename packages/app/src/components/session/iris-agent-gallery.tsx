@@ -1,5 +1,6 @@
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import "./iris-agent-gallery.css"
+import { Select } from "@opencode-ai/ui/select"
 import { IrisAgentLive } from "./iris-agent-live"
 import {
   capabilities,
@@ -85,6 +86,7 @@ const initials = (name: string) =>
 function Card(props: {
   agent: GalleryAgent
   onChat: () => void
+  onPage: () => void
   onTrain: () => void
   onLive: () => void
   onConfigure: () => void
@@ -121,7 +123,7 @@ function Card(props: {
             </Show>
           </div>
         </div>
-        <button type="button" class="iag-ghost" title="Open public chat in new tab" onClick={props.onChat}>
+        <button type="button" class="iag-ghost" title="Open public chat in new tab" onClick={props.onPage}>
           <I n="external" />
         </button>
       </div>
@@ -159,7 +161,7 @@ function Card(props: {
             {` · ${a().files} file${a().files !== 1 ? "s" : ""}`}
           </Show>
         </span>
-        <button type="button" class="iag-btn" onClick={props.onChat}>
+        <button type="button" class="iag-btn" title="Talk to this agent in the chat box below" onClick={props.onChat}>
           <I n="comment" />
           Chat
         </button>
@@ -202,7 +204,10 @@ export function IrisAgentGallery(props: {
   onConfigure: (a: GalleryAgent) => void
   onTrain: (a: GalleryAgent) => void
   openExternal: (url: string) => void
+  /** Make this agent the composer's agent (#192931). Resolves to a sentence for the person, if any. */
+  onChat: (a: GalleryAgent) => Promise<string | undefined>
 }) {
+  const [note, setNote] = createSignal<string | null>(null)
   const [scope, setScope] = createSignal<"project" | "all">("project")
   const [roster] = createResource(
     () => (props.bloqId ? ([props.bloqId, scope(), props.reload] as const) : undefined),
@@ -248,12 +253,29 @@ export function IrisAgentGallery(props: {
             )}
           </For>
         </div>
-        <select class="iag-select" aria-label="Workspace" value={workspace()} onChange={(e) => setWorkspace(e.currentTarget.value as WorkspaceFilter)}>
-          <For each={WORKSPACES}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-        </select>
-        <select class="iag-select" aria-label="Sort" value={sort()} onChange={(e) => setSort(e.currentTarget.value as SortKey)}>
-          <For each={SORTS}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-        </select>
+        {/* The app's own dropdown (Settings, the composer), not the OS one (#192931). */}
+        <Select
+          data-action="agents-workspace"
+          options={WORKSPACES}
+          current={WORKSPACES.find((o) => o.value === workspace())}
+          value={(o) => o.value}
+          label={(o) => o.label}
+          onSelect={(o) => o && setWorkspace(o.value)}
+          variant="ghost"
+          size="small"
+          valueClass="text-12-regular"
+        />
+        <Select
+          data-action="agents-sort"
+          options={SORTS}
+          current={SORTS.find((o) => o.value === sort())}
+          value={(o) => o.value}
+          label={(o) => o.label}
+          onSelect={(o) => o && setSort(o.value)}
+          variant="ghost"
+          size="small"
+          valueClass="text-12-regular"
+        />
         {/* Not in ELON, where the switch existed and nothing could reach it: this project, or the account. */}
         <div class="iag-seg" role="tablist" aria-label="Which agents">
           <For each={[["all", "All"], ["project", "This project"]] as const}>
@@ -276,6 +298,11 @@ export function IrisAgentGallery(props: {
         </span>
       </div>
 
+      <Show when={note()}>
+        <p class="iag-note iag-note--chat" role="status">
+          {note()}
+        </p>
+      </Show>
       <Show when={roster.latest?.measured === false}>
         <p class="iag-note iag-note--err">Could not load agents — {roster.latest?.reason}</p>
       </Show>
@@ -302,6 +329,11 @@ export function IrisAgentGallery(props: {
                   <Card
                     agent={a}
                     onChat={() => {
+                      open(a)
+                      setNote(`Selecting ${a.name}…`)
+                      void props.onChat(a).then((n) => setNote(n ?? null))
+                    }}
+                    onPage={() => {
                       open(a)
                       props.openExternal(chatUrl(a.id))
                     }}

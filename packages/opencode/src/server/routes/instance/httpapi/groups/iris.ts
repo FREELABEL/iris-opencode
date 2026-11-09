@@ -1989,6 +1989,7 @@ export const IrisPaths = {
   brandLogoProbe: `${root}/brand-logo/probe`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   agentLive: `${root}/agents/:agentID/live`,
+  agentDesktop: `${root}/agents/:agentID/desktop`,
   heartbeats: `${root}/heartbeats`,
   heartbeatRun: `${root}/heartbeats/:jobID/run`,
   heartbeatPause: `${root}/heartbeats/:jobID/pause`,
@@ -4026,6 +4027,24 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List Hive peer connections",
           description:
             "The other half of Hive: the panel could only ever show YOUR machines. Active connections sort first — a live one is what you act on, a pending code is a reminder.",
+        }),
+      ),
+      HttpApiEndpoint.post("agentDesktop", IrisPaths.agentDesktop, {
+        params: { agentID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            changed: Schema.Finite,
+            reason: Schema.optional(Schema.String),
+          }),
+          "Whether the agent is now in this computer's agent picker; `changed` = files written (0 = it already was, or cannot be)",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agentDesktop",
+          summary: "Put one IRIS agent in the composer's agent picker, pinned (#192931)",
+          description:
+            "Runs `iris agents desktop-sync --agent <id> --pin <id>`. The caller reloads the picker with POST /global/dispose. People, paused and scratch agents are never synced.",
         }),
       ),
       HttpApiEndpoint.get("agentLive", IrisPaths.agentLive, {
