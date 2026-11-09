@@ -61,6 +61,7 @@ import { PlatformOkrCommand } from "./cli/cmd/platform-okr"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
+import { PlatformDrivesCommand } from "./cli/cmd/platform-drives"
 import { PlatformOnboardingCommand } from "./cli/cmd/platform-onboarding"
 import { PlatformAtlasListCommand } from "./cli/cmd/platform-atlas-tree"
 import { PlatformAtlasDatabaseCommand } from "./cli/cmd/platform-atlas-database"
@@ -443,6 +444,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))
+  .command(reg(PlatformDrivesCommand))
   .command(reg(PlatformOnboardingCommand))
   .command(reg(PlatformAtlasItemCommand))
   .command(reg(PlatformAtlasListCommand))

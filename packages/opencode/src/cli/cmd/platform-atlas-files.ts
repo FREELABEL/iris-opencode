@@ -81,12 +81,14 @@ export async function uploadFileVerified(
   userId: number,
   bloqId: number,
   path: string,
+  opts: { title?: string } = {},
 ): Promise<{ ok: true; id: number; url: string } | { ok: false; error: string }> {
   const buf = await readFile(path)
   const form = new FormData()
   form.append("file", new Blob([new Uint8Array(buf)], { type: path.endsWith(".json") ? "application/json" : undefined }), basename(path))
   form.append("user_id", String(userId))
   form.append("bloq_id", String(bloqId))
+  if (opts.title) form.append("title", opts.title)
   const res = await irisFetch(`/api/v1/bloqs/files/upload`, { method: "POST", body: form })
   const text = await res.text()
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.trim().slice(0, 200) || "(empty body)"}` }
