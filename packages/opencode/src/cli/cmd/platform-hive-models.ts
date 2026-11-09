@@ -33,6 +33,18 @@ export interface InferenceSettings {
   models: string[] | null
   /** The model to use when a request must stay on your machines (PHI with phi-local on). */
   default_model: string | null
+  /**
+   * The Node (≥ 20) the tunnel was started with, and the tunnel itself — written only once `serve on`
+   * opened it, cleared by `serve off`. The daemon restarts a dead tunnel from exactly these (#192752).
+   */
+  node?: string | null
+  tunnel?: ServingTunnel | null
+}
+
+export interface ServingTunnel {
+  name: string
+  runner: string
+  zones: string[]
 }
 
 export const settingsPath = (home = homedir()) => join(home, ".iris", "inference.json")
@@ -354,7 +366,8 @@ const ServeCommand = cmd({
       return
     }
     if (argv.state === "off") {
-      writeSettings({ ...s, enabled: false })
+      // Off first, then the tunnel record: the daemon must never restart what the owner just stopped.
+      writeSettings({ ...s, enabled: false, tunnel: null })
       const closed = stopRelayTunnelBg(name)
       console.log(`\n${success("✓")} this machine no longer serves its models${closed ? dim(` — tunnel ${name} closed`) : ""}`)
       console.log(dim("  The gateway stops routing here on the next heartbeat (within a minute)."))
@@ -382,7 +395,8 @@ const ServeCommand = cmd({
     const models = argv.models ? String(argv.models).split(",").map((m) => m.trim()).filter(Boolean) : null
     // The endpoint first, so the tunnel's own reachability check finds something listening.
     const default_model = argv.default ? String(argv.default) : s.default_model
-    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url, default_model })
+    // No tunnel record until this run has opened one, so the daemon cannot start a second copy meanwhile.
+    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url, default_model, tunnel: null })
     const t = await startRelayTunnelBg(name, port)
     if (!t.ok) {
       console.log(`\n${highlight("✗")} the endpoint is on, but the tunnel did not open: ${t.error}`)
@@ -390,9 +404,9 @@ const ServeCommand = cmd({
       process.exitCode = 1
       return
     }
-    writeSettings({ ...readSettings(), url: t.url })
+    writeSettings({ ...readSettings(), url: t.url, node: t.node, tunnel: { name, runner: t.runner, zones: t.zones } })
     console.log(`\n${success("●")} serving at ${bold(t.url)}${t.already ? dim(" (tunnel was already open)") : ""}`)
-    console.log(dim("  The daemon picks this up within 15 s and reports it on its next heartbeat."))
+    console.log(dim(`  The daemon picks this up within 15 s, reports it on its next heartbeat, and restarts the tunnel with ${t.node} if it stops.`))
     console.log(dim("  Then: iris hive models   ·   use one: --model hive/<model>   ·   stop: iris hive models serve off"))
   },
 })

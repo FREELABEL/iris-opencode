@@ -227,15 +227,19 @@ function spawnRelayBg(o: { home: string; node: string; runner: string; args: str
  * every request IRIS did not sign, which is a different promise from "anyone can reach it").
  * Claims the name for this account first. Returns the URL, or why not.
  */
-export async function startRelayTunnelBg(name: string, port: number): Promise<{ ok: true; url: string; already: boolean } | { ok: false; error: string }> {
+export async function startRelayTunnelBg(
+  name: string,
+  port: number,
+): Promise<{ ok: true; url: string; already: boolean; node: string; runner: string; zones: string[] } | { ok: false; error: string }> {
   const home = homedir()
   const refused = refusedPort(port)
   if (refused) return { ok: false, error: refused }
   const prep = await prepareRelayRunner(name, port)
   if (!prep.ok) return prep
-  if (runningPid(home, name)) return { ok: true, url: prep.url, already: true }
+  const done = { url: prep.url, node: prep.node, runner: prep.runner, zones: prep.zones }
+  if (runningPid(home, name)) return { ok: true, ...done, already: true }
   spawnRelayBg({ home, node: prep.node, runner: prep.runner, args: prep.args, env: prep.env, dir: join(home, ".iris", "tunnels", name), name })
-  return { ok: true, url: prep.url, already: false }
+  return { ok: true, ...done, already: false }
 }
 
 /**
@@ -246,7 +250,7 @@ export async function startRelayTunnelBg(name: string, port: number): Promise<{ 
 export async function prepareRelayRunner(
   name: string,
   port: number,
-): Promise<{ ok: true; url: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; error: string }> {
+): Promise<{ ok: true; url: string; node: string; runner: string; args: string[]; env: NodeJS.ProcessEnv; zones: string[] } | { ok: false; error: string }> {
   const home = homedir()
   if (!validTunnelName(name)) return { ok: false, error: `"${name}" is not a valid tunnel name` }
   const res = await hiveFetch(`/api/v6/nodes/tunnels`, { method: "POST", body: JSON.stringify({ name }) })
@@ -264,7 +268,7 @@ export async function prepareRelayRunner(
     IRIS_API_KEY: await resolveToken(),
     ...(zones.length && !process.env.HIVE_RELAY_ZONES ? { HIVE_RELAY_ZONES: zones.join(",") } : {}),
   }
-  return { ok: true, url, node, runner, args: [runner, "--name", name, "--port", String(port)], env }
+  return { ok: true, url, node, runner, args: [runner, "--name", name, "--port", String(port)], env, zones }
 }
 
 /** Close a background relay tunnel by name. True when one was running. */
