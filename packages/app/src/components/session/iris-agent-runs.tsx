@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "@solidjs/router"
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -155,7 +155,15 @@ export function IrisAgentRuns() {
     candidates()
     void refresh()
   })
-  void discover()
+  // Look as soon as the open chat's folder is known — on a cold start the chat loads after the pane.
+  createEffect(
+    on(
+      () => (params.id ? serverSync().session.get(params.id)?.directory : undefined),
+      (directory) => {
+        if (directory) void discover()
+      },
+    ),
+  )
   const finder = setInterval(() => void discover(), DISCOVER_MS)
   onCleanup(() => clearInterval(finder))
   const timer = setInterval(() => {
