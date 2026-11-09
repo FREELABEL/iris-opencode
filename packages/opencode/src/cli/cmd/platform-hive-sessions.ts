@@ -5,6 +5,7 @@ import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from 
 import { hiveFetch } from "./platform-hive-nodes"
 import os from "os"
 import { followStep, newFollowState, refusedAtCreate, type TranscriptMessage } from "../lib/hive-chat-follow"
+import { followLive, type FollowMode } from "../lib/hive-live-follow"
 
 /**
  * `iris hive sessions` — what AI sessions are running across your fleet.
@@ -129,11 +130,15 @@ function label(s: Session): string {
 const STATUS_ORDER: Record<string, number> = { needs_you: -1, active: 0, idle: 1, unknown: 2, stale: 3 }
 
 const SessionsCommand = cmd({
-  command: "sessions",
-  describe: "AI sessions running across your Hive — what, where, on which model",
+  command: "sessions [action] [session-id]",
+  describe: "AI sessions running across your Hive — what, where, on which model; `follow <id>` to watch one live",
   builder: (yargs) =>
     yargs
-      .option("node", { describe: "only this node", type: "string" })
+      .positional("action", { describe: "follow — watch one session live, as it is written", type: "string", choices: ["follow"] })
+      .positional("session-id", { describe: "(follow) the session, from `iris hive sessions`", type: "string" })
+      .option("node", { describe: "only this node; with follow, the machine holding the session (skips the lookup)", type: "string" })
+      .option("provider", { describe: "(follow) the session's provider, when --node is given", type: "string", default: "claude_code" })
+      .option("timeout", { describe: "(follow) stop after this many seconds; 0 follows until Ctrl-C", type: "number", default: 0 })
       .option("status", { describe: "needs_you | active | idle | stale | unknown", type: "string" })
       .option("all", { describe: "include stale sessions (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
@@ -146,6 +151,7 @@ const SessionsCommand = cmd({
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
+    if (argv.action === "follow") return followSession(argv, userId)
 
     const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
     const body = (await res.json().catch(() => ({}))) as any
@@ -288,6 +294,78 @@ async function resolveSession(userId: number, wanted: string): Promise<{ node: a
   return { node, s }
 }
 
+/** One transcript message as a terminal line. */
+export function messageLine(m: TranscriptMessage): string {
+  if (m.type === "tool_use") return dim(`· ${m.tool || "tool"}${m.command || m.file_path ? " " + (m.command || m.file_path) : ""}`)
+  if (typeof m.text !== "string") return ""
+  return m.role === "user" ? bold(`› ${m.text}`) : m.text
+}
+
+/** What a follower prints when the live stream drops or returns (#192964: say it, never hide it). */
+export function modeLine(mode: FollowMode, why?: string): string {
+  if (mode === "live") return success("● live")
+  if (mode === "polling") return warn(`◌ ${why?.startsWith("live ") ? why : `live paused — polling${why ? ` (${why})` : ""}`}`)
+  return dim("… connecting")
+}
+
+/**
+ * `iris hive sessions follow <id>` — watch a session on another machine as it is written (#192964).
+ *
+ * Live: the machine pushes what is appended, so nothing is polled and no task runs on it. If the
+ * socket is down, this says "live paused — polling" and reads every 5 s until it returns. With
+ * --json it writes one JSON object per line: {event:"state",mode} and {event:"messages",reset,messages}.
+ */
+async function followSession(argv: any, userId: number) {
+  const wanted = String(argv["session-id"] ?? "").trim()
+  if (!wanted) {
+    console.error("Usage: iris hive sessions follow <session-id> [--node <machine>]")
+    process.exit(1)
+  }
+  let machine = argv.node as string | undefined
+  let provider = String(argv.provider || "claude_code")
+  let sessionId = wanted
+  let name = wanted.slice(0, 8)
+  if (!machine) {
+    const { node, s } = await resolveSession(userId, wanted)
+    machine = String(node.name)
+    provider = String(s.provider || provider)
+    sessionId = s.session_id
+    name = label(s)
+  }
+
+  const json = !!argv.json
+  const emit = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n")
+  if (!json) console.error(dim(`→ following ${name} on ${machine} · ${provider}  (Ctrl-C to stop)`))
+
+  const f = followLive({
+    sessionId,
+    machine,
+    provider,
+    fetch: hiveFetch,
+    onMessages: (msgs, reset) => {
+      if (json) return emit({ event: "messages", reset, messages: msgs })
+      if (reset) console.log(dim(`— the last ${msgs.length} messages —`))
+      for (const m of msgs) {
+        const line = messageLine(m)
+        if (line) console.log(line)
+      }
+    },
+    onMode: (mode, why) => (json ? emit({ event: "state", mode, why: why ?? null }) : console.error(modeLine(mode, why))),
+  })
+
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      f.stop()
+      resolve()
+    }
+    process.once("SIGINT", done)
+    process.once("SIGTERM", done)
+    const secs = Number(argv.timeout) || 0
+    if (secs > 0) setTimeout(done, secs * 1000)
+  })
+  process.exit(0)
+}
+
 /**
  * `iris hive send-input` — put a message into a session that is already running, on whichever
  * machine holds it.
@@ -365,9 +443,9 @@ const SendInputCommand = cmd({
  *
  * send-input delivers and walks away: the reply happens in a window on another machine. This sends
  * with `submit` (the session takes a turn — it spends THAT session's tokens, which is why send-input
- * does not) and then follows the transcript through the cloud until the reply settles. Polling, not a
- * stream: the transcript read is the one door to a session on another machine today, and a reply
- * that is still being written grows between polls, so it prints as it is written, a poll at a time.
+ * does not) and then follows the transcript until the reply settles. Live since #192964: the machine
+ * pushes the transcript as it is written; the 2 s transcript poll is only the fallback while the
+ * socket is down, and it says so.
  */
 const AskCommand = cmd({
   command: "ask <session-id> <message>",
@@ -377,7 +455,7 @@ const AskCommand = cmd({
       .positional("session-id", { describe: "from `iris hive sessions`", type: "string", demandOption: true })
       .positional("message", { describe: "what to say", type: "string", demandOption: true })
       .option("timeout", { describe: "seconds to follow the reply", type: "number", default: 300 })
-      .option("interval", { describe: "seconds between transcript reads", type: "number", default: 2 })
+      .option("interval", { describe: "seconds between transcript reads, only while the live stream is down", type: "number", default: 2 })
       .option("user-id", { describe: "user ID", type: "number" }),
   async handler(argv) {
     const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 10 })
@@ -420,38 +498,48 @@ const AskCommand = cmd({
 
     console.error(dim(`→ ${label(s)} on ${node.name} · ${s.provider}`))
     const state = newFollowState()
-    const interval = Math.max(1, Number(argv.interval) || 2) * 1000
     const deadline = Date.now() + Math.max(10, Number(argv.timeout) || 300) * 1000
     // A reply that has not changed for this long is done. A model waiting on a slow tool looks the
     // same, so it is generous; --timeout bounds the whole thing either way.
-    const QUIET_POLLS = 4
-    let quiet = 0
-    let lastError = ""
-    const q = new URLSearchParams({ machine: String(node.name), provider: String(s.provider || ""), limit: "40" })
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, interval))
-      const r = await hiveFetch(`/api/v6/nodes/sessions/${encodeURIComponent(s.session_id)}/transcript?${q}`)
-      const body = (await r.json().catch(() => ({}))) as any
-      if (!r.ok || !body.success) {
-        lastError = body.error || `HTTP ${r.status}`
-        continue
-      }
-      lastError = ""
-      const { out, changed } = followStep(state, (body.messages || []) as TranscriptMessage[], message)
-      if (out) process.stdout.write(out)
-      quiet = changed ? 0 : quiet + 1
-      if (state.answered && quiet >= QUIET_POLLS) {
-        process.stdout.write("\n")
-        return
-      }
-    }
+    const QUIET_MS = 8000
+    let lastChange = Date.now()
+
+    // Live (#192964): the machine pushes the transcript as it is written. Only while the socket is
+    // down does this read the transcript, every --interval seconds, and it says so.
+    const live = followLive({
+      sessionId: s.session_id,
+      machine: String(node.name),
+      provider: String(s.provider || ""),
+      fetch: hiveFetch,
+      pollMs: Math.max(1, Number(argv.interval) || 2) * 1000,
+      onMessages: () => {
+        const { out, changed } = followStep(state, live.state.messages as TranscriptMessage[], message)
+        if (out) process.stdout.write(out)
+        if (changed) lastChange = Date.now()
+      },
+      onMode: (mode, why) => {
+        if (mode !== "connecting") console.error("\n" + modeLine(mode, why))
+      },
+    })
+
+    await new Promise<void>((resolve) => {
+      const t = setInterval(() => {
+        if ((state.answered && Date.now() - lastChange >= QUIET_MS) || Date.now() >= deadline) {
+          clearInterval(t)
+          resolve()
+        }
+      }, 250)
+    })
+    live.stop()
     process.stdout.write("\n")
     if (!state.anchored) {
       console.error(warn(`The message did not show up in ${label(s)}'s transcript within the timeout.`))
-      if (lastError) console.error(dim(`  last read: ${lastError}`))
       process.exit(1)
     }
-    console.error(dim(`  Still going after ${argv.timeout}s — read it with: iris hive ask again, or open it on ${node.name}.`))
+    if (!state.answered || Date.now() - lastChange < QUIET_MS) {
+      console.error(dim(`  Still going after ${argv.timeout}s — read it with: iris hive sessions follow ${s.session_id.slice(-8)}, or open it on ${node.name}.`))
+    }
+    process.exit(0)
   },
 })
 
