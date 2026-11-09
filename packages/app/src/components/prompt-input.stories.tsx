@@ -50,6 +50,7 @@ function PromptInputExample() {
     agents: {
       available: [{ name: "review", hidden: false, mode: "subagent" }],
       options: ["build", "review", "plan"],
+      label: (name: string) => name.charAt(0).toUpperCase() + name.slice(1),
       get current() {
         return controls.agent
       },
@@ -128,6 +129,7 @@ function PromptInputWithOpenDock() {
     agents: {
       available: [],
       options: ["build"],
+      label: (name: string) => name.charAt(0).toUpperCase() + name.slice(1),
       get current() {
         return controls.agent
       },

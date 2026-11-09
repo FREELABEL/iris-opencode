@@ -18,6 +18,7 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { useProviders } from "@/hooks/use-providers"
 import { pathKey } from "@/utils/path-key"
+import { agentLabels } from "@/components/prompt-input/agent-label"
 
 export function createPromptInputController(input: {
   sessionKey: Accessor<string>
@@ -36,10 +37,12 @@ export function createPromptInputController(input: {
   const providersQuery = createQuery(() => input.queryOptions.providers(pathKey(sdk().directory)))
 
   return createMemo<PromptInputControls>(() => {
+    const labels = agentLabels(local.agent.list())
     return {
       agents: {
         available: sync().data.agent,
         options: local.agent.list().map((agent) => agent.name),
+        label: (name) => labels[name] ?? name,
         current: local.agent.current()?.name ?? "",
         loading: agentsQuery.isLoading,
         visible: local.agent.visible(),

@@ -1749,11 +1749,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         size="normal"
                         options={props.controls.agents.options}
                         current={props.controls.agents.current}
+                        label={props.controls.agents.label}
                         onSelect={(value) => {
                           props.controls.agents.select(value)
                           restoreFocus()
                         }}
-                        class="capitalize max-w-[160px] text-text-base"
+                        class="max-w-[160px] text-text-base"
                         valueClass="truncate text-13-regular text-text-base"
                         triggerStyle={control()}
                         triggerProps={{ "data-action": "prompt-agent" }}
