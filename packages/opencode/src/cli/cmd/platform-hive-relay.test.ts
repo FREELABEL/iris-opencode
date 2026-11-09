@@ -78,7 +78,7 @@ describe("runningPid", () => {
 })
 
 // #191176 — Node 18 crashed the relay runner on its first real request; the floor is now 20.
-import { findNode, RELAY_MIN_NODE } from "./platform-hive-relay"
+import { findNode, nodeMajor, RELAY_MIN_NODE } from "./platform-hive-relay"
 import { join as pjoin } from "path"
 
 describe("findNode — the relay runner never runs on Node 18", () => {
@@ -101,6 +101,32 @@ describe("findNode — the relay runner never runs on Node 18", () => {
     const want = pjoin(home, ".iris", "runtime", "node-v22.12.0", "bin", "node")
     const p = (b: string) => (b.includes(".iris/runtime/node-v22") ? 22 : b.includes(".iris/runtime/node-v20") ? 20 : probe(b))
     expect(findNode(home, {}, p)).toBe(want)
+  })
+
+  test("nodeMajor reads `node -p process.versions.node`", () => {
+    expect(nodeMajor("20.11.1\n")).toBe(20)
+    expect(nodeMajor("18.19.1")).toBe(18)
+    expect(nodeMajor("v22.12.0")).toBe(22)
+    expect(nodeMajor("")).toBeNull()
+    expect(nodeMajor("not a version")).toBeNull()
+  })
+
+  test("~/.iris/node20 (iris-hive-001's layout) beats the installer runtime and a Node 18 on PATH (#192752)", () => {
+    const home = mkdtempSync(pjoin(tmpdir(), "relay-node-"))
+    for (const d of ["node20", "node18", pjoin("runtime", "node-v22.12.0")]) mkdirSync(pjoin(home, ".iris", d, "bin"), { recursive: true })
+    const n20 = pjoin(home, ".iris", "node20", "bin", "node")
+    const p = (b: string) => (b === n20 ? 20 : b.includes(".iris/node18") ? 18 : b.includes(".iris/runtime/node-v22") ? 22 : b === "node" ? 18 : null)
+    expect(findNode(home, {}, p)).toBe(n20)
+    // IRIS_NODE still wins when it is new enough
+    expect(findNode(home, { IRIS_NODE: "/opt/n22" }, (b) => (b === "/opt/n22" ? 22 : p(b)))).toBe("/opt/n22")
+    // ~/.iris/node18 is looked at and skipped, never used
+    expect(findNode(home, {}, (b) => (b === n20 ? null : p(b)))).toBe(pjoin(home, ".iris", "runtime", "node-v22.12.0", "bin", "node"))
+  })
+
+  test("a newer ~/.iris/node* is preferred over an older one", () => {
+    const home = mkdtempSync(pjoin(tmpdir(), "relay-node-"))
+    for (const d of ["node20", "node22"]) mkdirSync(pjoin(home, ".iris", d, "bin"), { recursive: true })
+    expect(findNode(home, {}, (b) => (b.includes(".iris/node22") ? 22 : b.includes(".iris/node20") ? 20 : null))).toBe(pjoin(home, ".iris", "node22", "bin", "node"))
   })
 
   test("only Node 18 anywhere → null, so the tunnel refuses instead of crashing later", () => {
