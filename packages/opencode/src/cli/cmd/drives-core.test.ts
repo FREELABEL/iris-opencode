@@ -183,7 +183,19 @@ describe("seal / unseal", () => {
   })
 
   // Cross-language: the Python in production must open ours, and we must open its.
-  const PY = process.env.DRIVE_SCAN_PY ?? "/home/siralexmayo/work/freelabel/scripts/drives/drive_scan.py"
+  // A manifest RECORDED from the Python tool always runs, so this file proves interop on every machine,
+  // not only one that happens to have the Python checked out. The live round-trip below runs when
+  // DRIVE_SCAN_PY points at scripts/drives/drive_scan.py.
+  test("a manifest sealed by drive_scan.py (recorded fixture) opens here", async () => {
+    const fx = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.json"), "utf8"))
+    const text = fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.txt"), "utf8")
+    const [head, body] = [text.slice(0, text.indexOf("\n")), text.slice(text.indexOf("\n") + 1).trim()]
+    expect(head).toBe("iris-drive-manifest-v1")
+    const out = new TextDecoder().decode(await unseal(Buffer.from(body, "base64"), fx.key_hex))
+    expect(out).toBe(fx.plaintext)
+  })
+
+  const PY = process.env.DRIVE_SCAN_PY ?? ""
   const havePy =
     fs.existsSync(PY) && spawnSync("python3", ["-c", "import cryptography"], { encoding: "utf8" }).status === 0
   const py = (code: string) =>
@@ -287,7 +299,19 @@ describe("interop fixture: app bundles and macOS system folders (#192974)", () =
     expect(r.findings.map((f) => f.path)).toEqual(["Clients/site/.env"])
   })
 
-  const PY = process.env.DRIVE_SCAN_PY ?? "/home/siralexmayo/work/freelabel/scripts/drives/drive_scan.py"
+  // A manifest RECORDED from the Python tool always runs, so this file proves interop on every machine,
+  // not only one that happens to have the Python checked out. The live round-trip below runs when
+  // DRIVE_SCAN_PY points at scripts/drives/drive_scan.py.
+  test("a manifest sealed by drive_scan.py (recorded fixture) opens here", async () => {
+    const fx = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.json"), "utf8"))
+    const text = fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.txt"), "utf8")
+    const [head, body] = [text.slice(0, text.indexOf("\n")), text.slice(text.indexOf("\n") + 1).trim()]
+    expect(head).toBe("iris-drive-manifest-v1")
+    const out = new TextDecoder().decode(await unseal(Buffer.from(body, "base64"), fx.key_hex))
+    expect(out).toBe(fx.plaintext)
+  })
+
+  const PY = process.env.DRIVE_SCAN_PY ?? ""
   test.skipIf(!fs.existsSync(PY))("drive_scan.py walks the same fixture to the same items and findings", () => {
     const r = spawnSync(
       "python3",
