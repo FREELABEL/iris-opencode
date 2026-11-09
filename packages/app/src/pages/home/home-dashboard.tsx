@@ -29,6 +29,7 @@ import {
 import { hivePillTarget } from "@/components/session/iris-hive-inbox-model"
 import { focusHiveSession } from "@/components/session/iris-nav"
 import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
+import { AgentMark } from "@/components/session/agent-mark"
 import "./home-dashboard.css"
 
 /**
@@ -714,6 +715,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                         aria-selected={tool() === t}
                         onClick={() => pickTool(t)}
                       >
+                        <AgentMark provider={byTool(fleet().rows, t)[0]?.provider ?? t} />
                         {t}
                         <span>{byTool(fleet().rows, t).length}</span>
                       </button>
@@ -749,7 +751,10 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                       {r.label}
                       <Show when={r.branch}>{(b) => <small>{b()}</small>}</Show>
                     </span>
-                    <span class="ihd-mu ihd-tool">{r.tool}</span>
+                    <span class="ihd-mu ihd-tool">
+                      <AgentMark provider={r.provider} />
+                      <span class="ihd-tool-name">{r.tool}</span>
+                    </span>
                     <span class="ihd-mu ihd-where">{r.machine}</span>
                     <span class="ihd-mu ihd-age">{agoOf(r.updatedAt ?? undefined, now())}</span>
                   </div>

@@ -44,8 +44,8 @@
 .ihd-alert { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ihd-bad); border: 1px solid color-mix(in srgb, var(--ihd-bad) 35%, transparent);
   background: color-mix(in srgb, var(--ihd-bad) 8%, transparent); border-radius: 8px; padding: 7px 10px; margin-bottom: 8px; }
 .ihd-alert svg { width: 14px; height: 14px; flex: none; }
-.ihd-tabs { display: flex; gap: 4px; margin-bottom: 4px; }
-.ihd-tab { font-size: 12.5px; color: var(--ihd-mute); padding: 4px 9px; border-radius: 7px; border: 1px solid transparent; }
+.ihd-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.ihd-tab { white-space: nowrap; font-size: 12.5px; color: var(--ihd-mute); padding: 4px 9px; border-radius: 7px; border: 1px solid transparent; }
 .ihd-tab[aria-selected="true"] { color: var(--ihd-ink); border-color: var(--ihd-line); background: var(--v2-background-bg-layer-02); }
 .ihd-tab span { font: 11px var(--ihd-mono); color: var(--ihd-faint); margin-left: 4px; }
 .ihd-th, .ihd-tr { display: grid; grid-template-columns: 26px minmax(0, 1.6fr) 44px 150px 44px minmax(0, 1fr); align-items: center; gap: 10px; padding: 8px 4px; font-size: 13px; }
@@ -102,8 +102,12 @@
 .ihd-card-h .ihd-sum { margin: 0; }
 .ihd-card-h .ihd-more { margin-left: auto; font-size: 12px; color: var(--ihd-mute); }
 .ihd-card-h .ihd-more:hover { color: var(--ihd-ink); }
-.ihd-sr { display: grid; grid-template-columns: 22px minmax(0, 1.8fr) 108px minmax(0, 0.9fr) 44px; gap: 10px; align-items: center; padding: 7px 6px; border-bottom: 1px solid var(--ihd-line); font-size: 13px; cursor: pointer; border-radius: 6px; }
+.ihd-sr { display: grid; grid-template-columns: 22px minmax(0, 1.8fr) 128px minmax(0, 0.9fr) 44px; gap: 10px; align-items: center; padding: 7px 6px; border-bottom: 1px solid var(--ihd-line); font-size: 13px; cursor: pointer; border-radius: 6px; }
 .ihd-sr:hover { background: color-mix(in srgb, var(--ihd-line) 35%, transparent); }
 .ihd-sr .ihd-name small { font: 11.5px var(--ihd-mono); color: var(--ihd-faint); margin-left: 8px; font-weight: 400; }
-@container (max-width: 560px) { .ihd-sr { grid-template-columns: 22px minmax(0, 1fr) minmax(0, 96px) 40px; } .ihd-sr .ihd-tool { display: none; } }
+.ihd-sr .ihd-tool { display: flex; align-items: center; gap: 7px; }
+.ihd-sr .ihd-tool-name { overflow: hidden; text-overflow: ellipsis; }
+.ihd-tab:has(.agent-mark) { display: inline-flex; align-items: center; gap: 6px; }
+.ihd-tab .agent-mark { width: 14px; height: 14px; }
+@container (max-width: 560px) { .ihd-sr { grid-template-columns: 22px minmax(0, 1fr) 16px minmax(0, 96px) 40px; } .ihd-sr .ihd-tool-name { display: none; } }
 .ihd-hidden { font-size: 12px; color: var(--ihd-faint); padding: 8px 6px 0; }
