@@ -4,7 +4,7 @@ import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import { parsePlan, executeSkill } from "../../skill/executor"
 import { dim, bold } from "./iris-api"
-import { printLedger, raiseAgreement } from "./platform-agreements"
+import { printLedger, raiseAgreement, MERGE_OPTION, COUNTERSIGNER_OPTION } from "./platform-agreements"
 
 // ============================================================================
 // platform-lexicon — the legal product's front door (#181888 PROD-3)
@@ -198,19 +198,21 @@ const AgreementsListCmd = cmd({
 })
 
 const AgreementsRaiseCmd = cmd({
-  command: "raise <case>",
+  command: "raise [case]",
   aliases: ["new"],
-  describe: "send an engagement letter, retainer, fee agreement or release for signature on a case",
+  describe: "send an engagement letter, retainer, fee agreement, release or equity grant for signature — on a case or the firm's own",
   builder: (yargs) =>
     yargs
-      .positional("case", { describe: "case id (the lead id) or a synced case ref (e.g. LEX-CLIO-9)", type: "string", demandOption: true })
+      .positional("case", { describe: "case id (the lead id) or a synced case ref (e.g. LEX-CLIO-9). Omit for the firm's own paperwork, e.g. an equity grant", type: "string" })
       .option("name", { type: "string", describe: "who signs, as named in the document", demandOption: true })
       .option("firm", { type: "string", describe: "the firm issuing it, as named in the document", demandOption: true })
       .option("email", { type: "string", describe: "signer's email — required with --issue" })
       .option("org", { type: "string" })
-      .option("type", { type: "string", default: "engagement", describe: "engagement, fee, co_counsel, tolling, settlement, release, letter_of_protection, medical_authorization, nda, baa, other" })
+      .option("type", { type: "string", default: "engagement", describe: "engagement, fee, co_counsel, equity_grant, tolling, settlement, release, letter_of_protection, medical_authorization, nda, baa, other" })
       .option("body-file", { type: "string", describe: "the wording, from a text file — e.g. the attorney-approved output of `iris lexicon engagement`" })
       .option("template", { type: "string", describe: "contract template slug, instead of --body-file" })
+      .option("merge", MERGE_OPTION)
+      .option("countersigner", COUNTERSIGNER_OPTION)
       .option("term", { type: "string", describe: 'e.g. "two years"; omit for one that runs until revoked' })
       .option("expires", { type: "string", describe: "YYYY-MM-DD" })
       .option("issue", { type: "boolean", describe: "email the signing link now. Without it the agreement stays a draft" })
@@ -233,12 +235,14 @@ const AgreementsRaiseCmd = cmd({
       email: args.email as string | undefined,
       org: args.org as string | undefined,
       disclosing: args.firm as string,
-      subject: `case:${args.case}`,
+      subject: args.case ? `case:${args.case}` : undefined,
       tier: "standard",
       term: args.term as string | undefined,
       expires: args.expires as string | undefined,
       bodyFile: args.bodyFile as string | undefined,
       template: args.template as string | undefined,
+      merge: args.merge as string[] | undefined,
+      countersigner: args.countersigner as string | undefined,
       issue: Boolean(args.issue),
       json: Boolean(args.json),
     })

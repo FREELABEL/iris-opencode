@@ -26,7 +26,7 @@ import {
 // help text: `--type` is not restricted to these locally, so a type added on the server works
 // before the next CLI release, and an unknown one gets the server's refusal.
 const AGREEMENT_TYPES =
-  "nda, baa, engagement, fee, services, sow, co_counsel, tolling, settlement, release, letter_of_protection, medical_authorization, other"
+  "nda, baa, equity_grant, engagement, fee, services, sow, co_counsel, tolling, settlement, release, letter_of_protection, medical_authorization, other"
 
 interface LedgerRow {
   id: number
@@ -303,8 +303,38 @@ export interface RaiseOptions {
   expires?: string
   bodyFile?: string
   template?: string
+  merge?: string[]
+  countersigner?: string
   issue: boolean
   json: boolean
+}
+
+/** `--merge shares=500,000` → { shares: "500,000" }. Everything after the first = is the value. */
+export function parseMerge(pairs: string[] | undefined): Record<string, string> | string {
+  const out: Record<string, string> = {}
+  for (const raw of pairs ?? []) {
+    const i = raw.indexOf("=")
+    const key = i > 0 ? raw.slice(0, i).trim() : ""
+    if (!/^[a-z][a-z0-9_]{0,59}$/.test(key)) return `--merge "${raw}": expected key=value with a lowercase key`
+    out[key] = raw.slice(i + 1).trim()
+  }
+  return out
+}
+
+/** `"Alex Mayo <alex@co.com>"` → { name, email }. The email is required: a countersigner nobody can reach never signs. */
+export function parseSigner(raw: string): { name: string; email: string } | null {
+  const m = raw.match(/^\s*(.+?)\s*<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$/)
+  return m ? { name: m[1], email: m[2] } : null
+}
+
+export const MERGE_OPTION = {
+  type: "string" as const,
+  array: true,
+  describe: 'a template merge field, repeatable: --merge shares=500,000 --merge governing_law="the State of Delaware"',
+}
+export const COUNTERSIGNER_OPTION = {
+  type: "string" as const,
+  describe: 'a second signer for the issuing side, as "Name <email>". Signs after the counterparty',
 }
 
 /** Raise and optionally issue, for `iris agreements raise` and `iris lexicon agreements raise` alike. */
@@ -315,6 +345,30 @@ export async function raiseAgreement(opts: RaiseOptions): Promise<void> {
     prompts.log.error("--issue needs --email: there is nowhere to send the link")
     prompts.outro("Failed")
     return
+  }
+
+  const merge = parseMerge(opts.merge)
+  if (typeof merge === "string") {
+    prompts.log.error(merge)
+    prompts.outro("Failed")
+    return
+  }
+
+  // Two signatures, in order: the counterparty first, then the issuing side countersigns.
+  // An equity grant without the company's signature is a promise from nobody.
+  let parties: Array<Record<string, string | null>> | null = null
+  if (opts.countersigner) {
+    const cs = parseSigner(opts.countersigner)
+    if (!cs) {
+      prompts.log.error(`--countersigner "${opts.countersigner}": expected "Full Name <email@example.com>"`)
+      prompts.outro("Failed")
+      return
+    }
+    const [mine, theirs] = opts.type === "equity_grant" ? ["Recipient", "Company"] : ["Counterparty", "Issuer"]
+    parties = [
+      { role: mine, name: opts.name, email: opts.email ?? null, org: opts.org ?? null },
+      { role: theirs, name: cs.name, email: cs.email, org: opts.disclosing },
+    ]
   }
 
   let wording: string | null = null
@@ -343,6 +397,8 @@ export async function raiseAgreement(opts: RaiseOptions): Promise<void> {
       access_tier: opts.tier,
       term: opts.term ?? null,
       expiry_date: opts.expires ?? null,
+      ...(Object.keys(merge).length ? { merge } : {}),
+      ...(parties ? { parties, signing_order: "sequential" } : {}),
       issue: Boolean(opts.issue),
     }),
   })
@@ -363,7 +419,12 @@ export async function raiseAgreement(opts: RaiseOptions): Promise<void> {
   console.log(`  ${dim("between")}    ${a.disclosingParty}  and  ${bold(a.counterparty)}`)
   console.log(`  ${dim("term")}       ${a.expiryDate ? `expires ${a.expiryDate}` : "—"}  ·  tier ${a.tier}`)
   console.log(`  ${dim("state")}      ${highlight(stateLabel(a))}`)
-  if (a.signingUrl) console.log(`  ${dim("sign at")}    ${a.signingUrl}`)
+  const links: Array<{ role: string; name?: string | null; url: string }> = a.partyLinks ?? []
+  if (links.length > 1) {
+    for (const l of links) console.log(`  ${dim("sign as")}    ${bold(l.role.padEnd(12))} ${l.url}`)
+  } else if (a.signingUrl) {
+    console.log(`  ${dim("sign at")}    ${a.signingUrl}`)
+  }
   printDivider()
   if (opts.issue) {
     prompts.log.warn("That URL is a bearer link — anyone holding it can sign.")
@@ -385,6 +446,8 @@ const RaiseCommand = cmd({
       .option("type", { type: "string", default: "nda", describe: AGREEMENT_TYPES })
       .option("body-file", { type: "string", describe: "the wording, from a text file. Required for every type but nda and baa, unless --template names one" })
       .option("template", { type: "string", describe: "contract template slug to use instead of the type's default" })
+      .option("merge", MERGE_OPTION)
+      .option("countersigner", COUNTERSIGNER_OPTION)
       .option("disclosing", { type: "string", default: "IRIS", describe: "the disclosing party" })
       .option("subject", { type: "string", describe: "what this agreement gates" })
       .option("tier", { type: "string", default: "standard", choices: ["standard", "phi"] })
@@ -400,14 +463,19 @@ const RaiseCommand = cmd({
         '$0 agreements raise --type=baa --name="Dana Whitfield" --email=dana@example.com --tier=phi --issue',
         "a BAA — the signer must verify their email before signing",
       )
+      .example(
+        '$0 agreements raise --type=equity_grant --disclosing="FREELABEL, INC" --name="Dana Whitfield" --email=dana@example.com --countersigner="Alex Mayo <ceo@example.com>" --merge role="Head of Growth" --merge shares=500,000 --merge percent="five percent (5%)" --merge vesting_start="1 December 2026" --merge vesting_years="five (5)" --merge cliff_months="twelve (12)" --merge consideration="in exchange for services" --merge governing_law="the State of Delaware"',
+        "an equity grant: 5% vesting over five years, countersigned by the company",
+      )
       .epilogue(
         [
           // What this command CANNOT produce belongs here, not only on the parent's
           // epilogue: `raise --help` is the screen a user reads after deciding to raise
           // something, and it used to say nothing about the two types it accepts (#190002).
           `TYPES: ${AGREEMENT_TYPES}.`,
-          "Only an NDA or a BAA satisfies an access gate; the others are signed and kept. Only those",
-          "two have default wording, so every other type needs --body-file or --template. To be paid",
+          "Only an NDA or a BAA satisfies an access gate; the others are signed and kept. nda, baa and",
+          "equity_grant have default wording; every other type needs --body-file or --template. A",
+          "template with a blank left in it is refused, naming each field to pass with --merge. To be paid",
           "as well as signed, use a payment gate:",
           "  iris leads payment-gate <lead-id> --amount 500 --scope \"...\"",
           "",
@@ -437,6 +505,8 @@ const RaiseCommand = cmd({
       expires: args.expires as string | undefined,
       bodyFile: args.bodyFile as string | undefined,
       template: args.template as string | undefined,
+      merge: args.merge as string[] | undefined,
+      countersigner: args.countersigner as string | undefined,
       issue: Boolean(args.issue),
       json: Boolean(args.json),
     })
