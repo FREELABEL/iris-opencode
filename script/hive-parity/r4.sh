@@ -2,7 +2,7 @@
 # R4 (epic #192964): Desktop → Settings → Hive → "Allow access to this computer".
 #   ON  → this machine is online in `iris hive nodes list` on ANOTHER machine within 30 s.
 #   OFF → offline there within 30 s, and `iris hive send-input` to its sessions is refused.
-# Drives the switch through the Desktop engine route the toggle uses (GET/PUT /iris/hive/remote-access).
+# Drives the switch through the Desktop engine route the toggle uses (GET/POST /iris/hive/remote-access).
 # Exit 0 only when every step passes. Prints one JSON verdict.
 #   --baseline-stop   also measure today's nearest thing (stopping the daemon) — RED evidence only.
 cd "$(dirname "$0")" && source ./lib.sh
@@ -10,7 +10,7 @@ LIMIT=30; BASELINE=0; [ "${1:-}" = --baseline-stop ] && BASELINE=1
 why=(); steps=()
 NODE=$(local_node_id); [ -z "$NODE" ] && NODE="$(hostname -s)"
 read -r E AUTH < <(engine) || true
-put() { curl -s -m 120 -u "$AUTH" -H 'content-type: application/json' -X PUT -d "{\"allow\":$1}" "$E/iris/hive/remote-access"; }
+put() { curl -s -m 120 -u "$AUTH" -H 'content-type: application/json' -X POST -d "{\"allow\":$1}" "$E/iris/hive/remote-access"; }
 
 code=$( [ -n "${E:-}" ] && curl -s -m 5 -o /dev/null -w '%{http_code}' -u "$AUTH" "$E/iris/hive/remote-access" || echo none)
 steps+=("\"switch_route\": \"$code\"")

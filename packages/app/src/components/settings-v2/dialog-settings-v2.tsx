@@ -12,6 +12,7 @@ import "./settings-v2.css"
 import { SettingsServersV2 } from "./servers"
 import { SettingsAccountV2 } from "./account"
 import { SettingsSecurityV2 } from "./security"
+import { SettingsHiveV2 } from "./hive"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLayout } from "@/context/layout"
 import { useTabs } from "@/context/tabs"
@@ -67,6 +68,10 @@ export const DialogSettings: Component<{
                       <Icon name="shield" />
                       Security
                     </TabsV2.Trigger>
+                    <TabsV2.Trigger value="hive">
+                      <Icon name="globe" />
+                      Hive
+                    </TabsV2.Trigger>
                     <TabsV2.Trigger value="general">
                       <Icon name="sliders" />
                       {language.t("settings.tab.general")}
@@ -108,6 +113,9 @@ export const DialogSettings: Component<{
         </TabsV2.Content>
         <TabsV2.Content value="security" class="settings-v2-panel">
           <SettingsSecurityV2 />
+        </TabsV2.Content>
+        <TabsV2.Content value="hive" class="settings-v2-panel">
+          <SettingsHiveV2 />
         </TabsV2.Content>
         <TabsV2.Content value="general" class="settings-v2-panel">
           <SettingsGeneralV2 sessionID={props.sessionID} />
