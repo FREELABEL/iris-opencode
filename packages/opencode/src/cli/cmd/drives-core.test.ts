@@ -183,7 +183,19 @@ describe("seal / unseal", () => {
   })
 
   // Cross-language: the Python in production must open ours, and we must open its.
-  const PY = process.env.DRIVE_SCAN_PY ?? "/home/siralexmayo/work/freelabel/scripts/drives/drive_scan.py"
+  // A manifest RECORDED from the Python tool always runs, so this file proves interop on every machine,
+  // not only one that happens to have the Python checked out. The live round-trip below runs when
+  // DRIVE_SCAN_PY points at scripts/drives/drive_scan.py.
+  test("a manifest sealed by drive_scan.py (recorded fixture) opens here", async () => {
+    const fx = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.json"), "utf8"))
+    const text = fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.txt"), "utf8")
+    const [head, body] = [text.slice(0, text.indexOf("\n")), text.slice(text.indexOf("\n") + 1).trim()]
+    expect(head).toBe("iris-drive-manifest-v1")
+    const out = new TextDecoder().decode(await unseal(Buffer.from(body, "base64"), fx.key_hex))
+    expect(out).toBe(fx.plaintext)
+  })
+
+  const PY = process.env.DRIVE_SCAN_PY ?? ""
   const havePy =
     fs.existsSync(PY) && spawnSync("python3", ["-c", "import cryptography"], { encoding: "utf8" }).status === 0
   const py = (code: string) =>
@@ -235,5 +247,84 @@ describe("diskutil info -plist (hand-written fixture, not a recorded capture)", 
     expect(diskFactsFromPlist({ FileVault: true, Encrypted: false }).encrypted).toBe(true)
     expect(diskFactsFromPlist({ Encrypted: false }).encrypted).toBe(false)
     expect(driveIdFromDisk(diskFactsFromPlist({ DeviceNode: "/dev/disk6s1" }))).toBe("fs:_dev_disk6s1")
+  })
+})
+
+// #192974 — parity with drive_scan.py on a Mac drive. An installed app carries its own certs and
+// keys (Foo.app/Contents/Resources/*.pem): they are the vendor's, not ours, and must not be
+// findings. macOS also leaves suffixed copies of its system folders (.DocumentRevisions-V100-bad,
+// .Spotlight-V100.old) that are skipped by PREFIX. Both tools walk one fixture and must agree.
+describe("interop fixture: app bundles and macOS system folders (#192974)", () => {
+  let root: string
+  beforeAll(() => {
+    root = path.join(tmp, "mac-volume")
+    const put = (rel: string, bytes = 10) => {
+      const p = path.join(root, rel)
+      fs.mkdirSync(path.dirname(p), { recursive: true })
+      fs.writeFileSync(p, Buffer.alloc(bytes, 1))
+    }
+    put("Applications/Zoom.app/Contents/Resources/cacert.pem", 500)
+    put("Applications/Zoom.app/Contents/Frameworks/ssl.framework/Versions/A/server.key", 300)
+    put("Library/Foo.framework/Resources/client.p12")
+    put("Library/Audio/Plug-Ins/Thing.plugin/Contents/Resources/id_rsa")
+    put("Library/Thing.bundle/Contents/.env")
+    put("Library/Extensions/Driver.kext/Contents/key.pem")
+    put(".DocumentRevisions-V100-bad/PerUID/501/dump.sql")
+    put(".Spotlight-V100.old/Store-V2/credentials.json")
+    put(".TemporaryItems.1/folders.501/.env")
+    put(".fseventsd-uuid/backup.sql")
+    put("Clients/site/.env")
+    put("Footage/A001.mov", 1000)
+  })
+
+  const tsWalk = () => [...walk(root, { store: "/nonexistent" })].sort((a, b) => (a.rel < b.rel ? -1 : 1))
+
+  test("an app bundle is ONE item, never walked; macOS system folders are skipped by prefix", () => {
+    const rows = tsWalk()
+    expect(rows.map((r) => r.rel)).toEqual([
+      "Applications/Zoom.app",
+      "Clients/site/.env",
+      "Footage/A001.mov",
+      "Library/Audio/Plug-Ins/Thing.plugin",
+      "Library/Extensions/Driver.kext",
+      "Library/Foo.framework",
+      "Library/Thing.bundle",
+    ])
+    expect(rows.find((r) => r.rel === "Applications/Zoom.app")).toMatchObject({ bytes: 0, kind: "other" })
+  })
+
+  test("the only finding is our own credential — 0 from bundles and system folders", () => {
+    const r = new Rollup(2)
+    for (const e of tsWalk()) r.add(e)
+    expect(r.findings.map((f) => f.path)).toEqual(["Clients/site/.env"])
+  })
+
+  // A manifest RECORDED from the Python tool always runs, so this file proves interop on every machine,
+  // not only one that happens to have the Python checked out. The live round-trip below runs when
+  // DRIVE_SCAN_PY points at scripts/drives/drive_scan.py.
+  test("a manifest sealed by drive_scan.py (recorded fixture) opens here", async () => {
+    const fx = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.json"), "utf8"))
+    const text = fs.readFileSync(path.join(import.meta.dir, "drives-python-sealed.fixture.txt"), "utf8")
+    const [head, body] = [text.slice(0, text.indexOf("\n")), text.slice(text.indexOf("\n") + 1).trim()]
+    expect(head).toBe("iris-drive-manifest-v1")
+    const out = new TextDecoder().decode(await unseal(Buffer.from(body, "base64"), fx.key_hex))
+    expect(out).toBe(fx.plaintext)
+  })
+
+  const PY = process.env.DRIVE_SCAN_PY ?? ""
+  test.skipIf(!fs.existsSync(PY))("drive_scan.py walks the same fixture to the same items and findings", () => {
+    const r = spawnSync(
+      "python3",
+      [
+        "-c",
+        `import sys, json; sys.path.insert(0, ${JSON.stringify(path.dirname(PY))}); import drive_scan\n` +
+          `print(json.dumps(sorted([[rel, kind] for rel, _b, _m, kind in drive_scan.walk(${JSON.stringify(root)})])))`,
+      ],
+      { encoding: "utf8" },
+    )
+    expect(r.stderr).toBe("")
+    const py: Array<[string, string]> = JSON.parse(r.stdout)
+    expect(py).toEqual(tsWalk().map((e) => [e.rel, e.kind]))
+    expect(py.filter(([, k]) => k === "credential" || k === "db-dump").map(([rel]) => rel)).toEqual(["Clients/site/.env"])
   })
 })

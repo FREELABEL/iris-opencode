@@ -1,8 +1,13 @@
 import { describe, test, expect } from "bun:test"
+import { spawnSync } from "child_process"
 import fs from "fs"
 import os from "os"
 import path from "path"
-import { uploadManifest, type ManifestDeps, type UploadResult } from "./platform-drives"
+import {
+  uploadManifest, resolveDrivesBoard, requireDrivesBoard, scanSummary, NO_DRIVES_YET,
+  type ManifestDeps, type UploadResult, type BoardApi,
+} from "./platform-drives"
+import { DRIVES_DATASETS } from "./drives-core"
 
 /**
  * #192927 follow-up. Attachments are stored at cloud-files/<unix-second>_<filename>, so two
@@ -55,4 +60,132 @@ describe("uploadManifest", () => {
     expect(fs.readdirSync(h.dir)).toEqual(["files.tsv"]) // the temp ciphertext is cleaned up
     fs.rmSync(h.dir, { recursive: true, force: true })
   })
+})
+
+// ── #192974: a client never types an internal id ─────────────────────────────────
+
+function fakeBoards(boards: Array<{ id: number; name: string; is_owner: boolean }>, existing: string[] = []) {
+  const calls: string[] = []
+  const api: BoardApi = {
+    list: async () => { calls.push("list"); return boards },
+    createBoard: async (name) => { calls.push(`board:${name}`); return 4242 },
+    createDataset: async (slug, _name, fields, bloq) => {
+      calls.push(`dataset:${slug}@${bloq}:${fields.length}`)
+      return existing.includes(slug) ? "exists" : "created"
+    },
+  }
+  return { api, calls }
+}
+
+describe("resolveDrivesBoard", () => {
+  test("finds the user's own board named Drives — no create, no datasets touched", async () => {
+    const { api, calls } = fakeBoards([
+      { id: 7, name: "Drives", is_owner: false }, // shared with me, not mine
+      { id: 12, name: "Drives", is_owner: true },
+    ])
+    expect(await resolveDrivesBoard(api, { create: false })).toEqual({ id: 12, created: false })
+    expect(calls).toEqual(["list"])
+  })
+
+  test("accepts an existing 'IRIS Drives' board (early users)", async () => {
+    const { api } = fakeBoards([{ id: 905, name: "IRIS Drives", is_owner: true }, { id: 823, name: "Redwalrus Drive — Inventory", is_owner: true }])
+    expect(await resolveDrivesBoard(api, { create: false })).toEqual({ id: 905, created: false })
+  })
+
+  test("--bloq / IRIS_DRIVES_BLOQ still override, without a lookup", async () => {
+    const { api, calls } = fakeBoards([{ id: 905, name: "IRIS Drives", is_owner: true }])
+    expect(await resolveDrivesBoard(api, { override: 31, create: false })).toEqual({ id: 31, created: false })
+    expect(calls).toEqual([])
+  })
+
+  test("not found + scan → creates the board and all three datasets with the playbook's fields", async () => {
+    const { api, calls } = fakeBoards([{ id: 3, name: "Music", is_owner: true }])
+    expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
+    expect(calls).toEqual(["list", "board:Drives", "dataset:drives@4242:16", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9"])
+    expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings"])
+    // the manifest key must never be readable by anyone the board is shared with
+    expect(DRIVES_DATASETS[0].fields.find((f: any) => f.key === "manifest_key")).toMatchObject({ visibility: "private" })
+  })
+
+  test("found + scan → the datasets are made sure of (repairs a half-set-up board), nothing new created", async () => {
+    const { api, calls } = fakeBoards([{ id: 905, name: "IRIS Drives", is_owner: true }], ["drives", "drive-folders", "drive-findings"])
+    expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 905, created: false })
+    expect(calls.filter((c) => c.startsWith("board:"))).toEqual([])
+  })
+
+  test("'already exists for this bloq' is success", async () => {
+    const { api } = fakeBoards([], ["drives", "drive-folders", "drive-findings"])
+    expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
+  })
+
+  test("not found + find/list/path → null (nothing created)", async () => {
+    const { api, calls } = fakeBoards([])
+    expect(await resolveDrivesBoard(api, { create: false })).toBeNull()
+    expect(calls).toEqual(["list"])
+  })
+
+  test("requireDrivesBoard: none found prints the plain next step and exits non-zero", async () => {
+    const { api } = fakeBoards([])
+    const errs: string[] = []
+    const origErr = console.error
+    const origExit = process.exit
+    console.error = (...a: any[]) => { errs.push(a.join(" ")) }
+    ;(process as any).exit = (code: number) => { throw new Error(`exit ${code}`) }
+    try {
+      await expect(requireDrivesBoard(api, undefined, { create: false })).rejects.toThrow("exit 1")
+    } finally {
+      console.error = origErr
+      ;(process as any).exit = origExit
+    }
+    expect(errs.join("\n")).toContain(NO_DRIVES_YET)
+    expect(NO_DRIVES_YET).toBe("No drives cataloged yet — run: iris drives scan <drive or folder>")
+    expect(errs.join("\n")).not.toMatch(/bloq|IRIS_DRIVES_BLOQ/i)
+  })
+})
+
+// ── #192974: scan speaks client, not developer ───────────────────────────────────
+
+describe("scanSummary", () => {
+  test("one line a client can act on", () => {
+    expect(scanSummary({ label: "Studio footage", files: 60072, bytes: 3.0e12, folders: 21, sensitive: 292, encrypted: false })).toBe(
+      "Cataloged 'Studio footage': 60,072 files · 3.0 TB · 21 project folders · 292 sensitive files (drive NOT encrypted — run: iris drives list to review)",
+    )
+    expect(scanSummary({ label: "BK-03", files: 1, bytes: 5e8, folders: 1, sensitive: 0, encrypted: true })).toBe(
+      "Cataloged 'BK-03': 1 file · 500 MB · 1 project folder · no sensitive files",
+    )
+    expect(scanSummary({ label: "BK-03", files: 9, bytes: 2e9, folders: 2, sensitive: 1, encrypted: true })).toBe(
+      "Cataloged 'BK-03': 9 files · 2.0 GB · 2 project folders · 1 sensitive file (drive encrypted — contained)",
+    )
+  })
+})
+
+describe("iris drives scan output (runs the CLI, dry run, signed out)", () => {
+  const entry = path.join(import.meta.dir, "..", "..", "index.ts")
+  function run(...extra: string[]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "iris-drives-home-"))
+    const vol = path.join(home, "Footage")
+    fs.mkdirSync(path.join(vol, "Shoot"), { recursive: true })
+    fs.writeFileSync(path.join(vol, "Shoot", "A001.mov"), "x")
+    fs.writeFileSync(path.join(vol, "Shoot", ".env"), "x")
+    const env: Record<string, string> = { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" } as any
+    for (const k of Object.keys(env)) if (/^(IRIS_|XDG_)/.test(k)) delete env[k] // signed out: no token anywhere
+    const r = spawnSync(process.execPath, ["run", entry, "drives", "scan", vol, "--dry-run", ...extra], { encoding: "utf8", env, timeout: 120_000 })
+    fs.rmSync(home, { recursive: true, force: true })
+    return { out: `${r.stdout}\n${r.stderr}`, status: r.status }
+  }
+
+  test("default: no drive id, no local manifest path, no Atlas row counts", () => {
+    const { out, status } = run()
+    expect(status).toBe(0)
+    expect(out).toContain("Would catalog 'Footage': 2 files · under 1 MB · 1 project folder · 1 sensitive file (drive NOT encrypted")
+    expect(out).not.toMatch(/\b(fs|dir):/)
+    expect(out).not.toContain("files.tsv")
+    expect(out).not.toMatch(/atlas drive-|rows →/)
+  }, 120_000)
+
+  test("--verbose prints the old detail", () => {
+    const { out } = run("--verbose")
+    expect(out).toMatch(/\bdir:/)
+    expect(out).toContain("files.tsv")
+  }, 120_000)
 })

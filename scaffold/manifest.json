@@ -45,6 +45,12 @@
       "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
     },
     {
+      "src": "how-to/iris-drives.md",
+      "dest": "how-to/iris-drives.md",
+      "managed": true,
+      "purpose": "Catalog your drives (iris drives): find any file without plugging the drive in, catch sensitive files on unencrypted drives, encrypt them, and keep two copies of camera cards."
+    },
+    {
       "src": "how-to/atlas-local-copy.md",
       "dest": "how-to/atlas-local-copy.md",
       "managed": true,

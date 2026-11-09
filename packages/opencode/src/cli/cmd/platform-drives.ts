@@ -20,12 +20,12 @@ import os from "os"
 import path from "path"
 import { spawnSync } from "child_process"
 import { cmd } from "./cmd"
-import { irisFetch, requireAuth, requireUserId, dim, warn } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveToken, warn } from "./iris-api"
 import { listBloqFiles, uploadFileVerified } from "./platform-atlas-files"
 import {
   STORE, walk, Rollup, manifestRow, TSV_HEADER, tsvRow, seal, unseal, manifestFileText, parseManifestFile,
   manifestTitle, storeDirName, parsePlist, diskFactsFromPlist, driveIdFromDisk, parseTsv, mostCommon,
-  round, todayIso, splitRef,
+  round, todayIso, splitRef, DRIVES_BOARD_NAMES, DRIVES_BOARD_DESCRIPTION, DRIVES_DATASETS,
 } from "./drives-core"
 
 const KIND_CHOICES = ["backup-drive", "media-drive", "archive-folder", "other"] as const
@@ -40,15 +40,124 @@ function sh(...cmdline: string[]): string {
   }
 }
 
-function resolveBloq(flag: unknown): number | null {
+/** --bloq / IRIS_DRIVES_BLOQ: an override for people who keep the catalog on another board. */
+function overrideBloq(flag: unknown): number | undefined {
   const v = flag ?? process.env.IRIS_DRIVES_BLOQ
   const n = Number(v)
-  return v != null && v !== "" && Number.isFinite(n) && n > 0 ? n : null
+  return v != null && v !== "" && Number.isFinite(n) && n > 0 ? n : undefined
 }
 
-function noBloq(): never {
-  console.error("  No Drives bloq. Pass --bloq <id> or set IRIS_DRIVES_BLOQ (the board your drives catalog lives on).")
-  process.exit(1)
+// ── the user's Drives board, found by name (#192974) ─────────────────────────────
+//
+// A client never types an internal id. The board is the one they own named "Drives" (or
+// "IRIS Drives", for accounts that set up early). The first `scan` creates it and its three
+// datasets exactly as the iris-drives playbook's setup step does. It is one API call to find,
+// so it is resolved on every run rather than cached somewhere that could go stale.
+
+export const NO_DRIVES_YET = "No drives cataloged yet — run: iris drives scan <drive or folder>"
+
+export type BoardApi = {
+  list: () => Promise<Array<{ id: number; name: string; is_owner?: boolean }>>
+  createBoard: (name: string, description: string) => Promise<number>
+  /** "exists" = the dataset is already on this board ("already exists for this bloq"): success. */
+  createDataset: (slug: string, name: string, fields: any[], bloq: number) => Promise<"created" | "exists">
+}
+
+function liveBoardApi(userId: number): BoardApi {
+  const failure = async (res: Response) => {
+    const t = (await res.text()).trim()
+    let msg = t
+    try {
+      const j = JSON.parse(t)
+      msg = j?.message ?? j?.error ?? t
+    } catch {}
+    return `HTTP ${res.status} ${String(msg).slice(0, 200)}`
+  }
+  return {
+    list: async () => {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=1&per_page=500`)
+      if (!res.ok) throw new Error(await failure(res))
+      const body = (await res.json()) as any
+      return Array.isArray(body?.data) ? body.data : Array.isArray(body?.data?.data) ? body.data.data : []
+    },
+    createBoard: async (name, description) => {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, { method: "POST", body: JSON.stringify({ name, description }) })
+      if (!res.ok) throw new Error(await failure(res))
+      const body = (await res.json()) as any
+      const id = Number((body?.data?.bloq ?? body?.data ?? body)?.id)
+      if (!(id > 0)) throw new Error("the new board came back without an id")
+      return id
+    },
+    createDataset: async (slug, name, fields, bloq) => {
+      const res = await irisFetch("/api/v1/atlas/schemas", {
+        method: "POST",
+        body: JSON.stringify({ name, slug, bloq_id: bloq, fields: { fields } }),
+      })
+      if (res.ok) return "created"
+      const why = await failure(res)
+      if (/already exists/i.test(why)) return "exists"
+      throw new Error(why)
+    },
+  }
+}
+
+export function pickDrivesBoard(boards: Array<{ id: number; name: string; is_owner?: boolean }>): number | null {
+  for (const want of DRIVES_BOARD_NAMES) {
+    const mine = boards
+      .filter((b) => b?.is_owner === true && String(b.name ?? "").trim().toLowerCase() === want.toLowerCase())
+      .map((b) => Number(b.id))
+      .sort((a, b) => a - b)
+    if (mine.length) return mine[0]
+  }
+  return null
+}
+
+/**
+ * The board this account's drives live on. `create` (scan only): make the board if there is none,
+ * and make sure its three datasets exist — "already exists" counts as done.
+ */
+export async function resolveDrivesBoard(
+  api: BoardApi,
+  opts: { override?: number; create: boolean },
+): Promise<{ id: number; created: boolean } | null> {
+  if (opts.override) return { id: opts.override, created: false }
+  let id = pickDrivesBoard(await api.list())
+  let created = false
+  if (id == null) {
+    if (!opts.create) return null
+    id = await api.createBoard(DRIVES_BOARD_NAMES[0], DRIVES_BOARD_DESCRIPTION)
+    created = true
+  }
+  if (opts.create) for (const d of DRIVES_DATASETS) await api.createDataset(d.slug, d.name, d.fields, id)
+  return { id, created }
+}
+
+/** resolveDrivesBoard, or a plain sentence and a non-zero exit. */
+export async function requireDrivesBoard(api: BoardApi, override: number | undefined, opts: { create: boolean }): Promise<number> {
+  let board: { id: number; created: boolean } | null
+  try {
+    board = await resolveDrivesBoard(api, { override, create: opts.create })
+  } catch (e: any) {
+    console.error(
+      opts.create
+        ? `  Could not set up your Drives catalog in Atlas (${e?.message ?? e}). Check your connection and run the scan again.`
+        : `  Could not reach your IRIS account to find your drives (${e?.message ?? e}). Check your connection and try again.`,
+    )
+    return process.exit(1)
+  }
+  if (!board) {
+    console.error(`  ${NO_DRIVES_YET}`)
+    return process.exit(1)
+  }
+  if (board.created) console.log("  Set up your Drives catalog in Atlas — every drive you scan is listed there.")
+  return board.id
+}
+
+async function signedIn(): Promise<number> {
+  if (!(await requireAuth())) process.exit(1)
+  const userId = await requireUserId()
+  if (!userId) process.exit(1)
+  return userId
 }
 
 // ── identity ─────────────────────────────────────────────────────────────────
@@ -226,7 +335,7 @@ function liveDeps(userId: number, bloq: number): ManifestDeps {
  *
  * Platform bug (2026-11-09): attachments are stored at cloud-files/<unix-second>_<filename> with
  * no owner or random part, so two uploads of one filename in the same second share ONE object —
- * the second reads back as the first, and deleting either deletes both. That destroyed BK-03's
+ * the second reads back as the first, and deleting either deletes both. That destroyed a real drive's
  * manifest. So: a random filename per upload, and anything short of `verified === true` is a
  * failed upload — no record points at it and nothing older is removed.
  */
@@ -287,53 +396,89 @@ function unreadableHint(): string {
     : "re-run as a user that can read them (sudo for a drive formatted on a Mac)"
 }
 
+/** "3.0 TB" / "512.4 GB" — decimal units, as the drive's own box says. */
+export function formatSize(bytes: number): string {
+  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
+  return bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : "under 1 MB"
+}
+
+const plural = (n: number, one: string, many = one + "s") => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
+
+/** The one line a client reads after a scan (#192974). Developer detail is behind --verbose. */
+export function scanSummary(s: { label: string; files: number; bytes: number; folders: number; sensitive: number; encrypted: boolean }): string {
+  const head = `Cataloged '${s.label}': ${plural(s.files, "file")} · ${formatSize(s.bytes)} · ${plural(s.folders, "project folder")}`
+  if (!s.sensitive) return `${head} · no sensitive files`
+  return `${head} · ${plural(s.sensitive, "sensitive file")} ` +
+    (s.encrypted ? "(drive encrypted — contained)" : "(drive NOT encrypted — run: iris drives list to review)")
+}
+
+const HOWTO = "Step by step, including how to encrypt a drive: iris how-to view iris-drives"
+const BLOQ_OPTION = { type: "number", alias: "atlas-bloq", describe: "advanced: use this board id instead of your Drives board (or set IRIS_DRIVES_BLOQ)" } as const
+
 const ScanCommand = cmd({
   command: "scan <path>",
-  describe: "catalog a drive or folder into Atlas (encrypted per-file manifest + folder and finding rows)",
+  describe: "catalog a drive or folder: a searchable, encrypted list of what is on it, and any sensitive files",
   builder: (y) =>
     y
-      .positional("path", { type: "string", demandOption: true, describe: "mount point or folder" })
-      .option("label", { type: "string", describe: "name for the drive (default: volume label or folder name)" })
+      .positional("path", { type: "string", demandOption: true, describe: "the drive or folder, e.g. /Volumes/Footage (Mac), E:\\ (Windows)" })
+      .option("label", { type: "string", describe: "a name for the drive (default: its volume name or folder name)" })
       .option("kind", { type: "string", choices: KIND_CHOICES as unknown as string[], default: "media-drive" })
-      .option("exclude", { type: "string", array: true, default: [] as string[], describe: "private folder (relative): never opened or indexed; remembered on the drive in Atlas" })
-      .option("depth", { type: "number", default: 2, describe: "folder rollup depth" })
-      .option("bloq", { type: "number", alias: "atlas-bloq", describe: "Drives bloq id (default: $IRIS_DRIVES_BLOQ)" })
-      .option("dry-run", { type: "boolean", default: false, describe: "scan and write the local manifest, send nothing" }),
+      .option("exclude", { type: "string", array: true, default: [] as string[], describe: "a private folder on the drive (relative): never opened or listed; remembered for every later scan" })
+      .option("depth", { type: "number", default: 2, describe: "how many folder levels count as a project folder" })
+      .option("bloq", BLOQ_OPTION)
+      .option("dry-run", { type: "boolean", default: false, describe: "scan and show the result, send nothing to your account" })
+      .option("verbose", { type: "boolean", default: false, describe: "also print the drive id, the local file list's path and each Atlas write" })
+      .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac (see your drives with: ls /Volumes)")
+      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example('$0 drives scan ~/Projects --label "Client projects" --kind archive-folder', "catalog a folder on this computer")
+      .example('$0 drives scan /Volumes/Backup --exclude Personal/Family --exclude Taxes', "keep private folders out — never opened, remembered next time")
+      .epilogue(HOWTO),
   async handler(args) {
+    const verbose = args.verbose === true
+    const detail = (line: string) => { if (verbose) console.log(line) }
+    const dryRun = args["dry-run"] === true
     const root = fs.existsSync(String(args.path)) ? fs.realpathSync(String(args.path)) : path.resolve(String(args.path))
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-      console.error(`not a folder: ${root}`)
+      console.error(`  Cannot see ${root} — is the drive plugged in?` + (process.platform === "darwin" ? " Your drives are listed by: ls /Volumes" : ""))
       process.exit(1)
     }
-    const bloq = resolveBloq(args.bloq)
-    if (!bloq && !args["dry-run"]) noBloq()
+    const override = overrideBloq(args.bloq)
+
+    // Private folders are remembered IN ATLAS on the drive's record, so a scan from any machine
+    // inherits them. Unreadable Atlas = refuse; a privacy promise is not kept from a local guess.
+    let bloq: number | null = null
+    let userId: number | null = null
+    if (!dryRun) {
+      userId = await signedIn()
+      bloq = await requireDrivesBoard(liveBoardApi(userId), override, { create: true })
+    } else if (await resolveToken()) {
+      userId = await signedIn()
+      bloq = (await resolveDrivesBoard(liveBoardApi(userId), { override, create: false }).catch(() => null))?.id ?? null
+    }
     const [driveId, facts] = identify(root, args.label as string | undefined)
     const out = path.join(STORE(), storeDirName(driveId))
     fs.mkdirSync(out, { recursive: true })
     const today = todayIso()
 
-    // Private folders are remembered IN ATLAS on the drive's record, so a scan from any machine
-    // inherits them. Unreadable Atlas = refuse; a privacy promise is not kept from a local guess.
-    let userId: number | null = null
     let remembered: string[] = []
     if (bloq) {
-      if (!(await requireAuth())) process.exit(1)
-      userId = await requireUserId()
-      if (!userId) process.exit(1)
       try {
         for (const d of await atlasDrives(bloq)) {
           if (d.external_id === driveId) remembered = String(d.private_excluded ?? "").split("\n").filter((x) => x.trim())
         }
       } catch (e: any) {
-        console.error(`cannot read this drive's private-folder list from Atlas (${e?.message ?? e}) — refusing to scan blind`)
+        console.error(`  Could not read this drive's private-folder list from your account (${e?.message ?? e}).`)
+        console.error("  Not scanning, so a folder you made private is never read by mistake. Check your connection and run it again.")
         process.exit(1)
       }
-    } else {
-      console.log(warn("  no Drives bloq: folders made private on another machine are NOT applied to this dry run"))
+    } else if (dryRun) {
+      console.log(warn("  Not checked against your account: folders made private from another computer are not applied to this dry run."))
     }
     const exclude = [...new Set([...(args.exclude as string[]), ...remembered])].sort()
-    console.log(`scanning ${root}\n  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted ? "True" : "False"}`)
-    if (exclude.length) console.log(`  never opened (private): ${exclude.length} folder(s)`)
+    console.log(`Scanning ${facts.label} (${root})`)
+    detail(`  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted ? "True" : "False"}`)
+    if (exclude.length) console.log(`  Private folders skipped, never opened: ${exclude.length}`)
 
     const rollup = new Rollup(Number(args.depth))
     const unreadable: string[] = []
@@ -367,20 +512,24 @@ const ScanCommand = cmd({
     )
     driveRow.unreadable_folders = unreadable.length
 
-    console.log(
+    detail(
       `  ${rollup.files.toLocaleString("en-US")} files · ${(rollup.total / 1e9).toFixed(1)} GB · ${rollup.folders.size.toLocaleString("en-US")} folders · ${rollup.findings.length} sensitive (${status})`,
     )
     if (unreadable.length) {
       console.log(warn(`  ⚠ INCOMPLETE: ${unreadable.length} folder(s) could not be read — the catalog is missing them:`))
       for (const u of unreadable.slice(0, 8)) console.log(`     ${u}`)
-      if (unreadable.length > 8) console.log(`     … and ${unreadable.length - 8} more (all listed in ${path.join(out, "drive.json")})`)
+      if (unreadable.length > 8) console.log(`     … and ${unreadable.length - 8} more` + (verbose ? ` (all listed in ${path.join(out, "drive.json")})` : ""))
       console.log(`     ${unreadableHint()}`)
     }
-    console.log("  " + mostCommon(rollup.kinds()).map(([k, c]) => `${k} ${c.toLocaleString("en-US")}`).join(" · "))
-    console.log(`  manifest: ${tsvPath}`)
+    if (rollup.files) console.log("  Mostly: " + mostCommon(rollup.kinds()).map(([k, c]) => `${k} ${c.toLocaleString("en-US")}`).join(" · "))
+    detail(`  manifest: ${tsvPath}`)
+    const summary = scanSummary({
+      label: facts.label, files: rollup.files, bytes: rollup.total, folders: rollup.folders.size,
+      sensitive: rollup.findings.length, encrypted: facts.encrypted,
+    })
 
-    if (args["dry-run"] || !bloq || !userId) {
-      console.log("  (not sent to Atlas — pass --bloq and drop --dry-run)")
+    if (dryRun || !bloq || !userId) {
+      console.log(`Dry run — nothing was sent to your account. ${summary.replace(/^Cataloged/, "Would catalog").replace(" — run: iris drives list to review", "")}`)
       return
     }
     // Findings no longer on the drive are CLOSED (status moved), not left saying "exposed".
@@ -391,9 +540,10 @@ const ScanCommand = cmd({
       for (const r of gone) {
         await irisFetch(`/api/v1/atlas/datasets/drive-findings/${r.id}`, { method: "PATCH", body: JSON.stringify({ data: { status: "moved" } }) })
       }
-      if (gone.length) console.log(`  closed ${gone.length} finding(s) no longer on this drive`)
+      if (gone.length) console.log(`  ${plural(gone.length, "sensitive file")} from the last scan ${gone.length === 1 ? "is" : "are"} no longer on this drive — marked moved`)
     } catch (e: any) {
-      console.log(`  could not reconcile old findings: ${e?.message ?? e}`)
+      console.log(warn(`  Could not update the sensitive files found by the last scan: ${e?.message ?? e}`))
+      process.exitCode = 1
     }
     const { fid, key } = await uploadManifest(liveDeps(userId, bloq), driveId, tsvPath, today)
     if (fid && key) {
@@ -403,42 +553,65 @@ const ScanCommand = cmd({
       // Do not point the record at an unverified upload; keep whatever manifest it had.
       delete driveRow.manifest
       delete driveRow.manifest_key
+      console.log(warn("  Could not save the encrypted file list — this drive keeps its previous one. Run the scan again."))
+      process.exitCode = 1
     }
-    console.log(`  manifest in Atlas: ${fid ? driveRow.manifest : "UPLOAD FAILED — the drive keeps its previous manifest"}`)
+    detail(`  manifest in Atlas: ${fid ? driveRow.manifest : "UPLOAD FAILED — the drive keeps its previous manifest"}`)
+    const what: Record<string, string> = { drives: "the drive's card", "drive-folders": "the folder list", "drive-findings": "the sensitive-file list" }
     for (const [schema, rows] of [["drives", [driveRow]], ["drive-folders", folderRows], ["drive-findings", findingRows]] as const) {
-      if (!rows.length) { console.log(`  atlas ${schema}: nothing to send`); continue }
+      if (!rows.length) { detail(`  atlas ${schema}: nothing to send`); continue }
       try {
         const r = await importRows(schema, bloq, rows as any[])
-        console.log(`  atlas ${schema}: ${rows.length} rows → created ${r.created} · updated ${r.updated} · failed ${r.failed}`)
+        detail(`  atlas ${schema}: ${rows.length} rows → created ${r.created} · updated ${r.updated} · failed ${r.failed}`)
+        if (r.failed) {
+          console.log(warn(`  ${plural(r.failed, "row")} of ${what[schema]} could not be saved`))
+          process.exitCode = 1
+        }
       } catch (e: any) {
-        console.log(`  atlas ${schema}: IMPORT FAILED — ${String(e?.message ?? e).slice(0, 300)}`)
+        console.log(warn(`  Could not save ${what[schema]}: ${String(e?.message ?? e).slice(0, 300)}`))
         process.exitCode = 1
       }
     }
-    if (!fid) process.exitCode = 1
+    console.log(process.exitCode ? `Scanned '${facts.label}', but not everything was saved (see above). Run the scan again.` : summary)
   },
 })
 
+/** Every cataloged drive, or a plain sentence and a non-zero exit. */
+async function drivesOrExit(bloq: number): Promise<any[]> {
+  try {
+    return await atlasDrives(bloq)
+  } catch (e: any) {
+    console.error(`  Could not read your drives from your account (${e?.message ?? e}). Check your connection and try again.`)
+    return process.exit(1)
+  }
+}
+
 const FindCommand = cmd({
   command: "find <words..>",
-  describe: "search every cataloged drive's file list (works with the drive unplugged, on any signed-in machine)",
+  describe: "search every cataloged drive for a file — works with the drive unplugged, on any computer you sign in to",
   builder: (y) =>
     y
       .positional("words", { type: "string", array: true, demandOption: true })
       .option("limit", { type: "number", default: 8, describe: "matches shown per drive" })
-      .option("bloq", { type: "number", alias: "atlas-bloq", describe: "Drives bloq id (default: $IRIS_DRIVES_BLOQ)" }),
+      .option("bloq", BLOQ_OPTION)
+      .example("$0 drives find freetrap stems", "every file whose path has both words, on every drive")
+      .example("$0 drives find A001 .mov --limit 50", "more matches per drive")
+      .epilogue(HOWTO),
   async handler(args) {
-    const bloq = resolveBloq(args.bloq) ?? noBloq()
-    if (!(await requireAuth())) process.exit(1)
-    const userId = await requireUserId()
-    if (!userId) process.exit(1)
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
     const words = (args.words as string[]).map((w) => String(w).toLowerCase())
     const limit = Number(args.limit)
     let hits = 0
-    for (const drive of await atlasDrives(bloq)) {
-      const text = await cachedManifest(userId, bloq, drive)
-      if (!text) { console.log(`\n${drive.label}: no manifest in Atlas yet — scan it`); continue }
-      const state = online(drive) ? "connected to this machine" : "not connected here — found from its Atlas manifest"
+    const drives = await drivesOrExit(bloq)
+    if (!drives.length) {
+      console.error(`  ${NO_DRIVES_YET}`)
+      process.exit(1)
+    }
+    for (const drive of drives) {
+      const text = await cachedManifest(userId, bloq, drive).catch(() => null)
+      if (!text) { console.log(`\n${drive.label}: not searchable yet — scan it again`); continue }
+      const state = online(drive) ? "connected to this computer" : "not connected here — found from its catalog"
       let shown = 0
       for (const row of parseTsv(text)) {
         const p = row.path.toLowerCase()
@@ -450,32 +623,48 @@ const FindCommand = cmd({
       }
       if (shown > limit) console.log(`  … and ${shown - limit} more on ${drive.label}`)
     }
-    if (!hits) console.log("nothing found on any cataloged drive")
+    if (!hits) console.log("Nothing found on any cataloged drive.")
+    else console.log(`\nWhere a file is on this computer right now: iris drives path <drive>:<path>   (iris drives list shows each drive)`)
   },
 })
 
 const PathCommand = cmd({
   command: "path <ref>",
-  describe: "drive-id:relative/path → the real path on this machine, or exit 2 (not connected) / 3 (moved or deleted)",
+  describe: "where a cataloged file is on this computer right now — or exit 2 (drive not connected) / 3 (moved or deleted)",
   builder: (y) =>
     y
-      .positional("ref", { type: "string", demandOption: true, describe: "drive-id:relative/path" })
-      .option("bloq", { type: "number", alias: "atlas-bloq", describe: "Drives bloq id (default: $IRIS_DRIVES_BLOQ)" }),
+      .positional("ref", { type: "string", demandOption: true, describe: "<drive>:<path inside the drive>, the drive as shown by iris drives list" })
+      .option("bloq", BLOQ_OPTION)
+      .example('$0 drives path "Studio footage:Shoot 12/A001.mov"', "the full path, if that drive is plugged into this computer")
+      .epilogue(HOWTO),
   async handler(args) {
-    const bloq = resolveBloq(args.bloq)
+    // Resolving the path needs only this computer; the catalog adds drive names. So an
+    // unreachable account is not fatal — but an account with no drives cataloged is.
     let labels: Record<string, string> = {}
-    if (bloq && (await requireAuth())) {
+    if (await resolveToken()) {
+      const userId = await signedIn()
+      let bloq: number | null = null
       try {
+        bloq = (await resolveDrivesBoard(liveBoardApi(userId), { override: overrideBloq(args.bloq), create: false }))?.id ?? null
+        if (bloq == null) {
+          console.error(`  ${NO_DRIVES_YET}`)
+          process.exit(1)
+        }
         for (const d of await atlasDrives(bloq)) labels[d.external_id] = d.label
       } catch {
         labels = {} // names are a nicety; resolving the path does not need Atlas
       }
     }
-    const [driveId, rel] = splitRef(String(args.ref), Object.keys(labels))
+    // A drive can be named by its label as well as its id.
+    const byLabel = Object.fromEntries(Object.entries(labels).map(([id, l]) => [String(l), id]))
+    let ref = String(args.ref)
+    const label = Object.keys(byLabel).sort((a, b) => b.length - a.length).find((l) => ref.startsWith(l + ":"))
+    if (label) ref = byLabel[label] + ref.slice(label.length)
+    const [driveId, rel] = splitRef(ref, Object.keys(labels))
     const mount = resolveMount(driveId)
     const name = labels[driveId] ?? driveId
     if (!mount) {
-      console.log(`not a valid path right now: ${name} is not connected to this machine`)
+      console.log(`Not a valid path right now: ${name} is not connected to this computer`)
       process.exit(2)
     }
     const full = path.join(mount, rel)
@@ -490,13 +679,16 @@ const PathCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "every drive cataloged in Atlas, and whether it is connected here",
-  builder: (y) => y.option("bloq", { type: "number", alias: "atlas-bloq", describe: "Drives bloq id (default: $IRIS_DRIVES_BLOQ)" }),
+  describe: "every cataloged drive: encrypted or not, sensitive files, connected here or not, last scanned",
+  builder: (y) => y.option("bloq", BLOQ_OPTION).example("$0 drives list", "your drives at a glance").epilogue(HOWTO),
   async handler(args) {
-    const bloq = resolveBloq(args.bloq) ?? noBloq()
-    if (!(await requireAuth())) process.exit(1)
-    const drives = await atlasDrives(bloq)
-    if (!drives.length) { console.log(dim(`  no drives cataloged on bloq ${bloq} yet — iris drives scan <mount>`)); return }
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const drives = await drivesOrExit(bloq)
+    if (!drives.length) {
+      console.error(`  ${NO_DRIVES_YET}`)
+      process.exit(1)
+    }
     for (const d of drives) {
       console.log(
         `${String(d.label).padEnd(24)} ${Number(d.files ?? 0).toLocaleString("en-US").padStart(9)} files  ${String(d.used_gb).padStart(8)} GB  ` +
@@ -510,13 +702,21 @@ const ListCommand = cmd({
 
 export const PlatformDrivesCommand = cmd({
   command: "drives",
-  describe: "catalog your drives in Atlas — scan, find a file on any drive, resolve its path, list",
+  describe: "catalog your drives — find any file without plugging the drive in, and catch sensitive files on unencrypted drives",
   builder: (y) =>
     y
       .command(ScanCommand)
       .command(FindCommand)
       .command(PathCommand)
       .command(ListCommand)
-      .demandCommand(1, "Specify: scan, find, path, list"),
+      .demandCommand(1, "Specify: scan, find, path, list")
+      .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
+      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example("$0 drives scan ~/Projects --label \"Client projects\"", "catalog a folder")
+      .example("$0 drives scan /Volumes/Backup --exclude Personal", "a private folder: never opened, remembered next time")
+      .example("$0 drives find freetrap stems", "which drive has it — plugged in or not")
+      .example('$0 drives path "Studio footage:Shoot 12/A001.mov"', "the real path, if that drive is plugged in here")
+      .example("$0 drives list", "every drive: encrypted?, sensitive files, connected here?")
+      .epilogue(HOWTO),
   async handler() {},
 })
