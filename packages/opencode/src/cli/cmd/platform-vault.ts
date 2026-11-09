@@ -29,7 +29,11 @@
  */
 
 import { cmd } from "./cmd"
-import { NodeVaultCommands } from "./platform-hive-vaults"
+import { NodeVaultCommands, daemonVaultLocked, readPassphrase } from "./platform-hive-vaults"
+import {
+  VaultUserError, loadEncryptedVaultModule, findEncryptedVault, openForUse,
+  encryptedPut, encryptedLs, encryptedGet, type EncryptedVaultModule,
+} from "./encrypted-vault-files"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { fetchNodes } from "./platform-hive-nodes"
 import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, detectLocalNodeId, type SshTarget } from "./hive-tailscale"
@@ -70,7 +74,7 @@ async function saveKey(vaultId: string, key: Buffer): Promise<void> {
 
 async function requireKey(vaultId: string): Promise<Buffer> {
   const k = (await loadKeys())[vaultId]
-  if (!k) throw new Error(`no key for vault ${vaultId} on this machine. Keys never sync — copy ~/.iris/vault-keys.json to a device you own, by hand.`)
+  if (!k) throw new VaultUserError(`no key for vault ${vaultId} on this machine. Keys never sync — copy ~/.iris/vault-keys.json to a device you own, by hand.`)
   return Buffer.from(k, "base64")
 }
 
@@ -78,7 +82,7 @@ async function loadMeta(id: string): Promise<VaultMeta> {
   return JSON.parse(await readFile(join(vaultDir(id), "vault.json"), "utf-8"))
 }
 
-async function resolveVault(nameOrId: string): Promise<VaultMeta> {
+async function findReplicated(nameOrId: string): Promise<VaultMeta | null> {
   if (existsSync(join(vaultDir(nameOrId), "vault.json"))) return loadMeta(nameOrId)
   let ids: string[] = []
   try { ids = await readdir(VAULT_ROOT) } catch { /* none yet */ }
@@ -88,7 +92,46 @@ async function resolveVault(nameOrId: string): Promise<VaultMeta> {
       if (m.name === nameOrId) return m
     } catch { /* skip malformed */ }
   }
-  throw new Error(`no vault named "${nameOrId}". Run: iris vault list`)
+  return null
+}
+
+/**
+ * One name, two kinds. A replicated vault (this file) wins a name clash, so existing replicated
+ * behaviour is unchanged; otherwise an encrypted PHI vault on THIS node (#192914 — `put` used to
+ * look only at replicated vaults, so a vault `list` showed could not be filled).
+ */
+type AnyVault =
+  | { kind: "replicated"; meta: VaultMeta }
+  | { kind: "encrypted"; entry: any; mod: EncryptedVaultModule }
+
+async function resolveAnyVault(nameOrId: string): Promise<AnyVault> {
+  const meta = await findReplicated(nameOrId)
+  if (meta) return { kind: "replicated", meta }
+  const mod = loadEncryptedVaultModule()
+  const entry = findEncryptedVault(mod, nameOrId)
+  if (mod && entry) return { kind: "encrypted", entry, mod }
+  throw new VaultUserError(`no vault named "${nameOrId}" on this machine. Run: iris hive vault list`)
+}
+
+/** Open an encrypted vault for this process, refusing a locked one with how to fix it. */
+async function openEncrypted(v: { entry: any; mod: EncryptedVaultModule }, argv: any) {
+  const fromStdin = !!argv["passphrase-stdin"]
+  return openForUse(v.mod, v.entry, {
+    daemonLocked: await daemonVaultLocked(v.entry.name),
+    passphrase: fromStdin || process.stdin.isTTY ? () => readPassphrase(false, fromStdin) : undefined,
+  })
+}
+
+/**
+ * Every failure of these commands ends here: one plain sentence on stderr (or one JSON object on
+ * stdout with --json) and exit 1. Before #192914 an unknown vault name reached the top-level
+ * handler and came out as "Unexpected error" plus a dump of the minified bundle.
+ */
+async function vaultFail(e: unknown, json: boolean): Promise<never> {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (json) await writeJson({ ok: false, error: msg })
+  else process.stderr.write(`error: ${msg}\n`)
+  process.exit(1)
 }
 
 async function latestManifest(id: string): Promise<VaultManifest | null> {
@@ -225,13 +268,52 @@ const PutCommand = cmd({
     .option("replicas", { describe: "override target replica count", type: "number" })
     .option("user", { describe: "ssh user on nodes", type: "string" })
     .option("user-id", { type: "number" })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    try {
+      const v = await resolveAnyVault(String(argv.vault))
+      if (v.kind === "encrypted") return await putEncrypted(v, argv)
+      await putReplicated(v.meta, argv)
+    } catch (e) {
+      await vaultFail(e, !!argv.json)
+    }
+  },
+})
+
+/**
+ * Encrypted PHI vault: encrypt on THIS machine with the vault's own key, store, read it back and
+ * compare SHA-256. Nothing leaves the node — an encrypted vault does not replicate.
+ */
+async function putEncrypted(v: { entry: any; mod: EncryptedVaultModule }, argv: any) {
+  const paths = ([] as string[]).concat(argv.path as any)
+  if (argv.as && paths.length > 1) throw new VaultUserError("--as names one file; pass a single path with it")
+  const entry = await openEncrypted(v, argv)
+  const results = await encryptedPut(v.mod, entry, paths.map((p) => ({ src: p, as: paths.length === 1 && argv.as ? String(argv.as) : undefined })))
+  const ok = results.every((r) => r.ok)
+  if (argv.json) {
+    await writeJson({ ok, vault: entry.name, encrypted: true, results })
+    if (!ok) process.exit(1)
+    return
+  }
+  console.log()
+  for (const r of results) {
+    if (!r.ok) { process.stderr.write(`error: ${r.path}: ${r.error}\n`); continue }
+    console.log(`  ${success("✓")} ${bold(r.vault_path!)}  ${dim(`${r.size} bytes · encrypted in ${entry.name}`)}`)
+    console.log(`     ${dim("sha256 " + r.sha256 + " — read back and verified")}`)
+  }
+  console.log(`  ${dim("Encrypted PHI vault: stays on this node, never replicated" + (argv.replicas != null ? " (--replicas ignored)" : "") + ".")}`)
+  if (entry.phi) console.log(`  ${dim(`PHI working copies are crypto-shredded after ${v.mod.retentionDays?.() ?? 30} days.`)}`)
+  console.log()
+  if (!ok) process.exit(1)
+}
+
+async function putReplicated(meta: VaultMeta, argv: any) {
+  {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const meta = await resolveVault(String(argv.vault))
     const key = await requireKey(meta.id)
     const replicas = Number(argv.replicas ?? meta.replicas)
     const paths = ([] as string[]).concat(argv.path as any)
@@ -323,8 +405,8 @@ const PutCommand = cmd({
     }
     console.log()
     if (results.some((r) => !r.ok)) process.exit(1)
-  },
-})
+  }
+}
 
 const GetCommand = cmd({
   command: "get <vault> <path>",
@@ -335,13 +417,35 @@ const GetCommand = cmd({
     .option("out", { describe: "output directory", type: "string", default: "." })
     .option("user", { type: "string" })
     .option("user-id", { type: "number" })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    try {
+      const v = await resolveAnyVault(String(argv.vault))
+      if (v.kind === "encrypted") {
+        const entry = await openEncrypted(v, argv)
+        const r = await encryptedGet(v.mod, entry, String(argv.path), String(argv.out))
+        if (argv.json) { await writeJson({ ok: true, encrypted: true, ...r }); return }
+        console.log()
+        console.log(`  ${success("✓")} ${bold(r.out)}  ${dim(`${r.size} bytes · decrypted on this machine`)}`)
+        console.log(`     ${dim("sha256 " + r.sha256 + " — every chunk authenticated (AES-256-GCM)")}`)
+        console.log(`     ${dim("This is plaintext of a PHI vault — delete it when you are done.")}`)
+        console.log()
+        return
+      }
+      await getReplicated(v.meta, argv)
+    } catch (e) {
+      await vaultFail(e, !!argv.json)
+    }
+  },
+})
+
+async function getReplicated(meta: VaultMeta, argv: any) {
+  {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const meta = await resolveVault(String(argv.vault))
     const key = await requireKey(meta.id)
     const man = await latestManifest(meta.id)
     const vpath = normalizePath(String(argv.path))
@@ -401,15 +505,39 @@ const GetCommand = cmd({
     console.log(`     ${dim("sha256 " + sha256(out) + " — matches the manifest")}`)
     if (fetchedFrom.length) console.log(`     ${dim("chunks fetched from: " + fetchedFrom.join(", "))}`)
     console.log()
-  },
-})
+  }
+}
 
 const LsCommand = cmd({
   command: "ls <vault>",
   describe: "list files in a vault",
-  builder: (y) => y.positional("vault", { type: "string", demandOption: true }).option("json", { type: "boolean", default: false }),
+  builder: (y) => y
+    .positional("vault", { type: "string", demandOption: true })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
+    .option("json", { type: "boolean", default: false }),
   async handler(argv) {
-    const meta = await resolveVault(String(argv.vault))
+    try {
+      const v = await resolveAnyVault(String(argv.vault))
+      if (v.kind === "encrypted") {
+        const entry = await openEncrypted(v, argv)
+        const files = await encryptedLs(v.mod, entry)
+        if (argv.json) { await writeJson({ ok: true, vault: entry.name, encrypted: true, files }); return }
+        console.log()
+        if (files.length === 0) console.log(`  ${dim("empty encrypted vault")}`)
+        for (const f of files) console.log(`  ${bold(f.name || f.file_id)}  ${dim(`${f.size} bytes · ${f.kind} · ${f.created_at} · ${f.file_id}`)}`)
+        console.log()
+        if (files.length) console.log(`  ${files.length} file(s) · encrypted on this node\n`)
+        return
+      }
+      await lsReplicated(v.meta, argv)
+    } catch (e) {
+      await vaultFail(e, !!argv.json)
+    }
+  },
+})
+
+async function lsReplicated(meta: VaultMeta, argv: any) {
+  {
     const man = await latestManifest(meta.id)
     const entries = Object.entries(man?.entries ?? {})
     if (argv.json) { await writeJson({ ok: true, vault: meta.name, seq: man?.seq ?? 0, files: entries.map(([p, e]) => ({ path: p, ...e })) }); return }
@@ -418,8 +546,8 @@ const LsCommand = cmd({
     for (const [p, e] of entries) console.log(`  ${bold(p)}  ${dim(`${e.size} bytes · ${e.chunks.length} chunk(s) · ${e.plain_sha256.slice(0, 12)}…`)}`)
     console.log()
     if (entries.length) console.log(`  ${entries.length} file(s) · manifest seq ${man?.seq}\n`)
-  },
-})
+  }
+}
 
 const StatusCommand = cmd({
   command: "status <vault>",
@@ -430,11 +558,34 @@ const StatusCommand = cmd({
     .option("user-id", { type: "number" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    try {
+      const v = await resolveAnyVault(String(argv.vault))
+      if (v.kind === "encrypted") {
+        // Needs no key: name, binding, lock state and counts are plaintext in the registry.
+        const s = v.mod.summary(v.entry)
+        const daemonLocked = await daemonVaultLocked(s.name)
+        const locked = daemonLocked ?? s.locked
+        if (argv.json) { await writeJson({ ok: true, ...s, locked, replicated: false }); return }
+        console.log()
+        console.log(`  ${bold(s.name)}  ${dim(`encrypted PHI vault · bloq ${s.bloq_id ?? "-"} · ${locked ? "locked" : "unlocked"} · key:${s.key_source}`)}`)
+        console.log(`     ${dim(`${s.files} file(s) · ${s.bytes} bytes · last write ${s.last_write_at ?? "never"}`)}`)
+        console.log(`  ${dim("Held by this node only — encrypted vaults never replicate; their keys never leave this machine.")}`)
+        console.log()
+        return
+      }
+      await statusReplicated(v.meta, argv)
+    } catch (e) {
+      await vaultFail(e, !!argv.json)
+    }
+  },
+})
+
+async function statusReplicated(meta: VaultMeta, argv: any) {
+  {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const meta = await resolveVault(String(argv.vault))
     const man = await latestManifest(meta.id)
     if (!man) { console.log(`\n  ${dim("vault is empty — nothing to replicate")}\n`); return }
 
@@ -483,8 +634,8 @@ const StatusCommand = cmd({
     console.log(`  ${dim("single-writer only · no key escrow · availability follows your devices being awake")}`)
     console.log()
     if (atRisk.length) process.exit(1)
-  },
-})
+  }
+}
 
 const VaultCommand = cmd({
   command: "vault",
