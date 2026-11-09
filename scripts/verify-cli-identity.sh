@@ -253,7 +253,10 @@ step "4. Is the published CLI release asset actually our CLI?"
 if ! command -v gh >/dev/null 2>&1; then
   warn release_asset_identity "gh is not installed — cannot audit the published release"
 else
-  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 30 --json tagName \
+  # Desktop releases (desktop-v*) share this list and can bury the newest CLI release: on
+  # 2026-11-09 v1.5.42 was 32nd, the old --limit 30 found nothing, and every desktop release
+  # since 1.18.182 failed promotion as "CLI IDENTITY DRIFT" (#192929). Look back far enough.
+  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 500 --json tagName \
         --jq '[.[] | select(.tagName | startswith("v1."))] | .[0].tagName' 2>/dev/null)"
   if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
     warn release_asset_identity "could not resolve the newest v1.* CLI release"
