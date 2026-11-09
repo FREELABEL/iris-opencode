@@ -155,26 +155,38 @@ export function buildNode(input: {
   children: RunNode[]
 }): RunNode {
   const { session, messages } = input
-  const calls = messages.flatMap((m) => m.parts.map(toCall).filter((c): c is RunCall => !!c))
-  const assistants = messages.filter((m) => m.info.role === "assistant")
+  // A run is the chat's LATEST turn: everything from the newest message a person (or a parent
+  // agent) sent. A chat opened two days ago and asked something now has been working for seconds,
+  // not two days — and the calls and sub-agents of earlier turns are not part of this run.
+  const asked = messages
+    .filter((m) => m.info.role === "user")
+    .map((m) => m.info.time?.created)
+    .filter((n): n is number => typeof n === "number")
+  const turnStart = asked.length ? Math.max(...asked) : undefined
+  const turn = turnStart === undefined ? messages : messages.filter((m) => (m.info.time?.created ?? 0) >= turnStart)
+  const calls = turn.flatMap((m) => m.parts.map(toCall).filter((c): c is RunCall => !!c))
+  const assistants = turn.filter((m) => m.info.role === "assistant")
   const last = assistants[assistants.length - 1]
   // Failed means the agent itself ended on an error (an aborted or errored turn) — a failed CALL it
   // recovered from is red on its row, not on the whole box.
   const state: AgentState = input.retrying ? "retry" : input.working ? "running" : last?.info.error ? "failed" : "done"
-  const cost = session.cost ?? assistants.reduce((sum, m) => sum + (m.info.cost ?? 0), 0)
-  const starts = [session.time?.created, ...calls.map((c) => c.start)].filter((n): n is number => typeof n === "number")
-  const ends = [last?.info.time?.completed, session.time?.updated, ...calls.map((c) => c.end)].filter((n): n is number => typeof n === "number")
+  const turnCost = assistants.reduce((sum, m) => sum + (m.info.cost ?? 0), 0)
+  const cost = turnStart === undefined ? (session.cost ?? turnCost) : turnCost
+  const starts = [turnStart ?? session.time?.created, ...calls.map((c) => c.start)].filter((n): n is number => typeof n === "number")
+  const ends = [last?.info.time?.completed, ...calls.map((c) => c.end)].filter((n): n is number => typeof n === "number")
+  const children = turnStart === undefined ? input.children : input.children.filter((c) => (c.start ?? 0) >= turnStart - 1000)
+  const anyModel = messages.find((m) => m.info.role === "assistant" && m.info.modelID)?.info.modelID
   return {
     id: session.id,
     agent: agentName(messages, session.title),
     task: taskTitle(session.title),
-    model: last?.info.modelID ?? assistants[0]?.info.modelID,
+    model: last?.info.modelID ?? anyModel,
     state,
     cost,
     start: starts.length ? Math.min(...starts) : undefined,
     end: state === "running" || state === "retry" ? undefined : ends.length ? Math.max(...ends) : undefined,
     calls,
-    children: [...input.children].sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
+    children: [...children].sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
   }
 }
 

@@ -52,6 +52,24 @@ describe("toCall / callLabel", () => {
 })
 
 describe("buildNode", () => {
+  test("a run is the chat's latest turn: an old chat asked again counts from the new message", () => {
+    const day = 24 * 60 * 60 * 1000
+    const now = 10 * day
+    const user = (t: number): RunMessage => ({ info: { role: "user", time: { created: t } }, parts: [] })
+    const old = assistant([tool("o", "bash", { status: "completed", title: "old ls", input: {}, output: "", time: { start: now - 2 * day + 10, end: now - 2 * day + 20 } })], { cost: 0.5, time: { created: now - 2 * day + 5, completed: now - 2 * day + 30 } })
+    const fresh = assistant([tool("n", "bash", { status: "running", title: "mdfind jimmy", input: {}, time: { start: now - 5000 } })], { cost: 0.001, time: { created: now - 9000 } })
+    const oldKid = buildNode({ session: { id: "ok", time: { created: now - 2 * day + 12 } }, messages: [], working: false, retrying: false, children: [] })
+    const newKid = buildNode({ session: { id: "nk", time: { created: now - 4000 } }, messages: [], working: true, retrying: false, children: [] })
+    const n = buildNode({
+      session: { id: "w", title: "Watching", cost: 0.501, time: { created: now - 2 * day } },
+      messages: [user(now - 2 * day), old, user(now - 10000), fresh],
+      working: true, retrying: false, children: [oldKid, newKid],
+    })
+    expect(n.start).toBe(now - 10000)
+    expect(n.calls.map((c) => c.label)).toEqual(["mdfind jimmy"])
+    expect(n.children.map((c) => c.id)).toEqual(["nk"])
+    expect(n.cost).toBe(0.001)
+  })
   const session = { id: "child", title: "Find session reports (@explore subagent)", parentID: "root", time: { created: 500, updated: 9000 } }
   const messages = [
     assistant([
