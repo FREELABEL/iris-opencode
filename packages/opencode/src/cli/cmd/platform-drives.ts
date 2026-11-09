@@ -202,28 +202,56 @@ async function importRows(schema: string, bloq: number, rows: any[]) {
 }
 
 /** Encrypt the per-file list, attach it to the board, remove this drive's older manifests. */
-async function uploadManifest(userId: number, bloq: number, driveId: string, tsvPath: string, today: string) {
+export type UploadResult = { ok: boolean; id?: number; verified?: boolean; error?: string }
+export type ManifestDeps = {
+  upload: (path: string, title: string) => Promise<UploadResult>
+  list: () => Promise<{ ok: true; files: Array<{ id: number; name: string; title?: string | null }> } | { ok: false; error: string }>
+  remove: (id: number) => Promise<unknown>
+}
+
+function liveDeps(userId: number, bloq: number): ManifestDeps {
+  return {
+    // uploadFileVerified is ok ONLY when the stored bytes were read back and matched.
+    upload: async (p, title) => {
+      const r = await uploadFileVerified(userId, bloq, p, { title })
+      return r.ok ? { ok: true, id: r.id, verified: true } : { ok: false, verified: false, error: r.error }
+    },
+    list: () => listBloqFiles(userId, bloq),
+    remove: (id) => irisFetch(`/api/v1/cloud-files/${id}`, { method: "DELETE" }),
+  }
+}
+
+/**
+ * Encrypt the per-file list, attach it to the board, remove this drive's older manifests.
+ *
+ * Platform bug (2026-11-09): attachments are stored at cloud-files/<unix-second>_<filename> with
+ * no owner or random part, so two uploads of one filename in the same second share ONE object —
+ * the second reads back as the first, and deleting either deletes both. That destroyed BK-03's
+ * manifest. So: a random filename per upload, and anything short of `verified === true` is a
+ * failed upload — no record points at it and nothing older is removed.
+ */
+export async function uploadManifest(deps: ManifestDeps, driveId: string, tsvPath: string, today: string) {
   const { blob, keyHex } = await seal(new Uint8Array(fs.readFileSync(tsvPath)))
-  const enc = tsvPath + ".enc.txt"
+  const enc = path.join(path.dirname(tsvPath), `manifest-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}.enc.txt`)
   fs.writeFileSync(enc, manifestFileText(blob))
   const title = manifestTitle(driveId)
   let fid: number
   try {
-    const up = await uploadFileVerified(userId, bloq, enc, { title: `${title} ${today}` })
-    if (!up.ok) {
-      console.log(`  manifest upload failed: ${up.error}`)
+    const up = await deps.upload(enc, `${title} ${today}`)
+    if (up.ok !== true || up.verified !== true || !up.id) {
+      console.log(`  manifest upload failed: ${up.error ?? `not verified (${JSON.stringify(up).slice(0, 160)})`}`)
       return { fid: null, key: null }
     }
     fid = up.id
   } finally {
     fs.rmSync(enc, { force: true })
   }
-  const listed = await listBloqFiles(userId, bloq)
+  const listed = await deps.list()
   if (listed.ok) {
     const old = listed.files.filter((f) => String(f.title ?? f.name ?? "").startsWith(title + " ") && f.id !== fid)
-    for (const f of old) await irisFetch(`/api/v1/cloud-files/${f.id}`, { method: "DELETE" })
+    for (const f of old) await deps.remove(f.id)
   }
-  return { fid, key: keyHex }
+  return { fid, key: keyHex as string }
 }
 
 /** Atlas is the truth; this machine caches only the CIPHERTEXT. Returns the decrypted TSV text, or null. */
@@ -367,10 +395,16 @@ const ScanCommand = cmd({
     } catch (e: any) {
       console.log(`  could not reconcile old findings: ${e?.message ?? e}`)
     }
-    const { fid, key } = await uploadManifest(userId, bloq, driveId, tsvPath, today)
-    driveRow.manifest = fid ? `atlas-file:${fid}` : ""
-    driveRow.manifest_key = key ?? ""
-    console.log(`  manifest in Atlas: ${driveRow.manifest || "UPLOAD FAILED"}`)
+    const { fid, key } = await uploadManifest(liveDeps(userId, bloq), driveId, tsvPath, today)
+    if (fid && key) {
+      driveRow.manifest = `atlas-file:${fid}`
+      driveRow.manifest_key = key
+    } else {
+      // Do not point the record at an unverified upload; keep whatever manifest it had.
+      delete driveRow.manifest
+      delete driveRow.manifest_key
+    }
+    console.log(`  manifest in Atlas: ${fid ? driveRow.manifest : "UPLOAD FAILED — the drive keeps its previous manifest"}`)
     for (const [schema, rows] of [["drives", [driveRow]], ["drive-folders", folderRows], ["drive-findings", findingRows]] as const) {
       if (!rows.length) { console.log(`  atlas ${schema}: nothing to send`); continue }
       try {
