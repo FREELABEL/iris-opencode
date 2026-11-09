@@ -78,9 +78,9 @@ iris drives list
 ```
 
 ```
-BK-03                          429 files      13.4 GB  encrypted      380 sensitive  offline  scanned 2026-11-09
-Redwalrus                   60,072 files    4147.9 GB  NOT encrypted  292 sensitive  offline  scanned 2026-11-09
-Hive archive                21,025 files      13.4 GB  NOT encrypted    0 sensitive  online  scanned 2026-11-09
+Backup stick                   429 files      13.4 GB  encrypted       12 sensitive  offline  scanned 2026-11-09
+Footage                     60,072 files    2981.8 GB  NOT encrypted  292 sensitive  online   scanned 2026-11-09
+Client projects             21,025 files      13.4 GB  NOT encrypted    0 sensitive  online   scanned 2026-11-09
 ```
 
 `online` means the drive is plugged into this computer right now. A drive marked **NOT encrypted**
@@ -93,9 +93,9 @@ iris drives find proxy mov --limit 1
 ```
 
 ```
-Redwalrus · not connected here — found from its catalog
-  SourceFootage/Proxies/20250117_fx30_0145_Proxy.mov  · 0.03 GB · video · 2025-01-21
-  … and 1196 more on Redwalrus
+Footage · not connected here — found from its catalog
+  Shoots/2025-01-17/Proxies/A001_0145_Proxy.mov  · 0.03 GB · video · 2025-01-21
+  … and 1196 more on Footage
 ```
 
 Every word has to appear somewhere in the file's path. The search works with the drive unplugged.
@@ -105,11 +105,11 @@ Every word has to appear somewhere in the file's path. The search works with the
 Use the drive's name from `iris drives list`, a colon, and the path `find` showed:
 
 ```bash
-iris drives path "Hive archive:sandisk-ultra-logic/MOVED-TO-ENCRYPTED-BK-03.txt"
+iris drives path "Client projects:Acme/brief.pdf"
 ```
 
 ```
-/home/siralexmayo/archive/sandisk-ultra-logic/MOVED-TO-ENCRYPTED-BK-03.txt
+/Users/you/Projects/Acme/brief.pdf
 ```
 
 If the drive is not plugged into this computer it says so and exits with code 2; if the file has
