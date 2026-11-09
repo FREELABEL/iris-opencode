@@ -6,7 +6,6 @@ import {
   chatUrl,
   description,
   galleryAgents,
-  icon,
   iconTooltip,
   integrationChips,
   lastActivity,
@@ -16,7 +15,6 @@ import {
   modelName,
   readLastOpened,
   SORTS,
-  theme,
   typeLabel,
   WORKSPACES,
   type GalleryAgent,
@@ -74,6 +72,16 @@ function I(props: { n: string; class?: string; title?: string }) {
   )
 }
 
+/** The editor's mark (iris-agent-editor.tsx): initials on a hue drawn from the name, so an agent looks the same in both. */
+const hue = (name: string) => [...(name || "?")].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
+const initials = (name: string) =>
+  (name || "?")
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("") || "?"
+
 function Card(props: {
   agent: GalleryAgent
   onChat: () => void
@@ -83,111 +91,86 @@ function Card(props: {
 }) {
   const a = () => props.agent
   const [all, setAll] = createSignal(false)
-  const caps = createMemo(() => capabilities(a()))
   const chips = createMemo(() => integrationChips(a()))
+  // ELON lists an integration twice (capabilities AND integrations); once is enough.
+  const caps = createMemo(() => capabilities(a()).filter((c) => !chips().some((x) => x.name === c)))
   const human = () => a().isHuman === true
   return (
     <div class="iag-card" data-agent-id={a().id} data-testid="iris-agent-card">
       <div class="iag-card__head">
-        <div class="iag-card__row">
-          <div class="iag-card__icon" data-theme={theme(a())}>
-            <I n={icon(a())} title={iconTooltip(a())} />
-          </div>
-          <div class="iag-card__info">
-            <div class="iag-card__titlerow">
-              <h3 class="iag-card__name">{a().name || "Unnamed Agent"}</h3>
-              <button type="button" class="iag-card__ext" title="Open public chat in new tab" onClick={props.onChat}>
-                <I n="external" />
-              </button>
-            </div>
-            <div class="iag-card__tags">
-              <span class="iag-pill" data-tone={human() ? "blue" : "orange"}>
-                {typeLabel(a())}
+        <span class="iag-mark" style={{ "--iag-hue": String(hue(a().name)) }} title={iconTooltip(a())} aria-hidden="true">
+          {initials(a().name)}
+        </span>
+        <div class="iag-card__who">
+          <div class="iag-card__name">{a().name || "Unnamed Agent"}</div>
+          <div class="iag-card__sub">
+            <span class="iag-kind" data-kind={human() ? "human" : "ai"}>
+              {typeLabel(a())}
+            </span>
+            <Show
+              when={human() && a().email}
+              fallback={
+                <Show when={!human() && model(a())}>
+                  <span title={`AI Model: ${model(a())}`}>{modelName(a())}</span>
+                </Show>
+              }
+            >
+              <span class="iag-card__email" title={`Email: ${a().email}`}>
+                {a().email}
               </span>
-              <Show
-                when={human() && a().email}
-                fallback={
-                  <Show when={!human() && model(a())}>
-                    <span class="iag-pill" data-tone="blue" title={`AI Model: ${model(a())}`}>
-                      <I n="chip" />
-                      {modelName(a())}
-                    </span>
-                  </Show>
-                }
-              >
-                <span class="iag-pill" data-tone="green" title={`Email: ${a().email}`}>
-                  {a().email}
-                </span>
-              </Show>
-              <span class="iag-pill" data-tone="gray" title={a().lastUsedAt ? new Date(a().lastUsedAt!).toLocaleString() : "This agent has not been used yet"}>
-                <I n="clock" />
-                {lastActivity(a().lastUsedAt)}
-              </span>
-              <Show when={(a().files ?? 0) > 0}>
-                <span class="iag-pill" data-tone="green" title={`${a().files} training file${a().files !== 1 ? "s" : ""} attached`}>
-                  <I n="file" />
-                  {a().files} file{a().files !== 1 ? "s" : ""}
-                </span>
-              </Show>
-            </div>
+            </Show>
           </div>
         </div>
+        <button type="button" class="iag-ghost" title="Open public chat in new tab" onClick={props.onChat}>
+          <I n="external" />
+        </button>
       </div>
 
-      <div class="iag-card__body">
-        <div class="iag-card__desc">{description(a())}</div>
+      <p class="iag-card__desc">{description(a())}</p>
 
-        <Show when={caps().length}>
-          <div class="iag-card__section">
-            <h4 class="iag-card__label">Capabilities</h4>
-            <div class="iag-card__capwrap">
-              <div class="iag-card__caps" data-open={all() ? "" : undefined}>
-                <For each={caps()}>{(c) => <span class="iag-cap">{c}</span>}</For>
-              </div>
-              <Show when={caps().length > MAX_VISIBLE_CONFIG}>
-                <button type="button" class="iag-more" onClick={() => setAll(!all())}>
-                  <I n={all() ? "up" : "down"} />
-                  {all() ? "Less" : "More"}
-                </button>
-                <Show when={!all()}>
-                  <div class="iag-fade" />
-                </Show>
-              </Show>
-            </div>
-          </div>
-        </Show>
+      <Show when={caps().length}>
+        <div class="iag-chips" aria-label="Capabilities">
+          <For each={all() ? caps() : caps().slice(0, MAX_VISIBLE_CONFIG)}>{(c) => <span class="iag-chip">{c}</span>}</For>
+          <Show when={caps().length > MAX_VISIBLE_CONFIG}>
+            <button type="button" class="iag-chip iag-chip--more" onClick={() => setAll(!all())}>
+              {all() ? "Less" : `+${caps().length - MAX_VISIBLE_CONFIG}`}
+            </button>
+          </Show>
+        </div>
+      </Show>
 
-        <Show when={chips().length}>
-          <div class="iag-card__section">
-            <h4 class="iag-card__label">Integrations</h4>
-            <div class="iag-card__chips">
-              <For each={chips()}>
-                {(c) => (
-                  <div class="iag-chip">
-                    <I n={c.icon} />
-                    {c.name}
-                    <I n="check" class="iag-chip__ok" />
-                  </div>
-                )}
-              </For>
-            </div>
-          </div>
-        </Show>
-      </div>
+      <Show when={chips().length}>
+        <div class="iag-chips" aria-label="Integrations">
+          <For each={chips()}>
+            {(c) => (
+              <span class="iag-chip iag-chip--on" title="Connected">
+                <I n={c.icon} />
+                {c.name}
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
 
       <div class="iag-card__foot">
-        <button type="button" class="iag-primary" onClick={props.onChat}>
-          <I n="comment" class="iag-primary__ic" />
+        <span class="iag-card__seen iag-num" title={a().lastUsedAt ? new Date(a().lastUsedAt!).toLocaleString() : "This agent has not been used yet"}>
+          {lastActivity(a().lastUsedAt)}
+          <Show when={(a().files ?? 0) > 0}>
+            {` · ${a().files} file${a().files !== 1 ? "s" : ""}`}
+          </Show>
+        </span>
+        <button type="button" class="iag-btn" onClick={props.onChat}>
+          <I n="comment" />
           Chat
         </button>
         <Show when={!a().isVirtual}>
-          <button type="button" class="iag-square" title="Train Agent" onClick={props.onTrain}>
+          <button type="button" class="iag-ghost" title="Train Agent" onClick={props.onTrain}>
             <I n="brain" />
           </button>
-          <button type="button" class="iag-square" title="Live — what it is doing now, and its tool access" onClick={props.onLive}>
+          <button type="button" class="iag-ghost iag-ghost--live" title="Live — what it is doing now, and its tool access" onClick={props.onLive}>
             <I n="pulse" />
           </button>
-          <button type="button" class="iag-square" title="Configure Agent" onClick={props.onConfigure}>
+          <button type="button" class="iag-ghost" title="Configure Agent" onClick={props.onConfigure}>
             <I n="cog" />
           </button>
         </Show>
@@ -252,69 +235,63 @@ export function IrisAgentGallery(props: {
     >
     <div class="iag" data-component="iris-agent-gallery">
       <div class="iag-bar">
-        <div class="iag-search">
-          <I n="search" class="iag-search__ic" />
-          <input class="iag-search__input" type="search" placeholder="Search agents..." value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
+        <label class="iag-find">
+          <I n="search" />
+          <input type="search" placeholder="Search agents…" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
+        </label>
+        <div class="iag-seg" role="tablist" aria-label="Kind">
+          <For each={[["all", "All"], ["human", "People"], ["ai", "Agents"]] as const}>
+            {([value, label]) => (
+              <button type="button" role="tab" aria-selected={kind() === value} onClick={() => setKind(value)}>
+                {label}
+              </button>
+            )}
+          </For>
         </div>
-        <div class="iag-filters">
-          <div class="iag-seg" role="tablist" aria-label="Kind">
-            <button type="button" role="tab" aria-selected={kind() === "all"} data-tone="gray" onClick={() => setKind("all")}>
-              All
-            </button>
-            <button type="button" role="tab" aria-selected={kind() === "human"} data-tone="blue" onClick={() => setKind("human")}>
-              <I n="user" />
-              <span>People</span>
-            </button>
-            <button type="button" role="tab" aria-selected={kind() === "ai"} data-tone="yellow" onClick={() => setKind("ai")}>
-              <I n="robot" />
-              <span>Agents</span>
-            </button>
-          </div>
-          <select class="iag-select" aria-label="Workspace" value={workspace()} onChange={(e) => setWorkspace(e.currentTarget.value as WorkspaceFilter)}>
-            <For each={WORKSPACES}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-          </select>
-          <select class="iag-select" aria-label="Sort" value={sort()} onChange={(e) => setSort(e.currentTarget.value as SortKey)}>
-            <For each={SORTS}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-          </select>
-          {/* Not in ELON, where the switch existed and nothing could reach it: this project, or the account. */}
-          <div class="iag-seg" role="tablist" aria-label="Which agents">
-            <button type="button" role="tab" aria-selected={scope() === "all"} data-tone="gray" onClick={() => setScope("all")}>
-              All
-            </button>
-            <button type="button" role="tab" aria-selected={scope() === "project"} data-tone="gray" onClick={() => setScope("project")}>
-              This project
-            </button>
-          </div>
+        <select class="iag-select" aria-label="Workspace" value={workspace()} onChange={(e) => setWorkspace(e.currentTarget.value as WorkspaceFilter)}>
+          <For each={WORKSPACES}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+        </select>
+        <select class="iag-select" aria-label="Sort" value={sort()} onChange={(e) => setSort(e.currentTarget.value as SortKey)}>
+          <For each={SORTS}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+        </select>
+        {/* Not in ELON, where the switch existed and nothing could reach it: this project, or the account. */}
+        <div class="iag-seg" role="tablist" aria-label="Which agents">
+          <For each={[["all", "All"], ["project", "This project"]] as const}>
+            {([value, label]) => (
+              <button type="button" role="tab" aria-selected={scope() === value} onClick={() => setScope(value)}>
+                {label}
+              </button>
+            )}
+          </For>
         </div>
+        <span class="iag-end">
+        <Show when={roster.latest?.measured}>
+          <span class="iag-count iag-num">
+            {shown().length === agents().length ? agents().length : `${shown().length} of ${agents().length}`}
+          </span>
+        </Show>
         <button type="button" class="iag-new" data-testid="iris-agent-new" disabled={!props.bloqId} onClick={props.onNew}>
-          <I n="plus" />
-          New Agent
+          + New agent
         </button>
+        </span>
       </div>
 
       <Show when={roster.latest?.measured === false}>
-        <p class="iag-error">Could not load agents — {roster.latest?.reason}</p>
+        <p class="iag-note iag-note--err">Could not load agents — {roster.latest?.reason}</p>
       </Show>
       <Show
         when={!roster.loading || agents().length}
-        fallback={
-          <div class="iag-loading">
-            <div class="iag-spinner" />
-            <p>Loading your team...</p>
-          </div>
-        }
+        fallback={<p class="iag-note">Loading your team…</p>}
       >
         <div class="iag-grid-wrap">
           <Show
             when={shown().length}
             fallback={
               <div class="iag-empty">
-                <I n="empty" class="iag-empty__ic" />
-                <h3>No agents found</h3>
-                <p>Create AI assistants or add human team members to build powerful workflows</p>
-                <button type="button" class="iag-empty__btn" disabled={!props.bloqId} onClick={props.onNew}>
-                  <I n="plus" />
-                  Create First Agent
+                <p>No agents found.</p>
+                <p class="iag-note">Create AI assistants or add human team members to build powerful workflows.</p>
+                <button type="button" class="iag-new" disabled={!props.bloqId} onClick={props.onNew}>
+                  + New agent
                 </button>
               </div>
             }
