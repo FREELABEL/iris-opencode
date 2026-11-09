@@ -97,6 +97,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "atlas:brand-kit": "atlas",
   "atlas:comms": "atlas",
   "atlas:datasets": "atlas",
+  drives: "atlas",
   onboarding: "atlas",
   "atlas:projections": "atlas",
   "good-deals": "atlas",
