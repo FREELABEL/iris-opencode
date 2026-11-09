@@ -14,6 +14,8 @@ import { needsSystemBrowser,
   webReloadKey,
   webUrl,
 } from "./web-nav"
+import { GithubPrView } from "./github-pr-view"
+import { isGithubPrUrl } from "./github-pr-model"
 import "./session-web-tab.css"
 
 /**
@@ -42,6 +44,7 @@ type Check =
   | { state: "embeddable" }
   | { state: "refused"; reason: string; opened?: boolean }
   | { state: "unknown" }
+  | { state: "github-pr" }
 
 export function SessionWebTab() {
   const serverSDK = useServerSDK()
@@ -54,6 +57,9 @@ export function SessionWebTab() {
     on([webUrl, webReloadKey], ([url]) => {
       setAddress(url ?? "")
       if (!url) return
+      // github.com refuses every frame (X-Frame-Options: DENY). A PR is drawn from the GitHub API
+      // instead of bouncing to the system browser (#192937).
+      if (isGithubPrUrl(url)) return setCheck({ state: "github-pr" })
       if (knownEmbeddable(url)) return setCheck({ state: "embeddable" })
       // A sign-in page that reached the panel some other way (typed, pasted, opened by an agent)
       // goes to the browser too — it cannot complete in a frame (#188639).
@@ -156,6 +162,9 @@ export function SessionWebTab() {
             <div class="session-web__note">
               Links you click in the chat open here. Cmd-click opens them in your browser.
             </div>
+          </Match>
+          <Match when={check().state === "github-pr" && webUrl()}>
+            {(url) => <GithubPrView url={url()} base={base()} reloadKey={webReloadKey()} />}
           </Match>
           <Match when={check().state === "checking"}>
             <div class="session-web__note">Loading {host()}…</div>

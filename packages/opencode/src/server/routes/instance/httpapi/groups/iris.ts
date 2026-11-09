@@ -2107,6 +2107,7 @@ export const IrisPaths = {
   checkout: `${root}/checkout`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
+  githubPr: `${root}/github/pr`,
   pageSignIn: `${root}/page-signin`,
   pagePin: `${root}/page-pin`,
   campaignBoards: `${root}/campaigns/boards`,
@@ -3558,6 +3559,30 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Can a page be framed",
           description:
             "A refused cross-origin frame fires load like a working one, and the deciding headers are invisible to the page — so the side panel's Browser tab asks the sidecar (#187864).",
+        }),
+      ),
+      HttpApiEndpoint.get("githubPr", IrisPaths.githubPr, {
+        query: Schema.Struct({
+          url: described(Schema.String, "A github.com/<owner>/<repo>/pull/<n> address."),
+        }),
+        success: described(
+          Schema.Struct({
+            state: described(
+              Schema.Literals(["ok", "no-access", "invalid", "unreachable"]),
+              "ok: `pr` is the pull request. no-access: GitHub refused (private repo, no or wrong login) — `reason` says which. invalid: not a PR address. unreachable: GitHub did not answer.",
+            ),
+            signedIn: Schema.optional(described(Schema.Boolean, "Whether a GitHub login (GITHUB_TOKEN, GH_TOKEN or `gh auth`) was used.")),
+            reason: Schema.optional(Schema.String),
+            pr: Schema.optional(Schema.Unknown),
+          }).annotate({ identifier: "IrisGithubPr" }),
+          "A pull request, read from the GitHub API for the side panel",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.githubPr",
+          summary: "Read a GitHub pull request",
+          description:
+            "github.com refuses to be framed (X-Frame-Options: DENY), so the Browser tab draws a PR from this instead (#192937). The GitHub token stays in the sidecar.",
         }),
       ),
       HttpApiEndpoint.post("pageSignIn", IrisPaths.pageSignIn, {
