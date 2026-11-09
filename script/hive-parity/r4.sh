@@ -29,9 +29,25 @@ print(s[0]["session_id"] if s else "")' "$NODE")
     why+=("OFF: no claude_code/opencode session of this node listed on $OBS to probe send-input with"); steps+=("\"send_input\": \"no-session\"")
   else
     out=$(ssh -o BatchMode=yes "$OBS" "$OBS_IRIS hive send-input $sid '[R4 probe, epic #192964] remote access is OFF; this must be refused' --json" 2>&1); rc=$?
-    refused=$(printf '%s' "$out" | grep -qiE 'offline|remote access|refus|not online' && [ $rc -ne 0 -o -n "$(printf '%s' "$out" | grep -i '"ok": *false')" ] && echo yes || echo no)
-    steps+=("\"send_input_rc\": $rc" "\"send_input_refused\": \"$refused\"")
-    [ "$refused" = yes ] || why+=("OFF: send-input to $sid was not refused (rc=$rc): $(printf '%s' "$out" | tr '\n"' ' ' | cut -c1-200)")
+    # Refused = the hub would not take it (an offline node) OR the task it made failed on this
+    # machine with the switch's reason. "dispatched" alone proves nothing, so follow the task.
+    tid=$(printf '%s' "$out" | python3 -c 'import sys,json
+try: d=json.loads(sys.stdin.read()); print((d.get("task") or {}).get("id") or "")
+except Exception: print("")')
+    verdict_in=$(printf '%s' "$out" | grep -qiE 'offline|not online' && echo hub-refused || echo send-failed); detail=$(printf '%s' "$out" | tr '\n"' '  ' | cut -c1-200)
+    if [ -n "$tid" ]; then
+      verdict_in="no-result"
+      for _ in $(seq 1 15); do
+        res=$(ssh -o BatchMode=yes "$OBS" "$OBS_IRIS hive tasks get $tid" 2>&1)
+        if printf '%s' "$res" | grep -q "Remote access to this computer is off"; then verdict_in="node-refused"; break; fi
+        if printf '%s' "$res" | grep -qE "Status:.*completed"; then verdict_in="DELIVERED"; break; fi
+        sleep 2
+      done
+      detail="task $tid: $verdict_in"
+    fi
+    refused=$([ "$verdict_in" = hub-refused ] || [ "$verdict_in" = node-refused ] && echo yes || echo no)
+    steps+=("\"send_input\": \"$verdict_in\"")
+    [ "$refused" = yes ] || why+=("OFF: send-input to $sid was not refused: $detail")
   fi
   # ON
   t=$(iso_now); put true >/dev/null; s=$(wait_state "$NODE" online "$t" $LIMIT); steps+=("\"on_to_online_s\": \"$s\"")
