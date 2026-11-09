@@ -253,8 +253,17 @@ step "4. Is the published CLI release asset actually our CLI?"
 if ! command -v gh >/dev/null 2>&1; then
   warn release_asset_identity "gh is not installed — cannot audit the published release"
 else
-  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 30 --json tagName \
+  # The newest v1.* tag, from a list deep enough to reach it. The limit was 30, and once 30
+  # desktop-v* releases sat on top of the last CLI release the list held no v1.* tag at all:
+  # every desktop release then failed here as "drift" (1.18.182, 1.18.183 — #192928). If even
+  # 200 does not reach one, fall back to the repo-wide "latest", which belongs to the CLI series
+  # (release-desktop.yml promotes desktop-v* with --prerelease=false and never --latest).
+  TAG="$(perl -e 'alarm 40; exec @ARGV' gh release list --repo "$REPO" --limit 200 --json tagName \
         --jq '[.[] | select(.tagName | startswith("v1."))] | .[0].tagName' 2>/dev/null)"
+  case "$TAG" in
+    v1.*) ;;
+    *) TAG="$(perl -e 'alarm 40; exec @ARGV' gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null)" ;;
+  esac
   if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
     warn release_asset_identity "could not resolve the newest v1.* CLI release"
   elif [ "$DEEP" -eq 0 ]; then
