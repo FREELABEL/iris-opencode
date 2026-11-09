@@ -98,11 +98,14 @@ describe("resolveDrivesBoard", () => {
     expect(calls).toEqual([])
   })
 
-  test("not found + scan → creates the board and all three datasets with the playbook's fields", async () => {
+  test("not found + scan → creates the board and all four datasets with the playbook's fields", async () => {
     const { api, calls } = fakeBoards([{ id: 3, name: "Music", is_owner: true }])
     expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
-    expect(calls).toEqual(["list", "board:Drives", "dataset:drives@4242:16", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9"])
-    expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings"])
+    expect(calls).toEqual([
+      "list", "board:Drives", "dataset:drives@4242:19", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
+      "dataset:drive-reads@4242:10",
+    ])
+    expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings", "drive-reads"])
     // the manifest key must never be readable by anyone the board is shared with
     expect(DRIVES_DATASETS[0].fields.find((f: any) => f.key === "manifest_key")).toMatchObject({ visibility: "private" })
   })
@@ -170,8 +173,13 @@ describe("iris drives scan output (runs the CLI, dry run, signed out)", () => {
     const env: Record<string, string> = { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" } as any
     for (const k of Object.keys(env)) if (/^(IRIS_|XDG_)/.test(k)) delete env[k] // signed out: no token anywhere
     const r = spawnSync(process.execPath, ["run", entry, "drives", "scan", vol, "--dry-run", ...extra], { encoding: "utf8", env, timeout: 120_000 })
+    // what the scan left on this machine: drive.json (the drive's row) and files.tsv (the manifest)
+    const store = path.join(home, ".iris", "drives")
+    const dir = fs.existsSync(store) ? fs.readdirSync(store).map((d) => path.join(store, d)).find((d) => fs.existsSync(path.join(d, "drive.json"))) : undefined
+    const drive = dir ? JSON.parse(fs.readFileSync(path.join(dir, "drive.json"), "utf8")).drive : null
+    const tsv = dir ? fs.readFileSync(path.join(dir, "files.tsv"), "utf8") : ""
     fs.rmSync(home, { recursive: true, force: true })
-    return { out: `${r.stdout}\n${r.stderr}`, status: r.status }
+    return { out: `${r.stdout}\n${r.stderr}`, status: r.status, drive, tsv }
   }
 
   test("default: no drive id, no local manifest path, no Atlas row counts", () => {
@@ -181,6 +189,23 @@ describe("iris drives scan output (runs the CLI, dry run, signed out)", () => {
     expect(out).not.toMatch(/\b(fs|dir):/)
     expect(out).not.toContain("files.tsv")
     expect(out).not.toMatch(/atlas drive-|rows →/)
+  }, 120_000)
+
+  test("#192914: the drive row carries free_gb / last_seen_on / last_seen_at; the manifest has a sha256 column", () => {
+    const { drive, tsv } = run()
+    expect(typeof drive.free_gb).toBe("number")
+    expect(drive.last_seen_on).toBe(os.hostname())
+    expect(drive.last_seen_at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
+    const lines = tsv.split("\n").filter(Boolean)
+    expect(lines[0]).toBe("path\tbytes\tmodified\tkind\tsha256")
+    // the .env is sensitive → hashed; the video is not hashed by default
+    expect(lines.find((l) => l.startsWith("Shoot/.env"))!.split("\t")[4]).toMatch(/^[0-9a-f]{64}$/)
+    expect(lines.find((l) => l.startsWith("Shoot/A001.mov"))!.split("\t")[4]).toBe("")
+  }, 120_000)
+
+  test("--checksums none writes the old 4-column manifest", () => {
+    const { tsv } = run("--checksums", "none")
+    expect(tsv.split("\n")[0]).toBe("path\tbytes\tmodified\tkind")
   }, 120_000)
 
   test("--verbose prints the old detail", () => {

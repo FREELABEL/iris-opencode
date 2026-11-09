@@ -5,6 +5,9 @@
  *   iris drives find <words…>        search every cataloged drive's manifest, plugged in or not
  *   iris drives path <drive-id>:<rel> where that file is on THIS machine right now
  *   iris drives list                 every cataloged drive
+ *   iris drives copies <words…>      how many identical copies of a file exist, across every drive
+ *   iris drives get <drive>:<rel> --to DIR --why TEXT [--confirm]
+ *                                    copy ONE file (or one bundle as .zip) off a connected drive, on the record
  *
  * TypeScript port of scripts/drives/drive_scan.py (freelabel repo). The two are
  * interchangeable on purpose — same Atlas datasets (`drives`, `drive-folders`,
@@ -19,6 +22,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { spawnSync } from "child_process"
+import { createHash } from "crypto"
 import { cmd } from "./cmd"
 import { irisFetch, requireAuth, requireUserId, resolveToken, warn } from "./iris-api"
 import { listBloqFiles, uploadFileVerified } from "./platform-atlas-files"
@@ -26,6 +30,9 @@ import {
   STORE, walk, Rollup, manifestRow, TSV_HEADER, tsvRow, seal, unseal, manifestFileText, parseManifestFile,
   manifestTitle, storeDirName, parsePlist, diskFactsFromPlist, driveIdFromDisk, parseTsv, mostCommon,
   round, todayIso, splitRef, DRIVES_BOARD_NAMES, DRIVES_BOARD_DESCRIPTION, DRIVES_DATASETS,
+  TSV_HEADER_SHA, CHECKSUM_CHOICES, type Checksums, liveDriveFields, copyIndex, copiesReport, copiesLine,
+  type ManifestRow, normalizeExcludes, kindOf, SENSITIVE, BUNDLES, APP_BUNDLES, sha256File, bundleMembers,
+  bundleHashFromLines, utcIso,
 } from "./drives-core"
 
 const KIND_CHOICES = ["backup-drive", "media-drive", "archive-folder", "other"] as const
@@ -427,12 +434,19 @@ const ScanCommand = cmd({
       .option("exclude", { type: "string", array: true, default: [] as string[], describe: "a private folder on the drive (relative): never opened or listed; remembered for every later scan" })
       .option("depth", { type: "number", default: 2, describe: "how many folder levels count as a project folder" })
       .option("bloq", BLOQ_OPTION)
+      .option("checksums", {
+        type: "string",
+        choices: CHECKSUM_CHOICES as unknown as string[],
+        default: "default",
+        describe: "which files get a sha256, so copies are counted by content: default = sensitive files + project/document/audio up to 64 MB; all; none",
+      })
       .option("dry-run", { type: "boolean", default: false, describe: "scan and show the result, send nothing to your account" })
       .option("verbose", { type: "boolean", default: false, describe: "also print the drive id, the local file list's path and each Atlas write" })
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac (see your drives with: ls /Volumes)")
       .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
       .example('$0 drives scan ~/Projects --label "Client projects" --kind archive-folder', "catalog a folder on this computer")
       .example('$0 drives scan /Volumes/Backup --exclude Personal/Family --exclude Taxes', "keep private folders out — never opened, remembered next time")
+      .example("$0 drives scan /Volumes/Backup --checksums all", "hash every file, so every copy is counted by content (slow on big drives)")
       .epilogue(HOWTO),
   async handler(args) {
     const verbose = args.verbose === true
@@ -484,10 +498,14 @@ const ScanCommand = cmd({
     const unreadable: string[] = []
     const tmp = path.join(out, "files.tsv.part")
     const fd = fs.openSync(tmp, "w")
-    let buf = tsvRow(TSV_HEADER)
-    for (const e of walk(root, { excludes: exclude, unreadable })) {
+    const checksums = String(args.checksums ?? "default") as Checksums
+    const withSha = checksums !== "none"
+    let buf = tsvRow(withSha ? TSV_HEADER_SHA : TSV_HEADER)
+    let hashed = 0
+    for (const e of walk(root, { excludes: exclude, unreadable, checksums })) {
       rollup.add(e)
-      buf += manifestRow(e)
+      if (e.sha256) hashed++
+      buf += manifestRow(e, withSha)
       if (buf.length > 1 << 20) { fs.writeSync(fd, buf); buf = "" }
       if (rollup.files % 20000 === 0) console.log(`  … ${rollup.files.toLocaleString("en-US")} files`)
     }
@@ -496,6 +514,7 @@ const ScanCommand = cmd({
     const tsvPath = path.join(out, "files.tsv")
     fs.renameSync(tmp, tsvPath)
     if (facts.size_gb == null) facts.size_gb = facts.used_gb = round(rollup.total / 1e9, 1)
+    detail(`  checksums (${checksums}): ${hashed.toLocaleString("en-US")} file(s) hashed`)
 
     const status = facts.encrypted ? "contained" : "exposed"
     const driveRow: Record<string, any> = {
@@ -503,6 +522,7 @@ const ScanCommand = cmd({
       filesystem: facts.filesystem, encrypted: facts.encrypted, size_gb: facts.size_gb,
       used_gb: facts.used_gb, files: rollup.files, folders: rollup.folders.size, sensitive_files: rollup.findings.length,
       last_scanned: today, manifest: "", private_excluded: exclude.join("\n"),
+      ...liveDriveFields(fs.statfsSync(root), facts.node, new Date()),
     }
     const folderRows = rollup.folderRows(driveId, facts.label)
     const findingRows = rollup.findingRows(driveId, facts.label, facts.encrypted, today)
@@ -586,6 +606,29 @@ async function drivesOrExit(bloq: number): Promise<any[]> {
   }
 }
 
+type LoadedRow = ManifestRow & { kind: string; modified: string }
+
+/** Every drive with its decrypted manifest rows (null = not searchable yet). Exits plainly on no drives. */
+async function loadManifests(userId: number, bloq: number): Promise<Array<{ drive: any; rows: LoadedRow[] | null }>> {
+  const drives = await drivesOrExit(bloq)
+  if (!drives.length) {
+    console.error(`  ${NO_DRIVES_YET}`)
+    process.exit(1)
+  }
+  const out: Array<{ drive: any; rows: LoadedRow[] | null }> = []
+  for (const drive of drives) {
+    const text = await cachedManifest(userId, bloq, drive).catch(() => null)
+    const rows = text
+      ? parseTsv(text).map((r) => ({
+          drive: String(drive.label ?? drive.external_id), path: r.path, bytes: Number(r.bytes), sha256: r.sha256 ?? "",
+          kind: r.kind, modified: r.modified,
+        }))
+      : null
+    out.push({ drive, rows })
+  }
+  return out
+}
+
 const FindCommand = cmd({
   command: "find <words..>",
   describe: "search every cataloged drive for a file — works with the drive unplugged, on any computer you sign in to",
@@ -594,7 +637,7 @@ const FindCommand = cmd({
       .positional("words", { type: "string", array: true, demandOption: true })
       .option("limit", { type: "number", default: 8, describe: "matches shown per drive" })
       .option("bloq", BLOQ_OPTION)
-      .example("$0 drives find freetrap stems", "every file whose path has both words, on every drive")
+      .example("$0 drives find mix stems", "every file whose path has both words, on every drive")
       .example("$0 drives find A001 .mov --limit 50", "more matches per drive")
       .epilogue(HOWTO),
   async handler(args) {
@@ -603,21 +646,19 @@ const FindCommand = cmd({
     const words = (args.words as string[]).map((w) => String(w).toLowerCase())
     const limit = Number(args.limit)
     let hits = 0
-    const drives = await drivesOrExit(bloq)
-    if (!drives.length) {
-      console.error(`  ${NO_DRIVES_YET}`)
-      process.exit(1)
-    }
-    for (const drive of drives) {
-      const text = await cachedManifest(userId, bloq, drive).catch(() => null)
-      if (!text) { console.log(`\n${drive.label}: not searchable yet — scan it again`); continue }
+    const loaded = await loadManifests(userId, bloq)
+    // Copies are counted by content across ALL drives (needs the sha256 column; see --checksums).
+    const idx = copyIndex(loaded.flatMap((m) => m.rows ?? []))
+    for (const { drive, rows } of loaded) {
+      if (!rows) { console.log(`\n${drive.label}: not searchable yet — scan it again`); continue }
       const state = online(drive) ? "connected to this computer" : "not connected here — found from its catalog"
       let shown = 0
-      for (const row of parseTsv(text)) {
+      for (const row of rows) {
         const p = row.path.toLowerCase()
         if (!words.every((w) => p.includes(w))) continue
+        const n = row.sha256 ? (idx.get(row.sha256)?.length ?? 0) : 0
         if (shown === 0) console.log(`\n${drive.label} · ${state}`)
-        if (shown < limit) console.log(`  ${row.path}  · ${(Number(row.bytes) / 1e9).toFixed(2)} GB · ${row.kind} · ${row.modified}`)
+        if (shown < limit) console.log(`  ${row.path}  · ${(Number(row.bytes) / 1e9).toFixed(2)} GB · ${row.kind} · ${row.modified}` + (n >= 2 ? ` · ${n} identical copies` : ""))
         shown++
         hits++
       }
@@ -627,6 +668,18 @@ const FindCommand = cmd({
     else console.log(`\nWhere a file is on this computer right now: iris drives path <drive>:<path>   (iris drives list shows each drive)`)
   },
 })
+
+/** `<drive name or id>:<rel>` → [drive id, rel]. A drive can be named by its label as well as its id. */
+export function resolveRef(refIn: string, labels: Record<string, string>): [string, string] {
+  const byLabel = Object.fromEntries(Object.entries(labels).map(([id, l]) => [String(l), id]))
+  let ref = refIn
+  const label = Object.keys(byLabel).sort((a, b) => b.length - a.length).find((l) => ref.startsWith(l + ":"))
+  if (label) ref = byLabel[label] + ref.slice(label.length)
+  return splitRef(ref, Object.keys(labels))
+}
+
+/** The one sentence `path` and `get` print (exit 2) when the drive is not plugged in here. */
+export const notConnected = (name: string) => `Not a valid path right now: ${name} is not connected to this computer`
 
 const PathCommand = cmd({
   command: "path <ref>",
@@ -655,16 +708,11 @@ const PathCommand = cmd({
         labels = {} // names are a nicety; resolving the path does not need Atlas
       }
     }
-    // A drive can be named by its label as well as its id.
-    const byLabel = Object.fromEntries(Object.entries(labels).map(([id, l]) => [String(l), id]))
-    let ref = String(args.ref)
-    const label = Object.keys(byLabel).sort((a, b) => b.length - a.length).find((l) => ref.startsWith(l + ":"))
-    if (label) ref = byLabel[label] + ref.slice(label.length)
-    const [driveId, rel] = splitRef(ref, Object.keys(labels))
+    const [driveId, rel] = resolveRef(String(args.ref), labels)
     const mount = resolveMount(driveId)
     const name = labels[driveId] ?? driveId
     if (!mount) {
-      console.log(`Not a valid path right now: ${name} is not connected to this computer`)
+      console.log(notConnected(name))
       process.exit(2)
     }
     const full = path.join(mount, rel)
@@ -679,7 +727,7 @@ const PathCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "every cataloged drive: encrypted or not, sensitive files, connected here or not, last scanned",
+  describe: "every cataloged drive: encrypted or not, sensitive files, free space, connected here or not, last scanned",
   builder: (y) => y.option("bloq", BLOQ_OPTION).example("$0 drives list", "your drives at a glance").epilogue(HOWTO),
   async handler(args) {
     const userId = await signedIn()
@@ -693,10 +741,283 @@ const ListCommand = cmd({
       console.log(
         `${String(d.label).padEnd(24)} ${Number(d.files ?? 0).toLocaleString("en-US").padStart(9)} files  ${String(d.used_gb).padStart(8)} GB  ` +
           `${(d.encrypted ? "encrypted" : "NOT encrypted").padEnd(13)} ${String(d.sensitive_files ?? 0).padStart(4)} sensitive  ` +
+          `${(d.free_gb != null && d.free_gb !== "" ? `${d.free_gb} GB free` : "free ?").padStart(13)}  ` +
           `${online(d) ? "online" : "offline"}  scanned ${d.last_scanned}` +
+          (d.last_seen_on ? ` · last seen on ${d.last_seen_on}` : "") +
           (Number(d.unreadable_folders) > 0 ? `  ${warn(`(${d.unreadable_folders} unreadable folder(s))`)}` : ""),
       )
     }
+  },
+})
+
+// ── copies: counted by content, across every drive (#192914) ──────────────────────
+
+const CopiesCommand = cmd({
+  command: "copies <words..>",
+  describe: "how many identical copies of a file exist, and on which drives — counted by content, not by name",
+  builder: (y) =>
+    y
+      .positional("words", { type: "string", array: true, demandOption: true })
+      .option("limit", { type: "number", default: 8, describe: "copies listed per file" })
+      .option("bloq", BLOQ_OPTION)
+      .example("$0 drives copies final mix", "every file whose path has both words: its identical copies on every drive")
+      .example("$0 drives copies brief.pdf", "same name on two drives — the same file, or two different versions?")
+      .epilogue(HOWTO),
+  async handler(args) {
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const loaded = await loadManifests(userId, bloq)
+    const limit = Number(args.limit)
+    for (const { drive, rows } of loaded) if (!rows) console.log(`${drive.label}: not searchable yet — scan it again`)
+    const report = copiesReport(loaded.flatMap((m) => m.rows ?? []), (args.words as string[]).map(String))
+    console.log(formatCopies(report, limit).join("\n"))
+  },
+})
+
+export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8): string[] {
+  const out: string[] = []
+  const list = (rows: ManifestRow[], indent: string) => {
+    for (const r of rows.slice(0, limit)) out.push(`${indent}${r.drive}: ${r.path}`)
+    if (rows.length > limit) out.push(`${indent}… and ${rows.length - limit} more`)
+  }
+  for (const k of report.known) {
+    out.push(`${k.name} — ${copiesLine(k.versions)}`)
+    if (k.versions.length === 1) list(k.versions[0].copies, "  ")
+    else
+      k.versions.forEach((v, i) => {
+        out.push(`  version ${i + 1} (sha256 ${v.sha256.slice(0, 12)}…): ${plural(v.copies.length, "copy", "copies")}`)
+        list(v.copies, "    ")
+      })
+  }
+  if (report.unknown.length) {
+    out.push(`Not checksummed yet: ${plural(report.unknown.length, "file")} — scan the drive with --checksums all to compare them`)
+    list(report.unknown, "  ")
+  }
+  if (!out.length) out.push("Nothing found on any cataloged drive.")
+  return out
+}
+
+// ── get: read ONE file, on the record (#192914) ──────────────────────────────────
+//
+// Copies one file (or one bundle, zipped) off a drive that is connected to THIS computer, checks
+// the copy's sha256 against the original, and writes one row to the board's `drive-reads`
+// dataset: who, which machine, why, what it hashed to. A private folder is never opened; a
+// sensitive file needs --confirm. No unlocking: an encrypted drive that is not mounted is simply
+// "not connected" (unlocking is the machine's business, not the CLI's).
+
+export type GetArgs = { ref: string; to: string; why?: string; confirm?: boolean }
+export type GetDeps = {
+  drives: () => Promise<any[]>
+  /** drive-findings rows (their data) for one drive */
+  findings: (driveId: string) => Promise<any[]>
+  /** make sure the drive-reads dataset exists ("already exists" is fine) */
+  ensureReadsDataset: () => Promise<void>
+  writeAudit: (rows: any[]) => Promise<{ created: number; updated: number; failed: number }>
+  account: () => Promise<string>
+  host: string
+  now: () => Date
+  hashFile?: (p: string) => string
+  resolveMount?: (driveId: string) => string | null
+}
+export type GetResult = { code: number; out: string[]; err: string[]; dest?: string; row?: any }
+
+function insidePrivate(rel: string, excludes: readonly string[]): boolean {
+  const rl = rel.toLowerCase()
+  return normalizeExcludes(excludes).some((x) => rl === x || rl.startsWith(x + "/"))
+}
+
+async function zipBundle(dest: string, members: Array<[string, string]>, totalBytes: number) {
+  const { ZipWriter, BlobReader, configure } = await import("@zip.js/zip.js")
+  configure({ useWebWorkers: false })
+  const fd = fs.openSync(dest, "wx")
+  try {
+    const writable = new WritableStream<Uint8Array>({ write: (c) => { fs.writeSync(fd, c) } })
+    // Stored, not compressed: media does not shrink, and the bytes stay byte-identical.
+    const zw = new ZipWriter(writable, { level: 0, zip64: totalBytes > 0xf0000000 || members.length > 65000 })
+    for (const [rel, abs] of members) await zw.add(rel, new BlobReader(Bun.file(abs)), { level: 0 })
+    await zw.close()
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/** The bundle hash of what is INSIDE a zip — so the copy is checked, not the original twice. */
+export async function zipBundleHash(zipPath: string): Promise<{ sha256: string; members: number }> {
+  const { ZipReader, BlobReader, configure } = await import("@zip.js/zip.js")
+  configure({ useWebWorkers: false })
+  const zr = new ZipReader(new BlobReader(Bun.file(zipPath)))
+  const lines: Array<[string, string]> = []
+  try {
+    for (const e of await zr.getEntries()) {
+      if (e.directory || !e.getData) continue
+      const h = createHash("sha256")
+      await e.getData(new WritableStream<Uint8Array>({ write: (c) => { h.update(c) } }))
+      lines.push([e.filename, h.digest("hex")])
+    }
+  } finally {
+    await zr.close()
+  }
+  return { sha256: bundleHashFromLines(lines), members: lines.length }
+}
+
+export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
+  const out: string[] = []
+  const err: string[] = []
+  const fail = (code: number, msg: string, to: "out" | "err" = "err"): GetResult => {
+    ;(to === "out" ? out : err).push(msg)
+    return { code, out, err }
+  }
+  const why = String(a.why ?? "").trim()
+  if (!why) return fail(1, '--why is required: say why you are reading this file, e.g. --why "send the brief to the client". It goes on the record.')
+  const hash = deps.hashFile ?? sha256File
+
+  let drives: any[]
+  try {
+    drives = await deps.drives()
+  } catch (e: any) {
+    return fail(1, `Could not read your drives from your account (${e?.message ?? e}). Nothing was read.`)
+  }
+  const labels: Record<string, string> = Object.fromEntries(drives.map((d) => [String(d.external_id), String(d.label ?? d.external_id)]))
+  const [driveId, rawRel] = resolveRef(String(a.ref), labels)
+  const drive = drives.find((d) => String(d.external_id) === driveId)
+  if (!drive) return fail(1, `${driveId} is not a cataloged drive. See your drives with: iris drives list`)
+  const name = labels[driveId]
+  const excludes = String(drive.private_excluded ?? "").split("\n").filter((x) => x.trim())
+
+  // The privacy check comes before anything on the drive is touched.
+  const rel = path.posix.normalize(rawRel.replace(/^\/+/, ""))
+  if (!rawRel || rel === "." || rel === ".." || rel.startsWith("../")) return fail(1, `Give a file inside the drive: iris drives get "${name}:<path>" (paths come from iris drives find)`)
+  const privateMsg = `${rel} is inside a private folder on ${name}. Private folders are never opened, so it cannot be read.`
+  if (insidePrivate(rel, excludes)) return fail(1, privateMsg)
+
+  const mount = (deps.resolveMount ?? resolveMount)(driveId)
+  if (!mount) return fail(2, notConnected(name), "out")
+  let real: string
+  try {
+    real = fs.realpathSync(path.join(mount, rel))
+  } catch {
+    return fail(3, `${name} is connected at ${mount}, but ${rel} is not there (moved or deleted since the last scan)`, "out")
+  }
+  // A link must not lead out of the drive, or into a private folder by another name.
+  const relReal = path.relative(fs.realpathSync(mount), real).split(path.sep).join("/")
+  if (!relReal || relReal.startsWith("..") || path.isAbsolute(relReal)) return fail(1, `${rel} leads outside ${name}; not read.`)
+  if (insidePrivate(relReal, excludes)) return fail(1, privateMsg)
+
+  const st = fs.statSync(real)
+  const lower = relReal.toLowerCase()
+  const isBundle = st.isDirectory() && BUNDLES.some((b) => lower.endsWith(b))
+  if (st.isDirectory() && !isBundle)
+    return fail(1, `${rel} is a folder. get copies ONE file, or one project bundle (${BUNDLES.slice(0, 3).join(", ")}…) as a .zip.`)
+  if (!st.isDirectory() && !st.isFile()) return fail(1, `${rel} is not a regular file; not read.`)
+  if (APP_BUNDLES.some((b) => lower.endsWith(b))) return fail(1, `${rel} is an installed app; apps are listed, never opened.`)
+
+  // Sensitive = the drive's finding says so, or the name alone would make it one.
+  let findings: any[]
+  try {
+    findings = await deps.findings(driveId)
+  } catch (e: any) {
+    return fail(1, `Could not check whether ${rel} is a sensitive file (${e?.message ?? e}). Nothing was read.`)
+  }
+  const finding = findings.find((f) => (f?.path === relReal || f?.path === rel) && f?.status !== "moved")
+  const sensitiveKind = finding?.kind ?? (SENSITIVE.has(kindOf(relReal)) ? kindOf(relReal) : null)
+  if (sensitiveKind && !a.confirm)
+    return fail(
+      1,
+      `${rel} is a sensitive file (${sensitiveKind}) on ${name}${drive.encrypted ? "" : ", and that drive is NOT encrypted"}.\n` +
+        `Copying it puts a second copy on this computer. If you mean to, add --confirm. The read is recorded either way.`,
+    )
+
+  const to = path.resolve(a.to)
+  fs.mkdirSync(to, { recursive: true })
+  const dest = path.join(to, path.posix.basename(relReal) + (isBundle ? ".zip" : ""))
+  if (fs.existsSync(dest)) return fail(1, `${dest} already exists — not overwritten. Choose another --to.`)
+
+  let sha256: string
+  let bytes: number
+  try {
+    if (isBundle) {
+      const members = bundleMembers(real)
+      const hashed = members.map(([r, p]) => [r, hash(p)] as [string, string])
+      sha256 = bundleHashFromLines(hashed)
+      bytes = members.reduce((n, [, p]) => n + fs.statSync(p).size, 0)
+      await zipBundle(dest, members, bytes)
+      const back = await zipBundleHash(dest)
+      if (back.sha256 !== sha256 || back.members !== members.length) throw new MismatchError()
+    } else {
+      sha256 = hash(real)
+      bytes = st.size
+      fs.copyFileSync(real, dest, fs.constants.COPYFILE_EXCL)
+      if (hash(dest) !== sha256) throw new MismatchError()
+    }
+  } catch (e: any) {
+    fs.rmSync(dest, { force: true })
+    if (e instanceof MismatchError) return fail(1, `The copy of ${rel} did not match the original (sha256). It was removed; nothing was recorded. Try again.`)
+    return fail(1, `Could not copy ${rel}: ${e?.message ?? e}. Nothing was recorded.`)
+  }
+
+  const at = utcIso(deps.now())
+  const row = {
+    external_id: `${driveId}:${relReal}:${at}`, drive_id: driveId, drive_label: name, path: relReal, bytes, sha256,
+    read_by: await deps.account().catch(() => "unknown"), read_on: deps.host, purpose: why, at,
+  }
+  try {
+    await deps.ensureReadsDataset()
+    const r = await deps.writeAudit([row])
+    if (r.failed || r.created + r.updated !== 1) throw new Error(`created ${r.created} · updated ${r.updated} · failed ${r.failed}`)
+  } catch (e: any) {
+    // Not on the record → not kept.
+    fs.rmSync(dest, { force: true })
+    return fail(1, `Could not record this read in your account (${e?.message ?? e}). The copy was removed. Check your connection and try again.`)
+  }
+  out.push(`Copied ${relReal} from ${name} → ${dest}`)
+  out.push(`  ${formatSize(bytes)} · sha256 ${sha256.slice(0, 16)}… verified · recorded in your Drives board (Drive reads)`)
+  return { code: 0, out, err, dest, row }
+}
+
+class MismatchError extends Error {}
+
+const GetCommand = cmd({
+  command: "get <ref>",
+  describe: "copy ONE file (or one project bundle, as .zip) off a drive plugged into this computer — checked, and recorded with your reason",
+  builder: (y) =>
+    y
+      .positional("ref", { type: "string", demandOption: true, describe: "<drive>:<path inside the drive>, as iris drives find shows it" })
+      .option("to", { type: "string", demandOption: true, describe: "the folder to copy it into" })
+      .option("why", { type: "string", describe: "REQUIRED: why you are reading it — saved with the record" })
+      .option("confirm", { type: "boolean", default: false, describe: "needed for a sensitive file (passwords, keys, database dumps)" })
+      .option("bloq", BLOQ_OPTION)
+      .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "one file, checked and recorded")
+      .example('$0 drives get "Studio:Songs/Demo.logicx" --to ~/Desktop --why "mixdown"', "a project bundle arrives as Demo.logicx.zip")
+      .example('$0 drives get "Old site:app/.env" --to ~/secure --why "rotate the key" --confirm', "a sensitive file needs --confirm")
+      .epilogue(HOWTO),
+  async handler(args) {
+    if (!String(args.why ?? "").trim()) {
+      console.error('  --why is required: say why you are reading this file, e.g. --why "send the brief to the client". It goes on the record.')
+      process.exit(1)
+    }
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const reads = DRIVES_DATASETS.find((d) => d.slug === "drive-reads")!
+    const r = await runGet(
+      { ref: String(args.ref), to: String(args.to), why: args.why as string | undefined, confirm: args.confirm === true },
+      {
+        drives: () => atlasDrives(bloq),
+        findings: async (driveId) => (await atlasRecords("drive-findings", bloq, { drive_id: driveId })).map((x) => x?.data ?? {}),
+        ensureReadsDataset: async () => { await liveBoardApi(userId).createDataset(reads.slug, reads.name, reads.fields, bloq) },
+        writeAudit: (rows) => importRows("drive-reads", bloq, rows),
+        account: async () => {
+          const res = await irisFetch("/api/user")
+          const b = res.ok ? ((await res.json()) as any) : {}
+          const u = b?.data ?? b
+          return String(u?.email || u?.name || `user ${userId}`)
+        },
+        host: os.hostname(),
+        now: () => new Date(),
+      },
+    )
+    for (const l of r.out) console.log(l)
+    for (const l of r.err) console.error(`  ${l}`)
+    if (r.code) process.exit(r.code)
   },
 })
 
@@ -709,14 +1030,18 @@ export const PlatformDrivesCommand = cmd({
       .command(FindCommand)
       .command(PathCommand)
       .command(ListCommand)
-      .demandCommand(1, "Specify: scan, find, path, list")
+      .command(CopiesCommand)
+      .command(GetCommand)
+      .demandCommand(1, "Specify: scan, find, path, list, copies, get")
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
       .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
       .example("$0 drives scan ~/Projects --label \"Client projects\"", "catalog a folder")
       .example("$0 drives scan /Volumes/Backup --exclude Personal", "a private folder: never opened, remembered next time")
-      .example("$0 drives find freetrap stems", "which drive has it — plugged in or not")
+      .example("$0 drives find mix stems", "which drive has it — plugged in or not")
       .example('$0 drives path "Studio footage:Shoot 12/A001.mov"', "the real path, if that drive is plugged in here")
-      .example("$0 drives list", "every drive: encrypted?, sensitive files, connected here?")
+      .example("$0 drives list", "every drive: encrypted?, sensitive files, free space, connected here?")
+      .example("$0 drives copies final mix", "how many identical copies exist, and on which drives")
+      .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "copy one file off a plugged-in drive — recorded in your Drives board")
       .epilogue(HOWTO),
   async handler() {},
 })

@@ -14,6 +14,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { gzipSync, gunzipSync } from "zlib"
+import { createHash } from "crypto"
 
 export const STORE = () => path.join(os.homedir(), ".iris", "drives")
 
@@ -62,7 +63,79 @@ export function kindOf(rel: string): string {
 
 // ── walk ──────────────────────────────────────────────────────────────────────
 
-export type Entry = { rel: string; bytes: number; mtime: number; kind: string }
+/** sha256 is "" (or absent) when the file was not checksummed — see shouldHash. */
+export type Entry = { rel: string; bytes: number; mtime: number; kind: string; sha256?: string }
+
+// ── checksums: copies counted by content (#192914) ─────────────────────────────────
+//
+// Hashing 5.5 TB over USB is ~10 hours, so by default only the small, high-value files are
+// hashed: every sensitive file, and project/document/audio files up to 64 MB. `--checksums all`
+// hashes everything, `--checksums none` nothing. drive_scan.py applies the same rule.
+
+export type Checksums = "default" | "all" | "none"
+export const CHECKSUM_CHOICES: Checksums[] = ["default", "all", "none"]
+export const HASH_KINDS = new Set(["project", "document", "audio"])
+export const HASH_MAX_BYTES = 64 * 1024 * 1024
+
+/** An empty file is never hashed: every empty file on every drive would count as one "copy". */
+export function shouldHash(kind: string, bytes: number, mode: Checksums): boolean {
+  if (mode === "none" || !(bytes > 0)) return false
+  if (mode === "all") return true
+  return SENSITIVE.has(kind) || (HASH_KINDS.has(kind) && bytes <= HASH_MAX_BYTES)
+}
+
+export function sha256File(p: string): string {
+  const h = createHash("sha256")
+  const fd = fs.openSync(p, "r")
+  try {
+    const buf = Buffer.allocUnsafe(4 << 20)
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null)
+      if (n <= 0) break
+      h.update(buf.subarray(0, n))
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
+  return h.digest("hex")
+}
+
+/** UTF-8 byte order == Unicode code-point order == Python's sorted() on str. */
+const byCodePoint = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b))
+
+/**
+ * A bundle's hash: sha256 of its members' `relpath\tsha256` lines, sorted, each ending in \n.
+ * relpath is relative to the bundle, "/"-separated. Only regular files are members.
+ */
+export function bundleHashFromLines(members: Array<[string, string]>): string {
+  const lines = members.map(([rel, h]) => `${rel}\t${h}`).sort(byCodePoint)
+  return createHash("sha256").update(lines.map((l) => l + "\n").join("")).digest("hex")
+}
+
+/** Every regular file inside a bundle: [relpath ("/"-separated), absolute path]. Links are not followed. */
+export function bundleMembers(dir: string, F: WalkFs = realFs): Array<[string, string]> {
+  const out: Array<[string, string]> = []
+  const stack = [""]
+  while (stack.length) {
+    const rel = stack.pop()!
+    let items: fs.Dirent[]
+    try {
+      items = F.readdir(path.join(dir, rel))
+    } catch {
+      continue
+    }
+    for (const e of items) {
+      const r = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) stack.push(r)
+      else if (e.isFile()) out.push([r, path.join(dir, r)])
+    }
+  }
+  return out
+}
+
+export function bundleHash(dir: string, hashFile: (p: string) => string = sha256File, F: WalkFs = realFs): string {
+  return bundleHashFromLines(bundleMembers(dir, F).map(([rel, abs]) => [rel, hashFile(abs)]))
+}
 
 /** The filesystem calls the walk makes — injectable so a test can prove a folder is never opened. */
 export type WalkFs = {
@@ -85,12 +158,30 @@ export function normalizeExcludes(excludes: readonly string[]): string[] {
  */
 export function* walk(
   root: string,
-  opts: { excludes?: readonly string[]; unreadable?: string[]; fsImpl?: WalkFs; store?: string } = {},
+  opts: {
+    excludes?: readonly string[]
+    unreadable?: string[]
+    fsImpl?: WalkFs
+    store?: string
+    /** default "none": nothing is read but names, sizes and dates. */
+    checksums?: Checksums
+    hashFile?: (abs: string) => string
+  } = {},
 ): Generator<Entry> {
   const ex = normalizeExcludes(opts.excludes ?? [])
   const unreadable = opts.unreadable ?? []
   const F = opts.fsImpl ?? realFs
   const store = opts.store ?? STORE()
+  const mode = opts.checksums ?? "none"
+  const hashFile = opts.hashFile ?? sha256File
+  // A file that cannot be read is "not checksummed", never a failed scan.
+  const tryHash = (f: () => string) => {
+    try {
+      return f()
+    } catch {
+      return ""
+    }
+  }
   const stack = [""]
   while (stack.length) {
     const relDir = stack.pop()!
@@ -117,13 +208,16 @@ export function* walk(
             yield { rel, bytes: 0, mtime: F.lstat(path.join(root, rel)).mtimeMs / 1000, kind: "other" }
           } else if (BUNDLES.some((b) => lower.endsWith(b))) {
             const { total, newest } = bundleSize(path.join(root, rel), F)
-            yield { rel, bytes: total, mtime: newest, kind: "project" }
+            const sha256 = shouldHash("project", total, mode) ? tryHash(() => bundleHash(path.join(root, rel), hashFile, F)) : ""
+            yield { rel, bytes: total, mtime: newest, kind: "project", sha256 }
           } else {
             stack.push(rel)
           }
         } else if (e.isFile()) {
           const s = F.lstat(path.join(root, rel))
-          yield { rel, bytes: s.size, mtime: s.mtimeMs / 1000, kind: kindOf(rel) }
+          const kind = kindOf(rel)
+          const sha256 = shouldHash(kind, s.size, mode) ? tryHash(() => hashFile(path.join(root, rel))) : ""
+          yield { rel, bytes: s.size, mtime: s.mtimeMs / 1000, kind, sha256 }
         }
       } catch {
         continue
@@ -191,6 +285,11 @@ export function round(x: number, digits: number): number {
 // ── TSV (python csv, delimiter \t, lineterminator \n, QUOTE_MINIMAL) ─────────────
 
 export const TSV_HEADER = ["path", "bytes", "modified", "kind"]
+/**
+ * The optional 5th column (#192914). Readers take 4 or 5 columns: parseTsv maps by header, so
+ * a 4-column manifest simply has no sha256, and older readers ignore the extra column.
+ */
+export const TSV_HEADER_SHA = [...TSV_HEADER, "sha256"]
 
 export function tsvField(v: string | number): string {
   const s = String(v)
@@ -199,8 +298,10 @@ export function tsvField(v: string | number): string {
 export function tsvRow(cells: Array<string | number>): string {
   return cells.map(tsvField).join("\t") + "\n"
 }
-export function manifestRow(e: Entry): string {
-  return tsvRow([e.rel, e.bytes, e.mtime ? isoDate(e.mtime) : "", e.kind])
+export function manifestRow(e: Entry, withSha = false): string {
+  const cells: Array<string | number> = [e.rel, e.bytes, e.mtime ? isoDate(e.mtime) : "", e.kind]
+  if (withSha) cells.push(e.sha256 ?? "")
+  return tsvRow(cells)
 }
 
 /** Parse what python's csv.writer wrote (and csv.DictReader reads): quoted fields may hold tabs, quotes, newlines. */
@@ -436,11 +537,92 @@ export const DRIVES_BOARD_DESCRIPTION =
   "Catalog of my drives: one card per drive, rows for project folders and sensitive files, an encrypted file list per drive."
 
 /**
- * The three datasets, field for field as the iris-drives playbook's `setup` step creates them
+ * The four datasets, field for field as the iris-drives playbook's `setup` step creates them
  * (copied verbatim from its heredocs). Change one, change both — the two must build the same board.
  */
 export const DRIVES_DATASETS: Array<{ slug: string; name: string; fields: any[] }> = [
-  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"}]`) },
+  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"},{"key":"free_gb","type":"number","label":"Free (GB)"},{"key":"last_seen_on","type":"text","label":"Last seen on"},{"key":"last_seen_at","type":"datetime","label":"Last seen at"}]`) },
   { slug: "drive-folders", name: "Drive folders", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Folder ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"folder","type":"text","label":"Folder"},{"key":"main_kind","type":"enum","label":"Mostly","options":[{"label":"video","value":"video"},{"label":"audio","value":"audio"},{"label":"image","value":"image"},{"label":"project","value":"project"},{"label":"code","value":"code"},{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"},{"label":"document","value":"document"},{"label":"archive","value":"archive"},{"label":"other","value":"other"}]},{"key":"files","type":"number","label":"Files"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"kinds","type":"text","label":"Kinds"},{"key":"newest","type":"date","label":"Newest file"},{"key":"sensitive_files","type":"number","label":"Sensitive files"}]`) },
   { slug: "drive-findings", name: "Drive findings", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Finding ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"}]},{"key":"size_kb","type":"number","label":"Size (KB)"},{"key":"drive_encrypted","type":"boolean","label":"Drive encrypted"},{"key":"status","type":"enum","label":"Status","options":[{"label":"exposed","value":"exposed"},{"label":"contained","value":"contained"},{"label":"moved","value":"moved"}]},{"key":"found","type":"date","label":"Found"}]`) },
+  // One row per `iris drives get`: who read which file, from which machine, why, and what it hashed to.
+  { slug: "drive-reads", name: "Drive reads", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Read ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"bytes","type":"number","label":"Bytes"},{"key":"sha256","type":"text","label":"SHA-256"},{"key":"read_by","type":"text","label":"Read by"},{"key":"read_on","type":"text","label":"Read on (machine)"},{"key":"purpose","type":"text","label":"Why"},{"key":"at","type":"datetime","label":"At"}]`) },
 ]
+
+// ── copies (#192914) ─────────────────────────────────────────────────────────────
+
+export type ManifestRow = { drive: string; path: string; bytes: number; sha256: string }
+
+/** sha256 → every row with that content, across all drives. Rows with no hash are left out. */
+export function copyIndex(all: readonly ManifestRow[]): Map<string, ManifestRow[]> {
+  const idx = new Map<string, ManifestRow[]>()
+  for (const r of all) {
+    if (!r.sha256) continue
+    const list = idx.get(r.sha256)
+    if (list) list.push(r)
+    else idx.set(r.sha256, [r])
+  }
+  return idx
+}
+
+export type CopiesReport = {
+  /** one entry per file name; >1 version = same name, different content */
+  known: Array<{ name: string; versions: Array<{ sha256: string; copies: ManifestRow[] }> }>
+  /** matches with no checksum yet */
+  unknown: ManifestRow[]
+}
+
+const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1)
+const rowOrder = (a: ManifestRow, b: ManifestRow) => byCodePoint(a.drive, b.drive) || byCodePoint(a.path, b.path)
+
+/**
+ * The files whose path holds every word, grouped by content across ALL drives' manifests.
+ * A version's copies include renamed copies (same content, other name) on any drive.
+ */
+export function copiesReport(all: readonly ManifestRow[], words: readonly string[]): CopiesReport {
+  const w = words.map((x) => x.toLowerCase())
+  const idx = copyIndex(all)
+  const names = new Map<string, { name: string; shas: Set<string> }>()
+  const seen = new Set<string>()
+  const unknown: ManifestRow[] = []
+  for (const r of all) {
+    const p = r.path.toLowerCase()
+    if (!w.every((x) => p.includes(x))) continue
+    if (!r.sha256) { unknown.push(r); continue }
+    if (seen.has(r.sha256)) continue
+    seen.add(r.sha256)
+    const name = baseName(r.path)
+    const key = name.toLowerCase()
+    const n = names.get(key) ?? { name, shas: new Set<string>() }
+    n.shas.add(r.sha256)
+    names.set(key, n)
+  }
+  const known = [...names.values()]
+    .map(({ name, shas }) => ({
+      name,
+      versions: [...shas]
+        .map((sha256) => ({ sha256, copies: [...(idx.get(sha256) ?? [])].sort(rowOrder) }))
+        .sort((a, b) => b.copies.length - a.copies.length || byCodePoint(a.sha256, b.sha256)),
+    }))
+    .sort((a, b) => byCodePoint(a.name.toLowerCase(), b.name.toLowerCase()))
+  return { known, unknown: unknown.sort(rowOrder) }
+}
+
+/** "3 identical copies on: A, B" · "only 1 copy, on: A" · "same name, different content: 2 versions" */
+export function copiesLine(versions: CopiesReport["known"][number]["versions"]): string {
+  if (versions.length > 1) return `same name, different content: ${versions.length} versions`
+  const copies = versions[0]?.copies ?? []
+  const drives = [...new Set(copies.map((c) => c.drive))].sort(byCodePoint).join(", ")
+  return copies.length === 1 ? `only 1 copy, on: ${drives}` : `${copies.length} identical copies on: ${drives}`
+}
+
+// ── live drive fields (#192914) ───────────────────────────────────────────────────
+
+/** "2026-11-09T18:04:05Z" — UTC, whole seconds; drive_scan.py writes the same shape. */
+export function utcIso(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z")
+}
+
+/** What a scan says about the drive right now: free space, and which machine saw it when. */
+export function liveDriveFields(st: { bavail: number; bsize: number }, host: string, now: Date) {
+  return { free_gb: round((st.bavail * st.bsize) / 1e9, 1), last_seen_on: host, last_seen_at: utcIso(now) }
+}
