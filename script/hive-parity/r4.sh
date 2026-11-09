@@ -40,6 +40,8 @@ except Exception: print("")')
       for _ in $(seq 1 15); do
         res=$(ssh -o BatchMode=yes "$OBS" "$OBS_IRIS hive tasks get $tid" 2>&1)
         if printf '%s' "$res" | grep -q "Remote access to this computer is off"; then verdict_in="node-refused"; break; fi
+        # The hub fails the task itself once the node is listed offline (fl-iris-api#352).
+        if printf '%s' "$res" | grep -q "offline or cannot accept work"; then verdict_in="hub-refused"; break; fi
         if printf '%s' "$res" | grep -qE "Status:.*completed"; then verdict_in="DELIVERED"; break; fi
         sleep 2
       done
