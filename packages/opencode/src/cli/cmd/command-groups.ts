@@ -12,7 +12,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
   },
   atlas: {
     name: "Atlas OS",
-    description: "Ledger, staff, inventory, meetings, brand kit, deals",
+    description: "Ledger, staff, inventory, meetings, brand kit, deals, drives",
     order: 2,
   },
   knowledge: {

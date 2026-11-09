@@ -21,6 +21,16 @@ export const SKIP_DIRS = new Set([
   ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", "lost+found",
   "System Volume Information", "$RECYCLE.BIN", ".DocumentRevisions-V100", ".git", "node_modules",
 ])
+/**
+ * macOS leaves suffixed copies of its own system folders (".DocumentRevisions-V100-bad",
+ * ".Spotlight-V100.old"), so these are skipped by PREFIX, as drive_scan.py does (#192974).
+ */
+export const SKIP_PREFIXES = [".DocumentRevisions-V100", ".Spotlight-V100", ".TemporaryItems", ".fseventsd"]
+/**
+ * An installed app, framework, plug-in or driver is ONE item, listed and never opened: the
+ * certificates and keys inside Zoom.app are the vendor's, not ours, and are not findings (#192974).
+ */
+export const APP_BUNDLES = [".app", ".framework", ".plugin", ".bundle", ".kext"]
 /** Bundles are ONE thing to a person (a Logic project is a folder of 2,000 files on disk). */
 export const BUNDLES = [".logicx", ".fcpbundle", ".photoslibrary", ".band", ".dspproj", ".imovielibrary", ".prproj", ".aep"]
 
@@ -93,7 +103,7 @@ export function* walk(
     }
     for (const e of items) {
       const name = e.name
-      if (name.startsWith("._") || SKIP_DIRS.has(name) || name === ".DS_Store") continue
+      if (name.startsWith("._") || SKIP_DIRS.has(name) || name === ".DS_Store" || SKIP_PREFIXES.some((p) => name.startsWith(p))) continue
       const rel = relDir ? `${relDir}/${name}` : name
       const rl = rel.toLowerCase()
       if (path.join(root, rel).startsWith(store)) continue // never catalog our own manifests
@@ -102,7 +112,10 @@ export function* walk(
         if (e.isSymbolicLink()) continue
         if (e.isDirectory()) {
           const lower = name.toLowerCase()
-          if (BUNDLES.some((b) => lower.endsWith(b))) {
+          if (APP_BUNDLES.some((b) => lower.endsWith(b))) {
+            // Listed, not opened — same row drive_scan.py writes (0 bytes, kind "other").
+            yield { rel, bytes: 0, mtime: F.lstat(path.join(root, rel)).mtimeMs / 1000, kind: "other" }
+          } else if (BUNDLES.some((b) => lower.endsWith(b))) {
             const { total, newest } = bundleSize(path.join(root, rel), F)
             yield { rel, bytes: total, mtime: newest, kind: "project" }
           } else {
@@ -411,3 +424,23 @@ export function splitRef(ref: string, knownIds: readonly string[] = []): [string
   }
   return [ref, ""]
 }
+
+// ── the board and its datasets (#192974) ─────────────────────────────────────────
+
+/**
+ * The board a client's drives live on, found by name so nobody types an id. "IRIS Drives" is
+ * accepted for accounts that set up before the name settled.
+ */
+export const DRIVES_BOARD_NAMES = ["Drives", "IRIS Drives"]
+export const DRIVES_BOARD_DESCRIPTION =
+  "Catalog of my drives: one card per drive, rows for project folders and sensitive files, an encrypted file list per drive."
+
+/**
+ * The three datasets, field for field as the iris-drives playbook's `setup` step creates them
+ * (copied verbatim from its heredocs). Change one, change both — the two must build the same board.
+ */
+export const DRIVES_DATASETS: Array<{ slug: string; name: string; fields: any[] }> = [
+  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"}]`) },
+  { slug: "drive-folders", name: "Drive folders", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Folder ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"folder","type":"text","label":"Folder"},{"key":"main_kind","type":"enum","label":"Mostly","options":[{"label":"video","value":"video"},{"label":"audio","value":"audio"},{"label":"image","value":"image"},{"label":"project","value":"project"},{"label":"code","value":"code"},{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"},{"label":"document","value":"document"},{"label":"archive","value":"archive"},{"label":"other","value":"other"}]},{"key":"files","type":"number","label":"Files"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"kinds","type":"text","label":"Kinds"},{"key":"newest","type":"date","label":"Newest file"},{"key":"sensitive_files","type":"number","label":"Sensitive files"}]`) },
+  { slug: "drive-findings", name: "Drive findings", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Finding ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"}]},{"key":"size_kb","type":"number","label":"Size (KB)"},{"key":"drive_encrypted","type":"boolean","label":"Drive encrypted"},{"key":"status","type":"enum","label":"Status","options":[{"label":"exposed","value":"exposed"},{"label":"contained","value":"contained"},{"label":"moved","value":"moved"}]},{"key":"found","type":"date","label":"Found"}]`) },
+]
