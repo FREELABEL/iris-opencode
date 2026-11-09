@@ -113,7 +113,10 @@ function fakePusher() {
         const m = JSON.parse(String(raw))
         events.push(m.event)
         if (m.event === "pusher:subscribe") {
-          if (m.data.auth !== `pk:sig-for-123.456:${m.data.channel}`) return ws.send(JSON.stringify({ event: "pusher:error", data: { code: 4009, message: "bad auth" } }))
+          if (m.data.auth !== `pk:sig-for-123.456:${m.data.channel}`) {
+            ws.send(JSON.stringify({ event: "pusher:error", data: { code: 4009, message: "bad auth" } }))
+            return
+          }
           ws.send(JSON.stringify({ event: "pusher_internal:subscription_succeeded", channel: m.data.channel, data: "{}" }))
         }
       },
