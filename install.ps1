@@ -523,17 +523,44 @@ function Install-IrisDaemonSource {
 
         # The exact commit: GitHub stores it as the zip's archive comment, the last bytes of the
         # file. Recorded so `iris hive doctor` can say what this node runs (#191480).
+        $commit = $null
         try {
             $bytes = [System.IO.File]::ReadAllBytes($zip)
             $n = [Math]::Min(256, $bytes.Length)
             $tail = [System.Text.Encoding]::ASCII.GetString($bytes, $bytes.Length - $n, $n)
             if ($tail -match '([0-9a-f]{40})\s*$') {
-                Set-Content -Path (Join-Path $root.FullName ".iris-commit") -Value $Matches[1] -Encoding ascii
+                $commit = $Matches[1]
+                Set-Content -Path (Join-Path $root.FullName ".iris-commit") -Value $commit -Encoding ascii
             }
         } catch { }
 
+        # The manifest the daemon reads to report its commit (#191614). Without it a Windows node
+        # showed "commit unknown" forever, and `iris daemon update` could not tell the shipped
+        # files from local edits (#192109). Hashed from the ARCHIVE, before this machine's runtime
+        # files are copied in, by the daemon's own hashTree, so the paths and exclusions are
+        # exactly what the daemon checks.
+        if ($commit -and (Get-Command node -ErrorAction SilentlyContinue)) {
+            $js = @'
+const [dir, commit, source] = process.argv.slice(1)
+const vm = require(dir + '/lib/version-manifest')
+const manifest = { schema: 1, commit, installed_at: new Date().toISOString(), source, files: vm.hashTree(dir) }
+require('fs').writeFileSync(dir + '/' + vm.MANIFEST_NAME, JSON.stringify(manifest, null, 2) + '\n')
+'@
+            try { & node -e $js $root.FullName $commit $Url 2>$null } catch { }
+        }
+
         $result.Updated = Test-Path (Join-Path $BridgeDir "daemon.js")
         New-Item -ItemType Directory -Path $BridgeDir -Force -ErrorAction Stop | Out-Null
+
+        # A .git left by an old clone-based install describes a commit these files no longer are,
+        # and `iris daemon update` trusts .git over the manifest: it reported that old commit and
+        # 209 "local changes" on qb-host-vanguard. Moved aside (kept), never deleted.
+        $staleGit = Join-Path $BridgeDir ".git"
+        if (Test-Path $staleGit) {
+            $backup = "$BridgeDir.git-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+            Move-Item -Path $staleGit -Destination $backup -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $staleGit)) { Write-Host "  Moved the old git checkout aside: $backup" -ForegroundColor DarkGray }
+        }
 
         # Remove only the files the repo owns; leave preserved entries untouched.
         Get-ChildItem -Path $BridgeDir -Force -ErrorAction SilentlyContinue | Where-Object {
