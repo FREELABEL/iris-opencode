@@ -3615,6 +3615,11 @@ const BloqsPlaybooksCommand = cmd({
 // Contributors — list leads attached to a bloq
 // ============================================================================
 
+/** What `contributors` lists, said in its own output: agents read these leads as "who can see the board" (#193064). */
+export function contributorsNote(bloqId: number | string): string {
+  return `These are the board's leads/contacts — not who can see the board. Who has access: iris bloqs members ${bloqId}`
+}
+
 const BloqsContributorsCommand = cmd({
   command: "contributors <bloq-id>",
   aliases: ["contacts", "leads"],
@@ -3650,9 +3655,15 @@ const BloqsContributorsCommand = cmd({
       const data = await res.json() as Record<string, unknown>
       const leads: any[] = firstArray((data as any)?.data, (data as any)?.leads, (Array.isArray(data) ? data : []))
 
-      if (args.json) { await writeJson(leads); return }
+      if (args.json) {
+        await writeJson(leads)
+        // stderr, so stdout stays the JSON a script parses; an MCP agent reads both.
+        process.stderr.write(contributorsNote(args["bloq-id"]) + "\n")
+        return
+      }
 
       if (spinner) spinner.stop(`${leads.length} contributor(s)`)
+      prompts.log.info(dim(contributorsNote(args["bloq-id"])))
 
       if (leads.length === 0) {
         prompts.log.warn("No leads attached to this bloq")
