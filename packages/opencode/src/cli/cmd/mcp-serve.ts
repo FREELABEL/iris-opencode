@@ -24,6 +24,7 @@ import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
 import { buildAgentListArgs, renderAgentList } from "./mcp-agent-list"
+import { dryRunAllows, dryRunResult, isDryRun } from "./mcp-dry-run"
 import { WAIT_POLL_MS, answerArgs, bridgeErrorText, fleetArgs, parseFleet, waitLoop, waitParams, waitPollArgs } from "./mcp-hive"
 import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
 
@@ -1049,6 +1050,16 @@ parts you did not mean to touch.`,
 
     const callTool = async (request: CallToolRequest) => {
       const { name, arguments: args } = request.params
+
+      // #193064 benchmark: with IRIS_MCP_DRY_RUN=1 only known reads run; the rest is recorded.
+      if (isDryRun() && !dryRunAllows(name, args as Record<string, unknown> | undefined)) {
+        const log = process.env.IRIS_MCP_DRY_RUN_LOG
+        if (log) {
+          const { appendFileSync } = await import("fs")
+          appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), tool: name, args: args ?? {} }) + "\n")
+        }
+        return { content: [{ type: "text" as const, text: dryRunResult(name, args) }] }
+      }
 
       if (playbooksEnabled && name.startsWith(TOOL_PREFIX)) {
         try {

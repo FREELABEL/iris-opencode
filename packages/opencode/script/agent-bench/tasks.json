@@ -1,0 +1,25 @@
+{
+  "about": "Agent benchmark for the IRIS MCP tool layout (#193064). Tasks are drawn from the measured usage mix (514 MCP iris_run calls and 2,624 agent Bash calls on iris-hive-002, 2026-11-10): the top commands plus tail ones. A task passes when the agent makes at least one call matching an `accept` entry. Writes run under IRIS_MCP_DRY_RUN=1, recorded and never executed.",
+  "tasks": [
+    { "id": "nodes", "effect": "read", "prompt": "Which of my Hive machines are online right now? Just list their names.",
+      "accept": [{ "tool": "iris_run", "command": "^hive (nodes|status|inventory)" }, { "tool": "hive_inventory" }] },
+    { "id": "sessions", "effect": "read", "prompt": "How many AI coding sessions are running on each of my machines? Give a count per machine.",
+      "accept": [{ "tool": "hive_sessions" }, { "tool": "iris_run", "command": "^hive sessions" }] },
+    { "id": "needs-you", "effect": "read", "prompt": "Is any session on my machines waiting for me to answer a question right now? Check once and tell me.",
+      "accept": [{ "tool": "hive_wait" }, { "tool": "hive_sessions" }, { "tool": "iris_run", "command": "^hive sessions.*needs_you" }] },
+    { "id": "tasks", "effect": "read", "prompt": "Show my five most recent Hive tasks and whether each one succeeded.",
+      "accept": [{ "tool": "iris_run", "command": "^hive tasks" }] },
+    { "id": "board-search", "effect": "read", "prompt": "Search my boards for anything about Lexicon and tell me the three most relevant items.",
+      "accept": [{ "tool": "iris_run", "command": "^(bloqs|boards) search" }, { "tool": "iris_memory", "action": "search" }, { "tool": "iris_run", "command": "^search" }] },
+    { "id": "board-items", "effect": "read", "prompt": "List the open items on board 297 (the IRIS CLI bug board). Just the first ten titles.",
+      "accept": [{ "tool": "iris_run", "command": "^(bloqs|boards) (items|get|list-items)" }, { "tool": "iris_memory", "action": "items" }, { "tool": "iris_run", "command": "^bug list" }] },
+    { "id": "bug-show", "effect": "read", "prompt": "What is the status of IRIS bug #193064, and what is its title?",
+      "accept": [{ "tool": "iris_run", "command": "^bug (show|get|view)" }] },
+    { "id": "hive-run", "effect": "write", "prompt": "Run `uptime` on my machine iris-hive-001 through Hive and tell me the result.",
+      "accept": [{ "tool": "iris_run", "command": "^hive (run|exec|script)" }] },
+    { "id": "add-item", "effect": "write", "prompt": "Add an item titled 'agent bench — please ignore' to board 297.",
+      "accept": [{ "tool": "iris_run", "command": "^(bloqs|boards) (add-item|create-item|item add|items add|add)" }, { "tool": "iris_memory", "action": "add" }] },
+    { "id": "bug-report", "effect": "write", "prompt": "File a low-severity IRIS bug titled 'agent bench — please ignore' with the description 'benchmark run'.",
+      "accept": [{ "tool": "iris_run", "command": "^bug (report|create|new|file)" }] }
+  ]
+}
