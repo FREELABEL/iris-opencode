@@ -1,4 +1,5 @@
 mod accounts;
+mod browser;
 mod cli;
 mod deep_link;
 mod engine_auth;
@@ -141,6 +142,45 @@ async fn get_logs(app: AppHandle) -> Result<String, String> {
 
 /// The port from OPENCODE_PORT, when one was given. Only then is an engine already answering on
 /// it one to attach to (#191482).
+/// Every app command. Registered through the webview gate in `run` (#193062), never directly.
+fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+            browser::browser_show,
+            browser::browser_bounds,
+            browser::browser_hide,
+            browser::browser_navigate,
+            browser::browser_go,
+            browser::browser_state,
+            browser::browser_cookie_domains,
+            kill_sidecar,
+            engine_credentials,
+            log_renderer,
+            copy_logs_to_clipboard,
+            get_logs,
+            install_cli,
+            cli_health,
+            iris_action,
+            login::save_iris_token,
+            login::restart_app,
+            login::open_login_window,
+            onboarding::track_onboarding,
+            google_signin::google_sign_in,
+            signin_in_app,
+            deep_link::take_deep_links
+    ]
+}
+
+/// The engine sidecar's port, once chosen. The Browser refuses to navigate to it (#193062): the
+/// engine is ours, and a web page has no business loading it as a page.
+static ENGINE_PORT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn engine_port_hint() -> Option<u16> {
+    match ENGINE_PORT.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => u16::try_from(p).ok(),
+    }
+}
+
 fn configured_sidecar_port() -> Option<u32> {
     option_env!("OPENCODE_PORT")
         .map(|s| s.to_string())
@@ -979,23 +1019,22 @@ pub fn run() {
                 engine_supervisor::note_page_load(webview.app_handle(), payload.url().as_str());
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            kill_sidecar,
-            engine_credentials,
-            log_renderer,
-            copy_logs_to_clipboard,
-            get_logs,
-            install_cli,
-            cli_health,
-            iris_action,
-            login::save_iris_token,
-            login::restart_app,
-            login::open_login_window,
-            onboarding::track_onboarding,
-            google_signin::google_sign_in,
-            signin_in_app,
-            deep_link::take_deep_links
-        ])
+        // #193062: the native Browser puts web pages in a webview's MAIN frame, where Tauri
+        // injects the IPC bridge. App commands carry no origin check (this app has no ACL
+        // manifest), so refuse every command that does not come from one of OUR webviews. One
+        // wrapper, not a check per command: a command added later is covered without remembering.
+        .invoke_handler({
+            let handler = app_commands();
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                let label = invoke.message.webview_ref().label().to_string();
+                if !browser::ipc_allowed(&label) {
+                    eprintln!("ipc: refused '{}' from webview '{label}'", invoke.message.command());
+                    invoke.resolver.reject("not allowed from this page");
+                    return true;
+                }
+                handler(invoke)
+            }
+        })
         .setup(move |app| {
             let app = app.handle().clone();
 
@@ -1075,6 +1114,7 @@ pub fn run() {
                       port = free_sidecar_port();
                       answering = is_server_running(port).await;
                   }
+                  ENGINE_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
                   let should_spawn_sidecar = !engine_supervisor::should_attach(configured_port.is_some(), answering);
 
                   if should_spawn_sidecar {
