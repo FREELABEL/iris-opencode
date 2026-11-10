@@ -10,7 +10,7 @@ import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
 import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
-import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
+import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, hiveRunScript, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
 import { listEnvelope, listFooter, wholeNumberError, rejectFieldErrors } from "./pagination-args"
 
@@ -714,14 +714,18 @@ const HiveRunCommand = cmd({
     // "run these three checks, report all three") could stop after the first
     // non-zero exit with no indication why (#182005).
     const failFast = argv["fail-fast"] !== false && !argv["no-fail-fast"]
+    const { nodeOs } = await import("./platform-hive-runner")
+    const windows = nodeOs(node) === "win32"
     if (failFast && !command.startsWith("#!") && !argv.json) {
-      console.log(dim("→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable"))
+      console.log(
+        dim(
+          windows
+            ? "→ Windows node: cmd.exe has no `set -e`, so every line runs — join commands with && to stop at the first failure"
+            : "→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable",
+        ),
+      )
     }
-    const script = command.startsWith("#!")
-      ? command
-      : failFast
-        ? `#!/bin/bash\nset -e\n${command}`
-        : `#!/bin/bash\n${command}`
+    const script = hiveRunScript(command, { failFast, windows })
     const title = (argv.title as string | undefined) ?? `iris hive run: ${command.slice(0, 60)}`
 
     const priority = argv.priority as number | undefined
