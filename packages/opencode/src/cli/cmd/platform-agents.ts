@@ -2075,6 +2075,9 @@ export const PlatformAgentsCommand = cmd({
   describe: "manage IRIS platform agents — install packs, pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
+      // #193064: "which of my agents are late or failing?" — agents read this help, never found the answer
+      // in it (0/3), and wandered into schedules. Health lives in another command; point at it here.
+      .epilogue("Which agents are late, failing or silent?  iris heartbeats query  (the states the Heartbeats panel shows)")
       .command(AgentsListCommand)
       .command(AgentsGetCommand)
       .command(AgentsCreateCommand)

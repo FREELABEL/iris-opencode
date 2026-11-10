@@ -1,0 +1,85 @@
+[
+ [
+  "which of my agents are late or failing",
+  [
+   "heartbeats",
+   "heartbeats query"
+  ]
+ ],
+ [
+  "are any of my agents broken right now",
+  [
+   "heartbeats",
+   "heartbeats query"
+  ]
+ ],
+ [
+  "who can see board 297",
+  [
+   "atlas members",
+   "bloqs members",
+   "bloq-members",
+   "bloq-members list"
+  ]
+ ],
+ [
+  "who has access to my board",
+  [
+   "atlas members",
+   "bloqs members",
+   "bloq-members",
+   "bloq-members list"
+  ]
+ ],
+ [
+  "what is a session on my machine doing right now",
+  [
+   "hive sessions",
+   "sessions read",
+   "hive sessions follow"
+  ]
+ ],
+ [
+  "how much have I spent on AI this week",
+  [
+   "usage"
+  ]
+ ],
+ [
+  "which apps have I connected to IRIS",
+  [
+   "integrations list-connected",
+   "integrations list-available",
+   "list-connected"
+  ]
+ ],
+ [
+  "stop agent 605 from running for now",
+  [
+   "agents pause"
+  ]
+ ],
+ [
+  "give dana access to board 297",
+  [
+   "atlas add-member",
+   "atlas invite",
+   "bloq-members invite",
+   "bloq-members add"
+  ]
+ ],
+ [
+  "make a new list called Benchmarks on board 297",
+  [
+   "atlas create-list",
+   "bloqs create-list"
+  ]
+ ],
+ [
+  "turn off schedule 12",
+  [
+   "schedules toggle",
+   "hive schedule pause"
+  ]
+ ]
+]

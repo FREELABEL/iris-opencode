@@ -548,6 +548,18 @@ const TERMS: Record<string, string[]> = {
   // product from my website then email them and book calls") — none of its words were here.
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
+  // #193064 agent benchmark: each of these was a real dead end for an agent AND for `iris intent`
+  // (intent-discovery-cases.json). "late or failing" reached a Discord playbook and `agents watch`;
+  // "who can see board 297" reached `teams list` (and the agent used `contributors`, the board's LEADS);
+  // "stop agent 605" reached `mint agent stop`; "make a new list on board 297" reached `bloq context`.
+  "heartbeats query": [
+    "late agents", "agents are late", "failing agents", "agents failing", "agents are failing", "broken agents",
+    "agents broken", "agents are broken", "agent health", "stuck agents", "silent agents", "which agents are late",
+  ],
+  "atlas members": ["who can see", "who has access", "has access to", "access to my board", "access to board", "board access", "shared with", "who can open"],
+  "hive sessions": ["what is a session doing", "what a session is doing", "session doing", "doing right now", "what is it working on", "watch a session"],
+  "agents pause": ["stop an agent", "stop agent", "stop it from running", "stop running", "turn off an agent", "disable an agent", "pause my agent", "pause agent"],
+  "atlas create-list": ["new list", "make a list", "make a new list", "add a list", "create a list", "list called", "new column"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
   // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
   "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],

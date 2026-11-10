@@ -3618,7 +3618,9 @@ const BloqsPlaybooksCommand = cmd({
 const BloqsContributorsCommand = cmd({
   command: "contributors <bloq-id>",
   aliases: ["contacts", "leads"],
-  describe: "list leads/contacts attached to this bloq project",
+  // "Who can see board 297?" was answered with this command three times out of three (#193064): it lists
+  // the board's LEADS, not who has access. Say so, and name the command that does.
+  describe: "list the leads/contacts attached to this bloq project — not who can access it (that is `bloqs members`)",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
@@ -4435,7 +4437,7 @@ async function resolveMemberId(
 const BloqsMembersCommand = cmd({
   command: "members <bloq-id>",
   aliases: ["shared-users", "who"],
-  describe: "list the accounts a bloq board is shared with (membership, not invite links)",
+  describe: "who can see a board — the accounts it is shared with (membership, not invite links)",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
