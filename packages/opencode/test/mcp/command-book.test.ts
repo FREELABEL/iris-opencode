@@ -9,7 +9,7 @@ const EFFECTS = ["read", "own_write", "shared_write", "shared_overwrite", "egres
 
 describe("the CLI ships a copy of the book that covers every command", () => {
   test("every command in capabilities.json has an entry in the book", () => {
-    const cli = [...new Set((capabilities as any).entries.filter((e: any) => e.kind === "command").map((e: any) => commandName(e.run)).filter(Boolean))]
+    const cli: string[] = [...new Set<string>((capabilities as any).entries.filter((e: any) => e.kind === "command").map((e: any) => commandName(e.run)).filter(Boolean))]
     const missing = cli.filter((n) => !(n in (book as any).commands))
     expect(missing).toEqual([]) // a new command needs its effect declared in fl-iris-api first, then: bun script/sync-command-book.ts
   })
