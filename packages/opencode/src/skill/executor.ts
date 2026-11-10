@@ -4,9 +4,9 @@ import { Skill } from "./skill"
 import { ConfigMarkdown } from "../config/markdown"
 import { Log } from "../util/log"
 import { McpClients } from "../mcp/clients"
-import { homedir } from "os"
+import { homedir, tmpdir } from "os"
 import { join, dirname, delimiter, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, chmodSync } from "fs"
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, chmodSync, rmSync } from "fs"
 
 const log = Log.create({ service: "skill-executor" })
 
@@ -1122,9 +1122,35 @@ export class NoPosixShellError extends Error {
   }
 }
 
-async function executeShell(code: string, timeoutMs: number): Promise<{ output: string; exit_code: number }> {
+/**
+ * How a shell step reaches bash (#192802): as a SCRIPT FILE, never as a `-c` argument.
+ *
+ * On Windows a command line is capped (8,191 characters through cmd.exe, 32,767 for CreateProcess),
+ * and the cut is silent: deal-scenarios' step 1 is 19,909 characters, was truncated at 8,191 —
+ * inside engine line 122 — and the run failed "unterminated string" with nothing saying the
+ * script had been cut. A file has no such limit, and its bytes (em dashes included) are exactly
+ * the step's. The file is written UTF-8 with LF endings and removed by cleanup().
+ */
+export function shellInvocation(bash: string, code: string, dir: string = tmpdir()): { argv: string[]; script: string; cleanup: () => void } {
+  mkdirSync(dir, { recursive: true })
+  const script = join(dir, `iris-step-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.sh`)
+  writeFileSync(script, code, { encoding: "utf8" })
+  return {
+    argv: [bash, script],
+    script,
+    cleanup: () => {
+      try {
+        rmSync(script, { force: true })
+      } catch {}
+    },
+  }
+}
+
+export async function executeShellStep(code: string, timeoutMs: number): Promise<{ output: string; exit_code: number }> {
+  let inv: ReturnType<typeof shellInvocation> | undefined
   try {
-    const proc = Bun.spawn([resolveBash() ?? "bash", "-c", code], {
+    inv = shellInvocation(resolveBash() ?? "bash", code)
+    const proc = Bun.spawn(inv.argv, {
       stdout: "pipe",
       stderr: "pipe",
       env: stepEnv(),
@@ -1141,6 +1167,8 @@ async function executeShell(code: string, timeoutMs: number): Promise<{ output: 
     return { output, exit_code: exitCode }
   } catch (e: any) {
     return { output: `Shell error: ${e.message}`, exit_code: 1 }
+  } finally {
+    inv?.cleanup()
   }
 }
 
@@ -2071,7 +2099,7 @@ export async function executeSkill(
 
       switch (step.mode) {
         case "shell":
-          lastResult = await executeShell(interpolatedCode!, plan.timeout * 1000)
+          lastResult = await executeShellStep(interpolatedCode!, plan.timeout * 1000)
           break
 
         case "prompt":
