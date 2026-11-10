@@ -33,7 +33,8 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = {
   // ads review wait there, and a hidden tab is the problem they fix. After the file tree, so for a
   // saved layout they land after what the person arranged.
   // Inbox (#192688) is shown, after Leads: replies wait there, with an unread count on the tab.
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "inbox", "marketing", "playbooks", "hive", "integrations", "mcp"],
+  // Browser (#193062) is shown, after Marketing: a tab nobody can find is the bug it was filed for.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "inbox", "marketing", "browser", "playbooks", "hive", "integrations", "mcp"],
   hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
 }
 

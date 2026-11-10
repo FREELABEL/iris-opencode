@@ -42,6 +42,7 @@ import {
   irisFilesPinned,
   irisOpensOnAtlas,
   toggleIrisFilesPin,
+  registerBrowserPane,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -77,6 +78,9 @@ import { IrisProductIcon } from "@/components/session/iris-product-icon"
 import { IrisPanelBody, IrisPinItems, IrisScopeChip } from "@/components/iris-panel"
 import { needsAttention, surfaceCount, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
+
+// #193062: the IRIS panel draws the Browser product with this pane (see registerBrowserPane).
+registerBrowserPane(SessionWebTab)
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
 type RenderDiff = FileDiffInfo | (SnapshotFileDiff & { file: string }) | VcsFileDiff
@@ -271,13 +275,14 @@ export function SessionSidePanel(props: {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
   /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
-  // With the native Browser (#193062) the tab is always there: you browse without a link first.
+  // With the native Browser (#193062) the browser is the Browser PRODUCT in the strip, and chat
+  // links open there; this link-only tab would be a second view of one native webview.
   const nativeBrowser = (() => {
     const p = usePlatform()
     return !!p.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)
   })()
   const webTabOpen = createMemo(
-    () => nativeBrowser || tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB,
+    () => !nativeBrowser && (tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB),
   )
   const webHost = createMemo(() => {
     try {

@@ -2,7 +2,10 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import type { NativeBrowser, NativeBrowserBounds, NativeBrowserState } from "@/context/platform"
 import { boundsOf, OVERLAY_SELECTOR, QUICK_SITES, sameBounds } from "./native-browser-model"
-import { webUrl } from "./web-nav"
+import { webReloadKey, webUrl } from "./web-nav"
+
+/** The last chat link opened, across remounts (one native view, one link history). */
+let lastLink: string | undefined
 
 /**
  * The Browser tab on desktop, spike #193062 (epic #193051).
@@ -84,10 +87,15 @@ export function NativeWebTab(props: {
     props.browser.navigate(text).catch((e) => setError(String(e)))
   }
 
-  // A link clicked in the chat (web-nav's history) opens here too.
+  // A link clicked in the chat (web-nav's history) opens here, ONCE: keyed by link + click, so
+  // remounting this pane doesn't reload an old link over the page you browsed to since, and
+  // clicking the same link again (same URL, new reload key) does open it again.
   createEffect(
-    on(webUrl, (url) => {
-      if (url && url !== page()?.url) open(url)
+    on([webUrl, webReloadKey], ([url, key]) => {
+      const id = url ? `${url}#${key}` : undefined
+      if (!url || id === lastLink) return
+      lastLink = id
+      open(url)
     }),
   )
 
@@ -101,6 +109,17 @@ export function NativeWebTab(props: {
     window.addEventListener("resize", schedule)
     document.addEventListener("visibilitychange", schedule)
     const off = props.browser.onState(report)
+    // Switching products unmounts this pane but not the native view: pick its page back up
+    // instead of showing the start tiles over a page that is still loaded.
+    void props.browser
+      .state()
+      .then((s) => {
+        if (!s || s.url === "about:blank") return
+        report(s)
+        setOpened(true)
+        schedule()
+      })
+      .catch(() => undefined)
     // pushState (single-page apps) fires no load event: ask where it really is, once a second,
     // only while the view is on screen.
     const poll = setInterval(() => {

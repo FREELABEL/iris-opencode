@@ -4,6 +4,7 @@ import { usePlatform } from "@/context/platform"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { focusArtifact, irisOpenArtifact, irisOpenCard, irisPanelView, requestIrisNav } from "./iris-nav"
+import { nativeBrowserEnabled } from "./native-browser-model"
 import { deliverReport } from "./panel-report"
 import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
 import { navigateWeb, WEB_TAB, webUrl } from "./web-nav"
@@ -149,6 +150,11 @@ export function usePanelControl(input: { open: () => boolean }) {
         return
       case "browse":
         navigateWeb(cmd.url)
+        if (platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)) {
+          requestIrisNav({ surface: "browser", session: params.id })
+          showTab("iris")
+          return
+        }
         showTab(WEB_TAB)
         return
       case "card":
@@ -182,7 +188,7 @@ export function usePanelControl(input: { open: () => boolean }) {
       case "tab":
         return s.tab === cmd.tab ? undefined : `the panel is on ${s.tab}, not ${cmd.tab}`
       case "browse":
-        return s.tab === WEB_TAB ? undefined : "the Browser tab did not open"
+        return s.tab === WEB_TAB || (s.tab === "iris" && s.surface === "browser") ? undefined : "the Browser tab did not open"
       case "card":
         if (!s.open) return "the panel did not open (the window may be too narrow for it)"
         if (s.tab !== "iris" || s.surface !== "atlas") return "Atlas did not open"

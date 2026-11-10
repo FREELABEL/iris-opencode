@@ -188,10 +188,11 @@ describe("one Inbox tab; old ids land on it (#192688)", () => {
   })
   test("the Inbox is account-wide, and shown by default after Leads — also for a saved layout that never had it", () => {
     expect(panelScope("inbox", "comms-inbox")).toBe("account")
-    expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing"])
+    expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing", "browser"])
     const saved = { version: 2, order: ["leads", "marketing", "atlas", "pages"], hidden: [] }
     const merged = mergeNavLayout(DEFAULT_NAV_LAYOUT, saved)
-    expect(visibleNavItems(merged).slice(0, 4)).toEqual(["leads", "inbox", "marketing", "atlas"])
+    // Browser (#193062) now follows Marketing; what this test is about is Inbox after Leads.
+    expect(visibleNavItems(merged).slice(0, 3)).toEqual(["leads", "inbox", "marketing"])
     // Hidden by the person stays hidden.
     expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "inbox"], hidden: ["inbox"] }).hidden).toContain("inbox")
   })
