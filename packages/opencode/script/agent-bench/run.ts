@@ -111,7 +111,7 @@ async function runOnce(task: Task, n: number) {
 }
 
 if (import.meta.main) {
-  const runs = []
+  const runs: Awaited<ReturnType<typeof runOnce>>[] = []
   for (const task of chosen)
     for (let n = 1; n <= repeats; n++) {
       const r = await runOnce(task, n)
