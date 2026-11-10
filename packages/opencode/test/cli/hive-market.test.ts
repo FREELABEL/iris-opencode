@@ -12,6 +12,7 @@ import {
   spendLines,
   type Listing,
 } from "../../src/cli/cmd/platform-hive-market"
+import { cashoutLines } from "../../src/cli/cmd/platform-hive-market"
 
 // #192752 — the Hive marketplace. Amounts are IRIS credits: 1 credit = $0.01.
 
@@ -143,4 +144,14 @@ test("spend: total, then what was paid to whom", () => {
   expect(lines[2]).toContain("1 min")
   expect(lines[2]).toContain("$0.45")
   expect(spendLines({ total: 0, charges: [] })[1]).toContain("Nothing yet")
+})
+
+// #192752 — cash-out reads fl-api's CashoutService result; it never invents an amount.
+test("cash-out explains every outcome in money, not codes", () => {
+  const base = { cashable_cents: 85, wallet_balance_cents: 85, amount_cents: 85, min_cents: 2000 }
+  expect(cashoutLines({ ...base, status: "below_threshold" }, false).join(" ")).toContain("$19.15 to go")
+  expect(cashoutLines({ ...base, amount_cents: 2500, cashable_cents: 2500, status: "ready" }, false)[1]).toContain("--execute")
+  expect(cashoutLines({ ...base, amount_cents: 2500, status: "sent", transfer_id: "tr_1" }, true)[1]).toContain("Sent $25.00")
+  expect(cashoutLines({ ...base, status: "blocked", reason: "no payout account" }, false).join(" ")).toContain("iris bounty connect")
+  expect(cashoutLines({ ...base, cashable_cents: -5, status: "below_threshold" }, false)[0]).toContain("$0.00")
 })

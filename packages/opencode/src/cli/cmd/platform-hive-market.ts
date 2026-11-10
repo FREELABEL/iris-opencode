@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { requireAuth, requireUserId, writeJson, dim, bold, success, warn, highlight, isJsonMode, emitJsonError } from "./iris-api"
+import { requireAuth, requireUserId, writeJson, dim, bold, success, warn, highlight, isJsonMode, emitJsonError, irisFetch } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { fleet, readSettings, checkedAgo } from "./platform-hive-models"
 import { asArray } from "../../util/array"
@@ -449,6 +449,61 @@ const SpendCommand = cmd({
   },
 })
 
+/** Cash-out result from fl-api's CashoutService (POST /api/v1/marketplace/cashout). Amounts are cents. */
+export interface Cashout {
+  status: "ready" | "sent" | "below_threshold" | "blocked" | string
+  cashable_cents: number
+  wallet_balance_cents: number
+  amount_cents: number
+  min_cents: number
+  reason?: string
+  transfer_id?: string
+}
+
+const usd = (cents: number) => `$${(Math.max(0, Number(cents) || 0) / 100).toFixed(2)}`
+
+/** Pure: what a person should read about a cash-out, dry run or real. */
+export function cashoutLines(c: Cashout, executed: boolean): string[] {
+  const head = `Earned and cashable ${usd(c.cashable_cents)}   ·   minimum ${usd(c.min_cents)}`
+  switch (c.status) {
+    case "sent":
+      return [head, `Sent ${usd(c.amount_cents)} to your payout account (transfer ${c.transfer_id ?? "?"}).`]
+    case "ready":
+      return executed
+        ? [head, `Ready, but nothing was sent.`]
+        : [head, `${usd(c.amount_cents)} is ready to cash out. Send it: iris hive market cashout --execute`]
+    case "below_threshold":
+      return [head, `Not yet: you need ${usd(c.min_cents)} earned to cash out (${usd(c.min_cents - c.amount_cents)} to go).`]
+    case "blocked":
+      return [head, `Can't cash out yet: ${c.reason ?? "your payout account isn't ready"}.`, `Set up payouts: iris bounty connect`]
+    default:
+      return [head, `Cash-out status: ${c.status}${c.reason ? ` — ${c.reason}` : ""}`]
+  }
+}
+
+const CashoutCommand = cmd({
+  command: "cashout",
+  describe: "turn what you earned from your listed machines into money in your payout account (dry run unless --execute)",
+  builder: (yargs) =>
+    yargs
+      .option("execute", { type: "boolean", default: false, describe: "actually send the money (otherwise shows what would happen)" })
+      .option("json", { type: "boolean", default: false })
+      .example("$0 hive market cashout", "see what you can cash out")
+      .example("$0 hive market cashout --execute", "send it to your connected payout account"),
+  async handler(argv) {
+    await requireAuth()
+    const res = await irisFetch(`/api/v1/marketplace/cashout`, { method: "POST", body: JSON.stringify({ execute: !!argv.execute }) })
+    const body: any = await res.json().catch(() => ({}))
+    if (!res.ok) return fail("could not check your cash-out", new Error(body?.message || body?.error || `HTTP ${res.status}`))
+    const data: Cashout = body?.data ?? body
+    if (argv.json) return void (await writeJson(data))
+    console.log()
+    for (const line of cashoutLines(data, !!argv.execute)) console.log(`  ${line}`)
+    console.log()
+    console.log(dim("  Only money you EARNED from listed machines can be cashed out — not credits you bought or were given."))
+  },
+})
+
 export const HiveMarketCommand = cmd({
   command: "market",
   describe: "the Hive marketplace — browse machines to rent, sell time on yours, see earnings and spend",
@@ -462,6 +517,7 @@ export const HiveMarketCommand = cmd({
       .command(toggle("resume", "let members use a paused listing again"))
       .command(toggle("remove", "take a listing off the marketplace"))
       .command(EarningsCommand)
-      .command(SpendCommand),
+      .command(SpendCommand)
+      .command(CashoutCommand),
   handler: () => {},
 })
