@@ -82,3 +82,34 @@
 .session-web__open:hover {
   background: var(--background-element);
 }
+
+/* Native Browser start page (#193062): quick-launch tiles. Theme tokens only. */
+.session-web__start {
+  margin: auto;
+  width: 100%;
+  max-width: 360px;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.session-web__start-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+.session-web__tile {
+  padding: 10px 4px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 8px;
+  background: var(--background-element);
+  color: var(--text-base);
+  font-size: 12px;
+}
+.session-web__tile:hover {
+  border-color: var(--text-interactive-base);
+  color: var(--text-strong);
+}
