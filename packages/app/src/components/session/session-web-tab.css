@@ -113,3 +113,58 @@
   border-color: var(--text-interactive-base);
   color: var(--text-strong);
 }
+
+/* The agent strip (#193145): IRIS's permission and activity on this site. Theme tokens only. */
+.session-web__agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 12px;
+  border-bottom: 1px solid var(--border-weaker-base);
+  font-size: 12px;
+  color: var(--text-weak);
+}
+.session-web__agent b {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.session-web__agent[data-state="asked"] {
+  background: var(--surface-warning-weak, var(--background-element));
+  color: var(--text-base);
+}
+.session-web__agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--icon-success-base, #22c55e);
+}
+.session-web__agent-dot[data-busy] {
+  animation: session-web-pulse 1s ease-in-out infinite;
+}
+@keyframes session-web-pulse {
+  50% { opacity: 0.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-web__agent-dot[data-busy] { animation: none; }
+}
+.session-web__agent-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  color: var(--text-base);
+  font-size: 12px;
+}
+.session-web__agent-btn + .session-web__agent-btn { margin-left: 0; }
+.session-web__agent-btn[data-primary] {
+  border-color: var(--text-interactive-base);
+  color: var(--text-interactive-base);
+}
+.session-web__agent-link {
+  color: var(--text-weak);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.session-web__agent-link:hover { color: var(--text-strong); }

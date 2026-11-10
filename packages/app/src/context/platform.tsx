@@ -44,6 +44,8 @@ export type NativeBrowser = {
   navigate(url: string): Promise<string>
   go(action: "back" | "forward" | "reload"): Promise<void>
   state(): Promise<NativeBrowserState | null>
+  /** Run a page script in the pane and return its JSON envelope {ok,value|error} (#193145). */
+  eval(script: string): Promise<string>
   /** Address/title/loading as the page changes. Returns the unsubscribe. */
   onState(handler: (state: NativeBrowserState) => void): () => void
 }

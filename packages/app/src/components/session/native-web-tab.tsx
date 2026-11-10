@@ -2,6 +2,17 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import type { NativeBrowser, NativeBrowserBounds, NativeBrowserState } from "@/context/platform"
 import { boundsOf, OVERLAY_SELECTOR, QUICK_SITES, sameBounds } from "./native-browser-model"
+import {
+  askedSite,
+  browserActivity,
+  browserGrants,
+  dismissAsked,
+  grantSite,
+  hostOf,
+  isGranted,
+  originOf,
+  revokeSite,
+} from "./browser-grants"
 import { webReloadKey, webUrl } from "./web-nav"
 
 /** The last chat link opened, across remounts (one native view, one link history). */
@@ -32,6 +43,17 @@ export function NativeWebTab(props: {
   let input!: HTMLInputElement
   let last: NativeBrowserBounds | undefined
   let shown = false
+
+  const origin = () => originOf(page()?.url)
+  const stripState = () => {
+    const o = origin()
+    if (isGranted(o, browserGrants())) return "granted"
+    return o && askedSite() === o ? "asked" : "off"
+  }
+  const activityHere = () => {
+    const a = browserActivity()
+    return a && a.origin === origin() ? a : undefined
+  }
 
   const report = (s: NativeBrowserState) => {
     setPage(s)
@@ -191,6 +213,39 @@ export function NativeWebTab(props: {
           title="Open in your browser"
         />
       </div>
+      {/* The agent strip (#193145): whether IRIS may use this site, what it is doing, and Stop. */}
+      <Show when={origin()}>
+        {(o) => (
+          <div class="session-web__agent" data-slot="browser-agent-strip" data-state={stripState()}>
+            <Show when={stripState() === "granted"}>
+              <span class="session-web__agent-dot" data-busy={activityHere() ? "true" : undefined} />
+              <span>
+                IRIS can use <b>{hostOf(o())}</b>
+                <Show when={activityHere()}>{(a) => <> · {a().doing}…</>}</Show>
+              </span>
+              <button type="button" class="session-web__agent-btn" onClick={() => revokeSite(o())} title="IRIS can't use this site until you allow it again">
+                Stop
+              </button>
+            </Show>
+            <Show when={stripState() === "asked"}>
+              <span>
+                IRIS asked to read <b>{hostOf(o())}</b>
+              </span>
+              <button type="button" class="session-web__agent-btn" data-primary="true" onClick={() => grantSite(o())}>
+                Allow
+              </button>
+              <button type="button" class="session-web__agent-btn" onClick={dismissAsked}>
+                Not now
+              </button>
+            </Show>
+            <Show when={stripState() === "off"}>
+              <button type="button" class="session-web__agent-link" onClick={() => grantSite(o())}>
+                Let IRIS use this page
+              </button>
+            </Show>
+          </div>
+        )}
+      </Show>
       <div class="session-web__body" ref={body} data-slot="native-browser-body">
         <Show when={!opened()}>
           <div class="session-web__start">

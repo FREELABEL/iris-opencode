@@ -2145,6 +2145,9 @@ export const PanelStatePayload = Schema.Struct({
   catalog: Schema.optional(PanelCatalog),
   ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
   error: Schema.optional(Schema.String),
+  result: Schema.optional(
+    described(Schema.String, "A page command's answer (#193145): the JSON envelope {ok,value|error}. Handed to the waiting call only, never stored."),
+  ),
 }).annotate({ identifier: "IrisPanelState" })
 const PanelReport = Schema.Struct({
   ...PanelStatePayload.fields,

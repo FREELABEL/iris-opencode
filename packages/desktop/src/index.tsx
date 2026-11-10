@@ -74,6 +74,7 @@ const platform: Platform = {
     navigate: (url) => invoke<string>("browser_navigate", { url }),
     go: (action) => invoke("browser_go", { action }),
     state: () => invoke("browser_state"),
+    eval: (script) => invoke<string>("browser_eval", { script }),
     onState(handler) {
       let off: (() => void) | undefined
       let gone = false

@@ -5,7 +5,9 @@ import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
-import { PageSession } from "@/iris/browser-driver"
+import { PageSession, type ScriptedPage } from "@/iris/browser-driver"
+import { PanelPage } from "@/iris/panel-page"
+import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
@@ -56,6 +58,10 @@ export const Parameters = Schema.Struct({
     "screenshot",
     "close",
   ]).annotate({ description: "What to do" }),
+  target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
+    description:
+      "Which browser. agent (default): your own logged-out browser, invisible to the person. panel: the IRIS Browser pane the person is looking at, signed in as them; only on sites they allowed, read-only for now",
+  }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
@@ -114,7 +120,7 @@ const DEFAULT_MAX_CHARS = 3000
  * session, and a browser it opened under that key would be invisible to the parent — and left
  * running. A process the user never started and cannot see is the thing to avoid.
  */
-const sessionsOpen = new Map<string, PageSession>()
+const sessionsOpen = new Map<string, ScriptedPage>()
 
 export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
   "browser",
@@ -134,30 +140,64 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
-          const page = sessionsOpen.get(session)
+          const target = params.target ?? "agent"
+          // One page per target per root session: the pane and the agent's Chrome never share.
+          const key = target === "panel" ? `${session}:panel` : session
+          let page = sessionsOpen.get(key)
+
+          if (target === "panel") {
+            // The pane is the person's, signed in as them. Acting there waits for B2 (#193144);
+            // the app refuses it too, so this is a clear sentence, not the only guard.
+            if (params.action === "click" || params.action === "type" || params.action === "select") {
+              return yield* Effect.fail(
+                new Error(
+                  `${params.action} isn't available in the Browser pane yet (it can only read). Tell the person what to ${params.action} and where, or use target agent on a public page.`,
+                ),
+              )
+            }
+            if (!page && params.action !== "close") {
+              const directory = (yield* InstanceState.context).directory
+              const panel = new PanelPage(
+                (command, timeoutMs) => Panel.send({ directory, session, command, timeoutMs }),
+                (o) => Panel.explainSilence(o, session),
+              )
+              if (params.action !== "open") {
+                const attached = yield* attempt(() => panel.attach())
+                if (!attached.ok) return yield* Effect.fail(new Error(attached.message))
+              }
+              sessionsOpen.set(key, panel)
+              page = panel
+            }
+          }
 
           if (params.action === "close") {
             if (!page) return { title: "browser", output: "No browser was open.", metadata: {} }
-            yield* attempt(() => page.close())
-            sessionsOpen.delete(session)
+            yield* attempt(() => page!.close())
+            sessionsOpen.delete(key)
+            if (target === "panel") {
+              return { title: "browser pane", output: "Done with the Browser pane. The page stays open there: it is the person's.", metadata: {} }
+            }
             return { title: "browser closed", output: "The browser is closed.", metadata: {} }
           }
 
           if (params.action === "open") {
             if (!params.url) return yield* Effect.fail(new Error("open needs a url"))
-            const refusal = page?.currentUrl
-              ? refuseNavigationReason(page.currentUrl, params.url)
-              : refuseUrlReason(params.url)
+            // The pane is opened by a person asking for a page, deliberately; the cross-origin rule
+            // exists for navigation the PAGE chooses (clicks), which the pane can't do yet.
+            const refusal =
+              target !== "panel" && page?.currentUrl
+                ? refuseNavigationReason(page.currentUrl, params.url)
+                : refuseUrlReason(params.url)
             if (refusal) return yield* Effect.fail(new Error(refusal))
 
-            const p = page ?? new PageSession()
+            const p: ScriptedPage = page ?? new PageSession()
             const opened = yield* attempt(() => p.open(params.url!))
             if (!opened.ok) {
-              yield* attempt(() => p.close())
+              if (target !== "panel") yield* attempt(() => p.close())
               return yield* Effect.fail(new Error(opened.message))
             }
             const landed = opened.value
-            sessionsOpen.set(session, p)
+            sessionsOpen.set(key, p)
 
             return {
               title: landed.title || landed.url,

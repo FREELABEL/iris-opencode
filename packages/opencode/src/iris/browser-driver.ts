@@ -48,21 +48,185 @@ export class BrowserUnavailable extends Error {}
 type CdpMessage = { id?: number; method?: string; params?: unknown; result?: any; error?: { message: string } }
 
 /**
+ * What every browser target can do to a page, written ONCE (#193145, epic #193144 B0).
+ *
+ * Every verb is a page script run through `evaluate`, so a target is only a way to run a script
+ * and open an address: the CDP Chrome below (PageSession), or the IRIS Browser pane
+ * (iris/panel-page.ts). The scripts, the refs stamped on elements, and the state the change check
+ * compares are the same for both, so a verb cannot behave differently depending on where it runs.
+ */
+export abstract class ScriptedPage {
+  currentUrl: string | null = null
+
+  abstract evaluate<T>(expression: string): Promise<T>
+  abstract open(url: string): Promise<{ url: string; title: string; status: string }>
+  abstract screenshot(): Promise<Uint8Array>
+  abstract close(): Promise<void>
+
+  /** The text a person would read, not the markup. */
+  async text(): Promise<string> {
+    return (await this.evaluate<string>("document.body ? document.body.innerText : ''")) ?? ""
+  }
+
+  /**
+   * The page as a numbered menu, rebuilt on every call (S3).
+   *
+   * Refs are assigned here and stamped onto the elements as a data attribute, so a later click
+   * addresses the SAME node even if the page reflowed — and a ref from a previous page simply is
+   * not found, rather than hitting whatever now sits in that position. Never coordinates: a
+   * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
+   */
+  async elements(limit = 150): Promise<
+    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[] }>
+  > {
+    const js = `(() => {
+      const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
+      const roleOf = (el) => {
+        const r = el.getAttribute('role')
+        if (r) return r
+        const tag = el.tagName.toLowerCase()
+        if (tag === 'a') return 'link'
+        if (tag === 'button') return 'button'
+        if (tag === 'select') return 'combobox'
+        if (tag === 'textarea') return 'textarea'
+        if (tag === 'input') {
+          const t = (el.getAttribute('type') || 'text').toLowerCase()
+          if (t === 'checkbox' || t === 'radio') return t
+          if (t === 'submit' || t === 'button' || t === 'reset') return 'button'
+          if (t === 'search') return 'searchbox'
+          return 'textbox'
+        }
+        return 'textbox'
+      }
+      const nameOf = (el) =>
+        (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
+         (el.innerText || el.value || '').trim() || el.getAttribute('name') || '').replace(/\\s+/g, ' ').slice(0, 120)
+      const out = []
+      let ref = 0
+      for (const el of document.querySelectorAll(SEL)) {
+        const rect = el.getBoundingClientRect()
+        const style = getComputedStyle(el)
+        if (style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0)) continue
+        ref++
+        if (ref > ${limit}) break
+        el.setAttribute('data-iris-ref', String(ref))
+        const options = el.tagName.toLowerCase() === 'select'
+          ? Array.from(el.options).map((o) => o.value).slice(0, 60)
+          : undefined
+        out.push({
+          options,
+          ref,
+          role: roleOf(el),
+          name: nameOf(el),
+          tag: el.tagName.toLowerCase(),
+          value: el.value === undefined ? undefined : String(el.value),
+          enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+          inViewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
+        })
+      }
+      return out
+    })()`
+
+    return (await this.evaluate<any[]>(js)) ?? []
+  }
+
+  /** Everything the change check compares, taken before and after an action. */
+  async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string> }> {
+    const js = `(() => {
+      const text = document.body ? document.body.innerText : ''
+      let h = 0
+      for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
+      const values = {}
+      for (const el of document.querySelectorAll('[data-iris-ref]')) {
+        if (el.value !== undefined) values[el.getAttribute('data-iris-ref')] = String(el.value)
+      }
+      return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values }
+    })()`
+
+    return await this.evaluate(js)
+  }
+
+  /** Click the element holding this ref. Returns false when the ref is no longer on the page. */
+  async clickRef(ref: number): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => { const el = document.querySelector('[data-iris-ref="${ref}"]'); if (!el) return false; el.scrollIntoView({block:'center'}); el.click(); return true })()`,
+    )
+    await Bun.sleep(400) // let a navigation or a re-render start before the state is read back
+    this.currentUrl = await this.evaluate<string>("location.href")
+
+    return !!ok
+  }
+
+  /** Type into the element holding this ref, firing the events a real keystroke would. */
+  async typeRef(ref: number, text: string): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => {
+        const el = document.querySelector('[data-iris-ref="${ref}"]')
+        if (!el) return false
+        el.focus()
+        const v = ${JSON.stringify(text)}
+        if (el.isContentEditable) { el.textContent = v }
+        else {
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
+          setter ? setter.call(el, v) : (el.value = v)
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`,
+    )
+    await Bun.sleep(150)
+
+    return !!ok
+  }
+
+  /** Set a dropdown to one of ITS values, firing the events a real choice would. */
+  async selectRef(ref: number, value: string): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(
+      `(() => {
+        const el = document.querySelector('[data-iris-ref="${ref}"]')
+        if (!el) return false
+        el.value = ${JSON.stringify(value)}
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`,
+    )
+    await Bun.sleep(150)
+
+    return !!ok
+  }
+
+  /** Move the viewport. Lazy pages load on scroll, so this is how the rest of a page appears. */
+  async scroll(direction: "up" | "down" | "top" | "bottom"): Promise<void> {
+    const js = {
+      up: "scrollBy(0, -Math.round(innerHeight * 0.9))",
+      down: "scrollBy(0, Math.round(innerHeight * 0.9))",
+      top: "scrollTo(0, 0)",
+      bottom: "scrollTo(0, document.body.scrollHeight)",
+    }[direction]
+    await this.evaluate(`(() => { ${js}; return true })()`)
+    await Bun.sleep(250)
+  }
+
+}
+
+/**
  * One Chrome, one tab, for the life of a tool session.
  *
  * Opened lazily by the tool on the first `open`, and closed by `close` — or by the session
  * ending. A browser left running after the agent stops is a process the user never started and
  * cannot see.
  */
-export class PageSession {
+export class PageSession extends ScriptedPage {
   private proc?: ChildProcess
   private ws?: WebSocket
   private profileDir?: string
   private nextId = 1
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
-  currentUrl: string | null = null
-
-  constructor(private readonly opts: { headless?: boolean; timeoutMs?: number } = {}) {}
+  constructor(private readonly opts: { headless?: boolean; timeoutMs?: number } = {}) {
+    super()
+  }
 
   private get timeout() {
     return this.opts.timeoutMs ?? 30_000
@@ -219,152 +383,6 @@ export class PageSession {
     if (r?.exceptionDetails) throw new Error(r.exceptionDetails.text ?? "evaluation failed")
 
     return r?.result?.value as T
-  }
-
-  /** The text a person would read, not the markup. */
-  async text(): Promise<string> {
-    return (await this.evaluate<string>("document.body ? document.body.innerText : ''")) ?? ""
-  }
-
-  /**
-   * The page as a numbered menu, rebuilt on every call (S3).
-   *
-   * Refs are assigned here and stamped onto the elements as a data attribute, so a later click
-   * addresses the SAME node even if the page reflowed — and a ref from a previous page simply is
-   * not found, rather than hitting whatever now sits in that position. Never coordinates: a
-   * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
-   */
-  async elements(limit = 150): Promise<
-    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[] }>
-  > {
-    const js = `(() => {
-      const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
-      const roleOf = (el) => {
-        const r = el.getAttribute('role')
-        if (r) return r
-        const tag = el.tagName.toLowerCase()
-        if (tag === 'a') return 'link'
-        if (tag === 'button') return 'button'
-        if (tag === 'select') return 'combobox'
-        if (tag === 'textarea') return 'textarea'
-        if (tag === 'input') {
-          const t = (el.getAttribute('type') || 'text').toLowerCase()
-          if (t === 'checkbox' || t === 'radio') return t
-          if (t === 'submit' || t === 'button' || t === 'reset') return 'button'
-          if (t === 'search') return 'searchbox'
-          return 'textbox'
-        }
-        return 'textbox'
-      }
-      const nameOf = (el) =>
-        (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
-         (el.innerText || el.value || '').trim() || el.getAttribute('name') || '').replace(/\\s+/g, ' ').slice(0, 120)
-      const out = []
-      let ref = 0
-      for (const el of document.querySelectorAll(SEL)) {
-        const rect = el.getBoundingClientRect()
-        const style = getComputedStyle(el)
-        if (style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0)) continue
-        ref++
-        if (ref > ${limit}) break
-        el.setAttribute('data-iris-ref', String(ref))
-        const options = el.tagName.toLowerCase() === 'select'
-          ? Array.from(el.options).map((o) => o.value).slice(0, 60)
-          : undefined
-        out.push({
-          options,
-          ref,
-          role: roleOf(el),
-          name: nameOf(el),
-          tag: el.tagName.toLowerCase(),
-          value: el.value === undefined ? undefined : String(el.value),
-          enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
-          inViewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
-        })
-      }
-      return out
-    })()`
-
-    return (await this.evaluate<any[]>(js)) ?? []
-  }
-
-  /** Everything the change check compares, taken before and after an action. */
-  async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string> }> {
-    const js = `(() => {
-      const text = document.body ? document.body.innerText : ''
-      let h = 0
-      for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
-      const values = {}
-      for (const el of document.querySelectorAll('[data-iris-ref]')) {
-        if (el.value !== undefined) values[el.getAttribute('data-iris-ref')] = String(el.value)
-      }
-      return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values }
-    })()`
-
-    return await this.evaluate(js)
-  }
-
-  /** Click the element holding this ref. Returns false when the ref is no longer on the page. */
-  async clickRef(ref: number): Promise<boolean> {
-    const ok = await this.evaluate<boolean>(
-      `(() => { const el = document.querySelector('[data-iris-ref="${ref}"]'); if (!el) return false; el.scrollIntoView({block:'center'}); el.click(); return true })()`,
-    )
-    await Bun.sleep(400) // let a navigation or a re-render start before the state is read back
-    this.currentUrl = await this.evaluate<string>("location.href")
-
-    return !!ok
-  }
-
-  /** Type into the element holding this ref, firing the events a real keystroke would. */
-  async typeRef(ref: number, text: string): Promise<boolean> {
-    const ok = await this.evaluate<boolean>(
-      `(() => {
-        const el = document.querySelector('[data-iris-ref="${ref}"]')
-        if (!el) return false
-        el.focus()
-        const v = ${JSON.stringify(text)}
-        if (el.isContentEditable) { el.textContent = v }
-        else {
-          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
-          setter ? setter.call(el, v) : (el.value = v)
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }))
-        el.dispatchEvent(new Event('change', { bubbles: true }))
-        return true
-      })()`,
-    )
-    await Bun.sleep(150)
-
-    return !!ok
-  }
-
-  /** Set a dropdown to one of ITS values, firing the events a real choice would. */
-  async selectRef(ref: number, value: string): Promise<boolean> {
-    const ok = await this.evaluate<boolean>(
-      `(() => {
-        const el = document.querySelector('[data-iris-ref="${ref}"]')
-        if (!el) return false
-        el.value = ${JSON.stringify(value)}
-        el.dispatchEvent(new Event('input', { bubbles: true }))
-        el.dispatchEvent(new Event('change', { bubbles: true }))
-        return true
-      })()`,
-    )
-    await Bun.sleep(150)
-
-    return !!ok
-  }
-
-  /** Move the viewport. Lazy pages load on scroll, so this is how the rest of a page appears. */
-  async scroll(direction: "up" | "down" | "top" | "bottom"): Promise<void> {
-    const js = {
-      up: "scrollBy(0, -Math.round(innerHeight * 0.9))",
-      down: "scrollBy(0, Math.round(innerHeight * 0.9))",
-      top: "scrollTo(0, 0)",
-      bottom: "scrollTo(0, document.body.scrollHeight)",
-    }[direction]
-    await this.evaluate(`(() => { ${js}; return true })()`)
-    await Bun.sleep(250)
   }
 
   async screenshot(): Promise<Uint8Array> {
