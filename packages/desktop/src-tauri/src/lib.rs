@@ -1,5 +1,6 @@
 mod accounts;
 mod browser;
+mod browser_eval;
 mod cli;
 mod deep_link;
 mod engine_auth;
@@ -152,6 +153,7 @@ fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
             browser::browser_go,
             browser::browser_state,
             browser::browser_cookie_domains,
+            browser::browser_eval,
             kill_sidecar,
             engine_credentials,
             log_renderer,

@@ -296,6 +296,22 @@ pub fn browser_state(app: AppHandle) -> Option<BrowserState> {
     Some(BrowserState { title: last_title(), url: url.to_string(), loading: false })
 }
 
+/// Run one of the engine's page scripts in the pane and return its result (#193145). Only the
+/// app calls this (the gate refuses every other webview), and only after the person granted the
+/// page's site: that check lives in the app, beside the button that grants it.
+#[tauri::command]
+pub async fn browser_eval(app: AppHandle, script: String) -> Result<String, String> {
+    let w = browser(&app).ok_or("the Browser isn't open: open a page in it first")?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let js = crate::browser_eval::wrap(&script);
+    w.with_webview(move |pw| crate::browser_eval::start(pw, js, tx)).map_err(|e| e.to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err("the page did not answer".into()),
+        Err(_) => Err("the page took longer than 10 s to answer".into()),
+    }
+}
+
 /// The sites this browser holds cookies for: the start of Settings › Browser (S3). Names and
 /// domains only, never values: values are credentials and never cross into the app's JS.
 #[tauri::command]

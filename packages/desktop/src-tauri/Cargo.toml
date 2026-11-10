@@ -52,11 +52,22 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+webview2-com = "0.38"
+windows = "0.61"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
 # v2_8: UserMediaPermissionRequest::is_for_{audio,video}_device (window_customizer.rs).
 webkit2gtk = { version = "=2.0.1", features = ["v2_8"] }
+# #193145: the agent reads the Browser pane. Same versions wry already pulls in (Cargo.lock), so
+# nothing new is downloaded: these only make the crates nameable from browser_eval.rs.
+javascriptcore-rs = { version = "=1.1.2", features = ["v2_28"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSJSONSerialization"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
