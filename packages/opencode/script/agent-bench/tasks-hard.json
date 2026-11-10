@@ -1,0 +1,25 @@
+{
+  "about": "Harder agent tasks for #193064: tail commands (not in the top-20 the agents use) and vague requests a person would actually type. The 10 core tasks (tasks.json) scored 30/30 on today's tools, so they cannot tell two tool layouts apart. Writes run under IRIS_MCP_DRY_RUN=1, recorded and never executed. Board 297 is the IRIS CLI bug board; agent 605 and schedule 12 are ids, not looked up.",
+  "tasks": [
+    { "id": "spend", "effect": "read", "prompt": "How much have I spent on AI this week, and on what?",
+      "accept": [{ "tool": "iris_run", "command": "^usage" }] },
+    { "id": "late-agents", "effect": "read", "prompt": "Which of my agents are late or failing right now?",
+      "accept": [{ "tool": "iris_run", "command": "^heartbeats" }, { "tool": "iris_run", "command": "^agents (list|health|status)" }] },
+    { "id": "board-access", "effect": "read", "prompt": "Who can see board 297?",
+      "accept": [{ "tool": "iris_run", "command": "^(atlas|bloqs) members" }, { "tool": "iris_run", "command": "^bloq-members( list)?" }] },
+    { "id": "connected", "effect": "read", "prompt": "Which apps and services have I connected to IRIS?",
+      "accept": [{ "tool": "iris_run", "command": "^integrations (list-connected|list-available|connections)" }] },
+    { "id": "find-capability", "effect": "read", "prompt": "Can IRIS make an animated ad from a reference post I like? How would I do that?",
+      "accept": [{ "tool": "iris_run", "command": "^(find|playbook (find|search|list|show)|how-to)" }, { "tool": "iris_help" }] },
+    { "id": "pause-agent", "effect": "write", "prompt": "Stop agent 605 from running for now.",
+      "accept": [{ "tool": "iris_run", "command": "^agents pause" }, { "tool": "iris_agent", "action": "update" }] },
+    { "id": "share-board", "effect": "write", "prompt": "Give dana@example.com access to board 297.",
+      "accept": [{ "tool": "iris_run", "command": "^(atlas|bloqs) (add-member|invite)" }, { "tool": "iris_run", "command": "^bloq-members (add|invite)" }] },
+    { "id": "new-list", "effect": "write", "prompt": "Make a new list called Benchmarks on board 297.",
+      "accept": [{ "tool": "iris_run", "command": "^(atlas|bloqs) create-list" }] },
+    { "id": "schedule-off", "effect": "write", "prompt": "Turn off schedule 12.",
+      "accept": [{ "tool": "iris_run", "command": "^schedules toggle" }, { "tool": "iris_run", "command": "^hive schedule pause" }] },
+    { "id": "ask-session", "effect": "write", "prompt": "Ask the Claude Code session on iris-hive-001 that is working on the pathways dashboard what it is doing right now.",
+      "accept": [{ "tool": "iris_run", "command": "^hive (ask|send-input)" }] }
+  ]
+}

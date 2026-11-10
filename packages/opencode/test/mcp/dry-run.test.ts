@@ -20,6 +20,18 @@ describe("dry-run lets only known reads through (#193064 benchmark)", () => {
     for (const command of ["hive tasks 12", "hive tasks --limit 5", "hive nodes --json", "hive sessions --status needs_you"])
       expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, true])
   })
+  test("one-word reads and the other read verbs agents reach for (#193064 harder tasks)", () => {
+    for (const command of ["usage", "usage --json", "heartbeats", "heartbeats query --state late", "atlas members 297", "bloqs members 297", "integrations list-connected", "models"])
+      expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, true])
+    for (const command of ["agents pause 605", "atlas add-member 297 --email a@b.c", "atlas create-list 297 Benchmarks", "schedules toggle 12", "hive schedule pause 3", "hive ask s1 hi"])
+      expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, false])
+  })
+  test("a read-only command stays a read whatever words follow, unless one is an action", () => {
+    for (const command of ["find animated ad from a reference post", "usage --since 7d", "heartbeats query --state late"])
+      expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, true])
+    for (const command of ["heartbeats pause 3", "find x --then run"])
+      expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, false])
+  })
   test("writes, sends and anything unknown do not", () => {
     for (const command of ["hive run iris-hive-001 uptime", "bloqs add-item 297 x", "bug report --title x", "leads delete 3", "pages publish x", "bloqs items 297 --apply", "hive", ""])
       expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, false])

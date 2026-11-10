@@ -2,7 +2,7 @@
 /**
  * Agent benchmark for the IRIS MCP tool layout (#193064).
  *
- *   bun script/agent-bench/run.ts [--label baseline] [--repeats 3] [--model sonnet] [--only id,id] [--max-usd 0.50]
+ *   bun script/agent-bench/run.ts [--tasks tasks.json|tasks-hard.json] [--label baseline] [--repeats 3] [--model sonnet] [--only id,id] [--max-usd 0.50]
  *
  * Each run: `claude -p <task>` in a fresh empty folder, with ONLY this checkout's `iris mcp serve` (no
  * built-in tools, no other MCP servers, no project instructions), under IRIS_MCP_DRY_RUN=1 — reads run
@@ -30,7 +30,8 @@ const repeats = Number(arg("repeats", "3"))
 const model = arg("model", "sonnet")
 const maxUsd = arg("max-usd", "0.50")
 const only = arg("only", "")
-const { tasks } = JSON.parse(readFileSync(join(HERE, "tasks.json"), "utf8")) as { tasks: Task[] }
+const taskFile = arg("tasks", "tasks.json")
+const { tasks } = JSON.parse(readFileSync(join(HERE, taskFile), "utf8")) as { tasks: Task[] }
 const chosen = only ? tasks.filter((t) => only.split(",").includes(t.id)) : tasks
 
 /** Pure: does this call satisfy one of the task's accept entries? Exported for the test. */
@@ -120,7 +121,7 @@ if (import.meta.main) {
     }
   const sum = (k: string) => runs.reduce((s, r: any) => s + (Number(r[k]) || 0), 0)
   const summary = {
-    label, model, repeats, tasks: chosen.length, runs: runs.length,
+    label, task_file: taskFile, model, repeats, tasks: chosen.length, runs: runs.length,
     pass_rate: runs.filter((r) => r.pass).length / runs.length,
     per_task: Object.fromEntries(chosen.map((t) => [t.id, runs.filter((r) => r.task === t.id && r.pass).length + "/" + repeats])),
     mean_calls: sum("calls") / runs.length, mean_wrong: sum("wrong") / runs.length, mean_seconds: sum("seconds") / runs.length,

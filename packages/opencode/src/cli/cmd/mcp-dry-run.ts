@@ -6,9 +6,11 @@
  * Interim: the read verbs below are a small allowlist until the book (#193064 decision 1) declares an
  * effect for every command; then this asks the book instead.
  */
-const READ_VERBS = new Set(["list", "ls", "get", "show", "search", "items", "item", "tasks", "nodes", "sessions", "status", "view", "inventory", "help"])
+const READ_VERBS = new Set(["list", "ls", "get", "show", "search", "items", "item", "tasks", "nodes", "sessions", "status", "view", "inventory", "help", "query", "members"])
+// Whole commands that only read, run with no subcommand.
+const READ_COMMANDS = new Set(["usage", "heartbeats", "models", "whoami", "help", "find"])
 // A read verb followed by one of these is a write: `hive tasks create`, `hive nodes remove`, `bloqs items 297 delete 5`.
-const ACTING_WORDS = new Set(["create", "add", "new", "update", "set", "edit", "delete", "remove", "rm", "cancel", "rerun", "retry", "run", "start", "stop", "kill", "restart", "send", "publish", "toggle", "enable", "disable", "approve", "reject", "answer", "claim", "release", "move", "rename", "assign", "merge", "push", "install", "uninstall", "reset", "purge", "pay", "charge", "refund"])
+const ACTING_WORDS = new Set(["pause", "resume", "archive", "unarchive", "create", "add", "new", "update", "set", "edit", "delete", "remove", "rm", "cancel", "rerun", "retry", "run", "start", "stop", "kill", "restart", "send", "publish", "toggle", "enable", "disable", "approve", "reject", "answer", "claim", "release", "move", "rename", "assign", "merge", "push", "install", "uninstall", "reset", "purge", "pay", "charge", "refund"])
 // Flags that turn a read verb into an action somewhere (e.g. `sessions … --follow` streams, fine; these are not).
 const ACTING_FLAGS = /(^|\s)--(apply|send|publish|delete|force|yes|confirm|execute|run)(\s|=|$)/
 
@@ -22,8 +24,9 @@ export function dryRunAllows(tool: string, args: Record<string, unknown> | undef
   if (tool === "iris_run") {
     const command = typeof args?.command === "string" ? args.command.trim() : ""
     const words = command.split(/\s+/).filter((w) => w && !w.startsWith("-"))
-    if (words.length < 2 && words[0] !== "help") return false
     if (ACTING_FLAGS.test(command)) return false
+    if (READ_COMMANDS.has(words[0])) return !words.slice(1).some((w) => ACTING_WORDS.has(w.toLowerCase()))
+    if (words.length < 2) return false
     if (words.slice(2).some((w) => ACTING_WORDS.has(w.toLowerCase()))) return false
     return words[0] === "help" || READ_VERBS.has(words[1]) || words[1].startsWith("get-") || words[1].startsWith("list-")
   }
