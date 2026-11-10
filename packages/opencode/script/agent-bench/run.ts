@@ -2,7 +2,7 @@
 /**
  * Agent benchmark for the IRIS MCP tool layout (#193064).
  *
- *   bun script/agent-bench/run.ts [--tasks tasks.json|tasks-hard.json] [--label baseline] [--repeats 3] [--model sonnet] [--only id,id] [--max-usd 0.50]
+ *   bun script/agent-bench/run.ts [--tasks tasks.json|tasks-hard.json] [--cli installed|source] [--label baseline] [--repeats 3] [--model sonnet] [--only id,id] [--max-usd 0.50]
  *
  * Each run: `claude -p <task>` in a fresh empty folder, with ONLY this checkout's `iris mcp serve` (no
  * built-in tools, no other MCP servers, no project instructions), under IRIS_MCP_DRY_RUN=1 — reads run
@@ -30,6 +30,9 @@ const repeats = Number(arg("repeats", "3"))
 const model = arg("model", "sonnet")
 const maxUsd = arg("max-usd", "0.50")
 const only = arg("only", "")
+// installed: the agent's iris_run/iris_help run ~/.iris/bin/iris (what users have). source: they run
+// THIS checkout's CLI, so a description or help change can be measured before it ships.
+const cli = arg("cli", "installed")
 const taskFile = arg("tasks", "tasks.json")
 const { tasks } = JSON.parse(readFileSync(join(HERE, taskFile), "utf8")) as { tasks: Task[] }
 const chosen = only ? tasks.filter((t) => only.split(",").includes(t.id)) : tasks
@@ -77,7 +80,11 @@ async function runOnce(task: Task, n: number) {
         // `run --cwd` (in that order — `bun --cwd X run` prints usage and exits): bun resolves the project's config (JSX runtime) from its working folder; started from the
         // agent's empty temp folder the server crashed on load and Claude reported it "failed".
         args: ["run", "--cwd", ROOT, "--conditions=browser", join(ROOT, "src", "index.ts"), "mcp", "serve", "--playbooks=false"],
-        env: { IRIS_MCP_DRY_RUN: "1", IRIS_MCP_DRY_RUN_LOG: dryLog },
+        env: {
+          IRIS_MCP_DRY_RUN: "1",
+          IRIS_MCP_DRY_RUN_LOG: dryLog,
+          ...(cli === "source" ? { IRIS_MCP_BIN: join(HERE, "iris-src.sh") } : {}),
+        },
       },
     },
   }
@@ -121,7 +128,7 @@ if (import.meta.main) {
     }
   const sum = (k: string) => runs.reduce((s, r: any) => s + (Number(r[k]) || 0), 0)
   const summary = {
-    label, task_file: taskFile, model, repeats, tasks: chosen.length, runs: runs.length,
+    label, task_file: taskFile, cli, model, repeats, tasks: chosen.length, runs: runs.length,
     pass_rate: runs.filter((r) => r.pass).length / runs.length,
     per_task: Object.fromEntries(chosen.map((t) => [t.id, runs.filter((r) => r.task === t.id && r.pass).length + "/" + repeats])),
     mean_calls: sum("calls") / runs.length, mean_wrong: sum("wrong") / runs.length, mean_seconds: sum("seconds") / runs.length,

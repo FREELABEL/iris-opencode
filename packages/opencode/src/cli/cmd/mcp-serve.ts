@@ -36,7 +36,9 @@ import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } fro
 // Writing the brace as a slice of a BALANCED pair keeps the counter honest.
 const JSON_OPEN = "{}".slice(0, 1)
 
-export const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
+// IRIS_MCP_BIN points the server at another iris — the agent benchmark (#193064) uses it to run THIS
+// checkout's CLI, so a change to a command's help or description is what the benchmarked agent sees.
+export const IRIS_BIN = process.env.IRIS_MCP_BIN || join(homedir(), ".iris", "bin", "iris")
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 const MAX_OUTPUT = 100 * 1024 // 100KB
 const TIMEOUT_MS = 30_000
