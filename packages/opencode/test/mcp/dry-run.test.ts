@@ -9,6 +9,8 @@ describe("dry-run lets only known reads through (#193064 benchmark)", () => {
   test("reads run", () => {
     for (const command of ["hive nodes", "hive tasks --json", "bloqs items 297", "bloqs search lexicon", "bug show 193064", "bloqs get-item 5", "help hive"])
       expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, true])
+    // A group alone prints its help: the book reviews `hive` as a read (#193064). An unknown subcommand is not.
+    expect(dryRunAllows("iris_run", { command: "hive" })).toBe(true)
     expect(dryRunAllows("hive_sessions", {})).toBe(true)
     expect(dryRunAllows("hive_wait", { timeout_s: 5 })).toBe(true)
     expect(dryRunAllows("hive_inventory", {})).toBe(true)
@@ -33,7 +35,7 @@ describe("dry-run lets only known reads through (#193064 benchmark)", () => {
       expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, false])
   })
   test("writes, sends and anything unknown do not", () => {
-    for (const command of ["hive run iris-hive-001 uptime", "bloqs add-item 297 x", "bug report --title x", "leads delete 3", "pages publish x", "bloqs items 297 --apply", "hive", ""])
+    for (const command of ["hive run iris-hive-001 uptime", "bloqs add-item 297 x", "bug report --title x", "leads delete 3", "pages publish x", "bloqs items 297 --apply", "hive frobnicate 3", ""])
       expect([command, dryRunAllows("iris_run", { command })]).toEqual([command, false])
     for (const tool of ["hive_answer", "hive_send_input", "hive_panes", "playbook_run", "something_new"]) expect(dryRunAllows(tool, {})).toBe(false)
     expect(dryRunAllows("iris_memory", { action: "add" })).toBe(false)

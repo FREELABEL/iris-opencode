@@ -9,6 +9,8 @@ import capabilities from "../../../capabilities.json"
  */
 export type Effect = "read" | "own_write" | "shared_write" | "shared_overwrite" | "egress" | "payment" | "unclassified"
 const COMMANDS = (book as { commands: Record<string, Effect> }).commands
+// A group (`atlas`, `hive`) has its own entry — what it does alone — and subcommands with theirs.
+const GROUPS = new Set(Object.keys(COMMANDS).flatMap((k) => k.split(" ").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join(" "))))
 const ACTIONS = ((book as { actions?: Record<string, Record<string, Effect>> }).actions ?? {}) as Record<string, Record<string, Effect>>
 
 // Aliases, from the CLI's own declarations: "bloqs" names `atlas`, "bug submit" names `bug report`.
@@ -52,7 +54,10 @@ export function effectOf(command: string): Effect {
     if (!hit) continue
     // `hive tasks create …`: an action taken as an argument decides; anything else (an id, nothing) is the default.
     const action = ACTIONS[name]?.[words[n] ?? ""]
-    return action ?? hit
+    if (action) return action
+    // A group speaks only for itself: `atlas` alone prints help, `atlas <unknown>` is not known (#193064).
+    if (GROUPS.has(name) && n < words.length) return "unclassified"
+    return hit
   }
   return "unclassified"
 }

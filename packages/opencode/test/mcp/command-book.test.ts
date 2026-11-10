@@ -50,3 +50,16 @@ describe("an action taken as an argument decides the effect (#193064 book action
   })
 })
 
+
+describe("a group entry only speaks for itself, not for an unknown subcommand (#193064)", () => {
+  // `atlas`, `hive`, `genesis` are groups: their own entry is what `iris atlas` alone does (help). If a
+  // longest-prefix lookup let `atlas <anything>` inherit it, an unknown subcommand would read as read.
+  test("an unknown subcommand of a group is unclassified, whatever the group's own effect", () => {
+    expect(effectOf("atlas frobnicate --everything")).toBe("unclassified")
+    expect(effectOf("hive definitely-not-a-thing 3")).toBe("unclassified")
+  })
+  test("a known subcommand still resolves, and a leaf command keeps its arguments", () => {
+    expect(effectOf("bloqs items 297 --limit 5")).toBe((book as any).commands["atlas items"])
+    expect(effectOf("hive tasks get 12")).toBe("read")
+  })
+})
