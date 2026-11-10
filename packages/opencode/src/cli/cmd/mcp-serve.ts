@@ -24,6 +24,7 @@ import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
 import { buildAgentListArgs, renderAgentList } from "./mcp-agent-list"
+import { bridgeErrorText, fleetArgs, parseFleet } from "./mcp-hive"
 import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
@@ -78,13 +79,6 @@ async function bridgeFetch(url: string, init: RequestInit = {}): Promise<Respons
     res = await fetch(url, withKey(readBridgeKey()))
   }
   return res
-}
-
-// Normalized error text for a failed bridge response (#145951: consistent shape).
-function bridgeErr(res: Response): string {
-  if (res.status === 401)
-    return "Bridge error: Unauthorized — the local daemon bridge rejected the key. Ensure the iris daemon is running (the key in ~/.iris/bridge-token rotates on restart)."
-  return `Bridge error: ${res.status} ${res.statusText}`
 }
 
 // Known commands from the registry (populated at startup)
@@ -635,7 +629,7 @@ export const McpServeCommand = cmd({
           "                ask takes an optional JSON `schema` -> a validated object, not prose",
           "  iris_memory   read/write the Atlas — boards, lists, items",
           "                search | boards | get | items | add | update",
-          "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
+          "  hive_*        the fleet's AI sessions (hive_sessions), and this machine's tmux swarm (needs the local daemon)",
           "  playbook_*    one typed tool per playbook (≤ 8), else playbook_find + playbook_run (--no-playbooks to omit; IRIS_MCP_PLAYBOOK_TOOLS=all|search)",
           "",
           `RESOURCES:  iris://guide  iris://commands  iris://recipes  ${RECIPE_URI_PREFIX}<name>  iris://playbook/<name>`,
@@ -797,15 +791,19 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
         },
         {
           name: "hive_sessions",
-          description: "List all active tmux sessions managed by IRIS Hive. Shows session names, pane counts, and task metadata.",
+          description:
+            "Every AI session on the user's machines — Claude Code, opencode, Codex — with machine, status (needs_you / active / idle), label and last activity: the same list as `iris hive sessions`, on any machine. Also lists this machine's local tmux swarm sessions under local_tmux, when tmux is installed. Stale sessions are hidden unless all is true.",
           inputSchema: {
             type: "object" as const,
-            properties: {},
+            properties: {
+              status: { type: "string", description: "Only this status: needs_you | active | idle | stale | unknown" },
+              all: { type: "boolean", description: "Include stale sessions (hidden by default)" },
+            },
           },
         },
         {
           name: "hive_panes",
-          description: "Get status and recent output from a Hive tmux session's panes. Use this to monitor what agents in a swarm are doing.",
+          description: "Get status and recent output from a LOCAL tmux swarm session's panes on this machine (see hive_sessions' local_tmux). Use this to monitor what agents in a swarm are doing. Not for fleet sessions.",
           inputSchema: {
             type: "object" as const,
             properties: {
@@ -817,7 +815,7 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
         },
         {
           name: "hive_send_input",
-          description: "Send text input to a specific pane in a running Hive tmux session. Use this for agent-to-agent communication.",
+          description: "Send text input to a pane of a LOCAL tmux swarm session on this machine. Use this for agent-to-agent communication. To message a fleet session from hive_sessions, use iris_run \"hive send-input <session id> <text>\".",
           inputSchema: {
             type: "object" as const,
             properties: {
@@ -1580,15 +1578,17 @@ parts you did not mean to touch.`,
       // ── Hive tmux tools (proxy through daemon bridge at localhost:3200) ──
       const BRIDGE = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
 
+      // #191981: the FLEET (what `iris hive sessions` shows) plus this machine's tmux swarm. Either
+      // half may fail on its own; the other is still returned, and the failure is named.
       if (name === "hive_sessions") {
-        try {
-          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions`)
-          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
-          const data = await res.json()
-          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: `Daemon bridge unavailable (is iris daemon running?): ${e instanceof Error ? e.message : e}` }], isError: true }
-        }
+        const fleet = await execIris(fleetArgs(args ?? {}))
+          .then((r) => (r.exitCode === 0 ? parseFleet(r.stdout) : { error: stripVTControlCharacters(r.stderr || r.stdout).trim().slice(0, 300) || "iris hive sessions failed" }))
+          .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }))
+        const local_tmux = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions`)
+          .then(async (res) => (res.ok ? await res.json() : { error: bridgeErrorText(res.status, res.statusText, await res.json().catch(() => null)) }))
+          .catch((e) => ({ error: `Daemon bridge unavailable (is iris daemon running?): ${e instanceof Error ? e.message : e}` }))
+        const out = "rows" in fleet ? { fleet: fleet.rows, local_tmux } : { fleet_error: fleet.error, local_tmux }
+        return { content: [{ type: "text" as const, text: JSON.stringify(out, null, 2) }], isError: "error" in fleet && "error" in local_tmux }
       }
 
       if (name === "hive_panes") {
@@ -1596,8 +1596,9 @@ parts you did not mean to touch.`,
         const lines = (args?.lines as number) ?? 20
         if (!session) return { content: [{ type: "text" as const, text: "Error: session is required" }], isError: true }
         try {
-          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${session}/panes?lines=${lines}`)
-          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
+          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${encodeURIComponent(session)}/panes?lines=${lines}`)
+          if (!res.ok)
+            return { content: [{ type: "text" as const, text: bridgeErrorText(res.status, res.statusText, await res.json().catch(() => null), session) }], isError: true }
           const data = await res.json()
           return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
         } catch (e) {
@@ -1611,12 +1612,13 @@ parts you did not mean to touch.`,
         const text = args?.text as string
         if (!session || text === undefined) return { content: [{ type: "text" as const, text: "Error: session and text are required" }], isError: true }
         try {
-          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${session}/input`, {
+          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${encodeURIComponent(session)}/input`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ pane, text }),
           })
-          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
+          if (!res.ok)
+            return { content: [{ type: "text" as const, text: bridgeErrorText(res.status, res.statusText, await res.json().catch(() => null), session) }], isError: true }
           return { content: [{ type: "text" as const, text: `Sent to ${session}:${pane}` }] }
         } catch (e) {
           return { content: [{ type: "text" as const, text: `Daemon bridge unavailable: ${e instanceof Error ? e.message : e}` }], isError: true }
