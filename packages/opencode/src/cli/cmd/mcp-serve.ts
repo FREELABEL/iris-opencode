@@ -24,7 +24,7 @@ import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
 import { buildAgentListArgs, renderAgentList } from "./mcp-agent-list"
-import { bridgeErrorText, fleetArgs, parseFleet } from "./mcp-hive"
+import { WAIT_POLL_MS, answerArgs, bridgeErrorText, fleetArgs, parseFleet, waitLoop, waitParams, waitPollArgs } from "./mcp-hive"
 import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
@@ -799,6 +799,34 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
               status: { type: "string", description: "Only this status: needs_you | active | idle | stale | unknown" },
               all: { type: "boolean", description: "Include stale sessions (hidden by default)" },
             },
+          },
+        },
+        {
+          name: "hive_wait",
+          description:
+            "Wait until a session on any of the user's machines needs them (asks a question), then return it with its questions and how to answer. Returns at once if one is already waiting. On timeout returns an empty list — not an error; call again to keep waiting. Pass the session ids you have already handled in `seen`.",
+          annotations: { title: "Wait for a session that needs you", readOnlyHint: true, openWorldHint: false },
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              timeout_s: { type: "number", description: "How long to wait, in seconds (default 60, max 600)" },
+              seen: { type: "array", items: { type: "string" }, description: "Session ids already handled — not returned again" },
+              node: { type: "string", description: "Only this machine (its name)" },
+            },
+          },
+        },
+        {
+          name: "hive_answer",
+          description:
+            "Answer the question(s) a session is waiting on (from hive_wait or hive_sessions): one choice per question — an option number, its label, or your own words. The session continues with your answer.",
+          annotations: { title: "Answer a waiting session", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              session_id: { type: "string", description: "The waiting session's id" },
+              choices: { type: "array", items: { type: "string" }, description: "One answer per question, in order" },
+            },
+            required: ["session_id", "choices"],
           },
         },
         {
@@ -1589,6 +1617,28 @@ parts you did not mean to touch.`,
           .catch((e) => ({ error: `Daemon bridge unavailable (is iris daemon running?): ${e instanceof Error ? e.message : e}` }))
         const out = "rows" in fleet ? { fleet: fleet.rows, local_tmux } : { fleet_error: fleet.error, local_tmux }
         return { content: [{ type: "text" as const, text: JSON.stringify(out, null, 2) }], isError: "error" in fleet && "error" in local_tmux }
+      }
+
+      // #193064: "a session needs you", delivered as a call that returns when it happens.
+      if (name === "hive_wait") {
+        const { timeoutMs, seen, node } = waitParams(args ?? {})
+        const out = await waitLoop(
+          async () => {
+            const r = await execIris(waitPollArgs(node)).catch((e) => ({ stdout: "", stderr: String(e), exitCode: 1 }))
+            return r.exitCode === 0 ? parseFleet(r.stdout) : { error: stripVTControlCharacters(r.stderr || r.stdout).trim().slice(0, 300) }
+          },
+          { timeoutMs, everyMs: WAIT_POLL_MS, seen },
+        )
+        if ("error" in out) return { content: [{ type: "text" as const, text: `Could not read the fleet: ${out.error}` }], isError: true }
+        return { content: [{ type: "text" as const, text: JSON.stringify(out, null, 2) }] }
+      }
+
+      if (name === "hive_answer") {
+        const built = answerArgs(args ?? {})
+        if ("error" in built) return { content: [{ type: "text" as const, text: `Error: ${built.error}` }], isError: true }
+        const r = await execIris(built.args, 60_000).catch((e) => ({ stdout: "", stderr: String(e), exitCode: 1 }))
+        const text = stripVTControlCharacters([r.stdout, r.stderr].filter(Boolean).join("\n")).trim() || "(no output)"
+        return { content: [{ type: "text" as const, text }], isError: r.exitCode !== 0 }
       }
 
       if (name === "hive_panes") {
