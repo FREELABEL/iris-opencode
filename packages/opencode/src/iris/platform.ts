@@ -604,6 +604,100 @@ export function mergeSkeleton(
   return out
 }
 
+/**
+ * BIG BOARDS ARE READ A PAGE PER LIST (#192670).
+ *
+ * Opening IRIS CLI Bug Reports (#297, 7,027 cards) downloaded 9.4 MB in 3.1 s to show 160 cards
+ * (189 KB). Past ATLAS_BIG cards a board is read as its SKELETON — every list and every card's id
+ * and rev, 242 KB for #297 — plus the first ATLAS_HEAD cards of each list by id. Each list keeps
+ * its true `total` and the ids not yet read (`more`); "Show more" reads the next ones by id. A board
+ * at or under ATLAS_BIG is read whole, exactly as before.
+ */
+export const ATLAS_BIG = 1000
+export const ATLAS_HEAD = 50
+export type AtlasSkeletonList = { id: number; name?: string; items?: { id: number; rev?: string | null }[] }
+export type AtlasSkeleton = { version: string; containsPhi: boolean; lists: AtlasSkeletonList[] }
+export type AtlasPagedList = AtlasList & { total: number; more: number[] }
+export const skeletonTotal = (s: AtlasSkeleton) => s.lists.reduce((n, l) => n + (l.items?.length ?? 0), 0)
+
+/** The skeleton, or "unchanged" when `version` is still current. `full` = an fl-api without versions. */
+export async function fetchAtlasSkeleton(
+  bloqId: number,
+  version = "none",
+): Promise<{ kind: "unchanged"; version: string } | { kind: "skeleton"; skel: AtlasSkeleton } | { kind: "full" } | { kind: "error"; reason: string }> {
+  const userId = await resolveUserId()
+  if (!userId) return { kind: "error", reason: `not signed in (token: ${tokenSource()})` }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?if_version=${encodeURIComponent(version)}`)
+    if (!res.ok) return { kind: "error", reason: `fl-api ${res.status}` }
+    const json = (await res.json()) as any
+    const s = json?.data ?? json
+    if (typeof s?.version !== "string") return { kind: "full" }
+    if (s.unchanged === true) return { kind: "unchanged", version: s.version }
+    if (!Array.isArray(s.lists)) return { kind: "full" }
+    return { kind: "skeleton", skel: { version: s.version, containsPhi: s.contains_phi === true, lists: s.lists } }
+  } catch (e) {
+    return { kind: "error", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Cards by id, light, in parallel requests of MAX_IDS. */
+export async function fetchAtlasCards(bloqId: number, ids: number[]): Promise<{ cards: Map<number, AtlasItem> } | { error: string }> {
+  const cards = new Map<number, AtlasItem>()
+  if (!ids.length) return { cards }
+  const userId = await resolveUserId()
+  if (!userId) return { error: `not signed in (token: ${tokenSource()})` }
+  const q = Date.now() >= previewsUnsupportedUntil ? "light=1&summary=1" : "no_searchable_content=1&summary=1"
+  const chunks: number[][] = []
+  for (let i = 0; i < ids.length; i += MAX_IDS) chunks.push(ids.slice(i, i + MAX_IDS))
+  try {
+    const answers = await Promise.all(chunks.map((c) => irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}?ids=${c.join(",")}&${q}`)))
+    for (const r of answers) {
+      if (!r.ok) return { error: `fl-api ${r.status}` }
+      const j = (await r.json()) as any
+      for (const l of (j?.data ?? j)?.lists ?? []) for (const i of l?.items ?? []) cards.set(i.id, atlasItemOf(i))
+    }
+    return { cards }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Which cards a page needs, and the lists it makes — pure, so it is tested without fl-api. `depth`
+ * says how many cards of a list are wanted; a held card whose rev still matches is reused, so a
+ * refresh fetches only what moved among the cards on screen.
+ */
+export function pageSkeleton(
+  skel: AtlasSkeleton,
+  depth: (listId: number) => number,
+  held: Map<number, AtlasItem> = new Map(),
+  names: Map<number, string> = new Map(),
+): { need: number[]; build: (fetched: Map<number, AtlasItem>) => AtlasPagedList[] } {
+  const need: number[] = []
+  const heads = skel.lists.map((l) => {
+    const all = l.items ?? []
+    const head = all.slice(0, Math.max(0, depth(l.id)))
+    for (const c of head) {
+      const mine = held.get(c.id)
+      if (!mine || !mine.rev || mine.rev !== c.rev) need.push(c.id)
+    }
+    return { l, head, rest: all.slice(head.length).map((c) => c.id), total: all.length }
+  })
+  return {
+    need,
+    build: (fetched) =>
+      heads.map(({ l, head, rest, total }) => ({
+        id: l.id,
+        name: l.name ?? names.get(l.id) ?? "",
+        // A card deleted between the two requests is simply absent; the count stays the skeleton's.
+        items: head.map((c) => fetched.get(c.id) ?? held.get(c.id)).filter((x): x is AtlasItem => !!x),
+        total,
+        more: rest,
+      })),
+  }
+}
+
 export interface HiveNode {
   id: string
   name: string
@@ -1816,6 +1910,77 @@ export interface Agent {
   active?: boolean
   failures?: number
   createdAt?: string
+  /** What the agents gallery's card reads (#192619, ELON BaseAgentCard). */
+  type?: string
+  isHuman?: boolean
+  isVirtual?: boolean
+  email?: string
+  linkedUserId?: number
+  workspaceId?: number
+  workspaceMatch?: string
+  lastUsedAt?: string
+  files?: number
+  /** settings booleans the card turns into capabilities (webAccess, useKnowledgeBase, …). */
+  flags?: string[]
+  /** settings.functions[].name. */
+  functions?: string[]
+  /** settings.agentIntegrations, enabled ones only. */
+  integrations?: string[]
+}
+
+/** settings arrives as an object or a JSON string; anything else is no settings. */
+function agentSettings(a: any): Record<string, any> {
+  const s = a?.settings
+  if (s && typeof s === "object") return s
+  if (typeof s === "string") {
+    try {
+      const v = JSON.parse(s)
+      return v && typeof v === "object" ? v : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+const CARD_FLAGS = ["webAccess", "canCreateContent", "useKnowledgeBase", "functionCalling", "memoryPersistence", "canManageTasks", "canAnalyzeData", "pipeline_flow", "writing_styles"]
+
+function agentCard(a: any): Partial<Agent> {
+  const s = agentSettings(a)
+  const num = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v))
+  const files = [a?.file_attachments, a?.fileAttachments, s.file_attachments, s.fileAttachments].find(Array.isArray)
+  const ai = s.agentIntegrations
+  const integrations = Array.isArray(ai)
+    ? ai.filter((x: unknown): x is string => typeof x === "string" && !!x)
+    : ai && typeof ai === "object"
+      ? Object.entries(ai).filter(([, on]) => on).map(([k]) => k)
+      : []
+  return {
+    type: typeof a?.type === "string" ? a.type : undefined,
+    isHuman: a?.isHuman === true || s.isHuman === true || s.isHuman === "true" || a?.type === "human",
+    isVirtual: a?.isVirtual === true || s.isVirtual === true,
+    email: typeof a?.email === "string" && a.email ? a.email : undefined,
+    linkedUserId: num(a?.linked_user_id),
+    workspaceId: num(a?.workspace_id),
+    workspaceMatch: typeof a?.google_workspace_match_state === "string" ? a.google_workspace_match_state : undefined,
+    // fl-api's column is last_active_at; ELON's card reads last_used_at — take either.
+    lastUsedAt: a?.last_used_at ?? a?.last_active_at ?? undefined,
+    files: files ? files.length : 0,
+    flags: CARD_FLAGS.filter((k) => s[k] === true || (k === "pipeline_flow" || k === "writing_styles" ? !!s[k] : false)),
+    functions: Array.isArray(s.functions) ? s.functions.map((f: any) => f?.name).filter((n: unknown): n is string => typeof n === "string" && !!n) : [],
+    integrations,
+  }
+}
+
+/** ELON's model order (BaseAgentCard.getAgentModel), after the row's own model field. */
+function agentModel(a: any, s: Record<string, any>): string | undefined {
+  const c = a?.config && typeof a.config === "object" ? a.config : {}
+  if (s.preferredModel && s.preferredModel !== "cloud" && s.preferredModel !== "ollama" && s.preferredModel !== "openrouter") return String(s.preferredModel)
+  const m = a.model ?? s.model ?? c.model ?? c.modelName
+  if (m) return String(m)
+  if (s.preferredModel === "ollama" && s.ollamaConfig?.modelName) return `${s.ollamaConfig.modelName} (Local)`
+  if (s.preferredModel === "openrouter" && s.openRouterConfig?.modelName) return String(s.openRouterConfig.modelName)
+  return undefined
 }
 
 /**
@@ -1853,17 +2018,31 @@ export async function fetchMyAgents(): Promise<PlatformResult<{ agents: { id: nu
   }
 }
 
-export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
+/**
+ * A bloq's agents, or with `all` every agent the account can see (own, owned boards, shared) —
+ * searched by fl-api (`search`), since 50 rows of an account are not the account.
+ */
+export async function fetchAgents(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ agents: Agent[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+  }
 
   try {
+    // All reads fl-api's maximum (500), not 50: Scheduled / On demand narrow AFTER this fetch, so
+    // a 50-row slice of a 358-agent account would undercount both and call the rest absent.
+    const scope = opts.all ? "" : `bloq_id=${bloqId}&`
+    const rows = opts.all ? 500 : 50
+    const search = opts.all && opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""
     const [agentsRes, jobsRes] = await Promise.all([
-      irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/agents?${scope}per_page=${rows}${search}`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${scope}per_page=${rows}`),
     ])
     if (!agentsRes.ok) return { measured: false, reason: `fl-api ${agentsRes.status}`, data: { agents: [] } }
 
@@ -1890,7 +2069,7 @@ export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agen
         id: Number(a.id),
         name: String(a.name ?? "unnamed"),
         status: String(a.health_status ?? (a.active === false ? "paused" : "idle")),
-        model: a.model ?? a.config?.model ?? a.config?.modelName ?? undefined,
+        model: agentModel(a, agentSettings(a)),
         heartbeat: hb,
         schedule: job?.interval_minutes ? `${job.interval_minutes}m` : undefined,
         lastRun: job?.last_run_at ?? undefined,
@@ -1898,6 +2077,7 @@ export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agen
         active: typeof a.active === "boolean" ? a.active : undefined,
         failures: typeof a.consecutive_failures === "number" ? a.consecutive_failures : undefined,
         createdAt: a.created_at ?? undefined,
+        ...agentCard(a),
       }
     })
     return {
@@ -2016,19 +2196,30 @@ export interface Page {
   category?: string
 }
 
-export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages: Page[] }>> {
+/**
+ * A bloq's pages, or with `all` every page on the account — searched by iris-api (`search`), since
+ * 50 rows of an account are not the account and a filter over them would miss most matches.
+ */
+export async function fetchPages(
+  bloqId: number,
+  opts: { all?: boolean; q?: string } = {},
+): Promise<PlatformResult<{ pages: Page[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { pages: [] } }
 
-  const unknown = await unknownBloq(bloqId)
-  if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  if (!opts.all) {
+    const unknown = await unknownBloq(bloqId)
+    if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+  }
 
   try {
     // owner_type/owner_id is a NARROWING filter, which is the point: this used to be fetched
     // per-user and rendered under a project header, so the list could never change when you
     // switched project.
     const res = await irisFetch(
-      `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
+      opts.all
+        ? `/api/v1/pages?user_id=${userId}&per_page=50${opts.q ? `&search=${encodeURIComponent(opts.q)}` : ""}`
+        : `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
       IRIS_API,
     )
     if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { pages: [] } }
@@ -2050,6 +2241,47 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
     return { measured: true, data: { pages } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { pages: [] } }
+  }
+}
+
+export type RecentItem = {
+  id: number
+  title: string
+  bloqId: number
+  bloqName?: string
+  listName?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * The account's most recently created or edited board items, newest first — Home › Activity
+ * (#192535). fl-api's content-items (what `iris search ""` falls back to) lists every board's items, newest first.
+ */
+export async function fetchRecentItems(): Promise<PlatformResult<{ items: RecentItem[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { items: [] } }
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/content-items?search=&per_page=50`, FL_API)
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { items: [] } }
+    const j = (await res.json()) as any
+    // { success, data: { items, search, pagination } }
+    const raw = j?.data?.items ?? j?.items ?? []
+    const rows = Array.isArray(raw) ? raw : []
+    const items: RecentItem[] = rows
+      .map((i: any) => ({
+        id: Number(i.id),
+        title: String(i.title || "Untitled"),
+        bloqId: Number(i.bloq_id),
+        bloqName: i.bloq_name ?? undefined,
+        listName: i.list_name ?? undefined,
+        createdAt: i.created_at ?? undefined,
+        updatedAt: i.updated_at ?? undefined,
+      }))
+      .filter((i: RecentItem) => Number.isFinite(i.id) && Number.isFinite(i.bloqId))
+    return { measured: true, data: { items } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { items: [] } }
   }
 }
 
@@ -2418,7 +2650,10 @@ export async function fetchSites(bloqId: number): Promise<PlatformResult<{ sites
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { sites: [] } }
 
   try {
-    const res = await irisFetch(`/api/v1/sites`)
+    // per_page: fl-api pages this list at 20 by default, newest first, and the board filter below
+    // runs AFTER that — an account with more than 20 sites lost the older ones of THIS board from
+    // the list, so a page in one of them showed as in no site at all (#192672).
+    const res = await irisFetch(`/api/v1/sites?per_page=100`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { sites: [] } }
     const json = (await res.json()) as any
     const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : []
@@ -5220,8 +5455,10 @@ export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
       return leadsCall(`${lead}/tasks`, send("POST"))
     case "saveTask":
       return a.taskId ? leadsCall(`${lead}/tasks/${a.taskId}`, send("PUT")) : { measured: false, reason: "saveTask needs a task", data: null }
+    // `/leads/{id}/messages` is not a route (404, measured 2026-11-06) — the panel said "No messages
+    // logged" for every lead. The outreach thread is `/outreach/messages` (#192688).
     case "messages":
-      return leadsCall(`${lead}/messages`)
+      return leadsCall(`${lead}/outreach/messages?limit=50`)
     case "steps":
       return leadsCall(`${lead}/outreach-steps`)
     case "readiness":

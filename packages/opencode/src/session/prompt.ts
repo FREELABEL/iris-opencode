@@ -42,6 +42,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import * as AttachmentText from "./attachment-text"
+import * as AttachmentPdf from "./attachment-pdf"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { TerminalRun } from "./terminal-run"
@@ -766,6 +767,7 @@ const layer = Layer.effect(
         part: Extract<PromptInput["parts"][number], { type: "file" }>,
         bytes: Uint8Array,
         path: string | undefined = part.filename,
+        resolved?: AttachmentText.AttachmentResult,
       ) {
         const text = (value: string): Draft<SessionV1.Part> => ({
           messageID: info.id,
@@ -774,7 +776,7 @@ const layer = Layer.effect(
           synthetic: true,
           text: value,
         })
-        const result = AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
+        const result = resolved ?? AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
         if (result.kind === "unreadable") {
           // The person sees why; the model is told it did not see the file. Nothing is forwarded.
           yield* events.publish(Session.Event.Error, {
@@ -799,6 +801,35 @@ const layer = Layer.effect(
           // Kept for the transcript as text/plain, which toModelMessages never forwards as a file part.
           { ...part, mime: "text/plain", messageID: info.id, sessionID: input.sessionID },
         ]
+      })
+
+      // #192645: a model that cannot take PDF input used to receive "ERROR: Cannot read <file>" for
+      // every attached PDF, and the agent then hunted for a way to extract the text itself. For those
+      // models the engine reads the PDF's text here; a model that reads PDFs still gets the file.
+      const modelReadsPdf = Effect.fn("SessionPrompt.modelReadsPdf")(function* () {
+        return yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
+          Effect.map((mdl) => !!mdl.capabilities?.input?.pdf),
+          Effect.catch(() => Effect.succeed(false)),
+        )
+      })
+      const inlinePdf = Effect.fn("SessionPrompt.inlinePdf")(function* (
+        part: Extract<PromptInput["parts"][number], { type: "file" }>,
+        bytes: Uint8Array,
+        path: string | undefined,
+      ) {
+        const result = yield* Effect.tryPromise({
+          try: () => AttachmentPdf.pdfToText(bytes),
+          catch: () => undefined,
+        }).pipe(
+          Effect.catch(() =>
+            Effect.succeed<AttachmentText.AttachmentResult>({
+              kind: "unreadable",
+              reason: "its text could not be read",
+              fix: "Open it and save or print it to a new PDF, then attach that.",
+            }),
+          ),
+        )
+        return yield* inlineAttachment(part, bytes, path, result)
       })
 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
@@ -897,11 +928,19 @@ const layer = Layer.effect(
               if (AttachmentText.needsTextResolution(part.mime)) {
                 return yield* inlineAttachment(part, AttachmentText.dataUrlBytes(part.url))
               }
+              if (AttachmentPdf.isPdf(part.mime, part.filename) && !(yield* modelReadsPdf())) {
+                return yield* inlinePdf(part, AttachmentText.dataUrlBytes(part.url), part.filename)
+              }
               break
             case "file:": {
               yield* Effect.logInfo("file", { mime: part.mime })
               const filepath = fileURLToPath(part.url)
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
+
+              if (mime !== "application/x-directory" && AttachmentPdf.isPdf(mime, filepath) && !(yield* modelReadsPdf())) {
+                const bytes = yield* fsys.readFile(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (bytes) return yield* inlinePdf(part, bytes, filepath)
+              }
 
               // A workbook or Word file referenced by path (the CLI's -f, an @-mention) used to go to
               // the Read tool as "text/plain" — which refuses binary — or to the SDK raw, which throws.

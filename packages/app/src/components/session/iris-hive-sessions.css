@@ -68,7 +68,9 @@
 .hss-sdot--work { background: var(--hsc-jade) !important; border: 0 !important; }
 .hss-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hss-node[data-report="stale"] .hss-label, .hss-node[data-report="unknown"] .hss-label { color: var(--hsc-ink2); }
-.hss-prov { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; }
+.hss-prov { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+.hss-prov .agent-mark { width: 13px; height: 13px; }
+.hss-dmeta .hss-dmark { width: 13px; height: 13px; vertical-align: -2px; margin-right: 5px; }
 .hss-age { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; text-align: right; }
 .hss-branch { color: var(--hsc-faint); }
 .hss-status { font-size: 11px; color: var(--hsc-faint); white-space: nowrap; }

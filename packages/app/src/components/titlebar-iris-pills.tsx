@@ -20,6 +20,7 @@ import { useTitlebarRightMount } from "./titlebar"
 import { useCommand } from "@/context/command"
 import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
+import { warmHomeDashboard } from "@/pages/home/home-dashboard-data"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
@@ -167,6 +168,27 @@ export function planBadge(state: PlanState | undefined): { text: string; tone: B
   return { text: "Upgrade", tone: "accent" }
 }
 
+/**
+ * TITLEBAR V2 — quiet by default (IRIS Desktop kit v1.6.0; Alex, 2026-11-04). An item shows only
+ * when it carries something you need to know: the fleet when a machine is down or it cannot be
+ * reached, the allowance when it is low or out, the inbox when something is unread. Loading is
+ * never a verdict, so nothing appears until the first reading lands.
+ */
+export function fleetAttention(hive: HiveState | undefined, loading = false): "degraded" | "unreachable" | null {
+  if (loading && !hive) return null
+  if (!hive) return null
+  if (!hive.measured) return "unreachable"
+  const online = hive.nodes.filter((n) => n.online).length
+  return hive.nodes.length > 0 && online < hive.nodes.length ? "degraded" : null
+}
+
+/** "low" from 90% of the allowance, "out" at 100% — both are "needs you", so both amber. */
+export function planAttention(state: PlanState | undefined): "low" | "out" | null {
+  const f = state?.measured ? state.fraction : null
+  if (typeof f !== "number" || !Number.isFinite(f)) return null
+  return f >= 1 ? "out" : f >= 0.9 ? "low" : null
+}
+
 const BADGE_CLASS: Record<BadgeTone, string> = {
   accent: "bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent hover:bg-v2-icon-icon-accent/30",
   warning: "bg-v2-state-bg-warning text-v2-state-fg-warning hover:opacity-90",
@@ -257,6 +279,11 @@ export function TitlebarIrisPills() {
   })
   const [inbox] = createResource<InboxState | undefined, Key>(inboxKey, poll<InboxState>("/iris/inbox?perPage=1"))
   const [auth] = createResource<AuthState | undefined, Key>(key, poll<AuthState>("/iris/auth"))
+  // Home opens from a warm copy (#192222): on this poll, keep one at most five minutes old.
+  createEffect(() => {
+    const k = key()
+    if (k) warmHomeDashboard(k[0], platform.fetch ?? globalThis.fetch)
+  })
 
   // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
   // happens mid-session, not only when someone buys. /iris/plan peeks — it never consumes the
@@ -321,14 +348,21 @@ export function TitlebarIrisPills() {
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
               was no way to find out what "3/4" counted without asking someone. */}
+          <Show when={fleetAttention(hive(), hive.loading)}>
+          {(attention) => (
           <div data-slot="iris-fleet-wrap" class="relative">
             {/* Click opens the side panel on Hive › Machines (#189279) — it used to toggle this
                 hover panel, which is what hovering already did, so the click went nowhere. */}
             <button
               type="button"
               data-slot="iris-fleet-pill"
-              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
-              aria-label="Hive machines — open the Hive tab"
+              data-attention={attention()}
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover"
+              classList={{
+                "text-v2-state-fg-warning": attention() === "degraded",
+                "text-v2-text-text-danger": attention() === "unreachable",
+              }}
+              aria-label={`Hive machines ${fleetLabel(hive(), hive.loading)} online — open the Hive tab`}
               onMouseEnter={() => setFleetOpen(true)}
               onMouseLeave={() => setFleetOpen(false)}
               onFocus={() => setFleetOpen(true)}
@@ -338,14 +372,10 @@ export function TitlebarIrisPills() {
                 openIrisPanel(hivePillTarget("machines"))
               }}
             >
-              <span
-                data-slot="iris-fleet-dot"
-                classList={{ [fleetDotClass(hive(), hive.loading)]: true, "animate-pulse": hive()?.measured === false }}
-              >
-                ●
-              </span>
-              <span>Hive</span>
-              <span class="tabular-nums">{fleetLabel(hive(), hive.loading)}</span>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <path d="M8 1.8 13.4 4.9v6.2L8 14.2 2.6 11.1V4.9Z" />
+              </svg>
+              <span class="font-mono tabular-nums">{attention() === "unreachable" ? "!" : fleetLabel(hive(), hive.loading)}</span>
             </button>
             <Show when={fleetOpen()}>
               <div
@@ -393,16 +423,18 @@ export function TitlebarIrisPills() {
               </div>
             </Show>
           </div>
+          )}
+          </Show>
 
-          <Show when={badge()}>
-            {(b) => (
+          <Show when={planAttention(plan())}>
+            {(level) => (
               <TooltipV2
                 placement="bottom"
                 value={
                   <>
-                    {b().tone === "danger"
+                    {level() === "out"
                       ? "Your allowance for this period is used up. Upgrade to keep chatting and keep your agents running."
-                      : b().tone === "warning"
+                      : level() === "low"
                         ? "You've used 90% of your allowance. Upgrade for 5x or 20x compute."
                         : "See IRIS plans: every product, every model, more compute"}
                   </>
@@ -411,11 +443,13 @@ export function TitlebarIrisPills() {
                 <button
                   type="button"
                   data-slot="iris-plan-pill"
-                  data-tone={b().tone}
-                  class={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors ${BADGE_CLASS[b().tone]}`}
+                  data-level={level()}
+                  class="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-v2-state-fg-warning hover:bg-v2-overlay-simple-overlay-hover"
+                  aria-label={level() === "out" ? "Allowance used up — see plans" : "Allowance almost used — see plans"}
                   onClick={() => showPlans("pill")}
                 >
-                  {b().text}
+                  <span aria-hidden="true">⚡</span>
+                  <span>{level()}</span>
                 </button>
               </TooltipV2>
             )}
@@ -431,6 +465,7 @@ export function TitlebarIrisPills() {
 
           {/* Always present (#189279): the inbox is a place, not only an alert. The badge is the
               alert — its own accent, never the fleet dot's green/red. */}
+          <Show when={unread() && unread() !== "—"}>
           <TooltipV2 placement="bottom" value={<>{inboxHint(inbox(), unread())}</>}>
             <button
               type="button"
@@ -452,24 +487,12 @@ export function TitlebarIrisPills() {
               >
                 <path d="M2 9h3l1 1.75h4L11 9h3M3.5 3.5h9L14 9v3.5H2V9l1.5-5.5Z" />
               </svg>
-              <span>Inbox</span>
-              <Show when={unread()}>
-                {/* Inline vars, not utilities: the theme tokens are always defined, a utility class
-                    only exists if Tailwind generated it (bg-v2-icon-icon-accent was not). */}
-                <span
-                  data-slot="iris-inbox-badge"
-                  class="min-w-4 rounded-full px-1 text-center text-[10px] font-semibold leading-4 tabular-nums"
-                  style={
-                    unread() === "—"
-                      ? { border: "1px solid var(--v2-border-border-base)", color: "var(--v2-text-text-weak)" }
-                      : { background: "var(--v2-icon-icon-accent)", color: "#fff" }
-                  }
-                >
-                  {unread()}
-                </span>
-              </Show>
+              <span data-slot="iris-inbox-badge" class="font-mono tabular-nums">
+                {unread()}
+              </span>
             </button>
           </TooltipV2>
+          </Show>
         </div>
       </Portal>
     </Show>

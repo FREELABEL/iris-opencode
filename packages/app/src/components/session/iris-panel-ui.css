@@ -1,0 +1,111 @@
+/*
+ * PANEL UI PATTERN (#192632) — the pieces the side panel's recent views already share, written once.
+ * Reachr Review (#191990), Lexicon › Agreements (#192484), the Leads tab (#192544) and now Genesis ›
+ * Pages are drawn from the same parts; Pages is the first to import them from here. The older views
+ * keep their own copies until someone touches them — move them across then, not in a sweep.
+ *
+ *   Tokens       the app theme only: --background-base / -element, --text-strong / -base / -weak /
+ *                -weaker, --border-weak-base / -weaker-base. State colours are a hue MIXED with
+ *                --text-strong (`--ui-good` etc.) so one rule reads in dark and light.
+ *   Type         13px names, 12px body and controls, 11px meta and chips, tabular numbers for counts.
+ *   Spacing      4 · 6 · 8 · 10 · 12 · 16. Radii 5 (filters), 6 (controls), 8 (cards), 10 (dialogs).
+ *   Toolbar      one line: search (with a `/` hint) · scope · spacer · view toggles · refresh.
+ *                Hairline below. (`.iris-ui-bar`)
+ *   Filter row   text tabs with their counts, the chosen one on --background-element. (`.iris-ui-tabs`)
+ *   Chips        999px pills; a tone is text colour + a 12–14% wash of the same hue, never a border
+ *                stripe. (`.iris-ui-chip[data-tone]`)
+ *   Buttons      bordered 6px, primary = ink on --text-strong; icon buttons 26px, no border. A busy
+ *                icon button swaps its icon for the Spinner. (`.iris-ui-btn`, `.iris-ui-icon`)
+ *   List⇄detail  the list owns the pane; a chosen row is tinted (--background-element), and the
+ *                detail replaces or sits beside it below 560px of container width.
+ *   Empty/error  centred, 13px, the reason in plain words and the way out (Retry, the command).
+ *   Confirm      a scrim over the view (not the window), an icon disc, a title that is a question,
+ *                body sentences that say WHO will be able to read/receive it, Cancel + the verb.
+ *                Only actions that widen exposure or replace content ask. (`.iris-ui-scrim`)
+ *   Icons        @opencode-ai/ui/icon at size="small"; a 13px stroked SVG only where it has none.
+ *   Never        a coloured bar down one edge of a card, row or callout — tint, text colour or an icon.
+ */
+.iris-ui {
+  --ui-hover: color-mix(in srgb, var(--text-strong) 5%, transparent);
+  --ui-sel: var(--background-element);
+  --ui-good: color-mix(in srgb, #10b981 72%, var(--text-strong));
+  --ui-warn: color-mix(in srgb, #f59e0b 70%, var(--text-strong));
+  --ui-bad: color-mix(in srgb, #ef4444 72%, var(--text-strong));
+  --ui-info: color-mix(in srgb, #3b82f6 70%, var(--text-strong));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-base);
+  container-type: inline-size;
+}
+.iris-ui [data-tone="good"] { --tone: var(--ui-good); }
+.iris-ui [data-tone="warn"] { --tone: var(--ui-warn); }
+.iris-ui [data-tone="bad"] { --tone: var(--ui-bad); }
+.iris-ui [data-tone="info"] { --tone: var(--ui-info); }
+.iris-ui [data-tone="idle"] { --tone: var(--text-weak); }
+.iris-ui-ic { display: inline-flex; flex-shrink: 0; }
+.iris-ui-svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.iris-ui-spin { width: 14px; }
+
+/* ── toolbar ── */
+.iris-ui-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); min-width: 0; }
+.iris-ui-spacer { flex: 1 1 0; }
+.iris-ui-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 120px; max-width: 320px; border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 0 6px 0 8px; color: var(--text-weak); }
+.iris-ui-search:focus-within { border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-ui-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: 12px; padding: 5px 0; }
+.iris-ui-search kbd { font: inherit; font-size: 10px; color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: 4px; padding: 0 4px; line-height: 14px; pointer-events: none; }
+.iris-ui-search:focus-within kbd { display: none; }
+.iris-ui-seg { display: inline-flex; flex: none; border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 1px; gap: 1px; }
+.iris-ui-seg > button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--text-weak); border-radius: 4px; padding: 3px 7px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.iris-ui-seg > button:hover { color: var(--text-strong); }
+.iris-ui-seg > button[aria-pressed="true"], .iris-ui-seg > button[aria-selected="true"] { background: var(--ui-sel); color: var(--text-strong); }
+
+/* ── buttons ── */
+.iris-ui-btn { display: inline-flex; align-items: center; gap: 5px; flex: none; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; line-height: 16px; cursor: pointer; white-space: nowrap; }
+.iris-ui-btn:hover:not(:disabled) { background: var(--ui-hover); color: var(--text-strong); }
+.iris-ui-btn:disabled { opacity: 0.45; cursor: default; }
+.iris-ui-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: 500; }
+.iris-ui-btn[data-primary]:hover:not(:disabled) { background: var(--text-strong); color: var(--background-base); opacity: 0.88; }
+.iris-ui-btn[data-primary][data-tone="warn"] { background: var(--ui-warn); border-color: var(--ui-warn); color: var(--background-base); }
+.iris-ui-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--text-weak); cursor: pointer; }
+.iris-ui-icon:hover:not(:disabled) { background: var(--ui-hover); color: var(--text-strong); }
+.iris-ui-icon:disabled { opacity: 0.45; cursor: default; }
+.iris-ui-icon[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); }
+
+/* ── filter row with counts ── */
+.iris-ui-tabs { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; min-width: 0; }
+.iris-ui-tab { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; color: var(--text-weak); font-size: 12px; padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.iris-ui-tab:hover { color: var(--text-strong); }
+.iris-ui-tab[aria-pressed="true"], .iris-ui-tab[aria-selected="true"] { background: var(--ui-sel); color: var(--text-strong); }
+.iris-ui-tab .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
+
+/* ── chips ── */
+.iris-ui-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px; background: var(--background-element); color: var(--text-weak); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iris-ui-chip[data-tone] { color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); }
+.iris-ui-chip .iris-ui-ic, .iris-ui-chip .iris-ui-svg { width: 12px; height: 12px; }
+
+/* ── callouts, empty and error ── */
+.iris-ui-callout { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; padding: 7px 10px; border-radius: 6px; background: var(--background-element); color: var(--text-base); }
+.iris-ui-callout[data-tone] { background: color-mix(in srgb, var(--tone) 11%, transparent); }
+.iris-ui-callout[data-tone] > .iris-ui-ic { color: var(--tone); }
+.iris-ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 36px 16px; color: var(--text-weak); font-size: 13px; text-align: center; }
+.iris-ui-empty code { font-size: 11.5px; color: var(--text-base); background: var(--background-element); border-radius: 4px; padding: 1px 5px; }
+
+/* ── confirm ── */
+.iris-ui-scrim { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--background-base) 72%, transparent); backdrop-filter: blur(2px); }
+.iris-ui-dialog { width: min(420px, 100%); background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 10px; padding: 18px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
+.iris-ui-dialog-icon { display: inline-flex; padding: 8px; border-radius: 999px; background: var(--background-element); color: var(--text-strong); margin-bottom: 10px; }
+.iris-ui-dialog-icon[data-tone] { color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); }
+.iris-ui-dialog h3 { font-size: 15px; font-weight: 500; color: var(--text-strong); margin: 0 0 6px; overflow-wrap: anywhere; }
+.iris-ui-dialog p { font-size: 12.5px; line-height: 1.5; color: var(--text-base); margin: 0 0 8px; overflow-wrap: anywhere; }
+.iris-ui-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
+
+/* ── menus ── */
+.iris-ui-menu { position: absolute; z-index: 15; min-width: 200px; max-height: 320px; overflow-y: auto; padding: 4px; background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 8px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.22); }
+.iris-ui-menu > button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; font-size: 12px; padding: 6px 8px; border-radius: 5px; cursor: pointer; }
+.iris-ui-menu > button:hover, .iris-ui-menu > button:focus-visible { background: var(--ui-hover); color: var(--text-strong); outline: none; }
+.iris-ui-menu > button[aria-checked="true"] { color: var(--text-strong); font-weight: 500; }
+.iris-ui-menu .sub { display: block; font-size: 11px; color: var(--text-weak); font-weight: 400; }
+@media (prefers-reduced-motion: reduce) { .iris-ui * { transition: none !important; } }

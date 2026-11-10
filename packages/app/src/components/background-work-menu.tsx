@@ -7,6 +7,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
 import { backgroundRows } from "./background-work-model"
+import { openIrisPanel } from "./session/iris-nav"
 
 /**
  * The "N working in the background" chip, now a button (#189437). It opens a list of every running
@@ -106,6 +107,16 @@ export function BackgroundWorkMenu(props: { inline?: boolean } = {}) {
                 </MenuV2.Item>
               )}
             </For>
+            {/* The whole picture — who started whom, every call (#192855) — in the side panel. */}
+            <MenuV2.Item
+              class="iris-bg-menu__all"
+              onSelect={() => {
+                setOpen(false)
+                openIrisPanel({ surface: "agents", sub: "running", session: params.id })
+              }}
+            >
+              Open in Agents › Running
+            </MenuV2.Item>
           </MenuV2.Content>
         </MenuV2.Portal>
       </MenuV2>

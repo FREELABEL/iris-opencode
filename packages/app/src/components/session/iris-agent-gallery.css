@@ -1,0 +1,100 @@
+/*
+ * Agents › Agents (#192619, restyled #192913). ELON's gallery — its filters and what a card says —
+ * drawn in the IRIS Desktop brand kit (#190058): the shared --hsc-* tokens (iris-hive-scripts.css),
+ * warm neutrals, role colours only (jade = IRIS / active, sage = connected / done, amber = needs
+ * you, coral = failed), the panel's 12–13px type, numbers in mono. The mark, the segment control
+ * and New agent are the agent editor's, so an agent looks the same in the list and in its editor.
+ */
+.iag {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%;
+  color: var(--hsc-ink); background: var(--hsc-surface); font-size: 12.5px; line-height: 1.4;
+}
+.iag *, .iag *::before, .iag *::after { box-sizing: border-box; }
+.iag-i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.iag-num { font-family: var(--hsc-mono-font); font-variant-numeric: tabular-nums; }
+.iag-end { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* toolbar — one row that wraps; controls at 12px like Heartbeats and the editor */
+.iag-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--hsc-rule); flex-shrink: 0; }
+.iag-find {
+  display: inline-flex; align-items: center; gap: 6px; flex: 1 1 180px; max-width: 260px; padding: 4px 9px;
+  border: 1px solid var(--hsc-rule); border-radius: 8px; color: var(--hsc-faint);
+}
+.iag-find:focus-within { border-color: var(--hsc-jade); }
+.iag-find input { all: unset; flex: 1; min-width: 0; font-size: 12px; color: var(--hsc-ink); }
+.iag-find input::placeholder { color: var(--hsc-faint); }
+.iag-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hsc-card); border: 1px solid var(--hsc-rule); }
+.iag-seg button { all: unset; cursor: pointer; padding: 3px 9px; border-radius: 6px; font-size: 12px; color: var(--hsc-ink2); }
+.iag-seg button:hover { color: var(--hsc-ink); }
+.iag-seg button[aria-selected="true"] { background: var(--hsc-surface); color: var(--hsc-ink); box-shadow: 0 0 0 1px var(--hsc-rule); }
+.iag-seg button:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 1px; }
+.iag-count { font-size: 11px; color: var(--hsc-faint); }
+/* the editor's New agent (.iae-new): jade, the one accent */
+.iag-new {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 7px;
+  font-size: 12px; font-weight: 600; color: light-dark(#ffffff, #131312); background: var(--hsc-jade);
+}
+.iag-new:hover { filter: brightness(1.08); }
+.iag-new:disabled { opacity: 0.45; cursor: default; }
+.iag-new:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 2px; }
+
+.iag-note { margin: 10px; font-size: 12px; color: var(--hsc-faint); }
+.iag-note--err { color: var(--hsc-coral); }
+.iag-note--chat { margin: 8px 10px 0; color: var(--hsc-ink2); }
+.iag-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px 12px; }
+.iag-empty p { margin: 0; }
+.iag-empty .iag-note { margin: 0 0 4px; }
+
+/* grid — by the pane's width, never the window's */
+.iag-grid-wrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; container-type: inline-size; padding: 10px; }
+.iag-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); align-items: stretch; }
+
+/* card — a raised surface on the ground, hairline rule, 8px radius; jade only for focus and live */
+.iag-card {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px; min-width: 0;
+  background: var(--hsc-card); border: 1px solid var(--hsc-rule); border-radius: 8px;
+  transition: border-color 0.15s;
+}
+.iag-card:hover { border-color: color-mix(in srgb, var(--hsc-ink2) 45%, var(--hsc-rule)); }
+.iag-card__head { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+/* .iae-mark, value for value */
+.iag-mark {
+  width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px;
+  font-weight: 700; font-size: 11.5px; letter-spacing: 0.02em; color: var(--hsc-surface);
+  background: oklch(0.68 0.11 calc(var(--iag-hue, 160) * 1deg));
+}
+.iag-card__who { flex: 1; min-width: 0; }
+.iag-card__name { font-size: 13px; font-weight: 600; color: var(--hsc-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iag-card__sub { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px; font-size: 11.5px; color: var(--hsc-ink2); white-space: nowrap; overflow: hidden; }
+.iag-card__sub > span { overflow: hidden; text-overflow: ellipsis; }
+.iag-kind { flex: none; font-size: 10.5px; font-weight: 500; padding: 1px 6px; border-radius: 6px; background: var(--hsc-elev); color: var(--hsc-ink2); }
+.iag-card__desc {
+  margin: 0; font-size: 12px; color: var(--hsc-ink2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* chips — level-3 size (NAVIGATION-TEMPLATE): small, inside the record */
+.iag-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.iag-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 7px; border-radius: 6px;
+  font-size: 11px; color: var(--hsc-ink2); background: var(--hsc-elev); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.iag-chip .iag-i { width: 11px; height: 11px; }
+.iag-chip--on { color: var(--hsc-sage); background: color-mix(in srgb, var(--hsc-sage) 14%, transparent); }
+button.iag-chip--more { all: unset; cursor: pointer; padding: 1px 7px; border-radius: 6px; font-size: 11px; color: var(--hsc-ink2); border: 1px solid var(--hsc-rule); }
+button.iag-chip--more:hover { color: var(--hsc-ink); }
+
+/* footer — last seen on the left, actions on the right; quiet until hovered */
+.iag-card__foot { display: flex; align-items: center; gap: 4px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--hsc-rule); }
+.iag-card__seen { flex: 1; min-width: 0; font-size: 11px; color: var(--hsc-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iag-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 7px;
+  font-size: 12px; color: var(--hsc-ink); border: 1px solid var(--hsc-rule);
+}
+.iag-btn:hover { background: var(--hsc-elev); }
+.iag-ghost {
+  all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px; color: var(--hsc-ink2);
+}
+.iag-ghost:hover { background: var(--hsc-elev); color: var(--hsc-ink); }
+.iag-ghost--live:hover { color: var(--hsc-jade); }
+.iag-btn:focus-visible, .iag-ghost:focus-visible, button.iag-chip--more:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 1px; }

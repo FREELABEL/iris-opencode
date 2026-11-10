@@ -7,6 +7,7 @@
  * scroller, so a board refresh that rebuilds the rows mid-drag cannot lose it.
  */
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
+import { ATLAS_PAGE, moreLabel, moreOf, windowOf } from "./iris-atlas-window"
 import {
   buildTimeline,
   DAY_WIDTH,
@@ -49,6 +50,9 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
   onToggleFold: (id: number) => void
   onOpen: (itemId: number) => void
   onSchedule: (item: I, dates: TimelineDates) => void
+  /** A big board is read a page per list (#192670): read more cards of one list. */
+  onLoadMore?: (listId: number) => void
+  loadingMore?: number
 }) {
   let stored: string | null = null
   try {
@@ -124,7 +128,25 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
 
   const [opened, setOpened] = createSignal<Record<number, boolean>>({})
   // With nothing scheduled there is nothing else to look at, so the cards to schedule start open.
-  const undatedOpen = (id: number) => opened()[id] ?? !hasBars()
+  // Open by itself only when it is small: a board with no dates used to open every "No dates" group,
+  // and 6,899 undated rows crashed the app (#192670).
+  const undatedOpen = (id: number, count: number) => opened()[id] ?? (!hasBars() && count <= ATLAS_PAGE)
+  const [shownRows, setShownRows] = createSignal<Record<string, number>>({})
+  // Cards of a paged list not read yet (#192670): the engine holds only the first pages of a big board.
+  const notLoaded = (id: number) => {
+    const l = props.lists.find((x) => x.id === id) as ({ total?: number; items: unknown[] } & { id: number }) | undefined
+    return l?.total != null ? Math.max(0, l.total - l.items.length) : 0
+  }
+  const showMoreRows = (key: string) => setShownRows((s) => ({ ...s, [key]: (s[key] ?? ATLAS_PAGE) + ATLAS_PAGE }))
+  const MoreRows = (p: { rowKey: string; total: number }) => (
+    <Show when={moreOf(p.total, shownRows()[p.rowKey])}>
+      {(m) => (
+        <button type="button" class="iris-atlas-tl__undated" onClick={() => showMoreRows(p.rowKey)}>
+          {moreLabel(m())}
+        </button>
+      )}
+    </Show>
+  )
 
   const grid = () => (
     <div class="iris-atlas-tl__grid" aria-hidden="true">
@@ -272,23 +294,47 @@ export function IrisAtlasTimeline<I extends TimelineItem>(props: {
                       </span>
                       <h3 class="iris-atlas-list__title truncate">{r.name}</h3>
                       <span class="iris-atlas-list__count font-mono tabular-nums">
-                        {r.bars.length + r.undated.length}
+                        {/* The list's true size: a big board is read a page per list (#192670). */}
+                        {(
+                          (props.lists.find((l) => l.id === r.id) as { total?: number } | undefined)?.total ??
+                          r.bars.length + r.undated.length
+                        ).toLocaleString("en-US")}
                       </span>
                     </button>
                   </div>
                   <Show when={!folded()}>
-                    <For each={r.bars}>{(bar) => row(bar.item, bar) as JSX.Element}</For>
+                    <For each={windowOf(r.bars, shownRows()[`b${r.id}`])}>
+                      {(bar) => row(bar.item, bar) as JSX.Element}
+                    </For>
+                    <MoreRows rowKey={`b${r.id}`} total={r.bars.length} />
                     <Show when={r.undated.length > 0}>
                       <button
                         type="button"
                         class="iris-atlas-tl__undated"
-                        aria-expanded={undatedOpen(r.id)}
-                        onClick={() => setOpened({ ...opened(), [r.id]: !undatedOpen(r.id) })}
+                        aria-expanded={undatedOpen(r.id, r.undated.length)}
+                        onClick={() => setOpened({ ...opened(), [r.id]: !undatedOpen(r.id, r.undated.length) })}
                       >
-                        {undatedOpen(r.id) ? "▾" : "▸"} No dates ({r.undated.length})
+                        {undatedOpen(r.id, r.undated.length) ? "▾" : "▸"} No dates (
+                        {r.undated.length.toLocaleString("en-US")}
+                        {notLoaded(r.id) ? ` · ${notLoaded(r.id).toLocaleString("en-US")} not loaded` : ""})
                       </button>
-                      <Show when={undatedOpen(r.id)}>
-                        <For each={r.undated}>{(item) => row(item) as JSX.Element}</For>
+                      <Show when={undatedOpen(r.id, r.undated.length)}>
+                        <For each={windowOf(r.undated, shownRows()[`u${r.id}`])}>
+                          {(item) => row(item) as JSX.Element}
+                        </For>
+                        <MoreRows rowKey={`u${r.id}`} total={r.undated.length} />
+                        <Show when={notLoaded(r.id) > 0 && !moreOf(r.undated.length, shownRows()[`u${r.id}`]) && props.onLoadMore}>
+                          <button
+                            type="button"
+                            class="iris-atlas-tl__undated"
+                            disabled={props.loadingMore === r.id}
+                            onClick={() => props.onLoadMore?.(r.id)}
+                          >
+                            {props.loadingMore === r.id
+                              ? "Loading…"
+                              : `Load ${Math.min(ATLAS_PAGE, notLoaded(r.id))} more · ${notLoaded(r.id).toLocaleString("en-US")} not loaded`}
+                          </button>
+                        </Show>
                       </Show>
                     </Show>
                   </Show>

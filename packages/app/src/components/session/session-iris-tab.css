@@ -901,6 +901,22 @@
 .iris-atlas-tl__undated:hover {
   color: var(--text-base);
 }
+/* "Show 50 more · N left" under a list in Board and List view (#192670) — quiet, like the toggle above. */
+.iris-atlas-more {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 24px;
+  padding: 2px 8px;
+  color: var(--text-weak);
+  cursor: pointer;
+  text-align: left;
+}
+.iris-atlas-more:hover {
+  color: var(--text-base);
+}
 .iris-atlas-tl__track--open {
   cursor: crosshair;
   touch-action: none;
@@ -2181,6 +2197,11 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 button.iris-scopechip__body { cursor: pointer; }
 button.iris-scopechip__body:hover { color: var(--text-strong); background: var(--background-element); }
 .iris-scopechip__chev { flex-shrink: 0; opacity: .7; }
+.iris-scope-toggle { display: inline-flex; flex-shrink: 0; gap: 2px; margin-left: 8px; }
+.iris-scope-toggle button { font-size: 12px; padding: 3px 8px; border-radius: 6px; opacity: .7; }
+.iris-scope-toggle button:hover { opacity: 1; }
+.iris-scope-toggle button[aria-selected="true"] { opacity: 1; color: var(--text-strong); background: var(--background-element); }
+.iris-scopechip__id { flex-shrink: 0; font-family: var(--font-family-mono, ui-monospace, monospace); font-size: .92em; opacity: .5; }
 @keyframes iris-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
 /* One-line artifact toolbar: ‹ All ▾ │ title · author  …  Save · Publish. The publish component
    joins the row (display: contents); its form wraps onto a full-width line underneath. */
@@ -2269,7 +2290,6 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* Agents › Live (#187921) — is it stuck? */
 .iris-live { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; overflow-y: auto; }
 .iris-live__bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; flex-shrink: 0; }
-.iris-live__picker { font-size: 12px; min-width: 0; }
 .iris-live__verdict { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--background-element); color: var(--text-strong); }
 .iris-live__verdict--warn { border-inline-start: 3px solid var(--border-warning-base, #d4a017); }
 .iris-live__verdict--paused { border-inline-start: 3px solid var(--border-interactive-base, #3b82f6); }

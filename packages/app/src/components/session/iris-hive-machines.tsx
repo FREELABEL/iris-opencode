@@ -30,6 +30,7 @@ import {
   type SessionsPayload,
 } from "./iris-hive-machines-model"
 import { focusHiveNode, requestIrisNav } from "./iris-nav"
+import { remoteAccessView, type RemoteAccessState } from "../settings-v2/hive-remote-access"
 
 /**
  * Hive › Machines (heyiris.io/p/hive-panel-directions#pick): your computers as a team — who is
@@ -95,6 +96,12 @@ export function IrisHiveMachines(props: {
   const [hereData, { refetch: refetchHere }] = createResource(() =>
     getJson<HereRow>("/iris/hive/here", { measured: false, nodeId: null, onTailnet: false, shells: { measured: false, workspaces: [] } }),
   )
+  // This computer's "Allow access" switch (Settings → Hive, epic #192964). Shown in place of the old
+  // "run `iris hive connect`" hint: the switch is that command, and it lives one click away.
+  const [here] = createResource(() =>
+    getJson<RemoteAccessState>("/iris/hive/remote-access", { measured: false, allow: true, explicit: false, daemon: "not-running", nodeId: null }),
+  )
+  const hereView = () => remoteAccessView(here(), here.loading)
   // Heartbeats move; a minute is fine-grained enough for "online" and "last seen".
   const timer = setInterval(() => {
     void refetch()
@@ -255,6 +262,11 @@ export function IrisHiveMachines(props: {
               <code class="hsc-mono">iris hive connect</code> on one to add it.
             </p>
           </Show>
+          <p class="hsc-muted hmc-here" data-action="hive-remote-access-state" data-tone={hereView().tone}>
+            This computer: <b>{hereView().short}</b>
+            {" — "}
+            {hereView().description} Change it in <b>Settings → Hive</b>.
+          </p>
 
           <Show when={view() === "list"}>
             <Show when={filter() !== "all" && shown().rows.length === 0 && computers().length > 0}>

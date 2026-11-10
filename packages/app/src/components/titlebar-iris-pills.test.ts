@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { fleetDotClass, fleetLabel, inboxHint, inboxLabel, planBadge } from "./titlebar-iris-pills"
+import { fleetAttention, fleetDotClass, fleetLabel, inboxHint, inboxLabel, planAttention, planBadge } from "./titlebar-iris-pills"
 
 describe("fleetDotClass", () => {
   // The dot is a verdict, so its colours must obey the same three-fact rule as the label:
@@ -142,5 +142,26 @@ describe("planBadge — the out-of-allowance indicator (#190087)", () => {
       expect(at(f)).toEqual({ text: "Upgrade", tone: "accent" })
     expect(planBadge(undefined).tone).toBe("accent")
     expect(planBadge({ measured: false, plan: null, upgradeUrl: null, fraction: 1.5 }).tone).toBe("accent")
+  })
+})
+
+describe("titlebar V2 — an item shows only when it needs you", () => {
+  const node = (online: boolean) => ({ online, name: "n" })
+  test("the fleet is quiet while loading and when every machine is up", () => {
+    expect(fleetAttention(undefined, true)).toBeNull()
+    expect(fleetAttention({ measured: true, nodes: [node(true), node(true)] })).toBeNull()
+    expect(fleetAttention({ measured: true, nodes: [] })).toBeNull()
+  })
+  test("the fleet speaks when a machine is down, or when it cannot be measured", () => {
+    expect(fleetAttention({ measured: true, nodes: [node(true), node(false)] })).toBe("degraded")
+    expect(fleetAttention({ measured: true, nodes: [node(false)] })).toBe("degraded")
+    expect(fleetAttention({ measured: false, nodes: [] } as any)).toBe("unreachable")
+  })
+  test("the allowance speaks from 90% and says out at 100%", () => {
+    expect(planAttention(undefined)).toBeNull()
+    expect(planAttention({ measured: true, fraction: 0.5 } as any)).toBeNull()
+    expect(planAttention({ measured: true, fraction: 0.9 } as any)).toBe("low")
+    expect(planAttention({ measured: true, fraction: 1 } as any)).toBe("out")
+    expect(planAttention({ measured: false } as any)).toBeNull()
   })
 })

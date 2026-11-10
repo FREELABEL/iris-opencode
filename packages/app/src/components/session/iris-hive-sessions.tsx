@@ -2,6 +2,8 @@ import { createEffect, createMemo, createResource, createSignal, For, on, onClea
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
 import "./iris-hive-sessions.css"
+import { focusHiveSession, irisHiveSessionFocus } from "./iris-nav"
+import { AgentMark } from "./agent-mark"
 import {
   continueText,
   ago,
@@ -112,6 +114,16 @@ export function IrisHiveSessions(props: {
     const node = nodes().find((n) => n.id === p.nodeId)
     const session = node?.sessions.find((s) => s.sessionId === p.sessionId)
     return node && session ? { node, session } : undefined
+  })
+  // Home › On your machines names a session (#192626); open it once the list has it.
+  createEffect(() => {
+    const f = irisHiveSessionFocus()
+    if (!f) return
+    const node = nodes().find((n) => n.id === f.nodeId)
+    if (!node?.sessions.some((s) => s.sessionId === f.sessionId)) return
+    setCollapsed((c) => ({ ...c, [node.id]: true }))
+    setPicked({ nodeId: f.nodeId, sessionId: f.sessionId })
+    focusHiveSession(null)
   })
 
   return (
@@ -246,6 +258,7 @@ export function IrisHiveSessions(props: {
                                   {STATUS_WORD[s.status] ?? s.status}
                                 </span>
                                 <span class="hss-prov" data-provider={s.provider}>
+                                  <AgentMark provider={s.provider} />
                                   {providerWord(s.provider)}
                                 </span>
                                 <span class="hsc-mono hss-model" title={s.model ?? "model not reported"}>
@@ -458,6 +471,7 @@ function SessionDetail(props: {
         <div class="hss-dtitle">
           <b title={props.session.label}>{props.session.label}</b>
           <span class="hss-dmeta">
+            <AgentMark provider={props.session.provider} class="hss-dmark" />
             {providerWord(props.session.provider)} · {props.node.name}
             <Show when={props.session.model}> · {props.session.model}</Show>
             <Show when={props.session.branch}> · {props.session.branch}</Show>

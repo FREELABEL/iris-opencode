@@ -128,6 +128,8 @@ const PROVIDER_WORD: Record<string, string> = {
   claude_code: "Claude Code",
   opencode: "IRIS / opencode",
   codex: "Codex",
+  gemini: "Gemini",
+  gemini_cli: "Gemini",
   ollama: "Ollama",
   acp: "ACP",
 }

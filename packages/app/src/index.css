@@ -351,3 +351,21 @@
 .iris-detailnav__item {
   cursor: pointer;
 }
+
+/* The loading bar under the IRIS mark — the same one as the boot splash in index.html (#192535). */
+.iris-loading-bar {
+  display: block;
+  width: 72px;
+  height: 2px;
+  margin-top: 18px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(156, 156, 146, 0.55), transparent) 0 0 / 200% 100%;
+  animation: iris-loading-bar 1.2s linear infinite;
+}
+@keyframes iris-loading-bar {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iris-loading-bar { animation: none; }
+}

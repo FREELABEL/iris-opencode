@@ -230,6 +230,10 @@ const platform: Platform = {
     }
   },
 
+  // #192660: the allowlisted maintenance actions (lib.rs iris_action), reachable from Hive screens —
+  // they were only in the macOS menu, so Windows had no way to restart Hive from the app.
+  irisAction: (action) => invoke<string>("iris_action", { action }),
+
   openSignIn: () => {
     void invoke("open_login_window").catch(() => undefined)
   },

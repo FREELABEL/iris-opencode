@@ -1,3 +1,4 @@
+import { IrisShell } from "@/components/iris-shell"
 import "@/index.css"
 import * as Sentry from "@sentry/solid"
 import { I18nProvider } from "@opencode-ai/ui/context"
@@ -5,7 +6,7 @@ import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { FileComponentProvider } from "@opencode-ai/ui/context/file"
 import { File } from "@opencode-ai/session-ui/file"
 import { Font } from "@opencode-ai/ui/font"
-import { Splash } from "@opencode-ai/ui/logo"
+import { IrisMark } from "@/components/iris-mark"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
 import {
@@ -68,7 +69,12 @@ import { useCheckServerHealth } from "./utils/server-health"
 import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 
-import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
+// The chat page (with its timeline, diffs and side panel) is its own chunk, so Home does not parse
+// it on the way in (#192535); the shell preloads it once the browser is idle.
+const sessionPage = () => import("@/pages/session")
+const SessionPage = lazy(() => sessionPage().then((m) => ({ default: m.SessionPage })))
+const SessionRouteErrorBoundary = lazy(() => sessionPage().then((m) => ({ default: m.SessionRouteErrorBoundary })))
+const TargetSessionRouteContent = lazy(() => sessionPage().then((m) => ({ default: m.TargetSessionRouteContent })))
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
 
@@ -500,7 +506,10 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean; start
       </Show>
       <Show when={loading()}>
         <div class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background-base">
-          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+          {/* The IRIS mark, as the boot splash in index.html shows it, so one hands over to the other unseen.
+              The cube itself never animates (brand kit); the bar says it is loading. */}
+          <IrisMark class="size-10 rounded-[9px]" />
+          <i class="iris-loading-bar" aria-hidden="true" />
         </div>
       </Show>
     </>
@@ -521,7 +530,7 @@ function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key:
   return (
     <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
       <div class="flex flex-col items-center max-w-md text-center">
-        <Splash class="w-12 h-15 mb-4" />
+        <IrisMark class="size-12 mb-4 rounded-[10px]" />
         <p class="text-14-regular text-text-base">
           {unreachable()[0]}
           <span class="text-text-strong font-medium">{name()}</span>
@@ -600,15 +609,15 @@ export function AppInterface(props: {
                 root={(routerProps) => (
                   <TabsProvider>
                     <SplitProvider>
-                    <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                          </Show>
-                        </ServerShell>
-                      </NotificationProvider>
-                    </PermissionProvider>
+                      <PermissionProvider>
+                        <NotificationProvider>
+                          <ServerShell>
+                            <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                              <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                            </Show>
+                          </ServerShell>
+                        </NotificationProvider>
+                      </PermissionProvider>
                     </SplitProvider>
                   </TabsProvider>
                 )}
@@ -647,11 +656,17 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
-        <Route path="/" component={NewHome} />
-        <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
-        <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+        {/* One shell, mounted once: only the left side changes between these (#192535). */}
+        <Route component={(routeProps) => <IrisShell>{routeProps.children}</IrisShell>}>
+          <Route path="/" component={NewHome} />
+          <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
+          <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+          <Route path="/new-session" component={DraftRoute} />
+        </Route>
       </Show>
-      <Route path="/new-session" component={DraftRoute} />
+      <Show when={!settings.general.newLayoutDesigns()}>
+        <Route path="/new-session" component={DraftRoute} />
+      </Show>
     </>
   )
 }

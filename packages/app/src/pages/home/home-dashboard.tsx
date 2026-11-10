@@ -1,7 +1,6 @@
-import { For, Show, createMemo, createResource, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
-import { useTabs } from "@/context/tabs"
 import { openIrisPanel } from "@/components/session/iris-nav"
 import type { HeartbeatRow } from "@/components/session/iris-heartbeats-model"
 import { todayOf, type AgentsPayload, type HivePayload, type InboxPayload } from "./home-today-model"
@@ -11,12 +10,26 @@ import {
   greetingOf,
   overviewOf,
   pageOf,
-  rowOf,
-  tabCount,
-  tabRows,
+  emptyText,
+  listRows,
   type Indicator,
   type Tab,
 } from "./home-dashboard-model"
+import { sayingFor } from "./home-sayings"
+import {
+  agoOf,
+  fetchHomeDashboard,
+  homeDashboard,
+  homeDashboardKey,
+  sliceOf,
+  verbOf,
+  type RecentItem,
+  type HomeDashboardData,
+} from "./home-dashboard-data"
+import { hivePillTarget } from "@/components/session/iris-hive-inbox-model"
+import { focusHiveSession } from "@/components/session/iris-nav"
+import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
+import { AgentMark } from "@/components/session/agent-mark"
 import "./home-dashboard.css"
 
 /**
@@ -24,9 +37,6 @@ import "./home-dashboard.css"
  * projects and sessions. Status is shown by indicators (dot, spinner, icons) with the words in the
  * tooltip, so the screen carries numbers rather than sentences.
  */
-
-type BeatsPayload = { measured: boolean; reason?: string | null; heartbeats: HeartbeatRow[] }
-type BloqsPayload = { measured: boolean; total?: number; bloqs: unknown[] }
 
 const PATHS: Record<string, string> = {
   clock: "M8 1.8a6.2 6.2 0 1 0 0 12.4A6.2 6.2 0 0 0 8 1.8zM8 4.6V8l2.3 1.5",
@@ -44,7 +54,16 @@ const PATHS: Record<string, string> = {
 
 function Icon(props: { name: keyof typeof PATHS; color?: string }) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style={{ color: props.color }} aria-hidden="true">
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      style={{ color: props.color }}
+      aria-hidden="true"
+    >
       <path d={PATHS[props.name]} fill={props.name === "bolt" ? "currentColor" : "none"} />
       <Show when={props.name === "stop"}>
         <rect x="5.6" y="5.6" width="4.8" height="4.8" rx="1" fill="currentColor" stroke="none" />
@@ -72,6 +91,8 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
       return <Icon name="warn" color={AMBER} />
     case "paused":
       return <Icon name="pause" color="var(--ihd-faint)" />
+    case "idle":
+      return <i class="ihd-idle" />
   }
 }
 
@@ -79,67 +100,115 @@ function Mark(props: { a: string; b: string; shape?: "split" | "square" }) {
   const r = (i: number) => (props.shape === "square" && (i === 1 || i === 2) ? "3px" : "50%")
   return (
     <div class="ihd-mk" aria-hidden="true">
-      <For each={[props.a, props.b, props.b, props.a]}>{(c, i) => <i style={{ background: c, "border-radius": r(i()) }} />}</For>
+      <For each={[props.a, props.b, props.b, props.a]}>
+        {(c, i) => <i style={{ background: c, "border-radius": r(i()) }} />}
+      </For>
     </div>
   )
 }
 
 const TAB_LABEL: Record<Tab, string> = { attention: "Needs attention", active: "Most active", all: "All" }
+// All first: what is failing is a filter you choose, not the first thing Home shows (2026-11-04).
+const AGENT_TABS: Tab[] = ["all", "active", "attention"]
+
+type Slice = { page: number; pages: number; from: number; to: number; total: number }
+function Pager(props: { slice: Slice; onPage: (page: number) => void }) {
+  return (
+    <div class="ihd-pager">
+      <span class="ihd-range">
+        {props.slice.from}–{props.slice.to} of {props.slice.total}
+      </span>
+      <button
+        type="button"
+        class="ihd-pg"
+        aria-label="Previous page"
+        disabled={props.slice.page <= 1}
+        onClick={() => props.onPage(props.slice.page - 1)}
+      >
+        ‹
+      </button>
+      <For each={Array.from({ length: props.slice.pages }, (_, i) => i + 1)}>
+        {(p) => (
+          <button
+            type="button"
+            class="ihd-pg"
+            aria-current={p === props.slice.page ? "page" : undefined}
+            onClick={() => props.onPage(p)}
+          >
+            {p}
+          </button>
+        )}
+      </For>
+      <button
+        type="button"
+        class="ihd-pg"
+        aria-label="Next page"
+        disabled={props.slice.page >= props.slice.pages}
+        onClick={() => props.onPage(props.slice.page + 1)}
+      >
+        ›
+      </button>
+    </div>
+  )
+}
 
 export function HomeDashboard(props: { class?: string; onNewChat?: () => void; onSettings?: () => void }) {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
-  const tabs = useTabs()
-  // Open Agents › Heartbeats in the panel of the chat you were last in (the panel lives in a chat).
-  const openHeartbeats = () => {
-    if (!tabs.store.length) return
-    openIrisPanel({ surface: "agents", sub: "heartbeats" })
-    tabs.toggleHome({ home: true })
-  }
+  // Opens beside Home (#192535): no chat is chosen, and none is needed.
+  const openHeartbeats = () => openIrisPanel({ surface: "agents", sub: "heartbeats" })
+  const key = () => homeDashboardKey(serverSDK().url)
+  const fetcher = (progress: (partial: HomeDashboardData) => void) =>
+    fetchHomeDashboard(serverSDK().url, platform.fetch ?? globalThis.fetch, progress)
+  // The last good copy first — it outlives this page — and the fresh read lands behind it.
+  const [data, setData] = createSignal(homeDashboard.read(key(), fetcher))
+  onCleanup(homeDashboard.subscribe((k, value) => k === key() && setData(() => value)))
   // #192608: the Machines tile opens Hive › Machines — the one Computers view — not a second copy here.
-  const openComputers = () => {
-    if (!tabs.store.length) return
-    openIrisPanel({ surface: "hive", sub: "machines" })
-    tabs.toggleHome({ home: true })
-  }
-  const get = async <T,>(path: string, fallback: T): Promise<T> => {
-    try {
-      const res = await (platform.fetch ?? globalThis.fetch)(`${serverSDK().url.replace(/\/$/, "")}${path}`, {
-        headers: { Accept: "application/json" },
-      })
-      if (!res.ok) return { ...fallback, reason: `engine ${res.status}` }
-      return (await res.json()) as T
-    } catch (e) {
-      return { ...fallback, reason: e instanceof Error ? e.message : String(e) }
-    }
-  }
-  const [data, { refetch }] = createResource(async () => {
-    const [hive, agents, inbox, bloqs, beats] = await Promise.all([
-      get<HivePayload>("/iris/hive?perPage=200", { measured: false, nodes: [] }),
-      get<AgentsPayload>("/iris/agents-mine", { measured: false, agents: [] }),
-      get<InboxPayload>("/iris/inbox?perPage=1", { measured: false, unread: null }),
-      get<BloqsPayload>("/iris/bloqs?perPage=1", { measured: false, bloqs: [] }),
-      get<BeatsPayload>("/iris/heartbeats", { measured: false, heartbeats: [] }),
-    ])
-    return { hive, agents, inbox, bloqs, beats, at: Date.now() }
-  })
+  // Beside Home, like Heartbeats (#192535): no chat is needed for the panel any more.
+  const openComputers = () => openIrisPanel({ surface: "hive", sub: "machines" })
   const [now, setNow] = createSignal(Date.now())
   const timer = setInterval(() => {
     setNow(Date.now())
-    void refetch()
+    void homeDashboard.load(key(), fetcher).catch(() => {})
   }, 60_000)
   onCleanup(() => clearInterval(timer))
+  const user = createMemo(() => {
+    const list = data()?.accounts.accounts ?? []
+    return (list.find((a) => a.active) ?? list[0])?.id
+  })
 
-  const [tab, setTab] = createSignal<Tab>("attention")
+  const [tab, setTab] = createSignal<Tab>("all")
   const [page, setPage] = createSignal(1)
+  // The card's three views (#192535). Activity first: what changed on your boards.
+  const [view, setView] = createSignal<"activity" | "agents" | "inbox">("activity")
+  const [feedPage, setFeedPage] = createSignal(1)
+  const [inboxPage, setInboxPage] = createSignal(1)
+  const feed = createMemo(() => sliceOf(data()?.recent?.items ?? [], feedPage()))
+  const mail = createMemo(() => sliceOf(data()?.inbox.items ?? [], inboxPage()))
+  const openItem = (item: RecentItem) => openIrisPanel({ surface: "atlas", bloqId: item.bloqId, itemId: item.id })
+  const openInbox = () => openIrisPanel(hivePillTarget("inbox"))
+  // On your machines (#192626): one row per live session, any tool, any machine you have.
+  const fleet = createMemo(() => fleetOf(data()?.sessions))
+  const [tool, setTool] = createSignal<string | null>(null)
+  const [fleetPage, setFleetPage] = createSignal(1)
+  const fleetRows = createMemo(() => sliceOf(byTool(fleet().rows, tool()), fleetPage()))
+  const pickTool = (t: string | null) => {
+    setTool(t)
+    setFleetPage(1)
+  }
+  const openSessions = () => openIrisPanel({ surface: "hive", sub: "sessions" })
+  const openFleetRow = (r: FleetRow) => {
+    focusHiveSession({ nodeId: r.nodeId, sessionId: r.sessionId })
+    openSessions()
+  }
   const pick = (t: Tab) => {
     setTab(t)
     setPage(1)
   }
 
-  const beats = () => data.latest?.beats.heartbeats ?? []
+  const beats = () => data()?.beats.heartbeats ?? []
   const tiles = createMemo(() => {
-    const d = data.latest
+    const d = data()
     return d ? todayOf(d.hive, d.agents, d.inbox) : []
   })
   const tile = (k: string) => tiles().find((t) => t.key === k)
@@ -148,18 +217,23 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     day.setHours(0, 0, 0, 0)
     return overviewOf(beats(), now(), day.getTime())
   })
-  const rows = createMemo(() => pageOf(tabRows(beats(), tab(), now()), page()))
-  const hive = () => data.latest?.hive
+  // #192647: every agent, not only the scheduled ones — the card counts all of them.
+  const agentList = () => (data()?.agents.measured ? data()!.agents.agents : [])
+  const agentTotal = () => data()?.agents.total ?? agentList().length
+  const all = createMemo(() => listRows(beats(), agentList(), tab(), now()))
+  const rows = createMemo(() => pageOf(all(), page()))
+  const openAgents = () => openIrisPanel({ surface: "agents" })
+  const hive = () => data()?.hive
   const online = () => hive()?.nodes.filter((n) => n.online) ?? []
   const freeSlots = () => online().reduce((s, n) => s + Math.max(0, (n.maxConcurrent ?? 0) - (n.activeTasks ?? 0)), 0)
   const models = () => new Set(online().flatMap((n) => n.modelsServing ?? [])).size
   const projects = () => {
-    const b = data.latest?.bloqs
+    const b = data()?.bloqs
     return b?.measured ? String(b.total ?? b.bloqs.length) : "—"
   }
 
   return (
-    <Show when={data.latest && (data.latest!.beats.measured || tiles().some((t) => t.measured))}>
+    <Show when={data() && (data()!.beats.measured || tiles().some((t) => t.measured))}>
       <div class={`ihd ${props.class ?? ""}`}>
         <div class="ihd-hello">
           <div>
@@ -168,7 +242,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
             <h1 class="ihd-h1">
               {greetingOf(new Date(now()).getHours())},<br />
-              <span class="ihd-grad">here's your operation.</span>
+              <span class="ihd-grad">{sayingFor(user(), new Date(now()))}</span>
             </h1>
             <div class="ihd-status">
               <Show when={ov().stopped}>
@@ -183,10 +257,10 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                   {online().length}/{hive()!.nodes.length} online
                 </span>
               </Show>
-              <Show when={data.latest?.inbox.measured && data.latest!.inbox.unread != null}>
+              <Show when={data()?.inbox.measured && data()!.inbox.unread != null}>
                 <span class="ihd-i" title="Unread in your Hive inbox">
                   <Icon name="mail" />
-                  {data.latest!.inbox.unread}
+                  {data()!.inbox.unread}
                 </span>
               </Show>
             </div>
@@ -244,7 +318,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </Show>
             <Mark a="var(--ihd-em)" b="var(--ihd-am)" shape="square" />
-            <div class="ihd-n">{data.latest?.beats.measured ? beats().length : "—"}</div>
+            <div class="ihd-n">{data()?.beats.measured ? beats().length : "—"}</div>
             <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
               Heartbeats
             </div>
@@ -261,8 +335,8 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
           <div
             class="ihd-stat"
-            data-link={tabs.store.length ? "1" : undefined}
-            title={tabs.store.length ? `${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines` : tile("machines")?.detail}
+            data-link="1"
+            title={`${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines`}
             role="button"
             tabIndex={0}
             onClick={openComputers}
@@ -286,7 +360,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
           <div class="ihd-stat" title={tile("inbox")?.detail}>
             <Mark a="var(--ihd-am)" b="var(--ihd-fu)" shape="square" />
-            <div class="ihd-n">{data.latest?.inbox.measured && data.latest!.inbox.unread != null ? data.latest!.inbox.unread : "—"}</div>
+            <div class="ihd-n">
+              {data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}
+            </div>
             <div class="ihd-label" style={{ color: "var(--ihd-am)" }}>
               Hive inbox
             </div>
@@ -299,159 +375,411 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
         </div>
 
-        <Show when={data.latest?.beats.measured}>
-          <section class="ihd-card" aria-label="Your agents">
-            <div class="ihd-ah">
-              <h2>Your agents</h2>
-              <span class="ihd-ov" title="Scheduled">
-                <Icon name="clock" />
-                <b>{ov().scheduled}</b>
-              </span>
-              <span class="ihd-ov" title="Healthy">
-                <i class="ihd-live" />
-                <b>{ov().healthy}</b>
-              </span>
-              <Show when={ov().resting}>
-                <span class="ihd-ov" title="Resting by choice — each runs again within a few beats">
-                  <Icon name="moon" color="var(--ihd-in)" />
-                  <b>{ov().resting}</b>
-                </span>
-              </Show>
-              <Show when={ov().stopped}>
-                <span class="ihd-ov" data-tone="bad" title="Not running">
-                  <Icon name="stop" color={RED} />
-                  <b>{ov().stopped}</b>
-                </span>
-              </Show>
-              <Show when={ov().failing}>
-                <span class="ihd-ov" data-tone="warn" title="Last run failed">
-                  <Icon name="warn" color={AMBER} />
-                  <b>{ov().failing}</b>
-                </span>
-              </Show>
-              <span class="ihd-ov" title="Paused">
-                <Icon name="pause" />
-                <b>{ov().paused}</b>
-              </span>
-              <span class="ihd-ov" title="Runs today">
-                <Icon name="bolt" color="var(--ihd-em)" />
-                <b>{ov().runsToday}</b>
-              </span>
-              <span class="ihd-ov" title="Tokens today">
-                <Icon name="token" />
-                <b>{compact(ov().tokensToday)}</b>
-              </span>
+        <Show when={data()}>
+          <section class="ihd-card" aria-label="Today">
+            <div class="ihd-views" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                class="ihd-view"
+                aria-selected={view() === "activity"}
+                onClick={() => setView("activity")}
+              >
+                Activity
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="ihd-view"
+                aria-selected={view() === "agents"}
+                onClick={() => setView("agents")}
+              >
+                Agents
+                <Show when={ov().stopped || ov().failing}>
+                  <i class="ihd-dot" title={`${ov().stopped} not running · ${ov().failing} failed`} />
+                </Show>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="ihd-view"
+                aria-selected={view() === "inbox"}
+                onClick={() => setView("inbox")}
+              >
+                Inbox
+                <Show when={data()?.inbox.unread}>{(n) => <span>{n()}</span>}</Show>
+              </button>
             </div>
-            <Show when={ov().stopped}>
-              <div class="ihd-alert" role="status">
-                <Icon name="stop" />
-                {ov().stopped} scheduled {ov().stopped === 1 ? "agent is" : "agents are"} not running. Hover a row to see why.
-              </div>
-            </Show>
-            <div class="ihd-tabs" role="tablist">
-              <For each={TABS}>
-                {(t) => (
-                  <button type="button" role="tab" class="ihd-tab" aria-selected={tab() === t} onClick={() => pick(t)}>
-                    {TAB_LABEL[t]}
-                    <span>{tabCount(beats(), t, now())}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-            <div class="ihd-th" aria-hidden="true">
-              <span />
-              <span>Agent</span>
-              <span title="Schedule">
-                <Icon name="clock" />
-              </span>
-              <span>Last 12 runs</span>
-              <span>Last</span>
-              <span title="Model">
-                <Icon name="chip" />
-              </span>
-            </div>
-            <Show when={rows().total} fallback={<div class="ihd-empty">Nothing here — every agent is beating.</div>}>
-              <For each={rows().items}>
-                {(r) => {
-                  const a = () => rowOf(r, now())
-                  return (
-                    <div
-                      class="ihd-tr"
-                      data-indicator={a().indicator}
-                      title={tabs.store.length ? `${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)` : a().why}
-                      role="button"
-                      tabIndex={0}
-                      onClick={openHeartbeats}
-                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openHeartbeats()}
-                    >
-                      <span class="ihd-st">
-                        <Indicate kind={a().indicator} />
-                      </span>
-                      <span class="ihd-name">{a().name}</span>
-                      <span class="ihd-mu">{a().every}</span>
-                      <span class="ihd-hb" aria-label={`Last ${a().strip.length} runs`}>
-                        <For each={Array.from({ length: Math.max(0, 12 - a().strip.length) })}>{() => <i />}</For>
-                        <For each={a().strip}>{(k) => <i data-k={k} />}</For>
-                      </span>
-                      <span class="ihd-mu" data-bad={a().indicator === "stopped" || a().indicator === "late" ? "" : undefined}>
-                        {a().last}
-                      </span>
-                      <span class="ihd-mu">{a().model ?? "—"}</span>
+            <Switch>
+              <Match when={view() === "activity"}>
+                <Show
+                  when={data()?.recent?.measured}
+                  fallback={
+                    <div class="ihd-empty">
+                      {data()?.recent?.reason
+                        ? `Recent activity could not be read — ${data()?.recent?.reason}`
+                        : "Reading recent activity…"}
                     </div>
-                  )
-                }}
-              </For>
-            </Show>
-            <div class="ihd-pager">
-              <span class="ihd-range">
-                {rows().from}–{rows().to} of {rows().total}
-              </span>
-              <button type="button" class="ihd-pg" aria-label="Previous page" disabled={rows().page <= 1} onClick={() => setPage(rows().page - 1)}>
-                ‹
-              </button>
-              <For each={Array.from({ length: rows().pages }, (_, i) => i + 1)}>
-                {(p) => (
-                  <button type="button" class="ihd-pg" aria-current={p === rows().page ? "page" : undefined} onClick={() => setPage(p)}>
-                    {p}
-                  </button>
-                )}
-              </For>
-              <button type="button" class="ihd-pg" aria-label="Next page" disabled={rows().page >= rows().pages} onClick={() => setPage(rows().page + 1)}>
-                ›
-              </button>
-            </div>
-            <div class="ihd-legend">
-              <span>
-                <i class="ihd-live" />
-                healthy
-              </span>
-              <span>
-                <i class="ihd-spin" style={{ width: "10px", height: "10px" }} />
-                running
-              </span>
-              <span>
-                <Icon name="moon" color="var(--ihd-in)" />
-                resting
-              </span>
-              <span>
-                <Icon name="stop" color={RED} />
-                not running
-              </span>
-              <span>
-                <Icon name="clock" color={RED} />
-                late
-              </span>
-              <span>
-                <Icon name="warn" color={AMBER} />
-                failed
-              </span>
-              <span>
-                <Icon name="pause" />
-                paused
-              </span>
-            </div>
+                  }
+                >
+                  <Show
+                    when={feed().total}
+                    fallback={<div class="ihd-empty">Nothing has changed on your boards yet.</div>}
+                  >
+                    <For each={feed().items}>
+                      {(item) => (
+                        <div
+                          class="ihd-fr"
+                          role="button"
+                          tabIndex={0}
+                          title={`Open in Atlas${item.bloqName ? ` — ${item.bloqName}` : ""}`}
+                          onClick={() => openItem(item)}
+                          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openItem(item)}
+                        >
+                          <span class="ihd-name">{item.title}</span>
+                          <span class="ihd-mu ihd-where">
+                            {[item.bloqName, item.listName].filter(Boolean).join(" › ")}
+                          </span>
+                          <span class="ihd-mu">{verbOf(item)}</span>
+                          <span class="ihd-mu ihd-age">{agoOf(item.updatedAt, now())}</span>
+                        </div>
+                      )}
+                    </For>
+                    <Pager slice={feed()} onPage={setFeedPage} />
+                  </Show>
+                </Show>
+              </Match>
+              <Match when={view() === "agents"}>
+                <Show
+                  when={data()?.beats.measured}
+                  fallback={
+                    <div class="ihd-empty">
+                      Heartbeats could not be read{data()?.beats.reason ? ` — ${data()?.beats.reason}` : ""}.
+                    </div>
+                  }
+                >
+                  <p class="ihd-sum">
+                    <span>
+                      <b>{ov().scheduled}</b> scheduled
+                    </span>
+                    <span>
+                      <b>{ov().healthy}</b> healthy
+                    </span>
+                    <Show when={ov().stopped}>
+                      <span data-tone="bad">
+                        <b>{ov().stopped}</b> not running
+                      </span>
+                    </Show>
+                    <Show when={ov().failing}>
+                      <span data-tone="warn">
+                        <b>{ov().failing}</b> failed
+                      </span>
+                    </Show>
+                    <Show when={ov().resting}>
+                      <span>
+                        <b>{ov().resting}</b> resting
+                      </span>
+                    </Show>
+                    <Show when={ov().paused}>
+                      <span>
+                        <b>{ov().paused}</b> paused
+                      </span>
+                    </Show>
+                    <span>
+                      <b>{ov().runsToday}</b> runs today
+                    </span>
+                    <span>
+                      <b>{compact(ov().tokensToday)}</b> tokens
+                    </span>
+                  </p>
+                  <div class="ihd-tabs" role="tablist">
+                    <For each={AGENT_TABS}>
+                      {(t) => (
+                        <button
+                          type="button"
+                          role="tab"
+                          class="ihd-tab"
+                          aria-selected={tab() === t}
+                          onClick={() => pick(t)}
+                        >
+                          {TAB_LABEL[t]}
+                          <span>{listRows(beats(), agentList(), t, now()).length}</span>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                  <div class="ihd-th" aria-hidden="true">
+                    <span />
+                    <span>Agent</span>
+                    <span title="Schedule">
+                      <Icon name="clock" />
+                    </span>
+                    <span>Last 12 runs</span>
+                    <span>Last</span>
+                    <span title="Model">
+                      <Icon name="chip" />
+                    </span>
+                  </div>
+                  <Show
+                    when={rows().total}
+                    fallback={<div class="ihd-empty">{emptyText(tab(), beats().length, agentTotal())}</div>}
+                  >
+                    <For each={rows().items}>
+                      {(r) => {
+                        const a = () => r
+                        const open = () => (r.indicator === "idle" ? openAgents() : openHeartbeats())
+                        return (
+                          <div
+                            class="ihd-tr"
+                            data-indicator={a().indicator}
+                            title={
+                              a().indicator === "idle"
+                                ? `${a().why}\nClick to open Agents`
+                                : `${a().why}\nClick to open in Agents › Heartbeats (Run now, Pause)`
+                            }
+                            role="button"
+                            tabIndex={0}
+                            onClick={open}
+                            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && open()}
+                          >
+                            <span class="ihd-st">
+                              <Indicate kind={a().indicator} />
+                            </span>
+                            <span class="ihd-name">{a().name}</span>
+                            <span class="ihd-mu">{a().every}</span>
+                            <span class="ihd-hb" aria-label={`Last ${a().strip.length} runs`}>
+                              <For each={Array.from({ length: Math.max(0, 12 - a().strip.length) })}>{() => <i />}</For>
+                              <For each={a().strip}>{(k) => <i data-k={k} />}</For>
+                            </span>
+                            <span
+                              class="ihd-mu"
+                              data-bad={a().indicator === "stopped" || a().indicator === "late" ? "" : undefined}
+                            >
+                              {a().last}
+                            </span>
+                            <span class="ihd-mu">{a().model ?? "—"}</span>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </Show>
+                  <div class="ihd-pager">
+                    <span class="ihd-range">
+                      {rows().from}–{rows().to} of {rows().total}
+                    </span>
+                    <button
+                      type="button"
+                      class="ihd-pg"
+                      aria-label="Previous page"
+                      disabled={rows().page <= 1}
+                      onClick={() => setPage(rows().page - 1)}
+                    >
+                      ‹
+                    </button>
+                    <For each={Array.from({ length: rows().pages }, (_, i) => i + 1)}>
+                      {(p) => (
+                        <button
+                          type="button"
+                          class="ihd-pg"
+                          aria-current={p === rows().page ? "page" : undefined}
+                          onClick={() => setPage(p)}
+                        >
+                          {p}
+                        </button>
+                      )}
+                    </For>
+                    <button
+                      type="button"
+                      class="ihd-pg"
+                      aria-label="Next page"
+                      disabled={rows().page >= rows().pages}
+                      onClick={() => setPage(rows().page + 1)}
+                    >
+                      ›
+                    </button>
+                  </div>
+                  <div class="ihd-legend">
+                    <span>
+                      <i class="ihd-idle" />
+                      no schedule
+                    </span>
+                    <span>
+                      <i class="ihd-live" />
+                      healthy
+                    </span>
+                    <span>
+                      <i class="ihd-spin" style={{ width: "10px", height: "10px" }} />
+                      running
+                    </span>
+                    <span>
+                      <Icon name="moon" color="var(--ihd-in)" />
+                      resting
+                    </span>
+                    <span>
+                      <Icon name="stop" color={RED} />
+                      not running
+                    </span>
+                    <span>
+                      <Icon name="clock" color={RED} />
+                      late
+                    </span>
+                    <span>
+                      <Icon name="warn" color={AMBER} />
+                      failed
+                    </span>
+                    <span>
+                      <Icon name="pause" />
+                      paused
+                    </span>
+                  </div>
+                </Show>
+              </Match>
+              <Match when={view() === "inbox"}>
+                <Show
+                  when={data()?.inbox.measured}
+                  fallback={
+                    <div class="ihd-empty">
+                      The Hive inbox could not be read{data()?.inbox.reason ? ` — ${data()?.inbox.reason}` : ""}.
+                    </div>
+                  }
+                >
+                  <Show when={mail().total} fallback={<div class="ihd-empty">Your Hive inbox is empty.</div>}>
+                    <For each={mail().items}>
+                      {(m) => (
+                        <div
+                          class="ihd-fr"
+                          data-unread={m.read ? undefined : ""}
+                          role="button"
+                          tabIndex={0}
+                          title="Open in Hive › Inbox"
+                          onClick={openInbox}
+                          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openInbox()}
+                        >
+                          <span class="ihd-name">{m.label}</span>
+                          <span class="ihd-mu ihd-where">{m.from}</span>
+                          <span class="ihd-mu">{m.type}</span>
+                          <span class="ihd-mu ihd-age">{agoOf(m.receivedAt, now())}</span>
+                        </div>
+                      )}
+                    </For>
+                    <Pager slice={mail()} onPage={setInboxPage} />
+                  </Show>
+                </Show>
+              </Match>
+            </Switch>
           </section>
         </Show>
+
+        <section class="ihd-card" aria-label="On your machines">
+          <div class="ihd-card-h">
+            <h2>On your machines</h2>
+            <Show when={data()?.sessions.measured && fleet().rows.length}>
+              <p class="ihd-sum">
+                <span>
+                  <b>{fleet().rows.length}</b> live on <b>{fleet().machines}</b>{" "}
+                  {fleet().machines === 1 ? "machine" : "machines"}
+                </span>
+                <Show when={fleet().rows.filter((r) => r.status === "needs_you").length}>
+                  {(n) => (
+                    <span data-tone="warn">
+                      <b>{n()}</b> need{n() === 1 ? "s" : ""} you
+                    </span>
+                  )}
+                </Show>
+              </p>
+            </Show>
+            <button type="button" class="ihd-more" onClick={openSessions}>
+              Hive › Sessions
+            </button>
+          </div>
+          <Show
+            when={data()?.sessions.measured}
+            fallback={
+              <div class="ihd-empty">
+                {data()?.sessions.reason && data()?.sessions.reason !== "loading"
+                  ? `Your machines' sessions could not be read — ${data()?.sessions.reason}`
+                  : "Reading your machines' sessions…"}
+              </div>
+            }
+          >
+            <Show
+              when={fleet().rows.length}
+              fallback={<div class="ihd-empty">Nothing is running on your machines right now.</div>}
+            >
+              <Show when={fleet().tools.length > 1}>
+                <div class="ihd-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    class="ihd-tab"
+                    aria-selected={tool() === null}
+                    onClick={() => pickTool(null)}
+                  >
+                    All<span>{fleet().rows.length}</span>
+                  </button>
+                  <For each={fleet().tools}>
+                    {(t) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        class="ihd-tab"
+                        aria-selected={tool() === t}
+                        onClick={() => pickTool(t)}
+                      >
+                        <AgentMark provider={byTool(fleet().rows, t)[0]?.provider ?? t} />
+                        {t}
+                        <span>{byTool(fleet().rows, t).length}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <For each={fleetRows().items}>
+                {(r) => (
+                  <div
+                    class="ihd-sr"
+                    data-status={r.status}
+                    role="button"
+                    tabIndex={0}
+                    title={`${r.tool} · ${r.machine} · ${r.working ? "working" : r.status.replace("_", " ")}\nOpen in Hive › Sessions`}
+                    onClick={() => openFleetRow(r)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openFleetRow(r)}
+                  >
+                    <span class="ihd-st">
+                      <Switch fallback={<Icon name="moon" color="var(--ihd-in)" />}>
+                        <Match when={r.status === "needs_you"}>
+                          <Icon name="warn" color={AMBER} />
+                        </Match>
+                        <Match when={r.working}>
+                          <i class="ihd-spin" />
+                        </Match>
+                        <Match when={r.status === "active"}>
+                          <i class="ihd-live" />
+                        </Match>
+                      </Switch>
+                    </span>
+                    <span class="ihd-name">
+                      {r.label}
+                      <Show when={r.branch}>{(b) => <small>{b()}</small>}</Show>
+                    </span>
+                    <span class="ihd-mu ihd-tool">
+                      <AgentMark provider={r.provider} />
+                      <span class="ihd-tool-name">{r.tool}</span>
+                    </span>
+                    <span class="ihd-mu ihd-where">{r.machine}</span>
+                    <span class="ihd-mu ihd-age">{agoOf(r.updatedAt ?? undefined, now())}</span>
+                  </div>
+                )}
+              </For>
+              <Pager slice={fleetRows()} onPage={setFleetPage} />
+            </Show>
+            <Show when={fleet().hidden}>
+              <div class="ihd-hidden">
+                {fleet().hidden} older, or on machines that have not reported lately — all in Hive › Sessions.
+              </div>
+            </Show>
+          </Show>
+        </section>
       </div>
     </Show>
   )
