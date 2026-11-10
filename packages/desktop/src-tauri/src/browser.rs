@@ -41,6 +41,22 @@ pub fn ipc_allowed(webview_label: &str) -> bool {
     OUR_WEBVIEWS.contains(&webview_label)
 }
 
+/// Wrap an invoke handler so only OUR webviews reach it (see the module comment). lib.rs wraps the
+/// whole app command list with this; nothing registers a command around it.
+pub fn gate<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let label = invoke.message.webview_ref().label().to_string();
+        if !ipc_allowed(&label) {
+            eprintln!("ipc: refused '{}' from webview '{label}'", invoke.message.command());
+            invoke.resolver.reject("not allowed from this page");
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
 /// May the browser navigate here? It browses the web, so http(s) anywhere is allowed: the
 /// isolation is the protection, not a list of sites. What is refused is everything that is OURS
 /// or local-file: the app's own schemes, files on disk, and the engine sidecar's port.
@@ -357,5 +373,55 @@ mod tests {
         assert!(address_to_url("hello").is_none());
         assert!(address_to_url("file:///etc/passwd").is_none());
         assert!(address_to_url("javascript:alert(1)").is_none());
+    }
+
+    /// The isolation test (#193062), through Tauri's real IPC path on the mock runtime. A web page
+    /// in the browser webview has the invoke key (it is the main frame), so this sends exactly what
+    /// youtube.com could send. Red first: with `gate` removed, the "browser" call returns the secret.
+    mod ipc {
+        use super::super::*;
+        use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+        use tauri::webview::InvokeRequest;
+        use tauri::WebviewWindowBuilder;
+
+        #[tauri::command]
+        fn engine_secret() -> String {
+            "s3cret".into()
+        }
+
+        fn request(origin: &str) -> InvokeRequest {
+            InvokeRequest {
+                cmd: "engine_secret".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: origin.parse().unwrap(),
+                body: tauri::ipc::InvokeBody::default(),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            }
+        }
+
+        fn app() -> tauri::App<tauri::test::MockRuntime> {
+            mock_builder()
+                .invoke_handler(gate(tauri::generate_handler![engine_secret]))
+                .build(mock_context(noop_assets()))
+                .expect("mock app")
+        }
+
+        #[test]
+        fn a_web_page_in_the_browser_cannot_call_an_app_command() {
+            let app = app();
+            let page = WebviewWindowBuilder::new(&app, BROWSER_LABEL, Default::default()).build().unwrap();
+            let got = get_ipc_response(&page, request("https://www.youtube.com"));
+            assert!(got.is_err(), "the browser page got an answer: {got:?}");
+        }
+
+        #[test]
+        fn our_own_window_still_can() {
+            let app = app();
+            let main = WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+            let got = get_ipc_response(&main, request("tauri://localhost"));
+            assert_eq!(got.unwrap().deserialize::<String>().unwrap(), "s3cret");
+        }
     }
 }

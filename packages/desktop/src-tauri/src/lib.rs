@@ -1023,18 +1023,10 @@ pub fn run() {
         // injects the IPC bridge. App commands carry no origin check (this app has no ACL
         // manifest), so refuse every command that does not come from one of OUR webviews. One
         // wrapper, not a check per command: a command added later is covered without remembering.
-        .invoke_handler({
-            let handler = app_commands();
-            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
-                let label = invoke.message.webview_ref().label().to_string();
-                if !browser::ipc_allowed(&label) {
-                    eprintln!("ipc: refused '{}' from webview '{label}'", invoke.message.command());
-                    invoke.resolver.reject("not allowed from this page");
-                    return true;
-                }
-                handler(invoke)
-            }
-        })
+        // #193062: the native Browser puts web pages in a webview's MAIN frame, where Tauri
+        // injects the IPC bridge. App commands carry no origin check (this app has no ACL
+        // manifest), so every one goes through the gate: only OUR webviews reach them.
+        .invoke_handler(browser::gate(app_commands()))
         .setup(move |app| {
             let app = app.handle().clone();
 
