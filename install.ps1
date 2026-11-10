@@ -554,7 +554,7 @@ require('fs').writeFileSync(dir + '/' + vm.MANIFEST_NAME, JSON.stringify(manifes
 
         # A .git left by an old clone-based install describes a commit these files no longer are,
         # and `iris daemon update` trusts .git over the manifest: it reported that old commit and
-        # 209 "local changes" on qb-host-vanguard. Moved aside (kept), never deleted.
+        # hundreds of "local changes" on a real node. Moved aside (kept), never deleted.
         $staleGit = Join-Path $BridgeDir ".git"
         if (Test-Path $staleGit) {
             $backup = "$BridgeDir.git-" + (Get-Date -Format "yyyyMMdd-HHmmss")

@@ -649,7 +649,7 @@ export function restartDaemon(bridge: string): { ok: boolean; out: string } {
 //   1. The bridge cannot be renamed while the daemon runs — it is that process's working
 //      directory. So Windows STOPS, swaps, then STARTS, where POSIX swaps then restarts.
 //   2. Stop by killing the daemon's node process, never Stop-ScheduledTask. Measured on
-//      qb-host-vanguard (2026-11-10): a detached child of the daemon outlived the kill and the
+//      a Windows node (2026-11-10): a detached child of the daemon outlived the kill and the
 //      task's restart. The update helper is such a child; it must live to verify and roll back.
 
 export function onWindows(): boolean {
