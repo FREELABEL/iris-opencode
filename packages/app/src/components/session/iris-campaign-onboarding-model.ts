@@ -170,3 +170,16 @@ export function afterMake(
     return { do: "say", step: { at: "message", tone: "error", title: "The page was made, but IRIS didn't say where", body: "Find it in Genesis › Pages.", board, retry: false } }
   return { do: "pin", slug: r.slug, label: r.name ?? "Landing page", already: false }
 }
+
+/** The board step shows a filter once the list is longer than this. */
+export const FILTER_FROM = 8
+
+/** Boards whose name contains every word typed, in any order, ignoring case. */
+export function filterBoards(boards: CampaignBoard[], q: string): CampaignBoard[] {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return boards
+  return boards.filter((b) => {
+    const n = b.name.toLowerCase()
+    return words.every((w) => n.includes(w))
+  })
+}

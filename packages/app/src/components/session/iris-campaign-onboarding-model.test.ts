@@ -123,3 +123,17 @@ describe("marketing + wizard (#193233)", () => {
     expect(nameText("brand", acme)).not.toMatch(noIds)
   })
 })
+
+import { filterBoards } from "./iris-campaign-onboarding-model"
+
+describe("board filter (#193233)", () => {
+  const list = [acme, client, { id: 3, name: "IRIS Investor Outreach", role: "owner" as const }]
+  test("matches every word, any order, any case", () => {
+    expect(filterBoards(list, "outreach iris").map((b) => b.id)).toEqual([3])
+    expect(filterBoards(list, "SHOES")).toEqual([acme])
+  })
+  test("blank keeps every board; no match is empty", () => {
+    expect(filterBoards(list, "  ")).toEqual(list)
+    expect(filterBoards(list, "zzz")).toEqual([])
+  })
+})

@@ -9,6 +9,8 @@ import {
   afterMake,
   afterSetup,
   boardTag,
+  filterBoards,
+  FILTER_FROM,
   confirmText,
   KINDS,
   kindTitle,
@@ -48,10 +50,16 @@ export function IrisCampaignOnboarding(props: {
   /** Open Genesis › Brand kits, after a kit is made. */
   openBrandKits?: () => void
 }) {
-  const [s, set] = createStore<{ step: Step; kind: MakeKind; name: string }>({ step: { at: "idle" }, kind: "campaign", name: "" })
+  const [s, set] = createStore<{ step: Step; kind: MakeKind; name: string; filter: string }>({
+    step: { at: "idle" },
+    kind: "campaign",
+    name: "",
+    filter: "",
+  })
   const go = (step: Step) => set("step", step)
   const close = () => {
     set("name", "")
+    set("filter", "")
     go({ at: "idle" })
   }
 
@@ -71,6 +79,7 @@ export function IrisCampaignOnboarding(props: {
 
   const loadBoards = (kind: MakeKind) => {
     set("kind", kind)
+    set("filter", "")
     go({ at: "loading" })
     void props
       .doFetch("/iris/campaigns/boards", { headers: { Accept: "application/json" } })
@@ -124,6 +133,8 @@ export function IrisCampaignOnboarding(props: {
     const st = s.step
     return st.at === "pick" || st.at === "confirm" || st.at === "name" ? st.boards : []
   }
+  // A long board list gets a filter (188 boards on one account): a question about the wizard, not a way out of it.
+  const shown = () => filterBoards(boards(), s.filter)
   const back = (list: CampaignBoard[]) => go(list.length > 1 ? { at: "pick", boards: list } : { at: "choose" })
 
   return (
@@ -186,8 +197,26 @@ export function IrisCampaignOnboarding(props: {
             <div class="iris-camp__step">{kindTitle(s.kind)}</div>
             <div class="iris-camp__title">Which board is this for?</div>
             <div class="iris-camp__text">Boards you own or can edit.</div>
+            <Show when={boards().length > FILTER_FROM}>
+              <input
+                ref={(el) => queueMicrotask(() => el.focus())}
+                class="iris-camp__input"
+                type="text"
+                placeholder={`Filter ${boards().length} boards`}
+                aria-label="Filter your boards"
+                value={s.filter}
+                onInput={(e) => set("filter", e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  const only = shown()
+                  if (e.key === "Enter" && only.length === 1) chooseBoard(only[0], boards())
+                }}
+              />
+            </Show>
             <div class="iris-camp__boards" role="listbox" aria-label="Your boards">
-              <For each={boards()}>
+              <Show when={shown().length === 0}>
+                <div class="iris-camp__text" data-slot="boards-none">No board matches "{s.filter.trim()}"</div>
+              </Show>
+              <For each={shown()}>
                 {(b) => (
                   <button
                     type="button"
