@@ -141,7 +141,7 @@ describe("Outreach folded into Leads (#192544)", () => {
   test("a pinned Outreach becomes a shown Leads, in Outreach's slot, once", () => {
     const l = merged(migrateNavLayout(withOutreach))
     // Inbox (#192688) is new to this layout, so it lands where the default puts it: after Leads.
-    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing"])
+    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing", "browser"])
     expect(l.order.filter((x) => x === "leads")).toHaveLength(1)
     expect(l.order).not.toContain("outreach")
     expect(l.hidden).not.toContain("outreach")
@@ -176,4 +176,16 @@ describe("Outreach folded into Leads (#192544)", () => {
     expect(DEF.order).not.toContain("outreach")
     expect(isNavItemVisible(merged(null), "leads")).toBe(true)
   })
+})
+
+// #193062: the Browser was unfindable (it only appeared after clicking a chat link). It is a shown
+// product now, after Marketing, for a new person AND for a saved layout that never had it.
+test("the Browser is shown by default after Marketing, also in a layout saved before it existed", () => {
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toContain("browser")
+  const saved: NavLayout = { version: 2, order: ["atlas", "marketing", "pages"], hidden: [] }
+  const l = mergeNavLayout(DEFAULT_NAV_LAYOUT, saved)
+  const shown = visibleNavItems(l)
+  expect(shown.indexOf("browser")).toBe(shown.indexOf("marketing") + 1)
+  // A person who hid it keeps it hidden.
+  expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "browser"], hidden: ["browser"] }).hidden).toContain("browser")
 })

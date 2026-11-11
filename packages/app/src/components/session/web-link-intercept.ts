@@ -4,6 +4,7 @@ import { usePlatform } from "@/context/platform"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { atlasNoteUrl } from "./iris-atlas-artifacts-model"
 import { focusAtlasNote, requestIrisNav } from "./iris-nav"
+import { nativeBrowserEnabled } from "./native-browser-model"
 import { claimLinkClick, navigateWeb, WEB_TAB } from "./web-nav"
 
 /**
@@ -38,6 +39,11 @@ export function useLinksOpenInPanel(root: () => HTMLElement | undefined) {
       return showTab("iris")
     }
     navigateWeb(href)
+    // Desktop (#193062): the Browser product, where the native webview lives.
+    if (platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)) {
+      requestIrisNav({ surface: "browser" })
+      return showTab("iris")
+    }
     showTab(WEB_TAB)
   }
 

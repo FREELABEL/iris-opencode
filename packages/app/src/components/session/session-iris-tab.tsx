@@ -1,19 +1,5 @@
-import {
-  batch,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Match,
-  on,
-  onCleanup,
-  Show,
-  startTransition,
-  Suspense,
-  Switch,
-  untrack,
-} from "solid-js"
+import { batch, createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, startTransition, Suspense, Switch, untrack } from "solid-js"
+import type { Component } from "solid-js"
 import { useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
 import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
@@ -694,6 +680,9 @@ const SURFACES = [
   // sub-views here the surface draws `marketing-pins`, which owns its pane and its empty state —
   // so no stored sub-view, deep link or agent command can open a page by an id from an older build.
   { id: "marketing", label: "Marketing", pane: "marketing-pins", path: () => `` },
+  // Browser (#193051 / #193062): browse beside the chat. On desktop a native webview with its own
+  // cookies; on the web build the framed Browser. Not board-scoped: a web page is no board's.
+  { id: "browser", label: "Browser", pane: "browser", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -752,6 +741,19 @@ SELF_PANES.add("lexicon-agreements")
 SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
+// Browser (#193062) draws itself: SessionWebTab picks native or framed.
+SELF_PANES.add("browser")
+
+/**
+ * The Browser pane, handed in by the screens that host this panel (session side panel, home panel)
+ * rather than imported here. The web tab's GitHub PR view pulls a Vite worker (`?worker&url`)
+ * that unit tests cannot load, and every test that imports this file would inherit it. Not
+ * `lazy()`: a lazy pane suspends the panel's <Suspense>, which is the blank-tab-switch bug.
+ */
+const [browserPane, setBrowserPane] = createSignal<Component>()
+export function registerBrowserPane(pane: Component) {
+  if (browserPane() !== pane) setBrowserPane(() => pane)
+}
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
 // Agents › Running (#192855) reads the engine's sessions for itself.
@@ -3268,6 +3270,12 @@ export function SessionIrisTab() {
     } catch {}
   }
 
+  // #193233: a brand kit just made from Marketing › + is edited in Genesis › Brand kits.
+  const openBrandKits = () => {
+    chooseSurface("pages")
+    chooseSub("brands", "pages")
+  }
+
   // `target` is explicit for a caller that has just chosen a surface.
   function chooseSub(id: string, target: SurfaceId = surface()) {
     const next = { ...subviews(), [target]: id }
@@ -4465,9 +4473,21 @@ export function SessionIrisTab() {
               <IrisMarketing
                 doFetch={doFetch}
                 openExternal={(url) => platform.openExternal(url)}
-                emptyActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} />}
-                pickerActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} compact />}
+                emptyActions={(ctx) => (
+                  <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} onActive={ctx.focus} openBrandKits={openBrandKits} />
+                )}
+                pickerActions={(ctx) => (
+                  <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} onActive={ctx.focus} openBrandKits={openBrandKits} compact />
+                )}
               />
+            </Match>
+            <Match when={pane() === "browser"}>
+              <Show when={browserPane()} fallback={<div class="iris-empty">The Browser is not available here.</div>}>
+                {(pane) => {
+                  const Pane = pane()
+                  return <Pane />
+                }}
+              </Show>
             </Match>
             <Match when={pane() === "lexicon-agreements"}>
               <IrisLexiconAgreements doFetch={doFetch} />

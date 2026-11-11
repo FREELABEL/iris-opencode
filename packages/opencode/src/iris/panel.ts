@@ -45,6 +45,8 @@ export namespace Panel {
     artifact?: string
     /** The Browser tab's address. */
     url?: string
+    /** The desktop has a native Browser pane that can run the agent's page commands. */
+    browser?: boolean
     /** Atlas: the card open in the card editor, and the board it is on (#191507). */
     card?: { id: number; bloq?: number }
     /** What the desktop can show: product id → its sub-view ids. Lets callers validate. */
@@ -53,6 +55,8 @@ export namespace Panel {
     ack?: string
     /** Set by the desktop when a command could not be applied as asked. */
     error?: string
+    /** A `page` command's answer: the JSON envelope {ok,value|error} (#193145). Never stored. */
+    result?: string
   }
 
   export type Stored = State & { received: number }
@@ -72,6 +76,24 @@ export namespace Panel {
     | { action: "card"; bloq: number; item: number; list?: number }
     /** Change nothing; answer with what is on screen now. A live `state` (#191506). */
     | { action: "report" }
+    /**
+     * The Browser pane's page (#193145): run one of the browser tool's page scripts there, or
+     * open an address. `mode` says whether the script only reads; the desktop refuses `act`
+     * until acting ships, and refuses everything on a site the person has not granted.
+     */
+    | {
+        action: "page"
+        op: "eval"
+        script: string
+        mode: "read" | "act"
+        /** An irreversible click's label (#193186): the person allows it once in the app, or not. */
+        confirm?: string
+        /** What the strip shows the agent doing. */
+        doing?: string
+      }
+    | { action: "page"; op: "open"; url: string }
+    /** A picture of the page (a JPEG, base64, in `result`): reading by eye, same Allow as read. */
+    | { action: "page"; op: "screenshot" }
 
   const states = new Map<string, Stored>()
   const waiters = new Map<string, (s: Stored) => void>()
@@ -85,7 +107,10 @@ export namespace Panel {
   }
 
   export function report(state: State): Stored {
-    const stored: Stored = { ...state, received: Date.now() }
+    // A page result is page CONTENT: hand it to the call waiting for it, never keep it where
+    // GET /iris/panel would show it to any reader.
+    const { result, ...rest } = state
+    const stored: Stored = { ...rest, received: Date.now() }
     states.delete(state.session)
     states.set(state.session, stored)
     while (states.size > MAX_SESSIONS) states.delete(states.keys().next().value!)
@@ -93,10 +118,20 @@ export namespace Panel {
       const w = waiters.get(state.ack)
       if (w) {
         waiters.delete(state.ack)
-        w(stored)
+        w(result === undefined ? stored : { ...stored, result })
       }
     }
     return stored
+  }
+
+  /**
+   * Which browser the browser tool uses when the agent doesn't say (#193200). The person asked
+   * for "go to youtube and click the first video" and watched an empty pane while a hidden Chrome
+   * did it, logged out. When this session's desktop has the Browser pane, use the pane: that is
+   * the browser the person is looking at. Anywhere else (CLI, web, an old desktop): the agent's own.
+   */
+  export function defaultBrowser(s: Stored | undefined, now = Date.now()): "panel" | "agent" {
+    return s?.browser === true && now - s.received < 30 * 60_000 ? "panel" : "agent"
   }
 
   /** The last report for a session, or the most recent report from any session. */

@@ -16,6 +16,24 @@ const chrome = await findChrome()
 const server = Bun.serve({
   port: 0,
   fetch(req) {
+    const html = (body: string) => new Response(`<!doctype html>${body}`, { headers: { "content-type": "text/html" } })
+    // Indeed's results (#193242): the visible control is a button; the job's link and id sit around it.
+    if (new URL(req.url).pathname === "/jobs") {
+      return html(`<title>Jobs</title><link rel="canonical" href="https://jobs.example/q"><body><ul>
+        <li data-jk="abc123"><div><h2><a href="/viewjob?jk=abc123">Contract Software Engineer</a></h2>
+        <button aria-label="full details of Contract Software Engineer">Details</button></div></li>
+        <li data-jk="def456"><div><button aria-label="full details of Data Labeler">Details</button></div></li>
+        </ul><button id="route" onclick="history.pushState({}, '', '/jobs?vjk=abc123')">Show job</button></body>`)
+    }
+    // Toast's item pop-up (2026-11-11): a long menu behind, choices drawn by the site with the
+    // real radio hidden, and an Add to Cart button.
+    if (new URL(req.url).pathname === "/menu") {
+      const menu = Array.from({ length: 220 }, (_, i) => `<button>Menu item ${i}</button>`).join("")
+      const choice = (n: string) =>
+        `<label style="display:block;padding:8px">${n}<input type="radio" name="protein" style="position:absolute;opacity:0;width:0;height:0"></label>`
+      return html(`<title>Menu</title><body>${menu}<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;background:#fff">
+        <h2>ORIGINATOR</h2>${choice("Hemp Protein")}${choice("Pea Protein")}<button>Add to Cart</button></div></body>`)
+    }
     if (new URL(req.url).pathname === "/second") {
       return new Response("<!doctype html><title>Second</title><body><h1>Second page</h1></body>", {
         headers: { "content-type": "text/html" },
@@ -139,7 +157,7 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     const els = await session.elements()
     const dd = els.find((e) => e.tag === "select")!
     expect(dd.options).toEqual(["01", "02"])
-    expect(refuseOptionReason(els, dd.ref, "99")).toContain("01, 02")
+    expect(refuseOptionReason(els, dd.ref, "99")).toContain(`01 "Round 01", 02 "Round 02"`)
 
     const before = await session.state()
     expect(await session.selectRef(dd.ref, "02")).toBe(true)
@@ -153,6 +171,45 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(atBottom).toBeGreaterThan(0)
     await session.scroll("top")
     expect(await session.evaluate<number>("Math.round(scrollY)")).toBe(0)
+  }, 60_000)
+
+  test("a job card's link and id come with its button, and inspect finds them without a click (#193242)", async () => {
+    await session.open(`${url}jobs`)
+    const els = await session.elements()
+    const link = els.find((e) => e.name === "Contract Software Engineer")!
+    expect(link.href).toBe(`${url}viewjob?jk=abc123`)
+    expect(link.ids).toEqual({ "data-jk": "abc123" })
+    const details = els.find((e) => e.name === "full details of Contract Software Engineer")!
+    expect(details.href).toBeUndefined()
+    expect(details.ids).toEqual({ "data-jk": "abc123" })
+
+    const seen = (await session.inspect(details.ref))!
+    expect(seen.links).toEqual([{ url: `${url}viewjob?jk=abc123`, source: "card-anchor", where: "a link in the same card: Contract Software Engineer" }])
+    expect(seen.ids["data-jk"]).toBe("abc123")
+    expect(seen.canonical).toBe("https://jobs.example/q")
+    // A card with only an id: no link is made up.
+    const bare = (await session.inspect(els.find((e) => e.name === "full details of Data Labeler")!.ref))!
+    expect(bare.links).toEqual([])
+    expect(bare.ids["data-jk"]).toBe("def456")
+  }, 60_000)
+
+  test("an in-place route change (pushState) shows in where()", async () => {
+    await session.open(`${url}jobs`)
+    const els = await session.elements()
+    await session.clickRef(els.find((e) => e.name === "Show job")!.ref)
+    expect((await session.where()).url).toBe(`${url}jobs?vjk=abc123`)
+  }, 60_000)
+
+  test("an open pop-up lists ITS choices, drawn ones included, and choosing one checks it (Toast)", async () => {
+    await session.open(`${url}menu`)
+    const els = await session.elements()
+    expect(els.every((e) => e.inDialog)).toBe(true)
+    expect(els.map((e) => `${e.role} ${e.name}`)).toEqual(["radio Hemp Protein", "radio Pea Protein", "button Add to Cart"])
+    const hemp = els[0]!
+    expect(hemp.checked).toBe(false)
+    expect(refuseTargetReason(els, hemp.ref, "click")).toBeNull()
+    await session.clickRef(hemp.ref)
+    expect((await session.elements())[0]!.checked).toBe(true)
   }, 60_000)
 
   test("closing twice is not an error — the session may end after the user already closed it", async () => {

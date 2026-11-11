@@ -1,4 +1,5 @@
 import { createEffect, createMemo, on, Show } from "solid-js"
+import { ToolMark } from "@opencode-ai/session-ui/tool-mark"
 import { BasicTool } from "@opencode-ai/session-ui/basic-tool"
 import { ToolRegistry } from "@opencode-ai/session-ui/message-part"
 import { useLayout } from "@/context/layout"
@@ -84,6 +85,7 @@ ToolRegistry.register({
                     ? "Genesis artifact — changed by someone else"
                     : "Genesis artifact",
               subtitle: action() === "list" ? "listed this session's artifacts" : ((props.input?.id as string) ?? ""),
+              lead: () => <ToolMark product="genesis" working={pending()} />,
             }}
           />
         }

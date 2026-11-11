@@ -1,3 +1,4 @@
+import { SessionWebTab } from "@/components/session/session-web-tab"
 import { For, Show } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -14,7 +15,11 @@ import {
   irisStripTabs,
   useIrisActiveSurface,
   useRequestIrisSurface,
+  registerBrowserPane,
 } from "@/components/session/session-iris-tab"
+
+// #193062: the IRIS panel draws the Browser product with this pane (see registerBrowserPane).
+registerBrowserPane(SessionWebTab)
 
 /**
  * The IRIS panel itself — one component, for every host (#192535). It used to exist only inside a

@@ -1,0 +1,59 @@
+<!doctype html>
+<!--
+  The native Browser isolation check (#193062), for a REAL desktop build. It only probes what IT
+  can reach; it sends nothing anywhere. Serve it from your Mac and open it in IRIS's Browser tab:
+    cd packages/desktop/test-fixtures && python3 -m http.server 8765
+    → Browser tab → http://localhost:8765/browser-hostile.html
+  Every row must read BLOCKED. Any row reading REACHED is a release blocker.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width" />
+<title>IRIS browser isolation check</title>
+<style>
+  body { font: 13px ui-monospace, Menlo, monospace; margin: 16px; background: #fff; color: #111; }
+  td { padding: 4px 8px; border-bottom: 1px solid #ddd; }
+  .b { color: #0a7a2f; font-weight: 700; } .r { color: #b3261e; font-weight: 700; }
+</style>
+<h3>IRIS browser isolation check</h3>
+<table id="t"></table>
+<p id="sum"></p>
+<script>
+  const rows = []
+  const row = (name, reached, detail) => {
+    rows.push(reached)
+    const tr = document.createElement("tr")
+    tr.innerHTML = `<td>${name}</td><td class="${reached ? "r" : "b"}">${reached ? "REACHED" : "BLOCKED"}</td><td>${String(detail).slice(0, 160)}</td>`
+    document.getElementById("t").appendChild(tr)
+  }
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__?.invoke(cmd, args ?? {})
+  async function probe(name, fn) {
+    try {
+      const v = await fn()
+      row(name, v !== undefined && v !== null, v === undefined ? "no bridge" : JSON.stringify(v))
+    } catch (e) {
+      row(name, false, e && (e.message || e))
+    }
+  }
+  ;(async () => {
+    row("IPC bridge present (expected: yes, it is the main frame)", false, typeof window.__TAURI_INTERNALS__)
+    await probe("app command: engine_credentials (engine password)", () => invoke("engine_credentials"))
+    await probe("app command: cli_health", () => invoke("cli_health"))
+    await probe("app command: iris_action daemon-status", () => invoke("iris_action", { action: "daemon-status" }))
+    await probe("app command: browser_cookie_domains", () => invoke("browser_cookie_domains"))
+    await probe("plugin: shell open", () => invoke("plugin:shell|open", { path: "https://example.com" }))
+    await probe("plugin: store load", () => invoke("plugin:store|load", { path: "x.json" }))
+    await probe("plugin: http fetch", () => invoke("plugin:http|fetch", { clientConfig: { url: "https://example.com", method: "GET" } }))
+    await probe("plugin: event emit to app", () => invoke("plugin:event|emit", { event: "iris-browser://state", payload: { url: "https://evil.example" } }))
+    await probe("engine over HTTP (no password)", async () => {
+      const port = window.__OPENCODE__?.port
+      if (!port) return undefined
+      const r = await fetch(`http://127.0.0.1:${port}/global/health`)
+      return r.ok ? r.status : undefined
+    })
+    try { window.parent.postMessage({ type: "iris-page-session", state: "signed_in" }, "*"); row("postMessage to the app", window.parent !== window, window.parent === window ? "no parent: top-level" : "has a parent") } catch (e) { row("postMessage to the app", false, e.message) }
+    row("window.__OPENCODE__ (app's injected globals)", !!window.__OPENCODE__, JSON.stringify(window.__OPENCODE__ ?? null))
+    const bad = rows.filter(Boolean).length
+    document.getElementById("sum").innerHTML = bad ? `<b class="r">${bad} REACHED — release blocker</b>` : `<b class="b">All blocked.</b>`
+    document.title = bad ? `ISOLATION FAIL ${bad}` : "ISOLATION OK"
+  })()
+</script>

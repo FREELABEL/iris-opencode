@@ -243,6 +243,35 @@ export type PageElement = {
   inViewport: boolean
   /** For a dropdown: what it can actually be set to. A closed set cannot be invented. */
   options?: string[]
+  /** What each option says (same order as options), when it differs from its value. */
+  optionLabels?: string[]
+  /** A radio or checkbox: whether it is chosen. */
+  checked?: boolean
+  /** The web address this element opens (its own link, or the link around it). */
+  href?: string
+  /** The site's ids on it or on its card: data-jk, data-id, data-product-id … */
+  ids?: Record<string, string>
+  /** Listed from an open pop-up; the page behind it is left out. */
+  inDialog?: boolean
+}
+
+/** A link as short as it can be read: a path on this page's site, the full address elsewhere. */
+export function shortHref(href: string, pageUrl?: string): string {
+  try {
+    const u = new URL(href)
+    const here = pageUrl ? new URL(pageUrl) : undefined
+    const s = here && here.origin === u.origin ? u.pathname + u.search + u.hash : href
+    return s.length > 120 ? s.slice(0, 119) + "…" : s
+  } catch {
+    return href.slice(0, 120)
+  }
+}
+
+/** "30 Austin: DoubleTree University Area": the value to pass AND what it means. */
+function optionText(e: PageElement, i: number): string {
+  const v = e.options![i]!
+  const l = e.optionLabels?.[i]
+  return l && l !== v ? `${v} "${l.slice(0, 40)}"` : v
 }
 
 const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
@@ -251,16 +280,23 @@ const SELECTABLE = new Set(["combobox", "listbox"])
 const SCROLLS = ["up", "down", "top", "bottom"] as const
 
 /** One line per element: what it is, what it says, and anything that makes it unusable. */
-export function renderElements(els: PageElement[]): string {
+export function renderElements(els: PageElement[], pageUrl?: string): string {
   if (!els.length) return "No interactive elements on this page."
 
-  return els
+  const head = els.some((e) => e.inDialog) ? "A pop-up is open: these are its controls (the page behind it is inert).\n" : ""
+  return head + els
     .map((e) => {
       const flags = [
         e.enabled ? "" : "disabled",
+        e.checked === true ? "checked" : e.checked === false ? "not checked" : "",
         e.inViewport ? "" : "off-screen",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
-        e.options?.length ? `options: ${e.options.slice(0, 12).join(", ")}${e.options.length > 12 ? " …" : ""}` : "",
+        e.options?.length
+          ? `options: ${e.options.slice(0, 12).map((_, i) => optionText(e, i)).join(", ")}${e.options.length > 12 ? ` … (${e.options.length} in all)` : ""}`
+          : "",
+        // What it IS: where it goes and the site's ids for the record (a job, a product).
+        e.href && e.role !== "textbox" ? `→ ${shortHref(e.href, pageUrl)}` : "",
+        e.ids ? Object.entries(e.ids).map(([k, v]) => `${k}=${v.slice(0, 40)}`).join(" ") : "",
       ].filter(Boolean)
 
       return `[${e.ref}] ${e.role.padEnd(10)} ${e.name.slice(0, 60)}${flags.length ? `  · ${flags.join(" · ")}` : ""}`
@@ -295,8 +331,10 @@ export function refuseOptionReason(els: PageElement[], ref: number, value: strin
   const options = el.options ?? []
   if (!options.length) return `[${ref}] has no options to choose from`
   if (options.includes(value)) return null
+  const want = value.trim().toLowerCase()
+  if (el.optionLabels?.some((l) => l.trim().toLowerCase() === want)) return null
 
-  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).join(", ")}`
+  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).map((_, i) => optionText(el, i)).join(", ")}`
 }
 
 /** Why this scroll cannot be done, or null. Four directions, named in the refusal. */
@@ -347,4 +385,48 @@ export function describeChange(before: PageState, after: PageState): string {
   }
 
   return parts.length ? parts.join("; ") : "nothing changed — same url, same text, same field values"
+}
+
+/**
+ * What inspect found, for the agent: the real addresses, each with where it came from, then the
+ * site's ids. An id is NOT an address: nothing here builds one from a pattern (#193242). If there
+ * is no link, it says so and says how to get one honestly.
+ */
+export function renderInspect(ref: number, i: {
+  tag: string
+  attributes: Record<string, string>
+  ids: Record<string, string>
+  links: { url: string; source: string; where: string }[]
+  ancestors: { tag: string; role?: string; id?: string; ids?: Record<string, string> }[]
+  canonical?: string
+  page: string
+}): string {
+  const lines = [`[${ref}] <${i.tag}> on ${i.page}`]
+  if (i.links.length) {
+    lines.push("links (real, from the page):")
+    for (const l of i.links) lines.push(`  ${l.url}  · ${l.source}: ${l.where}`)
+  } else {
+    lines.push("links: none on it or around it")
+  }
+  const ids = Object.entries(i.ids)
+  if (ids.length) lines.push(`ids: ${ids.map(([k, v]) => `${k}=${v}`).join(" ")}`)
+  if (i.canonical && i.canonical !== i.page) lines.push(`this page's canonical address: ${i.canonical}`)
+  const attrs = Object.entries(i.attributes).filter(([k]) => k !== "data-iris-ref")
+  if (attrs.length) lines.push(`attributes: ${attrs.slice(0, 20).map(([k, v]) => `${k}=${JSON.stringify(v.slice(0, 80))}`).join(" ")}`)
+  if (i.ancestors.length) {
+    lines.push(
+      `inside: ${i.ancestors
+        .slice(0, 6)
+        .map((a) => a.tag + (a.id ? `#${a.id}` : "") + (a.role ? `[${a.role}]` : "") + (a.ids ? ` {${Object.entries(a.ids).map(([k, v]) => `${k}=${v}`).join(" ")}}` : ""))
+        .join(" < ")}`,
+    )
+  }
+  if (!i.links.length) {
+    lines.push(
+      ids.length
+        ? "No address here, only ids. Don't build a link from an id: click it and read the address after, or say you have the id only."
+        : "No address here. Click it and read the address after, if you need one.",
+    )
+  }
+  return lines.join("\n")
 }

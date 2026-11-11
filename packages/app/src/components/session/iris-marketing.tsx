@@ -67,6 +67,11 @@ export type MarketingEmptyActions = {
   /** Check with the engine, then pin and open the page. Resolves with the outcome. */
   pin: (slug: string, label?: string, opts?: PinOptions) => Promise<PinResult>
   accountId: number
+  /**
+   * #193233: the action is a wizard and it is open. While true, Marketing hides everything else —
+   * the page search, the page list, the empty state's heading — so the wizard is all there is.
+   */
+  focus: (active: boolean) => void
 }
 
 const read = (key: string | null): MarketingPins => {
@@ -115,6 +120,9 @@ export function IrisMarketing(props: {
   }
 
   const [picking, setPicking] = createSignal(false)
+  // A wizard from emptyActions/pickerActions is open (#193233): nothing else is drawn beside it.
+  const [wizard, setWizard] = createSignal(false)
+  const ctx = (): MarketingEmptyActions => ({ pin: pinBySlug, accountId: (account() as { id: number }).id, focus: setWizard })
   const [renaming, setRenaming] = createSignal<string | null>(null)
   const open = createMemo(() => openPin(state()))
   const pinned = createMemo(() => new Set(state().pins.map((p) => p.slug)))
@@ -150,19 +158,23 @@ export function IrisMarketing(props: {
           )}
         </Match>
         <Match when={state().pins.length === 0}>
-          <div class="iris-mkt__empty" data-slot="marketing-empty">
+          <div class="iris-mkt__empty" classList={{ "iris-mkt__empty--wizard": wizard() }} data-slot="marketing-empty">
             <div class="iris-mkt__empty-head">
-              <div class="iris-pinned__title">Pin your review pages here</div>
-              <div class="iris-mkt__hint">
-                Pick one of your Genesis pages and it becomes a tab here. Only pages you own, or pages on a board you are a
-                member of, can be pinned.
-              </div>
+              <Show when={!wizard()}>
+                <div class="iris-pinned__title">Pin your review pages here</div>
+                <div class="iris-mkt__hint">
+                  Pick one of your Genesis pages and it becomes a tab here. Only pages you own, or pages on a board you are a
+                  member of, can be pinned.
+                </div>
+              </Show>
               {/* The slot for other ways in (#192627). Empty unless a caller passes emptyActions. */}
               <div class="iris-mkt__empty-actions" data-slot="marketing-empty-actions">
-                {props.emptyActions?.({ pin: pinBySlug, accountId: (account() as { id: number }).id })}
+                {props.emptyActions?.(ctx())}
               </div>
             </div>
-            <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} />
+            <Show when={!wizard()}>
+              <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} />
+            </Show>
           </div>
         </Match>
         <Match when={true}>
@@ -255,11 +267,11 @@ export function IrisMarketing(props: {
               when={!picking() && open()}
               keyed
               fallback={
-                <div class="iris-mkt__picker-wrap">
-                  <Show when={props.pickerActions}>
-                    {(slot) => slot()({ pin: pinBySlug, accountId: (account() as { id: number }).id })}
+                <div class="iris-mkt__picker-wrap" classList={{ "iris-mkt__picker-wrap--wizard": wizard() }}>
+                  <Show when={props.pickerActions}>{(slot) => slot()(ctx())}</Show>
+                  <Show when={!wizard()}>
+                    <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} onClose={() => setPicking(false)} />
                   </Show>
-                  <PagePicker doFetch={props.doFetch} pinned={pinned()} onPick={pick} onClose={() => setPicking(false)} />
                 </div>
               }
             >

@@ -5,7 +5,9 @@ import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
-import { PageSession } from "@/iris/browser-driver"
+import { PageSession, savedProfileDir, type ScriptedPage } from "@/iris/browser-driver"
+import { PanelPage } from "@/iris/panel-page"
+import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
@@ -17,6 +19,7 @@ import {
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
+  renderInspect,
   windowOfLines,
 } from "@/iris/browser-verbs"
 import { ARTIFACT_EVENT } from "./genesis-artifact"
@@ -49,6 +52,7 @@ export const Parameters = Schema.Struct({
     "find",
     "window",
     "elements",
+    "inspect",
     "click",
     "type",
     "select",
@@ -56,6 +60,18 @@ export const Parameters = Schema.Struct({
     "screenshot",
     "close",
   ]).annotate({ description: "What to do" }),
+  target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
+    description:
+      "Which browser. Leave it out to use the one the person can see: in IRIS Desktop that is panel (the Browser pane, signed in as them, only on sites they allowed); elsewhere agent. agent: your own separate Chrome, invisible and logged out unless you pass profile/visible",
+  }),
+  profile: Schema.optional(Schema.Literals(["fresh", "saved"])).annotate({
+    description:
+      "target agent, on open: fresh (default) is logged out of everything and forgotten on close. saved keeps the logins the person made in your browser window, between runs",
+  }),
+  visible: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "target agent, on open: true opens your browser as a window on the person's screen, so they can watch, take over, or sign in once (with profile saved). Default false: invisible",
+  }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
@@ -64,7 +80,7 @@ export const Parameters = Schema.Struct({
   }),
   line: Schema.optional(Schema.Number).annotate({ description: "Line number to read around (window)" }),
   radius: Schema.optional(Schema.Number).annotate({ description: "Lines either side, default 5 (window)" }),
-  ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type)" }),
+  ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type, select, inspect)" }),
   text: Schema.optional(Schema.String).annotate({ description: "What to type (type)" }),
   value: Schema.optional(Schema.String).annotate({ description: "Option to choose (select)" }),
   direction: Schema.optional(Schema.Literals(["up", "down", "top", "bottom"])).annotate({
@@ -86,6 +102,8 @@ type Metadata = {
   truncated?: boolean
   artifact?: string
   bytes?: number
+  /** The address changed during this call (a click, a route change inside the site). */
+  navigated?: boolean
 }
 
 /**
@@ -114,7 +132,7 @@ const DEFAULT_MAX_CHARS = 3000
  * session, and a browser it opened under that key would be invisible to the parent — and left
  * running. A process the user never started and cannot see is the thing to avoid.
  */
-const sessionsOpen = new Map<string, PageSession>()
+const sessionsOpen = new Map<string, ScriptedPage>()
 
 export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
   "browser",
@@ -131,37 +149,85 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
     return {
       description: DESCRIPTION,
       parameters: Parameters,
-      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
-        Effect.gen(function* () {
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) => {
+        // The page this call worked on, and where it was when the call began: every answer ends
+        // with where the page is NOW, read fresh (#193242: an Indeed click changed the address
+        // and nothing said so).
+        let used: { page: ScriptedPage; startUrl?: string } | undefined
+        return Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
-          const page = sessionsOpen.get(session)
+          const target = params.target ?? Panel.defaultBrowser(Panel.get(session))
+          // One page per target per root session: the pane and the agent's Chrome never share.
+          const key = target === "panel" ? `${session}:panel` : session
+          let page = sessionsOpen.get(key)
+
+          if (target === "panel") {
+            // The pane is the person's, signed in as them. Whether the agent may click or type
+            // there is THEIR call, made in the app per site (#193186), not this tool's.
+            if (!page && params.action !== "close") {
+              const directory = (yield* InstanceState.context).directory
+              const panel = new PanelPage(
+                (command, timeoutMs) => Panel.send({ directory, session, command, timeoutMs }),
+                (o) => Panel.explainSilence(o, session),
+              )
+              if (params.action !== "open") {
+                const attached = yield* attempt(() => panel.attach())
+                if (!attached.ok) return yield* Effect.fail(new Error(attached.message))
+              }
+              sessionsOpen.set(key, panel)
+              page = panel
+            }
+          }
 
           if (params.action === "close") {
             if (!page) return { title: "browser", output: "No browser was open.", metadata: {} }
-            yield* attempt(() => page.close())
-            sessionsOpen.delete(session)
+            yield* attempt(() => page!.close())
+            sessionsOpen.delete(key)
+            if (target === "panel") {
+              return { title: "browser pane", output: "Done with the Browser pane. The page stays open there: it is the person's.", metadata: {} }
+            }
             return { title: "browser closed", output: "The browser is closed.", metadata: {} }
           }
 
           if (params.action === "open") {
             if (!params.url) return yield* Effect.fail(new Error("open needs a url"))
-            const refusal = page?.currentUrl
-              ? refuseNavigationReason(page.currentUrl, params.url)
-              : refuseUrlReason(params.url)
+            // The pane is opened by a person asking for a page, deliberately; the cross-origin rule
+            // exists for navigation the PAGE chooses (clicks), which the pane can't do yet.
+            const refusal =
+              target !== "panel" && page?.currentUrl
+                ? refuseNavigationReason(page.currentUrl, params.url)
+                : refuseUrlReason(params.url)
             if (refusal) return yield* Effect.fail(new Error(refusal))
 
-            const p = page ?? new PageSession()
+            // The agent's own Chrome (B3, #193187): which profile, and whether it has a window.
+            // Asking for a different kind than the one open reopens it, never silently keeps the old.
+            const want = { saved: params.profile === "saved", visible: params.visible === true }
+            if (target === "agent" && page instanceof PageSession) {
+              const have = page.kind
+              if (have.saved !== want.saved || have.visible !== want.visible) {
+                yield* attempt(() => page!.close())
+                sessionsOpen.delete(key)
+                page = undefined
+              }
+            }
+            const p: ScriptedPage =
+              page ??
+              new PageSession({ headless: !want.visible, profileDir: want.saved ? savedProfileDir() : undefined })
             const opened = yield* attempt(() => p.open(params.url!))
             if (!opened.ok) {
-              yield* attempt(() => p.close())
+              if (target !== "panel") yield* attempt(() => p.close())
               return yield* Effect.fail(new Error(opened.message))
             }
             const landed = opened.value
-            sessionsOpen.set(session, p)
+            sessionsOpen.set(key, p)
 
+            const how =
+              p instanceof PageSession
+                ? `\n(${p.kind.visible ? "a window on the person's screen" : "invisible"}, ${p.kind.saved ? "saved profile: their earlier sign-ins in it apply" : "fresh profile: logged out"})`
+                : "\n(in the person's Browser pane)"
             return {
               title: landed.title || landed.url,
-              output: `opened ${landed.url}\ntitle: ${landed.title || "(none)"}\n\nRead it with action=read, or search it with action=find.`,
+              output: `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
               metadata: { url: landed.url, title: landed.title },
             }
           }
@@ -169,6 +235,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           if (!page) {
             return yield* Effect.fail(new Error("no page is open — call action=open with a url first"))
           }
+          used = { page, startUrl: page.currentUrl ?? undefined }
 
           if (params.action === "read") {
             const got = yield* attempt(() => page.text())
@@ -213,8 +280,20 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
 
             return {
               title: `${got.value.length} elements`,
-              output: `${renderElements(got.value)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}.`,
+              output: `${renderElements(got.value, page.currentUrl ?? undefined)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}. To see where an item leads or its id without clicking: {"action":"inspect","ref":N}.`,
               metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
+            }
+          }
+
+          if (params.action === "inspect") {
+            if (!params.ref) return yield* Effect.fail(new Error("inspect needs a ref — run action=elements first"))
+            const got = yield* attempt(() => page.inspect(params.ref!))
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            if (!got.value) return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+            return {
+              title: `inspect [${params.ref}]`,
+              output: renderInspect(params.ref, got.value),
+              metadata: { ref: params.ref },
             }
           }
 
@@ -286,6 +365,11 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               )
             }
 
+            // In the person's pane an irreversible click is theirs to allow, once, in the app:
+            // `confirm: true` above only means the agent is asking (#193186).
+            if (page instanceof PanelPage && params.action === "click" && looksIrreversible(el.name)) {
+              page.confirmNext = el.name.slice(0, 80)
+            }
             const before = yield* attempt(() => page.state())
             if (!before.ok) return yield* Effect.fail(new Error(before.message))
             const acted =
@@ -326,7 +410,19 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           const shot = yield* attempt(() => page.screenshot())
           if (!shot.ok) return yield* Effect.fail(new Error(shot.message))
           const png = shot.value
-          const dataUri = `data:image/png;base64,${Buffer.from(png).toString("base64")}`
+          // The pane answers with JPEG, Chrome with PNG: read the bytes, not an assumption.
+          const mime = png[0] === 0xff && png[1] === 0xd8 ? "image/jpeg" : "image/png"
+          const dataUri = `data:${mime};base64,${Buffer.from(png).toString("base64")}`
+          // The pane is already on the person's screen: the agent looks, nothing is saved, and the
+          // side panel stays on the Browser (an artifact would switch it to Genesis).
+          if (target === "panel") {
+            return {
+              title: `Looked at ${page.currentUrl ?? "the page"}`,
+              output: "Here is the Browser pane as the person sees it (attached).",
+              attachments: [{ type: "file" as const, mime, url: dataUri, filename: "browser.jpg" }],
+              metadata: { bytes: png.length, url: page.currentUrl ?? undefined },
+            }
+          }
           if (dataUri.length > Artifacts.MAX_CONTENT_BYTES) {
             return yield* Effect.fail(
               new Error(`the screenshot is ${Math.round(png.length / 1024)} KB, too large to save — narrow the page first`),
@@ -353,10 +449,43 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
 
           return {
             title,
-            output: `Saved the screenshot to the Artifacts pane as ${meta.id} (revision ${meta.revision}).`,
+            output: `Here is the page as the person sees it (attached). Also saved to the Artifacts pane as ${meta.id} (revision ${meta.revision}).`,
+            // The agent SEES it: a map, a chart, a canvas has no text to read.
+            attachments: [{ type: "file" as const, mime, url: dataUri, filename: "screenshot" }],
             metadata: { artifact: meta.id, bytes: png.length, url: page.currentUrl ?? undefined },
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          Effect.flatMap((result) =>
+            Effect.gen(function* () {
+              if (!used) return result
+              const now = yield* attempt(() => used!.page.where())
+              if (!now.ok || !now.value.url) return result
+              const moved = !!used.startUrl && now.value.url !== used.startUrl
+              const where = `\n\npage: ${now.value.url}${now.value.title ? ` ("${now.value.title.slice(0, 80)}")` : ""}${moved ? ` · the address changed (was ${used.startUrl})` : ""}`
+              return {
+                ...result,
+                output: result.output + where,
+                metadata: { ...result.metadata, url: now.value.url, ...(moved ? { navigated: true } : {}) },
+              }
+            }),
+          ),
+          // One line per call in engine.log, so a slow or silent Browser leaves a trace (2026-11-11:
+          // a 45 s stall on Vonlane left none). No page text, no typed text: action, target, timing.
+          Effect.tap(() =>
+            Effect.logInfo("browser", { action: params.action, target: params.target ?? "default", ok: true, ref: params.ref }),
+          ),
+          Effect.tapError((e) =>
+            Effect.logWarning("browser", {
+              action: params.action,
+              target: params.target ?? "default",
+              ok: false,
+              error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+            }),
+          ),
+          Effect.withLogSpan("browser"),
+          Effect.orDie,
+        )
+      },
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )
