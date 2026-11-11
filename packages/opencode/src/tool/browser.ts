@@ -5,7 +5,7 @@ import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
-import { PageSession, type ScriptedPage } from "@/iris/browser-driver"
+import { PageSession, savedProfileDir, type ScriptedPage } from "@/iris/browser-driver"
 import { PanelPage } from "@/iris/panel-page"
 import { Panel } from "@/iris/panel"
 import {
@@ -61,6 +61,14 @@ export const Parameters = Schema.Struct({
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
       "Which browser. agent (default): your own logged-out browser, invisible to the person. panel: the IRIS Browser pane the person is looking at, signed in as them; only on sites they allowed, read-only for now",
+  }),
+  profile: Schema.optional(Schema.Literals(["fresh", "saved"])).annotate({
+    description:
+      "target agent, on open: fresh (default) is logged out of everything and forgotten on close. saved keeps the logins the person made in your browser window, between runs",
+  }),
+  visible: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "target agent, on open: true opens your browser as a window on the person's screen, so they can watch, take over, or sign in once (with profile saved). Default false: invisible",
   }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
   query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
@@ -146,13 +154,11 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           let page = sessionsOpen.get(key)
 
           if (target === "panel") {
-            // The pane is the person's, signed in as them. Acting there waits for B2 (#193144);
-            // the app refuses it too, so this is a clear sentence, not the only guard.
-            if (params.action === "click" || params.action === "type" || params.action === "select") {
+            // The pane is the person's, signed in as them. Whether the agent may click or type
+            // there is THEIR call, made in the app per site (#193186), not this tool's.
+            if (params.action === "screenshot") {
               return yield* Effect.fail(
-                new Error(
-                  `${params.action} isn't available in the Browser pane yet (it can only read). Tell the person what to ${params.action} and where, or use target agent on a public page.`,
-                ),
+                new Error("screenshots of the Browser pane aren't available yet: use read or find, or target agent"),
               )
             }
             if (!page && params.action !== "close") {
@@ -190,7 +196,20 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
                 : refuseUrlReason(params.url)
             if (refusal) return yield* Effect.fail(new Error(refusal))
 
-            const p: ScriptedPage = page ?? new PageSession()
+            // The agent's own Chrome (B3, #193187): which profile, and whether it has a window.
+            // Asking for a different kind than the one open reopens it, never silently keeps the old.
+            const want = { saved: params.profile === "saved", visible: params.visible === true }
+            if (target === "agent" && page instanceof PageSession) {
+              const have = page.kind
+              if (have.saved !== want.saved || have.visible !== want.visible) {
+                yield* attempt(() => page!.close())
+                sessionsOpen.delete(key)
+                page = undefined
+              }
+            }
+            const p: ScriptedPage =
+              page ??
+              new PageSession({ headless: !want.visible, profileDir: want.saved ? savedProfileDir() : undefined })
             const opened = yield* attempt(() => p.open(params.url!))
             if (!opened.ok) {
               if (target !== "panel") yield* attempt(() => p.close())
@@ -199,9 +218,13 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const landed = opened.value
             sessionsOpen.set(key, p)
 
+            const how =
+              p instanceof PageSession
+                ? `\n(${p.kind.visible ? "a window on the person's screen" : "invisible"}, ${p.kind.saved ? "saved profile: their earlier sign-ins in it apply" : "fresh profile: logged out"})`
+                : "\n(in the person's Browser pane)"
             return {
               title: landed.title || landed.url,
-              output: `opened ${landed.url}\ntitle: ${landed.title || "(none)"}\n\nRead it with action=read, or search it with action=find.`,
+              output: `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
               metadata: { url: landed.url, title: landed.title },
             }
           }
@@ -326,6 +349,11 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               )
             }
 
+            // In the person's pane an irreversible click is theirs to allow, once, in the app:
+            // `confirm: true` above only means the agent is asking (#193186).
+            if (page instanceof PanelPage && params.action === "click" && looksIrreversible(el.name)) {
+              page.confirmNext = el.name.slice(0, 80)
+            }
             const before = yield* attempt(() => page.state())
             if (!before.ok) return yield* Effect.fail(new Error(before.message))
             const acted =

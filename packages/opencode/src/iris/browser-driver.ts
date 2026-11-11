@@ -18,8 +18,8 @@
  * the refusals move with it.
  */
 import { spawn, type ChildProcess } from "child_process"
-import { mkdtemp, readFile, rm } from "fs/promises"
-import { tmpdir } from "os"
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
+import { homedir, tmpdir } from "os"
 import path from "path"
 
 /** Where Chrome lives, in the order a machine is likely to have it. */
@@ -44,6 +44,32 @@ export async function findChrome(): Promise<string | null> {
 }
 
 export class BrowserUnavailable extends Error {}
+
+/**
+ * The agent's SAVED profile (#193187, B3): where logins the person made in the agent's Chrome are
+ * kept between runs. Never the person's own Chrome profile: a directory of its own, owner-only.
+ */
+export function savedProfileDir(): string {
+  return process.env["IRIS_BROWSER_PROFILE_DIR"] || path.join(homedir(), ".iris", "browser", "agent-profile")
+}
+
+/**
+ * Is another Chrome already using this profile? Chrome leaves a `SingletonLock` symlink whose
+ * target ends in "-<pid>". A second launch on a locked profile hands its window to the first
+ * process and exits, which looks like a hang ("never reported a DevTools port"): refuse with a
+ * sentence instead. A lock whose process is gone is stale and does not count.
+ */
+export async function profileInUse(dir: string): Promise<boolean> {
+  const target = await readlink(path.join(dir, "SingletonLock")).catch(() => undefined)
+  const pid = Number(target?.split("-").pop())
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 
 type CdpMessage = { id?: number; method?: string; params?: unknown; result?: any; error?: { message: string } }
 
@@ -220,12 +246,25 @@ export abstract class ScriptedPage {
  */
 export class PageSession extends ScriptedPage {
   private proc?: ChildProcess
+  private port?: number
   private ws?: WebSocket
   private profileDir?: string
   private nextId = 1
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
-  constructor(private readonly opts: { headless?: boolean; timeoutMs?: number } = {}) {
+  constructor(
+    private readonly opts: {
+      headless?: boolean
+      timeoutMs?: number
+      /** A profile kept between runs (B3). Absent: a throwaway profile, deleted on close. */
+      profileDir?: string
+    } = {},
+  ) {
     super()
+  }
+
+  /** Whether this session keeps its profile (logins persist) and shows a window. */
+  get kind(): { saved: boolean; visible: boolean } {
+    return { saved: !!this.opts.profileDir, visible: this.opts.headless === false }
   }
 
   private get timeout() {
@@ -240,7 +279,21 @@ export class PageSession extends ScriptedPage {
         "no Chrome found on this machine — install Google Chrome, or set IRIS_BROWSER_CHROME to a Chromium binary",
       )
     }
-    this.profileDir = await mkdtemp(path.join(tmpdir(), "iris-browser-"))
+    if (this.opts.profileDir) {
+      const dir = this.opts.profileDir
+      await mkdir(dir, { recursive: true, mode: 0o700 })
+      await chmod(dir, 0o700).catch(() => {})
+      if (await profileInUse(dir)) {
+        throw new BrowserUnavailable(
+          "the agent's saved browser profile is already open in another session: close that one first (action=close), or use profile fresh",
+        )
+      }
+      // The port file from the LAST run would be read before Chrome writes this run's.
+      await rm(path.join(dir, "DevToolsActivePort"), { force: true }).catch(() => {})
+      this.profileDir = dir
+    } else {
+      this.profileDir = await mkdtemp(path.join(tmpdir(), "iris-browser-"))
+    }
     const args = [
       "--remote-debugging-port=0",
       `--user-data-dir=${this.profileDir}`,
@@ -249,11 +302,18 @@ export class PageSession extends ScriptedPage {
       "--disable-extensions",
       "--disable-background-networking",
       "--window-size=1280,900",
+      // macOS: never touch the person's Keychain. Without this, the first persistent cookie makes
+      // Chrome ask for "Chrome Safe Storage", a system prompt that blocks the browser until someone
+      // answers it (measured #193187: every navigate timed out). The cost: the agent profile's
+      // cookies are encrypted with Chrome's fixed mock key, so the profile folder's 0700 is what
+      // protects a saved sign-in. It is the agent's profile, never the person's own Chrome.
+      ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
       ...(this.opts.headless === false ? [] : ["--headless=new"]),
       "about:blank",
     ]
     this.proc = spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe"] })
     const port = await this.readDevToolsPort()
+    this.port = port
     // The BROWSER endpoint answers Target.* and nothing else — Runtime.evaluate and
     // Page.captureScreenshot live on a PAGE target, and asking the wrong one returns
     // "'Runtime.evaluate' wasn't found", which reads like a protocol version problem.
@@ -272,6 +332,24 @@ export class PageSession extends ScriptedPage {
     })
     this.ws.addEventListener("message", (e) => this.onMessage(String(e.data)))
     await this.send("Page.enable")
+  }
+
+  /** Ask Chrome to quit in order (flushes cookies), over its BROWSER endpoint. */
+  private async browserClose(port: number): Promise<void> {
+    const v = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl?: string }
+    if (!v.webSocketDebuggerUrl) return
+    const ws = new WebSocket(v.webSocketDebuggerUrl)
+    await new Promise<void>((resolve) => {
+      const done = () => resolve()
+      const t = setTimeout(done, 3000)
+      ws.addEventListener("open", () => ws.send(JSON.stringify({ id: 1, method: "Browser.close" })))
+      ws.addEventListener("message", () => (clearTimeout(t), done()))
+      ws.addEventListener("close", () => (clearTimeout(t), done()))
+      ws.addEventListener("error", () => (clearTimeout(t), done()))
+    })
+    try {
+      ws.close()
+    } catch {}
   }
 
   /** Chrome writes the port it chose into the profile; poll for it rather than parse stderr. */
@@ -398,12 +476,28 @@ export class PageSession extends ScriptedPage {
       // closing a closed socket is not an error worth surfacing
     }
     this.ws = undefined
-    this.proc?.kill()
+    const proc = this.proc
     this.proc = undefined
-    this.currentUrl = null
-    if (this.profileDir) {
-      await rm(this.profileDir, { recursive: true, force: true }).catch(() => {})
-      this.profileDir = undefined
+    if (proc && proc.exitCode === null) {
+      const exited = new Promise<void>((resolve) => proc.once("exit", () => resolve()))
+      // A SAVED profile must be shut down CLEANLY: Chrome writes cookies to disk lazily and SIGTERM
+      // ends it before it does (measured #193187: close took 70 ms and the sign-in was gone on the
+      // next launch). Browser.close is Chrome's own orderly quit; SIGTERM is only the fallback.
+      if (this.opts.profileDir && this.port) {
+        await this.browserClose(this.port).catch(() => {})
+        await Promise.race([exited, Bun.sleep(8000)])
+      }
+      if (proc.exitCode === null) {
+        proc.kill()
+        if (this.opts.profileDir) await Promise.race([exited, Bun.sleep(5000)])
+      }
     }
+    this.port = undefined
+    this.currentUrl = null
+    // A throwaway profile is deleted; a saved one is the point of saving it (B3).
+    if (this.profileDir && !this.opts.profileDir) {
+      await rm(this.profileDir, { recursive: true, force: true }).catch(() => {})
+    }
+    this.profileDir = undefined
   }
 }
