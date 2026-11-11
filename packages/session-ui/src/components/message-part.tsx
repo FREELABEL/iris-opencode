@@ -2038,6 +2038,22 @@ ToolRegistry.register({
   },
 })
 
+/**
+ * The web-search mark: a small globe before "Exa Web Search", so it reads as "IRIS is out on the
+ * internet", not looking in your files. Its meridian turns while the search runs.
+ */
+function WebGlobe(props: { spinning: boolean }) {
+  return (
+    <span data-slot="web-globe" data-spinning={props.spinning ? "true" : undefined} aria-hidden="true">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
+        <circle cx="8" cy="8" r="6.25" />
+        <path d="M1.9 6h12.2M1.9 10h12.2" stroke-linecap="round" />
+        <ellipse data-slot="web-globe-meridian" cx="8" cy="8" rx="2.6" ry="6.25" />
+      </svg>
+    </span>
+  )
+}
+
 ToolRegistry.register({
   name: "websearch",
   render(props) {
@@ -2057,6 +2073,7 @@ ToolRegistry.register({
           title: title(),
           subtitle: query(),
           subtitleClass: "exa-tool-query",
+          lead: (pending) => <WebGlobe spinning={pending} />,
         }}
       >
         <ExaOutput output={props.output} />

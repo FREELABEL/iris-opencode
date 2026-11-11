@@ -356,3 +356,32 @@ body:not([data-new-layout]) {
     }
   }
 }
+
+/* The web-search globe (message-part WebGlobe): IRIS is searching the internet. */
+[data-slot="web-globe"] {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  align-self: center;
+  color: var(--text-weak, currentColor);
+}
+[data-slot="web-globe"][data-spinning] {
+  color: var(--text-interactive-base, #14b8a6);
+}
+[data-slot="web-globe"] [data-slot="web-globe-meridian"] {
+  transform-origin: 8px 8px;
+  transform-box: view-box;
+}
+[data-slot="web-globe"][data-spinning] [data-slot="web-globe-meridian"] {
+  animation: web-globe-turn 1.6s linear infinite;
+}
+@keyframes web-globe-turn {
+  0% { transform: scaleX(1); }
+  25% { transform: scaleX(0.05); }
+  50% { transform: scaleX(1); }
+  75% { transform: scaleX(1.9); opacity: 0.35; }
+  100% { transform: scaleX(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="web-globe"][data-spinning] [data-slot="web-globe-meridian"] { animation: none; }
+}
