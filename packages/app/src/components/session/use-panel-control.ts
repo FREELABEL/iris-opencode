@@ -11,6 +11,8 @@ import {
   hostOf,
   noteActivity,
   noteAsked,
+  browserMode,
+  recentlyDeclined,
   originOf,
   pageRefusal,
   takenOverSites,
@@ -60,6 +62,7 @@ type PageCommand =
       doing?: string
     }
   | { action: "page"; op: "open"; url: string }
+  | { action: "page"; op: "screenshot" }
 
 /** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
 const SETTLE_MS = 5000
@@ -111,6 +114,9 @@ export function usePanelControl(input: { open: () => boolean }) {
       artifact: irisOpenArtifact(),
       url: webUrl() ?? undefined,
       card: irisOpenCard(),
+      // The Browser pane can take the agent's page commands (#193145): the engine's browser tool
+      // defaults to it instead of a hidden Chrome when this is true.
+      browser: !!platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true),
     }
   }
 
@@ -298,7 +304,22 @@ export function usePanelControl(input: { open: () => boolean }) {
       }
       const s = await nb.state()
       const origin = originOf(s?.url)
-      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites() })
+      if (cmd.op === "screenshot") {
+        // Looking is reading: the same per-site Allow (or Always allow).
+        const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+        if (no && recentlyDeclined(origin)) return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+        if (no) {
+          if (origin && !takenOverSites().includes(origin)) noteAsked(origin, "read")
+          return reply({ error: no })
+        }
+        if (!nb.screenshot) return reply({ error: "this IRIS can't take pictures of the Browser yet: use read or find" })
+        noteActivity(origin!, "looking at the page", "read")
+        return reply({ result: JSON.stringify({ ok: true, value: await nb.screenshot() }) })
+      }
+      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+      if (why && recentlyDeclined(origin)) {
+        return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+      }
       if (why) {
         // Offer the missing permission right there in the strip (never while the person has the wheel).
         if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)
@@ -311,7 +332,7 @@ export function usePanelControl(input: { open: () => boolean }) {
           return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
         }
         // They may have taken over or stopped while the prompt was up.
-        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites() })
+        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
         if (again) return reply({ error: again })
       }
       noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
@@ -378,6 +399,7 @@ export function sameSite(a: string | undefined, b: string | undefined): boolean 
 
 async function waitForPage(nb: NativeBrowser, url: string, before: string | undefined) {
   const started = Date.now()
+  const stillOn = (u?: string) => (u && u !== "about:blank" ? ` The pane still shows ${u}.` : "")
   while (Date.now() - started < 20_000) {
     await new Promise((r) => setTimeout(r, 300))
     const s = await nb.state().catch(() => null)
@@ -385,8 +407,18 @@ async function waitForPage(nb: NativeBrowser, url: string, before: string | unde
       // The address changes before the page has painted: give it a moment, then read the title.
       await new Promise((r) => setTimeout(r, 800))
       const now = (await nb.state().catch(() => null)) ?? s
+      // A page that fails to load puts the pane back on the page it was on: never report THAT
+      // page as where we landed (Vonlane, 2026-11-11: www.vonlane.com "opened" Google Maps).
+      if (!sameSite(now.url, url)) {
+        throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(now.url)} Try the address without www, or the site's main page.`)
+      }
       return { url: now.url, title: now.title ?? "" }
     }
+    // Gave up loading and went back: say so now, not after 20 s.
+    if (s && !s.loading && s.url === before && Date.now() - started > 6_000) {
+      throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(s.url)} Try the address without www, or the site's main page.`)
+    }
   }
-  throw new Error(`the Browser pane did not reach ${url} within 20 s`)
+  const last = await nb.state().catch(() => null)
+  throw new Error(`${url} didn't load within 20 s.${stillOn(last?.url)}`)
 }

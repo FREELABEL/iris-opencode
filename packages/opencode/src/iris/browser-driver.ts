@@ -17,6 +17,7 @@
  * can never be. One place decides what may be opened; if that place moves, the tests that prove
  * the refusals move with it.
  */
+import { withCursor } from "./agent-cursor"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -103,7 +104,7 @@ export abstract class ScriptedPage {
    * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
    */
   async elements(limit = 150): Promise<
-    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[] }>
+    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[]; optionLabels?: string[] }>
   > {
     const js = `(() => {
       const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
@@ -136,11 +137,14 @@ export abstract class ScriptedPage {
         ref++
         if (ref > ${limit}) break
         el.setAttribute('data-iris-ref', String(ref))
-        const options = el.tagName.toLowerCase() === 'select'
-          ? Array.from(el.options).map((o) => o.value).slice(0, 60)
-          : undefined
+        const isSelect = el.tagName.toLowerCase() === 'select'
+        const opts = isSelect ? Array.from(el.options).slice(0, 60) : []
+        const options = isSelect ? opts.map((o) => o.value) : undefined
+        // What a person reads in the dropdown: "Austin: DoubleTree University Area", not "30".
+        const optionLabels = isSelect ? opts.map((o) => (o.label || o.textContent || '').trim()) : undefined
         out.push({
           options,
+          optionLabels,
           ref,
           role: roleOf(el),
           name: nameOf(el),
@@ -212,7 +216,10 @@ export abstract class ScriptedPage {
       `(() => {
         const el = document.querySelector('[data-iris-ref="${ref}"]')
         if (!el) return false
-        el.value = ${JSON.stringify(value)}
+        const want = ${JSON.stringify(value)}
+        // A value or the words a person sees: both pick the same option.
+        const opt = el.options ? Array.from(el.options).find((o) => o.value === want) || Array.from(el.options).find((o) => (o.label || o.textContent || '').trim().toLowerCase() === want.trim().toLowerCase()) : null
+        el.value = opt ? opt.value : want
         el.dispatchEvent(new Event('input', { bubbles: true }))
         el.dispatchEvent(new Event('change', { bubbles: true }))
         return true
@@ -266,6 +273,20 @@ export class PageSession extends ScriptedPage {
   get kind(): { saved: boolean; visible: boolean } {
     return { saved: !!this.opts.profileDir, visible: this.opts.headless === false }
   }
+  // A VISIBLE window is watched by the person: IRIS's cursor glides to what it acts on there too.
+  // Headless, nobody is watching, so no glide and no wait.
+  override clickRef(ref: number) {
+    return this.kind.visible ? withCursor((e) => this.evaluate(e), ref, () => super.clickRef(ref)) : super.clickRef(ref)
+  }
+  override typeRef(ref: number, text: string) {
+    return this.kind.visible ? withCursor((e) => this.evaluate(e), ref, () => super.typeRef(ref, text)) : super.typeRef(ref, text)
+  }
+  override selectRef(ref: number, value: string) {
+    return this.kind.visible
+      ? withCursor((e) => this.evaluate(e), ref, () => super.selectRef(ref, value))
+      : super.selectRef(ref, value)
+  }
+
 
   private get timeout() {
     return this.opts.timeoutMs ?? 30_000

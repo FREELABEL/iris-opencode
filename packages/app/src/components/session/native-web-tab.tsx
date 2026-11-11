@@ -6,6 +6,8 @@ import {
   answerConfirm,
   askedSite,
   browserActivity,
+  browserMode,
+  setBrowserMode,
   browserGrants,
   dismissAsked,
   grantSite,
@@ -18,9 +20,14 @@ import {
   takenOverSites,
 } from "./browser-grants"
 import { webReloadKey, webUrl } from "./web-nav"
+import { loadSignedIn, shouldRedo, signInWithChrome, type SignedIn } from "./browser-import"
 
 /** The last chat link opened, across remounts (one native view, one link history). */
 let lastLink: string | undefined
+/** Where the Browser forgets on quit (macOS 13), the Chrome sign-ins come back once per launch. */
+let redone = false
+/** Whether this computer has Chrome sign-ins to bring in: asked once per launch (cheap, no prompt). */
+let chromeFound: Promise<boolean> | undefined
 
 /**
  * The Browser tab on desktop, spike #193062 (epic #193051).
@@ -43,6 +50,25 @@ export function NativeWebTab(props: {
   const [page, setPage] = createSignal<NativeBrowserState | null>(null)
   const [opened, setOpened] = createSignal(false)
   const [error, setError] = createSignal<string>()
+  // Sign in with Chrome (S3b): one button, then the Mac's own prompt, then done.
+  const [hasChrome, setHasChrome] = createSignal(false)
+  const [signedIn, setSignedIn] = createSignal<SignedIn | undefined>(loadSignedIn())
+  const [chrome, setChrome] = createSignal<"idle" | "working" | "denied" | "error">("idle")
+  const [notice, setNotice] = createSignal<string>()
+  const signIn = async (quiet = false) => {
+    if (chrome() === "working") return
+    if (!quiet) setChrome("working")
+    const r = await signInWithChrome(props.browser)
+    if (r.ok) {
+      setSignedIn(loadSignedIn())
+      setChrome("idle")
+      setNotice(`Signed in to ${r.sites} site${r.sites === 1 ? "" : "s"} from Chrome`)
+      setTimeout(() => setNotice(undefined), 4000)
+      if (opened()) void props.browser.go("reload")
+      return
+    }
+    setChrome(quiet ? "idle" : r.reason === "denied" ? "denied" : r.reason === "none" ? "idle" : "error")
+  }
   let body!: HTMLDivElement
   let input!: HTMLInputElement
   let last: NativeBrowserBounds | undefined
@@ -56,6 +82,7 @@ export function NativeWebTab(props: {
       asked: askedSite(),
       takenOver: takenOverSites(),
       activity: browserActivity(),
+      always: browserMode() === "always",
     })
   const activityHere = () => {
     const a = browserActivity()
@@ -142,6 +169,17 @@ export function NativeWebTab(props: {
     window.addEventListener("resize", schedule)
     document.addEventListener("visibilitychange", schedule)
     const off = props.browser.onState(report)
+    if (props.browser.importSources) {
+      chromeFound ??= props.browser
+        .importSources()
+        .then((l) => l.length > 0)
+        .catch(() => false)
+      void chromeFound.then(setHasChrome)
+    }
+    if (!redone && shouldRedo(signedIn())) {
+      redone = true
+      void signIn(true)
+    }
     // Switching products unmounts this pane but not the native view: pick its page back up
     // instead of showing the start tiles over a page that is still loaded.
     void props.browser
@@ -211,6 +249,11 @@ export function NativeWebTab(props: {
           }}
           onFocus={(e) => e.currentTarget.select()}
         />
+        <Show when={opened() && hasChrome() && !signedIn()}>
+          <button type="button" class="session-web__bar-chrome" data-slot="browser-signins" onClick={() => signIn()}>
+            Sign in with Chrome
+          </button>
+        </Show>
         <IconButton
           icon="square-arrow-top-right"
           variant="ghost"
@@ -241,6 +284,14 @@ export function NativeWebTab(props: {
               {p.children}
             </button>
           )
+          // The "IRIS is asking you" mark: gold, the app's attention colour (same tokens as the question dock).
+          const Ask = () => (
+            <svg class="session-web__agent-ask" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M8 1.6 14.6 13.4H1.4z" fill="currentColor" fill-opacity=".18" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+              <path d="M8 6v3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              <circle cx="8" cy="11.4" r=".9" fill="currentColor" />
+            </svg>
+          )
           const StopBtn = () => (
             <Btn onClick={() => revokeSite(o())} title="IRIS can't read or click on this site until you allow it again">
               Stop
@@ -250,30 +301,39 @@ export function NativeWebTab(props: {
             <div class="session-web__agent" data-slot="browser-agent-strip" data-state={stripState()}>
               <Switch>
                 <Match when={stripState() === "confirm"}>
+                  <Ask />
                   <span>
-                    IRIS wants to click <b>"{confirmLabel()}"</b> on <b>{host()}</b>
+                    Let IRIS click <b>"{confirmLabel()}"</b>?
                   </span>
                   <Btn primary onClick={() => answerConfirm(true)}>Allow once</Btn>
                   <Btn onClick={() => answerConfirm(false)}>Deny</Btn>
                 </Match>
                 <Match when={stripState() === "ask-read"}>
+                  <Ask />
                   <span>
-                    IRIS asked to read <b>{host()}</b>
+                    Let IRIS use <b>{host()}</b>?
                   </span>
-                  <Btn primary onClick={() => grantSite(o())}>Allow</Btn>
+                  <Btn primary onClick={() => grantSite(o(), true)}>Allow</Btn>
                   <Btn onClick={dismissAsked}>Not now</Btn>
+                  <Btn onClick={() => setBrowserMode("always")} title="IRIS won't ask on any site again. It still asks before paying, ordering, sending or deleting">
+                    Always allow
+                  </Btn>
                 </Match>
                 <Match when={stripState() === "ask-act"}>
+                  <Ask />
                   <span>
-                    IRIS wants to click and type on <b>{host()}</b>
+                    Let IRIS use <b>{host()}</b>?
                   </span>
-                  <Btn primary onClick={() => grantSite(o(), true)}>Allow clicking</Btn>
+                  <Btn primary onClick={() => grantSite(o(), true)}>Allow</Btn>
                   <Btn onClick={dismissAsked}>Not now</Btn>
+                  <Btn onClick={() => setBrowserMode("always")} title="IRIS won't ask on any site again. It still asks before paying, ordering, sending or deleting">
+                    Always allow
+                  </Btn>
                 </Match>
                 <Match when={stripState() === "taken"}>
                   <span class="session-web__agent-dot" data-paused="true" />
                   <span>
-                    You have control of <b>{host()}</b>: IRIS won't click or type here
+                    You're in control. IRIS is paused
                   </span>
                   <Btn primary onClick={() => handBack(o())}>Hand back</Btn>
                   <StopBtn />
@@ -281,7 +341,7 @@ export function NativeWebTab(props: {
                 <Match when={stripState() === "acting"}>
                   <span class="session-web__agent-dot" data-busy="true" />
                   <span>
-                    <b>Agent is in control</b> · {activityHere()?.doing}…
+                    <b>IRIS is working</b> · {activityHere()?.doing}…
                   </span>
                   <Btn primary onClick={() => takeOver(o())} title="IRIS stops clicking and typing here until you hand back">
                     Take over
@@ -291,24 +351,31 @@ export function NativeWebTab(props: {
                 <Match when={stripState() === "reading"}>
                   <span class="session-web__agent-dot" data-busy="true" />
                   <span>
-                    IRIS is reading <b>{host()}</b>…
+                    IRIS is reading…
                   </span>
                   <StopBtn />
                 </Match>
                 <Match when={stripState() === "can-act" || stripState() === "can-read"}>
                   <span class="session-web__agent-dot" />
                   <span>
-                    IRIS can {stripState() === "can-act" ? "use" : "read"} <b>{host()}</b>
+                    <Show when={browserMode() === "always"} fallback={<>IRIS can {stripState() === "can-act" ? "use" : "read"} <b>{host()}</b></>}>
+                      IRIS can use any site
+                    </Show>
                   </span>
+                  <Show when={browserMode() === "always"}>
+                    <button type="button" class="session-web__agent-link" onClick={() => setBrowserMode("ask")} title="Go back to asking once per site">
+                      Ask first
+                    </button>
+                  </Show>
                   <Show when={stripState() === "can-read"}>
                     <button type="button" class="session-web__agent-link" onClick={() => grantSite(o(), true)}>
-                      Allow clicking
+                      Let it click
                     </button>
                   </Show>
                   <StopBtn />
                 </Match>
                 <Match when={stripState() === "off"}>
-                  <button type="button" class="session-web__agent-link" onClick={() => grantSite(o())}>
+                  <button type="button" class="session-web__agent-link" onClick={() => grantSite(o(), true)}>
                     Let IRIS use this page
                   </button>
                 </Match>
@@ -317,10 +384,50 @@ export function NativeWebTab(props: {
           )
         }}
       </Show>
+      <Show when={notice()}>
+        {(n) => (
+          <div class="session-web__import-notice" data-slot="browser-import-notice">
+            {n()}
+          </div>
+        )}
+      </Show>
       <div class="session-web__body" ref={body} data-slot="native-browser-body">
         <Show when={!opened()}>
           <div class="session-web__start">
-            <div class="session-web__note-title">Browse beside the chat</div>
+            <div class="session-web__hero">Browse beside the chat</div>
+            <Show when={hasChrome()}>
+              <Show
+                when={signedIn()}
+                fallback={
+                  <>
+                    <button type="button" class="session-web__chrome" data-slot="chrome-sign-in" onClick={() => signIn()}>
+                      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+                        <circle cx="10" cy="10" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        <circle cx="10" cy="8" r="2.75" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        <path d="M4.9 15.6c1.1-2 2.9-3.1 5.1-3.1s4 1.1 5.1 3.1" fill="none" stroke="currentColor" stroke-width="1.5" />
+                      </svg>
+                      Sign in with Chrome
+                    </button>
+                    <div class="session-web__chrome-hint">
+                      <Switch fallback="Your sites open already signed in.">
+                        <Match when={chrome() === "denied"}>No problem, nothing was copied. Try again any time.</Match>
+                        <Match when={chrome() === "error"}>That didn't work. Try again in a moment.</Match>
+                      </Switch>
+                    </div>
+                  </>
+                }
+              >
+                {(v) => (
+                  <div class="session-web__chrome-done" data-slot="chrome-signed-in">
+                    <span class="session-web__chrome-check" aria-hidden="true">✓</span>
+                    Signed in from {v().from}
+                    <button type="button" class="session-web__agent-link" onClick={() => signIn()}>
+                      Refresh
+                    </button>
+                  </div>
+                )}
+              </Show>
+            </Show>
             <div class="session-web__start-grid">
               <For each={QUICK_SITES}>
                 {(s) => (
@@ -330,7 +437,16 @@ export function NativeWebTab(props: {
                 )}
               </For>
             </div>
-            <div class="session-web__reason">Sign-ins here stay here: this browser has its own cookies, separate from IRIS.</div>
+          </div>
+        </Show>
+        {/* While the Mac asks: a role="dialog", so an open page steps aside and this is what shows. */}
+        <Show when={chrome() === "working"}>
+          <div class="session-web__wait" role="dialog" aria-label="Signing in with Chrome" aria-live="polite">
+            <div class="session-web__spinner" aria-hidden="true" />
+            <div class="session-web__hero">Look for the Mac prompt</div>
+            <div class="session-web__chrome-hint">
+              Click <b>Always Allow</b>. Your Mac is asking to share your Chrome sign-ins with IRIS.
+            </div>
           </div>
         </Show>
         <Show when={error()}>

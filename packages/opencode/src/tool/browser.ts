@@ -60,7 +60,7 @@ export const Parameters = Schema.Struct({
   ]).annotate({ description: "What to do" }),
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
-      "Which browser. agent (default): your own logged-out browser, invisible to the person. panel: the IRIS Browser pane the person is looking at, signed in as them; only on sites they allowed, read-only for now",
+      "Which browser. Leave it out to use the one the person can see: in IRIS Desktop that is panel (the Browser pane, signed in as them, only on sites they allowed); elsewhere agent. agent: your own separate Chrome, invisible and logged out unless you pass profile/visible",
   }),
   profile: Schema.optional(Schema.Literals(["fresh", "saved"])).annotate({
     description:
@@ -148,7 +148,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
-          const target = params.target ?? "agent"
+          const target = params.target ?? Panel.defaultBrowser(Panel.get(session))
           // One page per target per root session: the pane and the agent's Chrome never share.
           const key = target === "panel" ? `${session}:panel` : session
           let page = sessionsOpen.get(key)
@@ -156,11 +156,6 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           if (target === "panel") {
             // The pane is the person's, signed in as them. Whether the agent may click or type
             // there is THEIR call, made in the app per site (#193186), not this tool's.
-            if (params.action === "screenshot") {
-              return yield* Effect.fail(
-                new Error("screenshots of the Browser pane aren't available yet: use read or find, or target agent"),
-              )
-            }
             if (!page && params.action !== "close") {
               const directory = (yield* InstanceState.context).directory
               const panel = new PanelPage(
@@ -394,7 +389,19 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           const shot = yield* attempt(() => page.screenshot())
           if (!shot.ok) return yield* Effect.fail(new Error(shot.message))
           const png = shot.value
-          const dataUri = `data:image/png;base64,${Buffer.from(png).toString("base64")}`
+          // The pane answers with JPEG, Chrome with PNG: read the bytes, not an assumption.
+          const mime = png[0] === 0xff && png[1] === 0xd8 ? "image/jpeg" : "image/png"
+          const dataUri = `data:${mime};base64,${Buffer.from(png).toString("base64")}`
+          // The pane is already on the person's screen: the agent looks, nothing is saved, and the
+          // side panel stays on the Browser (an artifact would switch it to Genesis).
+          if (target === "panel") {
+            return {
+              title: `Looked at ${page.currentUrl ?? "the page"}`,
+              output: "Here is the Browser pane as the person sees it (attached).",
+              attachments: [{ type: "file" as const, mime, url: dataUri, filename: "browser.jpg" }],
+              metadata: { bytes: png.length, url: page.currentUrl ?? undefined },
+            }
+          }
           if (dataUri.length > Artifacts.MAX_CONTENT_BYTES) {
             return yield* Effect.fail(
               new Error(`the screenshot is ${Math.round(png.length / 1024)} KB, too large to save — narrow the page first`),
@@ -421,10 +428,28 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
 
           return {
             title,
-            output: `Saved the screenshot to the Artifacts pane as ${meta.id} (revision ${meta.revision}).`,
+            output: `Here is the page as the person sees it (attached). Also saved to the Artifacts pane as ${meta.id} (revision ${meta.revision}).`,
+            // The agent SEES it: a map, a chart, a canvas has no text to read.
+            attachments: [{ type: "file" as const, mime, url: dataUri, filename: "screenshot" }],
             metadata: { artifact: meta.id, bytes: png.length, url: page.currentUrl ?? undefined },
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          // One line per call in engine.log, so a slow or silent Browser leaves a trace (2026-11-11:
+          // a 45 s stall on Vonlane left none). No page text, no typed text: action, target, timing.
+          Effect.tap(() =>
+            Effect.logInfo("browser", { action: params.action, target: params.target ?? "default", ok: true, ref: params.ref }),
+          ),
+          Effect.tapError((e) =>
+            Effect.logWarning("browser", {
+              action: params.action,
+              target: params.target ?? "default",
+              ok: false,
+              error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+            }),
+          ),
+          Effect.withLogSpan("browser"),
+          Effect.orDie,
+        ),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )
