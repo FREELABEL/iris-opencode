@@ -297,10 +297,19 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
         })
         // target=_blank / window.open: open in the same tab (tabs are S2). Never a new webview
         // window: that window would carry no gate of its own.
+        //
+        // The navigate is posted from another thread so it runs AFTER this handler returns.
+        // WebKit calls this from inside its own click handling, on the main thread, and Tauri
+        // runs a main-thread navigate synchronously: the load started there was dropped and the
+        // page never moved. Google's "Sign in" (target=_blank to accounts.google.com) did
+        // nothing at all (2026-11-11). run_on_main_thread would not help: from the main thread
+        // it also runs at once.
         .on_new_window(move |url, _features| {
             if navigation_allowed(&url, crate::engine_port_hint()) {
                 if let Some(w) = win_app.get_webview(&win_label) {
-                    let _ = w.navigate(url);
+                    std::thread::spawn(move || {
+                        let _ = w.navigate(url);
+                    });
                 }
             }
             NewWindowResponse::Deny
