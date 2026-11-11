@@ -15,6 +15,8 @@ import { needsSystemBrowser,
   webUrl,
 } from "./web-nav"
 import { GithubPrView } from "./github-pr-view"
+import { NativeWebTab } from "./native-web-tab"
+import { nativeBrowserEnabled } from "./native-browser-model"
 import { isGithubPrUrl } from "./github-pr-model"
 import "./session-web-tab.css"
 
@@ -47,6 +49,24 @@ type Check =
   | { state: "github-pr" }
 
 export function SessionWebTab() {
+  const platform = usePlatform()
+  // Desktop: the native Browser (#193062). Decided once per mount, not reactively: switching
+  // engines under a loaded page would drop it.
+  const native = platform.nativeBrowser
+  if (native && nativeBrowserEnabled(globalThis.localStorage, true)) {
+    return (
+      <NativeWebTab
+        browser={native}
+        zoom={() => platform.webviewZoom?.() ?? 1}
+        openExternal={(u) => platform.openExternal(u)}
+      />
+    )
+  }
+  return <FramedWebTab />
+}
+
+/** The iframe Browser (#187864): the web build, and desktop with iris.browser.native=0. */
+function FramedWebTab() {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))

@@ -28,7 +28,32 @@ export type FatalRendererErrorLog = {
   os?: DesktopOS
 }
 
+/** A rectangle in the app webview's CSS pixels, already multiplied by the app's zoom. */
+export type NativeBrowserBounds = { x: number; y: number; width: number; height: number }
+export type NativeBrowserState = { url: string; title?: string | null; loading: boolean }
+
+/**
+ * The desktop app's native Browser (#193051 / spike #193062): a separate webview drawn OVER the
+ * side panel. It is not part of this document: its pages can't reach the app, and it can't
+ * draw under our menus. So the app hides it whenever something must draw on top.
+ */
+export type NativeBrowser = {
+  show(url: string | undefined, bounds: NativeBrowserBounds): Promise<void>
+  bounds(bounds: NativeBrowserBounds): Promise<void>
+  hide(): Promise<void>
+  navigate(url: string): Promise<string>
+  go(action: "back" | "forward" | "reload"): Promise<void>
+  state(): Promise<NativeBrowserState | null>
+  /** Run a page script in the pane and return its JSON envelope {ok,value|error} (#193145). */
+  eval(script: string): Promise<string>
+  /** Address/title/loading as the page changes. Returns the unsubscribe. */
+  onState(handler: (state: NativeBrowserState) => void): () => void
+}
+
 type PlatformBase = {
+  /** Desktop only: the native Browser. Absent on the web build, which keeps the iframe. */
+  nativeBrowser?: NativeBrowser
+
   /** App version */
   version?: string
 

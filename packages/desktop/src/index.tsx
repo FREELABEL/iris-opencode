@@ -66,6 +66,28 @@ const platform: Platform = {
   // whether updating is possible.
   updater: createUpdaterPlatform(),
 
+  // #193062: the side panel's native Browser (src-tauri/src/browser.rs).
+  nativeBrowser: {
+    show: (url, bounds) => invoke("browser_show", { url: url ?? null, bounds }),
+    bounds: (bounds) => invoke("browser_bounds", { bounds }),
+    hide: () => invoke("browser_hide"),
+    navigate: (url) => invoke<string>("browser_navigate", { url }),
+    go: (action) => invoke("browser_go", { action }),
+    state: () => invoke("browser_state"),
+    eval: (script) => invoke<string>("browser_eval", { script }),
+    onState(handler) {
+      let off: (() => void) | undefined
+      let gone = false
+      void listen<{ url: string; title?: string | null; loading: boolean }>("iris-browser://state", (e) =>
+        handler(e.payload),
+      ).then((u) => (gone ? u() : (off = u)))
+      return () => {
+        gone = true
+        off?.()
+      }
+    },
+  },
+
   async openDirectoryPickerDialog(opts) {
     const result = await open({
       directory: true,

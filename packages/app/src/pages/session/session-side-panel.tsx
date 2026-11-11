@@ -42,6 +42,7 @@ import {
   irisFilesPinned,
   irisOpensOnAtlas,
   toggleIrisFilesPin,
+  registerBrowserPane,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -52,6 +53,8 @@ const webTabPanelID = "session-side-panel-web-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
 import { SessionWebTab } from "@/components/session/session-web-tab"
+import { nativeBrowserEnabled } from "@/components/session/native-browser-model"
+import { usePlatform } from "@/context/platform"
 import { WEB_TAB, webUrl } from "@/components/session/web-nav"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
@@ -75,6 +78,9 @@ import { IrisProductIcon } from "@/components/session/iris-product-icon"
 import { IrisPanelBody, IrisPinItems, IrisScopeChip } from "@/components/iris-panel"
 import { needsAttention, surfaceCount, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
+
+// #193062: the IRIS panel draws the Browser product with this pane (see registerBrowserPane).
+registerBrowserPane(SessionWebTab)
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
 type RenderDiff = FileDiffInfo | (SnapshotFileDiff & { file: string }) | VcsFileDiff
@@ -269,7 +275,15 @@ export function SessionSidePanel(props: {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
   /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
-  const webTabOpen = createMemo(() => tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB)
+  // With the native Browser (#193062) the browser is the Browser PRODUCT in the strip, and chat
+  // links open there; this link-only tab would be a second view of one native webview.
+  const nativeBrowser = (() => {
+    const p = usePlatform()
+    return !!p.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)
+  })()
+  const webTabOpen = createMemo(
+    () => !nativeBrowser && (tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB),
+  )
   const webHost = createMemo(() => {
     try {
       return new URL(webUrl() ?? "").hostname.replace(/^www\./, "")
@@ -282,13 +296,15 @@ export function SessionSidePanel(props: {
       <Tabs.Trigger
         value={WEB_TAB}
         closeButton={
-          <IconButton
-            icon="close-small"
-            variant="ghost"
-            class="h-5 w-5"
-            onClick={() => tabs().close(WEB_TAB)}
-            aria-label={language.t("common.closeTab")}
-          />
+          nativeBrowser ? undefined : (
+            <IconButton
+              icon="close-small"
+              variant="ghost"
+              class="h-5 w-5"
+              onClick={() => tabs().close(WEB_TAB)}
+              aria-label={language.t("common.closeTab")}
+            />
+          )
         }
         hideCloseButton
         onMiddleClick={() => tabs().close(WEB_TAB)}

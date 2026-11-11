@@ -53,6 +53,8 @@ export namespace Panel {
     ack?: string
     /** Set by the desktop when a command could not be applied as asked. */
     error?: string
+    /** A `page` command's answer: the JSON envelope {ok,value|error} (#193145). Never stored. */
+    result?: string
   }
 
   export type Stored = State & { received: number }
@@ -72,6 +74,22 @@ export namespace Panel {
     | { action: "card"; bloq: number; item: number; list?: number }
     /** Change nothing; answer with what is on screen now. A live `state` (#191506). */
     | { action: "report" }
+    /**
+     * The Browser pane's page (#193145): run one of the browser tool's page scripts there, or
+     * open an address. `mode` says whether the script only reads; the desktop refuses `act`
+     * until acting ships, and refuses everything on a site the person has not granted.
+     */
+    | {
+        action: "page"
+        op: "eval"
+        script: string
+        mode: "read" | "act"
+        /** An irreversible click's label (#193186): the person allows it once in the app, or not. */
+        confirm?: string
+        /** What the strip shows the agent doing. */
+        doing?: string
+      }
+    | { action: "page"; op: "open"; url: string }
 
   const states = new Map<string, Stored>()
   const waiters = new Map<string, (s: Stored) => void>()
@@ -85,7 +103,10 @@ export namespace Panel {
   }
 
   export function report(state: State): Stored {
-    const stored: Stored = { ...state, received: Date.now() }
+    // A page result is page CONTENT: hand it to the call waiting for it, never keep it where
+    // GET /iris/panel would show it to any reader.
+    const { result, ...rest } = state
+    const stored: Stored = { ...rest, received: Date.now() }
     states.delete(state.session)
     states.set(state.session, stored)
     while (states.size > MAX_SESSIONS) states.delete(states.keys().next().value!)
@@ -93,7 +114,7 @@ export namespace Panel {
       const w = waiters.get(state.ack)
       if (w) {
         waiters.delete(state.ack)
-        w(stored)
+        w(result === undefined ? stored : { ...stored, result })
       }
     }
     return stored

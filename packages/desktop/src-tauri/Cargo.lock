@@ -2811,10 +2811,15 @@ name = "opencode-desktop"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "block2 0.6.2",
  "getrandom 0.2.16",
  "gtk",
+ "javascriptcore-rs",
  "libc",
  "listeners",
+ "objc2 0.6.3",
+ "objc2-foundation 0.3.2",
+ "objc2-web-kit",
  "semver",
  "serde",
  "serde_json",
@@ -2836,6 +2841,8 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "webkit2gtk",
+ "webview2-com",
+ "windows",
  "windows-sys 0.59.0",
 ]
 
