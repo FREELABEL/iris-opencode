@@ -291,7 +291,8 @@ export function usePanelControl(input: { open: () => boolean }) {
    */
   const runPage = async (cmd: PageCommand, ack: string) => {
     const reply = (r: { result?: string; error?: string }) => post({ ...untrack(snapshot), ack, ...r })
-    const nb = platform.nativeBrowser
+    // This chat's own page: an agent in one chat never reads or drives another chat's.
+    const nb = params.id ? platform.nativeBrowser?.(params.id) : undefined
     if (!nb || !nativeBrowserEnabled(globalThis.localStorage, true)) {
       return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
     }

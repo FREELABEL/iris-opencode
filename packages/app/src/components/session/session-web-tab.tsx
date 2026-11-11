@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, Match, on, Show, Switch } from 
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
+import { useSessionParams } from "@/context/session-pane"
 import { needsSystemBrowser,
   addressToUrl,
   knownEmbeddable,
@@ -53,13 +54,20 @@ export function SessionWebTab() {
   // Desktop: the native Browser (#193062). Decided once per mount, not reactively: switching
   // engines under a loaded page would drop it.
   const native = platform.nativeBrowser
+  const params = useSessionParams()
   if (native && nativeBrowserEnabled(globalThis.localStorage, true)) {
+    // Each chat its own page (2026-11-11: one page shared by every chat meant changing it in one
+    // changed it in all). Switching chats remounts the tab on that chat's page.
     return (
-      <NativeWebTab
-        browser={native}
-        zoom={() => platform.webviewZoom?.() ?? 1}
-        openExternal={(u) => platform.openExternal(u)}
-      />
+      <Show when={params.id ?? "new"} keyed>
+        {(chat) => (
+          <NativeWebTab
+            browser={native(chat)}
+            zoom={() => platform.webviewZoom?.() ?? 1}
+            openExternal={(u) => platform.openExternal(u)}
+          />
+        )}
+      </Show>
     )
   }
   return <FramedWebTab />

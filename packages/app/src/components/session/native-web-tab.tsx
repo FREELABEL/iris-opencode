@@ -22,7 +22,8 @@ import {
 import { webReloadKey, webUrl } from "./web-nav"
 import { loadSignedIn, shouldRedo, signInWithChrome, type SignedIn } from "./browser-import"
 
-/** The last chat link opened, across remounts (one native view, one link history). */
+/** The last chat link opened, across remounts AND chats: a link opens once, in the chat that was
+ * on screen when it was clicked, never again in the next chat shown. */
 let lastLink: string | undefined
 /** Where the Browser forgets on quit (macOS 13), the Chrome sign-ins come back once per launch. */
 let redone = false
@@ -38,7 +39,7 @@ let chromeFound: Promise<boolean> | undefined
  * it from the bar, and show what it reports. Everything a page could use against the app is
  * refused on the Rust side (browser.rs `ipc_allowed`), not here.
  *
- * Known limits, on purpose for a spike: one tab; back/forward are always enabled (the page owns
+ * One page per chat: `browser` is this chat's (session-web-tab remounts this per chat). Back/forward are always enabled (the page owns
  * its history); the app's zoom is read from platform.webviewZoom, which desktop doesn't set yet.
  */
 export function NativeWebTab(props: {

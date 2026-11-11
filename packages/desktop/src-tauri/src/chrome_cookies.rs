@@ -365,6 +365,7 @@ pub async fn browser_import(app: tauri::AppHandle, source: String, sites: Vec<St
             .await
             .map_err(|e| e.to_string())??;
         let w = crate::browser::ensure_browser(&app)?;
+        crate::browser::remember_imported(&cookies);
         let mut imported = 0;
         for c in cookies {
             match w.set_cookie(c) {
