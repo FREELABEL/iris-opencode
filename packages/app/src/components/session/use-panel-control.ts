@@ -62,6 +62,7 @@ type PageCommand =
       doing?: string
     }
   | { action: "page"; op: "open"; url: string }
+  | { action: "page"; op: "screenshot" }
 
 /** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
 const SETTLE_MS = 5000
@@ -303,6 +304,18 @@ export function usePanelControl(input: { open: () => boolean }) {
       }
       const s = await nb.state()
       const origin = originOf(s?.url)
+      if (cmd.op === "screenshot") {
+        // Looking is reading: the same per-site Allow (or Always allow).
+        const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+        if (no && recentlyDeclined(origin)) return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+        if (no) {
+          if (origin && !takenOverSites().includes(origin)) noteAsked(origin, "read")
+          return reply({ error: no })
+        }
+        if (!nb.screenshot) return reply({ error: "this IRIS can't take pictures of the Browser yet: use read or find" })
+        noteActivity(origin!, "looking at the page", "read")
+        return reply({ result: JSON.stringify({ ok: true, value: await nb.screenshot() }) })
+      }
       const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
       if (why && recentlyDeclined(origin)) {
         return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })

@@ -77,11 +77,16 @@ export class PanelPage extends ScriptedPage {
     // Not allowed yet: the app is showing Allow in the Browser bar right now. Wait for the
     // person's one click instead of making them click, then tell the agent to try again (#193200).
     // Each try is a quick round trip; the same command (confirm included) is re-sent.
+    return (await this.sendWaiting(command, confirm ? CONFIRM_TIMEOUT_MS : undefined)) as T
+  }
+
+  /** Send, and while the app says "click Allow", wait for that click and send again. */
+  private async sendWaiting(command: Panel.Command, timeoutMs?: number): Promise<unknown> {
     const until = Date.now() + this.allowWaitMs
     for (;;) {
-      const o = await this.send(command, confirm ? CONFIRM_TIMEOUT_MS : undefined)
+      const o = await this.send(command, timeoutMs)
       try {
-        return unpackPageAnswer(o, this.explainSilence) as T
+        return unpackPageAnswer(o, this.explainSilence)
       } catch (err) {
         if (!(err instanceof Error) || !WAITING_FOR_ALLOW.test(err.message) || Date.now() >= until) throw err
         await Bun.sleep(this.allowPollMs)
@@ -133,8 +138,11 @@ export class PanelPage extends ScriptedPage {
     return this.acting(ref, `choosing "${value.slice(0, 30)}"`, () => super.selectRef(ref, value))
   }
 
+  /** A JPEG of what the person sees in the pane (macOS for now). Same Allow as reading. */
   async screenshot(): Promise<Uint8Array> {
-    throw new Error("screenshots of the Browser pane aren't available yet: use read or find, or target agent")
+    const b64 = await this.sendWaiting({ action: "page", op: "screenshot" }, 20_000)
+    if (typeof b64 !== "string" || !b64) throw new Error("the Browser sent no picture")
+    return new Uint8Array(Buffer.from(b64, "base64"))
   }
 
   /** The page is the person's: closing forgets it here and leaves it open in their pane. */

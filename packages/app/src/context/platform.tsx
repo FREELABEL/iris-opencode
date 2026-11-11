@@ -46,6 +46,8 @@ export type NativeBrowser = {
   state(): Promise<NativeBrowserState | null>
   /** Run a page script in the pane and return its JSON envelope {ok,value|error} (#193145). */
   eval(script: string): Promise<string>
+  /** A JPEG (base64) of what the Browser shows: the agent's eyes on maps and charts. macOS for now. */
+  screenshot?(): Promise<string>
   /** Address/title/loading as the page changes. Returns the unsubscribe. */
   onState(handler: (state: NativeBrowserState) => void): () => void
   /** Chrome-family profiles and the sites each is signed into: names and counts only (S3b). */

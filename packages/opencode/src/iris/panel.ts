@@ -92,6 +92,8 @@ export namespace Panel {
         doing?: string
       }
     | { action: "page"; op: "open"; url: string }
+    /** A picture of the page (a JPEG, base64, in `result`): reading by eye, same Allow as read. */
+    | { action: "page"; op: "screenshot" }
 
   const states = new Map<string, Stored>()
   const waiters = new Map<string, (s: Stored) => void>()

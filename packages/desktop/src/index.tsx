@@ -75,6 +75,7 @@ const platform: Platform = {
     go: (action) => invoke("browser_go", { action }),
     state: () => invoke("browser_state"),
     eval: (script) => invoke<string>("browser_eval", { script }),
+    screenshot: () => invoke<string>("browser_screenshot"),
     importSources: () => invoke("browser_import_sources"),
     importSignIns: (source, sites) => invoke("browser_import", { source, sites }),
     onState(handler) {

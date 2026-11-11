@@ -152,3 +152,29 @@ describe("PanelPage", () => {
     expect(page.currentUrl).toBeNull()
   })
 })
+
+describe("PanelPage.screenshot (the agent's eyes on maps and charts)", () => {
+  const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString("base64")
+  test("asks the pane for a picture and decodes it", async () => {
+    const sent: Panel.Command[] = []
+    const page = new PanelPage(async (c) => (sent.push(c), outcome({ result: env(fakeJpeg) })), silence)
+    const img = await page.screenshot()
+    expect(sent[0]).toEqual({ action: "page", op: "screenshot" })
+    expect([...img.slice(0, 2)]).toEqual([0xff, 0xd8])
+  })
+  test("waits for the person's Allow like reading does", async () => {
+    let allowed = false
+    const page = new PanelPage(
+      async () =>
+        outcome(
+          allowed
+            ? { result: env(fakeJpeg) }
+            : { error: "the person hasn't let IRIS use maps.google.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" },
+        ),
+      silence,
+    )
+    page.allowPollMs = 5
+    setTimeout(() => (allowed = true), 25)
+    expect((await page.screenshot()).length).toBe(7)
+  })
+})

@@ -26,7 +26,7 @@ Actions:
 - type: ref, text. Types into that field. A ref that is not a text field is refused.
 - select: ref, value. Sets a dropdown to one of ITS options — `elements` lists them. A value it does not offer is refused, with the real options.
 - scroll: direction (up, down, top, bottom). Moves the viewport; use it when a page loads more as you go, then run elements again.
-- screenshot: photographs the page and saves it to the Genesis Artifacts pane, where the user can see it. Optional title.
+- screenshot: a picture of the page, attached for you to SEE. Use it when the text doesn't carry the answer: maps, charts, images, canvas apps, layout. target panel: you see what the person sees (nothing is saved). target agent: also saved to the Genesis Artifacts pane. Optional title.
 - close: ends the browser. Do this when you are finished with the page.
 
 Clicking and typing act on a real page in a real browser. Before you act on someone's behalf — sending, buying, deleting, submitting — say what you are about to do and let them answer.

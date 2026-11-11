@@ -155,6 +155,7 @@ fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
             browser::browser_state,
         chrome_cookies::browser_import_sources,
         chrome_cookies::browser_import,
+        browser::browser_screenshot,
         browser::browser_cookie_domains,
             browser::browser_eval,
             kill_sidecar,

@@ -342,6 +342,20 @@ pub async fn browser_eval(app: AppHandle, script: String) -> Result<String, Stri
     }
 }
 
+/// A JPEG (base64) of the page in the Browser. Whether the agent may look is the app's check
+/// (the same per-site Allow as reading), made before this is called.
+#[tauri::command]
+pub async fn browser_screenshot(app: AppHandle) -> Result<String, String> {
+    let w = browser(&app).ok_or("the Browser isn't open: open a page in it first")?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    w.with_webview(move |pw| crate::browser_eval::snapshot(pw, tx)).map_err(|e| e.to_string())?;
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err("the Browser did not answer".into()),
+        Err(_) => Err("the picture took longer than 10 s".into()),
+    }
+}
+
 /// The sites this browser holds cookies for: the start of Settings › Browser (S3). Names and
 /// domains only, never values: values are credentials and never cross into the app's JS.
 #[tauri::command]
