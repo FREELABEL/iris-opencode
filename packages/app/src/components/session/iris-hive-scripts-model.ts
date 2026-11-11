@@ -95,6 +95,11 @@ export type HiveNodeRow = {
   modelsInstalled?: readonly string[]
   /** Reachable through the IRIS gateway now, as hive/<model>. */
   modelsServing?: readonly string[]
+  /** The tailnet address the node advertised (#192608) — the server stores only 100.64.0.0/10. */
+  tailscaleIp?: string
+  tailscaleIpAt?: string
+  /** The address IRIS last saw it connect from: its internet connection, never a LAN address. */
+  lastIp?: string
 }
 
 export type TaskView = {

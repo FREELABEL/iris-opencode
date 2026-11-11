@@ -198,7 +198,12 @@ const HiveResponse = Schema.Struct({
       capabilities: Schema.optional(Schema.Array(Schema.String)),
       recentRestarts: Schema.optional(Schema.Finite),
       transport: Schema.optional(Schema.String),
-      tailscaleIp: Schema.optional(Schema.String),
+      tailscaleIp: described(Schema.optional(Schema.String), "The tailnet address the node advertised (fl-iris-api stores only 100.64.0.0/10)."),
+      tailscaleIpAt: described(Schema.optional(Schema.String), "When the node last advertised its tailnet address."),
+      lastIp: described(
+        Schema.optional(Schema.String),
+        "The address IRIS last saw the node connect from — its internet connection, not a LAN address.",
+      ),
       gpu: described(
         Schema.optional(
           Schema.Struct({
@@ -2077,6 +2082,7 @@ export const IrisPaths = {
   roomMessages: `${root}/rooms/:roomID/messages`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
+  hiveHere: `${root}/hive/here`,
   hiveRemoteAccess: `${root}/hive/remote-access`,
   hiveSessionTranscript: `${root}/hive/sessions/:sessionID/transcript`,
   hiveSessionReply: `${root}/hive/sessions/:sessionID/reply`,
@@ -4701,6 +4707,30 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List AI sessions across your machines",
           description:
             "What each machine's daemon last reported, with the server's freshness applied: a machine whose report is old shows its sessions as `unknown`, never `active`.",
+        }),
+      ),
+      HttpApiEndpoint.get("hiveHere", IrisPaths.hiveHere, {
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            nodeId: described(Schema.NullOr(Schema.String), "This computer's Hive record, from its running daemon. Null when no daemon answered."),
+            onTailnet: described(Schema.Boolean, "Whether one of this computer's network interfaces holds a tailnet address."),
+            shells: described(
+              Schema.Struct({
+                ...Measured,
+                workspaces: Schema.Array(Schema.Struct({ panes: Schema.Finite, kind: Schema.NullOr(Schema.String) })),
+              }),
+              "The tmux workspaces Hive started on THIS computer (the `iris hive panes` list). Panes Hive did not start, and other computers' panes, are not measured.",
+            ),
+          }).annotate({ identifier: "IrisHiveHere" }),
+          "What this computer knows about itself",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hiveHere",
+          summary: "This computer in Hive",
+          description:
+            "Hive › Computers (#192608): which registered machine this is, whether it is on a tailnet, and the shell panes Hive started here — the three facts the node list cannot carry.",
         }),
       ),
       HttpApiEndpoint.get("hiveSessionTranscript", IrisPaths.hiveSessionTranscript, {

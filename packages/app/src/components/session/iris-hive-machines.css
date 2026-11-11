@@ -133,9 +133,68 @@
 .hmc-dev summary { cursor: pointer; font-size: 11px; color: var(--hsc-faint); }
 .hmc-dev p { margin: 6px 0 0; font-size: 10.5px; color: var(--hsc-faint); word-break: break-all; }
 
+/* #192608 Computers: how each is reached, what runs on it, the filter, Add a computer */
+.hmc-tools { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin: -2px 0 12px; }
+.hmc-totals { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; flex: 1; min-width: 0; color: var(--hsc-ink2); }
+.hmc-totals b { color: var(--hsc-ink); font-weight: 600; }
+.hmc-filter button { font-size: 11.5px; }
+.hmc-filter-note, .hmc-filter-empty { margin: 0 0 10px; font-size: 11.5px; }
+.hmc-reach-row { justify-content: space-between; }
+.hmc-reach {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600;
+  border: 1px solid var(--hsc-rule); color: var(--hsc-ink2); white-space: nowrap;
+}
+.hmc-reach[data-kind="self"] { color: var(--hsc-ink); background: var(--hsc-elev); }
+.hmc-reach[data-kind="tailscale"] { color: var(--hsc-jade); border-color: color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
+.hmc-reach[data-kind="lan"] { color: var(--hsc-sage); border-color: color-mix(in srgb, var(--hsc-sage) 45%, transparent); }
+.hmc-reach[data-kind="unknown"] { color: var(--hsc-faint); border-style: dashed; }
+.hmc-online { font-size: 10.5px; }
+.hmc-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; }
+.hmc-count { display: inline-flex; align-items: center; gap: 5px; color: var(--hsc-faint); }
+.hmc-count[data-counted] { color: var(--hsc-ink); }
+.hmc-count svg { width: 14px; height: 14px; flex: none; }
+.hmc-reach-detail { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin: 0; font-size: 11.5px; color: var(--hsc-ink2); line-height: 1.4; word-break: break-word; }
+.hmc-running .hmc-note { margin: 2px 0 0; font-size: 10.5px; color: var(--hsc-faint); line-height: 1.35; }
+.hmc-add-btn { padding: 4px 10px; font-size: 11.5px; }
+.hmc-add {
+  border: 1px solid var(--hsc-rule); border-radius: 10px; background: var(--hsc-card); padding: 10px 12px; margin-bottom: 12px;
+}
+.hmc-add-lede { margin: 0 0 8px; color: var(--hsc-ink2); line-height: 1.45; }
+.hmc-add ol { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 10px; }
+.hmc-add li { display: flex; flex-direction: column; gap: 4px; }
+.hmc-add-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.hmc-add-head .hmc-faint { font-size: 10.5px; }
+.hmc-add-cmd { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hmc-add-cmd code {
+  flex: 1; min-width: 0; padding: 5px 8px; border-radius: 7px; background: var(--hsc-elev); font-size: 11px;
+  overflow-x: auto; white-space: nowrap;
+}
+.hmc-add-cmd .hmc-btn { padding: 4px 8px; font-size: 11px; flex: none; }
+.hmc-add-why { font-size: 11px; color: var(--hsc-faint); line-height: 1.4; }
+
 /* narrow: detail drops below the cards */
 @container (max-width: 720px) {
   .hmc { grid-template-columns: 1fr; grid-auto-rows: min-content; overflow-y: auto; }
   .hmc-main { overflow: visible; }
   .hmc-detail { border-left: 0; border-top: 1px solid var(--hsc-rule); }
+}
+
+/* #192608 phone width: one column, controls full-width and thumb-sized, nothing scrolls sideways */
+@container (max-width: 480px) {
+  .hmc-main { padding: 10px 10px 14px; }
+  .hmc-top { gap: 8px; }
+  .hmc-sum { flex-basis: 100%; flex-wrap: wrap; gap: 4px 12px; }
+  .hmc-seg, .hmc-filter { flex: 1 1 auto; }
+  .hmc-seg button { flex: 1; justify-content: center; padding: 7px 8px; }
+  .hmc-add-btn { flex: 1 1 100%; justify-content: center; padding: 8px 10px; }
+  .hmc-tools { flex-direction: column; align-items: stretch; }
+  .hmc-filter { width: 100%; }
+  .hmc-cards { grid-template-columns: 1fr; }
+  .hmc-card { padding: 12px; }
+  .hmc-counts { font-size: 13px; }
+  .hmc-add-cmd { flex-direction: column; align-items: stretch; }
+  .hmc-add-cmd code { white-space: normal; word-break: break-all; }
+  .hmc-detail { padding: 12px 10px 16px; }
+  .hmc-stats { grid-template-columns: 1fr 1fr; }
+  .hmc-btn { padding: 8px 12px; }
 }

@@ -6,6 +6,7 @@
  * same fleet as a map one click away. Every rule here is testable without a DOM or a network.
  */
 import { ago, diskOf, groupComputers, type Computer, type HiveNodeRow } from "./iris-hive-scripts-model"
+import type { HiveSessionNode } from "./iris-hive-sessions-model"
 
 export type { Computer }
 
@@ -186,3 +187,222 @@ export function mapLayout(cs: readonly Computer[], peers: readonly HivePeerRow[]
   }))
   return out
 }
+
+// ── Computers (#192608): how each one is reached, and what is running on it ───────────────────────
+
+/**
+ * What THIS computer knows about itself (`/iris/hive/here`): which Hive record it is, whether it
+ * is on a tailnet, and the shell panes Hive started on it.
+ */
+export type HereRow = {
+  measured: boolean
+  reason?: string
+  nodeId: string | null
+  onTailnet: boolean
+  shells: { measured: boolean; reason?: string; workspaces: readonly { panes: number; kind: string | null }[] }
+}
+
+/** The `/iris/hive/sessions` payload — the same rows `iris hive sessions` prints. */
+export type SessionsPayload = { measured: boolean; reason?: string; nodes: readonly HiveSessionNode[] }
+
+/** Tailscale's 100.64.0.0/10 (and its IPv6 prefix) — the bound fl-iris-api validates before storing one. */
+export function isTailnetIp(ip: string | null | undefined): boolean {
+  if (!ip) return false
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip.trim())
+  if (!m) return /^fd7a:115c:a1e0:/i.test(ip.trim())
+  const o = m.slice(1).map(Number)
+  return o.every((n) => n <= 255) && o[0] === 100 && o[1] >= 64 && o[1] <= 127
+}
+
+export type ReachKind = "self" | "tailscale" | "lan" | "other" | "unknown"
+export type Reach = { kind: ReachKind; label: string; detail: string }
+
+export const REACH_LABEL: Record<ReachKind, string> = {
+  self: "This computer",
+  tailscale: "Tailscale",
+  lan: "This network",
+  other: "Other",
+  unknown: "Unknown",
+}
+
+/** An advertised address older than this is shown with its age, not as a fact about now. */
+const ADDRESS_STALE_MS = 24 * 3600_000
+
+const isHere = (c: Computer, here: HereRow | null | undefined) => !!here?.nodeId && c.ids.includes(here.nodeId)
+
+/**
+ * How this computer reaches that one — derived from what both sides reported, never guessed:
+ *  - Tailscale: it advertised a tailnet address AND this computer is on a tailnet too;
+ *  - This network: IRIS saw both connect from the same internet connection;
+ *  - Other: it reported an address, but neither of the above holds (Hive still reaches it through IRIS);
+ *  - Unknown: nothing to go on — this computer could not check itself, or that one never said.
+ */
+export function reachOf(c: Computer, here: HereRow | null | undefined, all: readonly Computer[], now: number): Reach {
+  const r = (kind: ReachKind, detail: string): Reach => ({ kind, label: REACH_LABEL[kind], detail })
+  if (!here?.measured) return r("unknown", "Could not check how this computer is connected")
+  if (isHere(c, here)) return r("self", "You are using this computer")
+  const mine = all.find((x) => isHere(x, here))
+  const sameNet = !!mine?.lastIp && !!c.lastIp && mine.lastIp === c.lastIp
+  const tail = isTailnetIp(c.tailscaleIp)
+  if (tail && here.onTailnet) {
+    const t = c.tailscaleIpAt ? Date.parse(c.tailscaleIpAt) : NaN
+    const old = Number.isFinite(t) && now - t > ADDRESS_STALE_MS
+    return r(
+      "tailscale",
+      `Over Tailscale at ${c.tailscaleIp}${old ? ` (address as of ${ago(c.tailscaleIpAt, now)})` : ""}${sameNet ? " · same internet connection as this computer" : ""}`,
+    )
+  }
+  if (sameNet) return r("lan", "Same internet connection as this computer")
+  if (tail) return r("other", "It is on Tailscale, but this computer is not — Hive still reaches it through IRIS")
+  if (c.lastIp) return r("other", "Over the internet, through IRIS")
+  return r("unknown", "It has never said how it connects")
+}
+
+export type AgentCount =
+  | {
+      state: "counted"
+      n: number
+      /** Untouched for over a day — hidden, as `iris hive sessions` hides them without --all. */
+      stale: number
+      /** A provider was cut at its cap or could not be asked: n is a floor. */
+      floor: boolean
+      /** The list is the last report, not a live one. */
+      old: boolean
+      reportedAt: string | null
+    }
+  | { state: "never" }
+  | { state: "unmeasured"; reason?: string }
+
+/**
+ * Agent sessions on a computer: exactly the rows `iris hive sessions` lists for it (stale hidden),
+ * summed over every registration of that computer. A machine that never reported is not zero.
+ */
+export function agentsOf(c: Computer, sessions: SessionsPayload | null | undefined): AgentCount {
+  if (!sessions?.measured) return { state: "unmeasured", reason: sessions?.reason }
+  const recs = sessions.nodes.filter((n) => c.ids.includes(n.id))
+  const reported = recs.filter((n) => n.report !== "never")
+  if (!reported.length) return { state: "never" }
+  const rows = reported.flatMap((n) => n.sessions)
+  const stale = rows.filter((s) => s.status === "stale").length
+  const newest = [...reported].sort((a, b) => (Date.parse(b.reportedAt ?? "") || 0) - (Date.parse(a.reportedAt ?? "") || 0))[0]
+  return {
+    state: "counted",
+    n: rows.length - stale,
+    stale,
+    floor: reported.some((n) => n.incomplete.length > 0),
+    old: newest.report !== "fresh",
+    reportedAt: newest.reportedAt,
+  }
+}
+
+export type ShellCount =
+  | { state: "counted"; n: number; workspaces: number }
+  /** Not this computer: no machine reports its panes to IRIS, so they are not measured. */
+  | { state: "elsewhere" }
+  | { state: "unmeasured"; reason?: string }
+
+/** Shell panes Hive started (`iris hive panes`). Counted only on the computer you are using. */
+export function shellsOfComputer(c: Computer, here: HereRow | null | undefined): ShellCount {
+  if (!here?.measured) return { state: "unmeasured", reason: here?.reason }
+  if (!isHere(c, here)) return { state: "elsewhere" }
+  if (!here.shells.measured) return { state: "unmeasured", reason: here.shells.reason }
+  return { state: "counted", n: here.shells.workspaces.reduce((t, w) => t + w.panes, 0), workspaces: here.shells.workspaces.length }
+}
+
+const plural = (n: number, one: string, many = one + "s") => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
+
+/** The words for a count. Anything not counted says why — never "0". */
+export function agentWords(a: AgentCount, now: number): { text: string; note: string | null; counted: boolean } {
+  if (a.state === "unmeasured") return { text: "Agents: couldn't check", note: a.reason ?? null, counted: false }
+  if (a.state === "never") return { text: "Agents: never reported", note: "This computer has not told IRIS about its sessions", counted: false }
+  const notes = [
+    a.old ? `as of ${ago(a.reportedAt, now)}` : null,
+    a.floor ? "at least — some were not counted" : null,
+    a.stale ? `${a.stale} older hidden` : null,
+  ].filter(Boolean)
+  return { text: `${a.floor ? "≥" : ""}${plural(a.n, "agent session")}`, note: notes.length ? notes.join(" · ") : null, counted: true }
+}
+
+export function shellWords(s: ShellCount): { text: string; note: string | null; counted: boolean } {
+  if (s.state === "elsewhere") return { text: "Shells: not counted", note: "Hive counts shells only on the computer you are using", counted: false }
+  if (s.state === "unmeasured") return { text: "Shells: couldn't check", note: s.reason ?? null, counted: false }
+  return {
+    text: plural(s.n, "shell"),
+    note: s.workspaces ? `Hive-started only · ${plural(s.workspaces, "workspace")}` : "Hive-started only",
+    counted: true,
+  }
+}
+
+export type ComputerRow = { computer: Computer; reach: Reach; agents: AgentCount; shells: ShellCount }
+
+export function computerRows(
+  cs: readonly Computer[],
+  sessions: SessionsPayload | null | undefined,
+  here: HereRow | null | undefined,
+  now: number,
+): ComputerRow[] {
+  return cs.map((c) => ({ computer: c, reach: reachOf(c, here, cs, now), agents: agentsOf(c, sessions), shells: shellsOfComputer(c, here) }))
+}
+
+export type ComputersFilter = "all" | "agents" | "shells"
+export const readComputersFilter = (raw: string | null | undefined): ComputersFilter =>
+  raw === "agents" || raw === "shells" ? raw : "all"
+
+/**
+ * All: every computer. Agents only / Shells only: the computers with at least one COUNTED of that
+ * kind. A computer whose count is unknown is not shown as having none — `hiddenUnknown` says how
+ * many were left out because they could not be counted, so the view can say so.
+ */
+export function filterComputers(rows: readonly ComputerRow[], f: ComputersFilter): { rows: ComputerRow[]; hiddenUnknown: number } {
+  if (f === "all") return { rows: [...rows], hiddenUnknown: 0 }
+  const counted = (r: ComputerRow) => (f === "agents" ? r.agents.state === "counted" : r.shells.state === "counted")
+  const n = (r: ComputerRow) =>
+    f === "agents" ? (r.agents.state === "counted" ? r.agents.n : 0) : r.shells.state === "counted" ? r.shells.n : 0
+  return { rows: rows.filter((r) => counted(r) && n(r) > 0), hiddenUnknown: rows.filter((r) => !counted(r)).length }
+}
+
+/** Totals across computers, with how many computers each total actually covers. */
+export function computerTotals(rows: readonly ComputerRow[]) {
+  let agents = 0
+  let agentsFloor = false
+  let agentMachines = 0
+  let shells = 0
+  let shellMachines = 0
+  for (const r of rows) {
+    if (r.agents.state === "counted") {
+      agents += r.agents.n
+      agentMachines++
+      agentsFloor ||= r.agents.floor
+    }
+    if (r.shells.state === "counted") {
+      shells += r.shells.n
+      shellMachines++
+    }
+  }
+  return { computers: rows.length, agents, agentsFloor, agentMachines, shells, shellMachines }
+}
+
+/**
+ * "Add a computer" — the hive-secure-mesh playbook's own steps, in order, with where each runs.
+ * Not a new flow: the same commands the playbook documents.
+ */
+export const ADD_COMPUTER_STEPS: readonly { title: string; where: string; command: string; why: string }[] = [
+  {
+    title: "Put it on your private network",
+    where: "On the new computer",
+    command: "iris playbook run hive-secure-mesh --action onboard",
+    why: "Installs Tailscale and joins your tailnet. No ports are opened to the internet. Note the 100.x address it prints.",
+  },
+  {
+    title: "Make it a Hive computer",
+    where: "On this computer",
+    command: "iris playbook run hive-secure-mesh --action enroll --ip <its 100.x address>",
+    why: "Registers it with Hive over the private network, so it shows up here and can take work.",
+  },
+  {
+    title: "Check the whole chain",
+    where: "On either",
+    command: "iris playbook run hive-secure-mesh --action doctor",
+    why: "Checks the network, who may reach it, and Hive, from the bottom up, and says what is missing.",
+  },
+]

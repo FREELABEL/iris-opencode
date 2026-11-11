@@ -163,6 +163,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   // The last good copy first — it outlives this page — and the fresh read lands behind it.
   const [data, setData] = createSignal(homeDashboard.read(key(), fetcher))
   onCleanup(homeDashboard.subscribe((k, value) => k === key() && setData(() => value)))
+  // #192608: the Machines tile opens Hive › Machines — the one Computers view — not a second copy here.
+  // Beside Home, like Heartbeats (#192535): no chat is needed for the panel any more.
+  const openComputers = () => openIrisPanel({ surface: "hive", sub: "machines" })
   const [now, setNow] = createSignal(Date.now())
   const timer = setInterval(() => {
     setNow(Date.now())
@@ -330,7 +333,15 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </div>
           </div>
-          <div class="ihd-stat" title={tile("machines")?.detail}>
+          <div
+            class="ihd-stat"
+            data-link="1"
+            title={`${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines`}
+            role="button"
+            tabIndex={0}
+            onClick={openComputers}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openComputers()}
+          >
             <Mark a="var(--ihd-cy)" b="var(--ihd-bl)" shape="square" />
             <div class="ihd-n">{hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}</div>
             <div class="ihd-label" style={{ color: "var(--ihd-cy)" }}>
