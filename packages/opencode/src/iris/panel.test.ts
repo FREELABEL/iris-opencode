@@ -255,3 +255,17 @@ describe("card (#191507)", () => {
     expect(text).toContain("card open: #191504 on board #628")
   })
 })
+
+describe("defaultBrowser (#193200): the browser the person can see", () => {
+  const now = 1_000_000_000
+  const s = (over: Partial<Panel.Stored>) => ({ session: "ses_1", open: true, received: now, ...over }) as Panel.Stored
+  test("a desktop with the Browser pane → the pane", () => {
+    expect(Panel.defaultBrowser(s({ browser: true }), now)).toBe("panel")
+  })
+  test("no desktop, an old desktop, the pane turned off, or a stale report → the agent's own Chrome", () => {
+    expect(Panel.defaultBrowser(undefined, now)).toBe("agent")
+    expect(Panel.defaultBrowser(s({}), now)).toBe("agent")
+    expect(Panel.defaultBrowser(s({ browser: false }), now)).toBe("agent")
+    expect(Panel.defaultBrowser(s({ browser: true, received: now - 31 * 60_000 }), now)).toBe("agent")
+  })
+})

@@ -137,3 +137,41 @@ mod tests {
         assert!(unwrap_result("null").is_err());
     }
 }
+
+/// A picture of what the Browser shows (the agent's eyes on a map, a chart, a canvas). macOS:
+/// WKWebView's own snapshot, 1024 px wide, as JPEG, base64. Other platforms: not yet.
+#[cfg(target_os = "macos")]
+pub fn snapshot(pw: tauri::webview::PlatformWebview, tx: Reply) {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_foundation::{NSDictionary, NSError, NSNumber};
+    use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
+
+    let tx = std::sync::Mutex::new(Some(tx));
+    // Safety: objc runtime calls on the main thread (`with_webview` runs there).
+    unsafe {
+        let handler = block2::RcBlock::new(move |img: *mut NSImage, _err: *mut NSError| {
+            if img.is_null() {
+                return answer(&tx, Err("the Browser could not take a picture of the page".into()));
+            }
+            let out = (|| {
+                let tiff = (*img).TIFFRepresentation()?;
+                let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
+                let props = NSDictionary::new();
+                let jpeg = rep.representationUsingType_properties(NSBitmapImageFileType::JPEG, &props)?;
+                Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, jpeg.to_vec()))
+            })();
+            answer(&tx, out.ok_or_else(|| "the picture could not be encoded".to_string()));
+        });
+        // with_webview runs this on the main thread.
+        let mtm = objc2::MainThreadMarker::new_unchecked();
+        let config = WKSnapshotConfiguration::new(mtm);
+        config.setSnapshotWidth(Some(&NSNumber::new_f64(1024.0)));
+        let webview: &WKWebView = &*(pw.inner() as *const WKWebView);
+        webview.takeSnapshotWithConfiguration_completionHandler(Some(&config), &handler);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn snapshot(_pw: tauri::webview::PlatformWebview, tx: Reply) {
+    let _ = tx.send(Err("pictures of the Browser pane work on macOS for now: use read or find".into()));
+}

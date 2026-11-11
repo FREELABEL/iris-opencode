@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { CONFIRM_TIMEOUT_MS, flashScript, PanelPage, unpackPageAnswer } from "./panel-page"
+import { CONFIRM_TIMEOUT_MS, PanelPage, unpackPageAnswer } from "./panel-page"
+import { cursorMoveScript, cursorPressScript } from "./agent-cursor"
 import type { Panel } from "./panel"
 
 const outcome = (state?: Partial<Panel.Stored>): Panel.Outcome => ({
@@ -51,6 +52,29 @@ describe("PanelPage", () => {
     expect(sent[0]).toEqual({ action: "page", op: "eval", script: "document.body ? document.body.innerText : ''", mode: "read" })
   })
 
+  test("not allowed yet: it waits for the person's one Allow, then carries on (no second ask)", async () => {
+    let allowed = false
+    const { sent, page } = desktop(() =>
+      allowed
+        ? { result: env("feed") }
+        : { error: "the person hasn't let IRIS use youtube.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" },
+    )
+    page.allowPollMs = 5
+    setTimeout(() => (allowed = true), 30)
+    expect(await page.text()).toBe("feed")
+    expect(sent.length).toBeGreaterThan(1)
+  })
+
+  test("waiting gives up after its window, and Not now (any other refusal) ends it at once", async () => {
+    const never = desktop(() => ({ error: "the person hasn't let IRIS use x.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" }))
+    never.page.allowPollMs = 5
+    never.page.allowWaitMs = 30
+    await expect(never.page.text()).rejects.toThrow("click Allow")
+    const no = desktop(() => ({ error: "the person chose Not now for x.com. Don't try again unless they ask" }))
+    await expect(no.page.text()).rejects.toThrow("Not now")
+    expect(no.sent.length).toBe(1)
+  })
+
   test("attach learns where the pane is", async () => {
     const { page } = desktop(() => ({ result: env("https://www.youtube.com/") }))
     expect(await page.attach()).toBe("https://www.youtube.com/")
@@ -88,10 +112,20 @@ describe("PanelPage", () => {
     expect(page.confirmNext).toBeUndefined()
   })
 
-  test("the element flashes before the act, as a read", async () => {
-    const { sent, page } = desktop(() => ({ result: env(true) }))
+  test("IRIS's cursor glides to the element and presses, as reads, before the act", async () => {
+    const { sent, page } = desktop(() => ({ result: env(0) }))
     await page.clickRef(4)
-    expect(sent[0]).toEqual({ action: "page", op: "eval", script: flashScript(4), mode: "read" })
+    expect(sent[0]).toEqual({ action: "page", op: "eval", script: cursorMoveScript(4), mode: "read" })
+    expect(sent[1]).toEqual({ action: "page", op: "eval", script: cursorPressScript(), mode: "read" })
+    expect((sent[2] as { mode?: string }).mode).toBe("act")
+  })
+
+  test("a cursor that can't be drawn never stops the act", async () => {
+    const { sent, page } = desktop((c) =>
+      c.action === "page" && c.op === "eval" && c.script.includes("__irisCursor") ? { error: "page threw" } : { result: env(true) },
+    )
+    expect(await page.clickRef(4)).toBe(true)
+    expect(sent.some((c) => c.action === "page" && c.op === "eval" && c.mode === "act")).toBe(true)
   })
 
   test("a person's Deny reaches the agent and the act fails", async () => {
@@ -116,5 +150,31 @@ describe("PanelPage", () => {
     await page.close()
     expect(sent.length).toBe(1)
     expect(page.currentUrl).toBeNull()
+  })
+})
+
+describe("PanelPage.screenshot (the agent's eyes on maps and charts)", () => {
+  const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString("base64")
+  test("asks the pane for a picture and decodes it", async () => {
+    const sent: Panel.Command[] = []
+    const page = new PanelPage(async (c) => (sent.push(c), outcome({ result: env(fakeJpeg) })), silence)
+    const img = await page.screenshot()
+    expect(sent[0]).toEqual({ action: "page", op: "screenshot" })
+    expect([...img.slice(0, 2)]).toEqual([0xff, 0xd8])
+  })
+  test("waits for the person's Allow like reading does", async () => {
+    let allowed = false
+    const page = new PanelPage(
+      async () =>
+        outcome(
+          allowed
+            ? { result: env(fakeJpeg) }
+            : { error: "the person hasn't let IRIS use maps.google.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" },
+        ),
+      silence,
+    )
+    page.allowPollMs = 5
+    setTimeout(() => (allowed = true), 25)
+    expect((await page.screenshot()).length).toBe(7)
   })
 })

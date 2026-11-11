@@ -2140,6 +2140,7 @@ export const PanelStatePayload = Schema.Struct({
   sub: Schema.optional(Schema.String),
   bloq: Schema.optional(Schema.Struct({ id: Schema.Finite, name: Schema.optional(Schema.String) })),
   artifact: Schema.optional(Schema.String),
+  browser: Schema.optional(Schema.Boolean),
   url: Schema.optional(Schema.String),
   card: Schema.optional(Schema.Struct({ id: Schema.Finite, bloq: Schema.optional(Schema.Finite) })),
   catalog: Schema.optional(PanelCatalog),

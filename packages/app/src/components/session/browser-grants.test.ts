@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ASK_STALE_MS,
+  noteAsked,
   answerConfirm,
+  browserMode,
+  setBrowserMode,
   askedSite,
   confirmAct,
   grantSite,
@@ -54,7 +58,7 @@ describe("pageRefusal", () => {
   test("act on a READ-only site: refused, and says how to allow clicking", () => {
     const why = pageRefusal({ mode: "act", url: "https://www.youtube.com/feed", grants })
     expect(why).toContain("READ youtube.com")
-    expect(why).toContain("Allow clicking")
+    expect(why).toContain("click Allow")
   })
   test("act on an act site: yes", () => {
     expect(pageRefusal({ mode: "act", url: "https://www.airbnb.com/s/Tokyo", grants })).toBeUndefined()
@@ -65,7 +69,7 @@ describe("pageRefusal", () => {
     expect(pageRefusal({ mode: "read", url: "https://www.airbnb.com/", grants, takenOver })).toBeUndefined()
   })
   test("a site never granted, and another subdomain, are refused", () => {
-    expect(pageRefusal({ mode: "read", url: "https://x.com/home", grants })).toContain("Let IRIS use this page")
+    expect(pageRefusal({ mode: "read", url: "https://x.com/home", grants })).toContain("click Allow")
     expect(pageRefusal({ mode: "read", url: "https://studio.youtube.com/", grants })).toBeDefined()
   })
   test("no page open", () => {
@@ -143,3 +147,32 @@ describe("stripState: most urgent first", () => {
     expect(stripState({ origin: undefined, grants: act })).toBeUndefined()
   })
 })
+
+describe("Always allow mode", () => {
+  const o = "https://www.heb.com"
+  test("every site may be read and clicked, with no asks", () => {
+    expect(pageRefusal({ mode: "act", url: "https://www.heb.com/cart", grants: [], always: true })).toBeUndefined()
+    expect(pageRefusal({ mode: "read", url: "https://news.example/", grants: [], always: true })).toBeUndefined()
+    expect(stripState({ origin: o, grants: [], always: true })).toBe("can-act")
+  })
+  test("Take over still wins, and so does a pending Allow once (irreversible clicks still ask)", () => {
+    expect(pageRefusal({ mode: "act", url: o, grants: [], always: true, takenOver: [o] })).toContain("took over")
+    expect(
+      stripState({ origin: o, grants: [], always: true, asked: { origin: o, kind: "confirm", label: "Place order", resolve: () => {} } }),
+    ).toBe("confirm")
+  })
+  test("Ask is the default; Stop in Always allow goes back to Ask", () => {
+    expect(pageRefusal({ mode: "read", url: o, grants: [] })).toContain("click Allow")
+    setBrowserMode("always")
+    expect(browserMode()).toBe("always")
+    revokeSite(o)
+    expect(browserMode()).toBe("ask")
+  })
+})
+
+test("an ask nobody is waiting on any more goes away by itself", async () => {
+  noteAsked("https://stale.example", "read")
+  expect(askedSite()?.origin).toBe("https://stale.example")
+  await Bun.sleep(ASK_STALE_MS + 100)
+  expect(askedSite()).toBeUndefined()
+}, ASK_STALE_MS + 2000)
