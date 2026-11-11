@@ -79,7 +79,16 @@ export namespace Panel {
      * open an address. `mode` says whether the script only reads; the desktop refuses `act`
      * until acting ships, and refuses everything on a site the person has not granted.
      */
-    | { action: "page"; op: "eval"; script: string; mode: "read" | "act" }
+    | {
+        action: "page"
+        op: "eval"
+        script: string
+        mode: "read" | "act"
+        /** An irreversible click's label (#193186): the person allows it once in the app, or not. */
+        confirm?: string
+        /** What the strip shows the agent doing. */
+        doing?: string
+      }
     | { action: "page"; op: "open"; url: string }
 
   const states = new Map<string, Stored>()

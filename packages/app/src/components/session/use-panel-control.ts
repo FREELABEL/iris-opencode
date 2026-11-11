@@ -5,7 +5,16 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { focusArtifact, irisOpenArtifact, irisOpenCard, irisPanelView, requestIrisNav } from "./iris-nav"
 import { nativeBrowserEnabled } from "./native-browser-model"
-import { browserGrants, noteActivity, noteAsked, originOf, pageRefusal } from "./browser-grants"
+import {
+  browserGrants,
+  confirmAct,
+  hostOf,
+  noteActivity,
+  noteAsked,
+  originOf,
+  pageRefusal,
+  takenOverSites,
+} from "./browser-grants"
 import type { NativeBrowser } from "@/context/platform"
 import { deliverReport } from "./panel-report"
 import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
@@ -40,7 +49,16 @@ type Command =
 
 /** The Browser pane's page (#193145): run a browser-tool script there, or open an address. */
 type PageCommand =
-  | { action: "page"; op: "eval"; script: string; mode: "read" | "act" }
+  | {
+      action: "page"
+      op: "eval"
+      script: string
+      mode: "read" | "act"
+      /** Set on an irreversible click (#193186): its label. The person allows it once, or not. */
+      confirm?: string
+      /** What the strip says the agent is doing ("clicking 'Search'"). */
+      doing?: string
+    }
   | { action: "page"; op: "open"; url: string }
 
 /** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
@@ -280,12 +298,23 @@ export function usePanelControl(input: { open: () => boolean }) {
       }
       const s = await nb.state()
       const origin = originOf(s?.url)
-      const why = pageRefusal({ mode: cmd.mode, url: s?.url, granted: browserGrants() })
+      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites() })
       if (why) {
-        if (cmd.mode === "read" && origin) noteAsked(origin)
+        // Offer the missing permission right there in the strip (never while the person has the wheel).
+        if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)
         return reply({ error: why })
       }
-      noteActivity(origin!, "reading")
+      if (cmd.mode === "act" && cmd.confirm) {
+        noteActivity(origin!, `waiting for you to allow "${cmd.confirm}"`, "act")
+        const ok = await confirmAct(origin!, cmd.confirm)
+        if (!ok) {
+          return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
+        }
+        // They may have taken over or stopped while the prompt was up.
+        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites() })
+        if (again) return reply({ error: again })
+      }
+      noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
       reply({ result: await nb.eval(cmd.script) })
     } catch (err) {
       reply({ error: err instanceof Error ? err.message : String(err) })

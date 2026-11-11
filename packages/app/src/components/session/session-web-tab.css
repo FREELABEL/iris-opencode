@@ -168,3 +168,12 @@
   text-underline-offset: 2px;
 }
 .session-web__agent-link:hover { color: var(--text-strong); }
+.session-web__agent[data-state="confirm"],
+.session-web__agent[data-state="ask-act"] {
+  background: var(--surface-warning-weak, var(--background-element));
+  color: var(--text-base);
+}
+.session-web__agent-dot[data-paused] {
+  background: var(--icon-warning-base, #f59e0b);
+}
+.session-web__agent-link + .session-web__agent-btn { margin-left: auto; }

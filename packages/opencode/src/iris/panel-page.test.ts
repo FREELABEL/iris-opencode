@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { PanelPage, unpackPageAnswer } from "./panel-page"
+import { CONFIRM_TIMEOUT_MS, flashScript, PanelPage, unpackPageAnswer } from "./panel-page"
 import type { Panel } from "./panel"
 
 const outcome = (state?: Partial<Panel.Stored>): Panel.Outcome => ({
@@ -70,6 +70,38 @@ describe("PanelPage", () => {
       c.action === "page" && c.op === "eval" && c.mode === "act" ? { error: "it can only read" } : { result: env(true) },
     )
     expect(page.clickRef(1)).rejects.toThrow("it can only read")
+  })
+
+  test("an irreversible click carries its label ONCE, on the click itself, with the long timeout", async () => {
+    const sent: { c: Panel.Command; t?: number }[] = []
+    const page = new PanelPage(async (c, t) => {
+      sent.push({ c, t })
+      return outcome({ result: env(true) })
+    }, silence)
+    page.confirmNext = "Book"
+    await page.clickRef(7)
+    const acts = sent.filter((x) => x.c.action === "page" && x.c.op === "eval" && x.c.mode === "act")
+    const withConfirm = acts.filter((x) => (x.c as { confirm?: string }).confirm === "Book")
+    expect(withConfirm.length).toBe(1)
+    expect(withConfirm[0]!.t).toBe(CONFIRM_TIMEOUT_MS)
+    expect((acts[0]!.c as { doing?: string }).doing).toBe('clicking "Book"')
+    expect(page.confirmNext).toBeUndefined()
+  })
+
+  test("the element flashes before the act, as a read", async () => {
+    const { sent, page } = desktop(() => ({ result: env(true) }))
+    await page.clickRef(4)
+    expect(sent[0]).toEqual({ action: "page", op: "eval", script: flashScript(4), mode: "read" })
+  })
+
+  test("a person's Deny reaches the agent and the act fails", async () => {
+    const { page } = desktop((c) =>
+      c.action === "page" && c.op === "eval" && (c as { confirm?: string }).confirm
+        ? { error: 'the person did not allow clicking "Pay"' }
+        : { result: env(true) },
+    )
+    page.confirmNext = "Pay"
+    expect(page.clickRef(2)).rejects.toThrow("did not allow")
   })
 
   test("open asks the pane to navigate and reports where it landed", async () => {

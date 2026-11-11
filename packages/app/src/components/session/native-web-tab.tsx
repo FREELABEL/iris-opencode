@@ -1,17 +1,21 @@
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import type { NativeBrowser, NativeBrowserBounds, NativeBrowserState } from "@/context/platform"
 import { boundsOf, OVERLAY_SELECTOR, QUICK_SITES, sameBounds } from "./native-browser-model"
 import {
+  answerConfirm,
   askedSite,
   browserActivity,
   browserGrants,
   dismissAsked,
   grantSite,
+  handBack,
   hostOf,
-  isGranted,
   originOf,
   revokeSite,
+  stripState as computeStrip,
+  takeOver,
+  takenOverSites,
 } from "./browser-grants"
 import { webReloadKey, webUrl } from "./web-nav"
 
@@ -45,14 +49,21 @@ export function NativeWebTab(props: {
   let shown = false
 
   const origin = () => originOf(page()?.url)
-  const stripState = () => {
-    const o = origin()
-    if (isGranted(o, browserGrants())) return "granted"
-    return o && askedSite() === o ? "asked" : "off"
-  }
+  const stripState = () =>
+    computeStrip({
+      origin: origin(),
+      grants: browserGrants(),
+      asked: askedSite(),
+      takenOver: takenOverSites(),
+      activity: browserActivity(),
+    })
   const activityHere = () => {
     const a = browserActivity()
     return a && a.origin === origin() ? a : undefined
+  }
+  const confirmLabel = () => {
+    const a = askedSite()
+    return a?.kind === "confirm" ? a.label : ""
   }
 
   const report = (s: NativeBrowserState) => {
@@ -213,38 +224,98 @@ export function NativeWebTab(props: {
           title="Open in your browser"
         />
       </div>
-      {/* The agent strip (#193145): whether IRIS may use this site, what it is doing, and Stop. */}
-      <Show when={origin()}>
-        {(o) => (
-          <div class="session-web__agent" data-slot="browser-agent-strip" data-state={stripState()}>
-            <Show when={stripState() === "granted"}>
-              <span class="session-web__agent-dot" data-busy={activityHere() ? "true" : undefined} />
-              <span>
-                IRIS can use <b>{hostOf(o())}</b>
-                <Show when={activityHere()}>{(a) => <> · {a().doing}…</>}</Show>
-              </span>
-              <button type="button" class="session-web__agent-btn" onClick={() => revokeSite(o())} title="IRIS can't use this site until you allow it again">
-                Stop
-              </button>
-            </Show>
-            <Show when={stripState() === "asked"}>
-              <span>
-                IRIS asked to read <b>{hostOf(o())}</b>
-              </span>
-              <button type="button" class="session-web__agent-btn" data-primary="true" onClick={() => grantSite(o())}>
-                Allow
-              </button>
-              <button type="button" class="session-web__agent-btn" onClick={dismissAsked}>
-                Not now
-              </button>
-            </Show>
-            <Show when={stripState() === "off"}>
-              <button type="button" class="session-web__agent-link" onClick={() => grantSite(o())}>
-                Let IRIS use this page
-              </button>
-            </Show>
-          </div>
-        )}
+      {/* The agent strip (#193145 read, #193186 act): what IRIS may do here, what it is doing, and
+          the person's controls. Most urgent state first (browser-grants stripState). */}
+      <Show when={origin() && stripState()}>
+        {(_) => {
+          const o = () => origin()!
+          const host = () => hostOf(o())
+          const Btn = (p: { primary?: boolean; onClick: () => void; title?: string; children: any }) => (
+            <button
+              type="button"
+              class="session-web__agent-btn"
+              data-primary={p.primary ? "true" : undefined}
+              onClick={p.onClick}
+              title={p.title}
+            >
+              {p.children}
+            </button>
+          )
+          const StopBtn = () => (
+            <Btn onClick={() => revokeSite(o())} title="IRIS can't read or click on this site until you allow it again">
+              Stop
+            </Btn>
+          )
+          return (
+            <div class="session-web__agent" data-slot="browser-agent-strip" data-state={stripState()}>
+              <Switch>
+                <Match when={stripState() === "confirm"}>
+                  <span>
+                    IRIS wants to click <b>"{confirmLabel()}"</b> on <b>{host()}</b>
+                  </span>
+                  <Btn primary onClick={() => answerConfirm(true)}>Allow once</Btn>
+                  <Btn onClick={() => answerConfirm(false)}>Deny</Btn>
+                </Match>
+                <Match when={stripState() === "ask-read"}>
+                  <span>
+                    IRIS asked to read <b>{host()}</b>
+                  </span>
+                  <Btn primary onClick={() => grantSite(o())}>Allow</Btn>
+                  <Btn onClick={dismissAsked}>Not now</Btn>
+                </Match>
+                <Match when={stripState() === "ask-act"}>
+                  <span>
+                    IRIS wants to click and type on <b>{host()}</b>
+                  </span>
+                  <Btn primary onClick={() => grantSite(o(), true)}>Allow clicking</Btn>
+                  <Btn onClick={dismissAsked}>Not now</Btn>
+                </Match>
+                <Match when={stripState() === "taken"}>
+                  <span class="session-web__agent-dot" data-paused="true" />
+                  <span>
+                    You have control of <b>{host()}</b>: IRIS won't click or type here
+                  </span>
+                  <Btn primary onClick={() => handBack(o())}>Hand back</Btn>
+                  <StopBtn />
+                </Match>
+                <Match when={stripState() === "acting"}>
+                  <span class="session-web__agent-dot" data-busy="true" />
+                  <span>
+                    <b>Agent is in control</b> · {activityHere()?.doing}…
+                  </span>
+                  <Btn primary onClick={() => takeOver(o())} title="IRIS stops clicking and typing here until you hand back">
+                    Take over
+                  </Btn>
+                  <StopBtn />
+                </Match>
+                <Match when={stripState() === "reading"}>
+                  <span class="session-web__agent-dot" data-busy="true" />
+                  <span>
+                    IRIS is reading <b>{host()}</b>…
+                  </span>
+                  <StopBtn />
+                </Match>
+                <Match when={stripState() === "can-act" || stripState() === "can-read"}>
+                  <span class="session-web__agent-dot" />
+                  <span>
+                    IRIS can {stripState() === "can-act" ? "use" : "read"} <b>{host()}</b>
+                  </span>
+                  <Show when={stripState() === "can-read"}>
+                    <button type="button" class="session-web__agent-link" onClick={() => grantSite(o(), true)}>
+                      Allow clicking
+                    </button>
+                  </Show>
+                  <StopBtn />
+                </Match>
+                <Match when={stripState() === "off"}>
+                  <button type="button" class="session-web__agent-link" onClick={() => grantSite(o())}>
+                    Let IRIS use this page
+                  </button>
+                </Match>
+              </Switch>
+            </div>
+          )
+        }}
       </Show>
       <div class="session-web__body" ref={body} data-slot="native-browser-body">
         <Show when={!opened()}>

@@ -11,8 +11,11 @@
  * in the app (browser-grants.ts). Whether a verb may run at all is browser-verbs.ts, at the tool
  * boundary, the same for every target. This file only moves scripts and answers.
  *
- * READ-ONLY FOR NOW. Every script goes out as `mode: "read"` except the three that act, which go
- * as `act`; the app refuses `act` until acting ships (B2), so a tool bug cannot make it click.
+ * READ AND ACT (#193186). Every script goes out as `mode: "read"` except the three that act,
+ * which go as `act`: the app checks the person allowed CLICKING on that site, separately from
+ * reading, and refuses while they have taken over. An irreversible click carries its label as
+ * `confirm`, and the app asks the person to allow it once; that wait is why such a call gets a
+ * long timeout. The element about to be acted on flashes, so the person sees where.
  */
 import { ScriptedPage } from "./browser-driver"
 import type { Panel } from "./panel"
@@ -36,8 +39,19 @@ export function unpackPageAnswer(o: Panel.Outcome, explainSilence: (o: Panel.Out
   return env.value
 }
 
+/** Outline the element holding this ref for a moment: the person sees where the agent works. */
+export function flashScript(ref: number): string {
+  return `(() => { const el = document.querySelector('[data-iris-ref="${Math.trunc(ref)}"]'); if (!el) return false; const o = el.style.outline, f = el.style.outlineOffset; el.style.outline = '3px solid #14b8a6'; el.style.outlineOffset = '2px'; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { el.style.outline = o; el.style.outlineOffset = f }, 1200); return true })()`
+}
+
+/** How long the person has to answer an Allow once prompt, plus the round trip. */
+export const CONFIRM_TIMEOUT_MS = 75_000
+
 export class PanelPage extends ScriptedPage {
   private mode: "read" | "act" = "read"
+  private doing?: string
+  /** Set by the tool just before an irreversible click: the label the person will be asked about. */
+  confirmNext?: string
 
   constructor(
     private readonly send: PanelSend,
@@ -47,7 +61,20 @@ export class PanelPage extends ScriptedPage {
   }
 
   async evaluate<T>(expression: string): Promise<T> {
-    const o = await this.send({ action: "page", op: "eval", script: expression, mode: this.mode })
+    // The confirm rides only the FIRST act script (the click itself), never the reads after it.
+    const confirm = this.mode === "act" ? this.confirmNext : undefined
+    if (confirm) this.confirmNext = undefined
+    const o = await this.send(
+      {
+        action: "page",
+        op: "eval",
+        script: expression,
+        mode: this.mode,
+        ...(confirm ? { confirm } : {}),
+        ...(this.mode === "act" && this.doing ? { doing: this.doing } : {}),
+      },
+      confirm ? CONFIRM_TIMEOUT_MS : undefined,
+    )
     return unpackPageAnswer(o, this.explainSilence) as T
   }
 
@@ -65,22 +92,28 @@ export class PanelPage extends ScriptedPage {
     return { url: this.currentUrl, title: v.title ?? "", status: "ok" }
   }
 
-  private async acting<T>(fn: () => Promise<T>): Promise<T> {
+  private async acting<T>(ref: number, doing: string, fn: () => Promise<T>): Promise<T> {
+    // The flash is a read: it only outlines. A failure to flash never stops the act.
+    await this.evaluate(flashScript(ref)).catch(() => undefined)
+    await Bun.sleep(350)
     this.mode = "act"
+    this.doing = doing
     try {
       return await fn()
     } finally {
       this.mode = "read"
+      this.doing = undefined
+      this.confirmNext = undefined
     }
   }
   override clickRef(ref: number) {
-    return this.acting(() => super.clickRef(ref))
+    return this.acting(ref, this.confirmNext ? `clicking "${this.confirmNext}"` : `clicking [${ref}]`, () => super.clickRef(ref))
   }
   override typeRef(ref: number, text: string) {
-    return this.acting(() => super.typeRef(ref, text))
+    return this.acting(ref, `typing into [${ref}]`, () => super.typeRef(ref, text))
   }
   override selectRef(ref: number, value: string) {
-    return this.acting(() => super.selectRef(ref, value))
+    return this.acting(ref, `choosing "${value.slice(0, 30)}"`, () => super.selectRef(ref, value))
   }
 
   async screenshot(): Promise<Uint8Array> {

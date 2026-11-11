@@ -1,18 +1,30 @@
 /**
- * Which sites the person has let IRIS use in the Browser pane (#193145, epic #193144 Q1).
+ * What the person has let IRIS do in the Browser pane, per site (#193145 read, #193186 act).
  *
- * THE CHECK LIVES HERE, IN THE APP, not in the engine. The agent runs in the engine; the button
- * that grants a site and the code that enforces it are both on the person's side of the line,
- * where no tool call can reach. A grant is per SITE (origin) and lasts until the person revokes
- * it (epic Q2 may narrow that to one chat): Stop in the Browser bar revokes it at once.
+ * THE CHECK LIVES HERE, IN THE APP, not in the engine. The agent runs in the engine; the buttons
+ * that grant a site and the code that enforces them are both on the person's side of the line,
+ * where no tool call can reach.
  *
- * Plus two pieces of UI state the bar draws: a site the agent ASKED for and was refused (so the
- * bar can offer Allow right there), and what the agent is doing right now (the control strip).
+ * Two levels per site (origin): READ (B1) and ACT (B2: click, type, select). They are separate
+ * on purpose: a site someone allowed to be read was not allowed to be clicked, and must not
+ * become clickable because a later build learned to click. Grants from the read-only build
+ * (v1, a list of origins) come back as read-only.
+ *
+ * Plus the person's controls while the agent works:
+ *  - Take over: the agent's next act on that site is refused until Hand back. Reading continues.
+ *  - Stop: the site's grant is revoked, read and act.
+ *  - Confirm: an irreversible click (Book, Pay, Send…) waits for the person's Allow once. The
+ *    tool's own `confirm: true` is the agent vouching for itself; in the person's signed-in pane
+ *    the person decides.
  */
 import { createSignal } from "solid-js"
 
-const KEY = "iris.browser.grants.v1"
+const KEY_V1 = "iris.browser.grants.v1"
+const KEY = "iris.browser.grants.v2"
 const MAX = 200
+
+export type Grant = { origin: string; act: boolean }
+export type PageMode = "read" | "act"
 
 export function originOf(url: string | undefined | null): string | undefined {
   if (!url) return undefined
@@ -33,27 +45,36 @@ export function hostOf(origin: string | undefined): string {
   }
 }
 
-/** Read defensively: storage can be absent, full, or hold something an older build wrote. */
-export function parseGrants(raw: string | null | undefined): string[] {
-  if (!raw) return []
-  try {
-    const v = JSON.parse(raw)
-    return Array.isArray(v) ? v.filter((o): o is string => typeof o === "string" && !!originOf(o)).slice(-MAX) : []
-  } catch {
-    return []
+/** v1 was a list of origins (read-only); v2 is {origin, act}. Defensive: storage may hold junk. */
+export function parseGrants(raw: string | null | undefined, legacy?: string | null): Grant[] {
+  const out: Grant[] = []
+  const add = (g: Grant) => {
+    if (!originOf(g.origin) || out.some((x) => x.origin === g.origin)) return
+    out.push(g)
   }
+  try {
+    const v = raw ? JSON.parse(raw) : undefined
+    if (Array.isArray(v)) {
+      for (const g of v) if (g && typeof g.origin === "string") add({ origin: g.origin, act: g.act === true })
+    }
+  } catch {}
+  try {
+    const v1 = legacy ? JSON.parse(legacy) : undefined
+    if (Array.isArray(v1)) for (const o of v1) if (typeof o === "string") add({ origin: o, act: false })
+  } catch {}
+  return out.slice(-MAX)
 }
 
 const load = () => {
   try {
-    return parseGrants(globalThis.localStorage?.getItem(KEY))
+    return parseGrants(globalThis.localStorage?.getItem(KEY), globalThis.localStorage?.getItem(KEY_V1))
   } catch {
     return []
   }
 }
 
-const [grants, setGrantsRaw] = createSignal<string[]>(load())
-const save = (next: string[]) => {
+const [grants, setGrantsRaw] = createSignal<Grant[]>(load())
+const save = (next: Grant[]) => {
   setGrantsRaw(next)
   try {
     globalThis.localStorage?.setItem(KEY, JSON.stringify(next))
@@ -61,54 +82,153 @@ const save = (next: string[]) => {
 }
 
 export const browserGrants = grants
-export function isGranted(origin: string | undefined, list = grants()): boolean {
-  return !!origin && list.includes(origin)
+
+export function isGranted(origin: string | undefined, mode: PageMode = "read", list = grants()): boolean {
+  if (!origin) return false
+  const g = list.find((x) => x.origin === origin)
+  return !!g && (mode === "read" || g.act)
 }
-export function grantSite(origin: string) {
-  if (!originOf(origin) || isGranted(origin)) return
-  save([...grants(), origin].slice(-MAX))
-  if (asked() === origin) setAsked(undefined)
+
+/** Allow a site. `act` adds clicking/typing; it never removes it (Stop does). */
+export function grantSite(origin: string, act = false) {
+  if (!originOf(origin)) return
+  const cur = grants().find((x) => x.origin === origin)
+  if (cur && (cur.act || !act)) return clearAsked(origin)
+  save([...grants().filter((x) => x.origin !== origin), { origin, act: act || !!cur?.act }].slice(-MAX))
+  clearAsked(origin)
 }
+
+/** Stop: the site's grant goes, read and act, and any take-over or prompt for it ends. */
 export function revokeSite(origin: string) {
-  save(grants().filter((o) => o !== origin))
+  save(grants().filter((x) => x.origin !== origin))
+  handBack(origin)
+  const a = asked()
+  if (a?.origin === origin) {
+    a.resolve?.(false)
+    setAsked(undefined)
+  }
   setActivity(undefined)
 }
 
-/** A site the agent asked to use and was refused: the bar offers Allow for it. */
-const [asked, setAsked] = createSignal<string>()
+// ── Take over ────────────────────────────────────────────────────────────────────────────────
+const [takenOver, setTakenOver] = createSignal<string[]>([])
+export const takenOverSites = takenOver
+export function takeOver(origin: string) {
+  if (!takenOver().includes(origin)) setTakenOver([...takenOver(), origin])
+  setActivity(undefined)
+}
+export function handBack(origin: string) {
+  setTakenOver(takenOver().filter((o) => o !== origin))
+}
+
+// ── What the agent asked for, shown in the strip ─────────────────────────────────────────────
+export type Ask =
+  | { origin: string; kind: "read" | "act"; resolve?: undefined; label?: undefined }
+  | { origin: string; kind: "confirm"; label: string; resolve: (ok: boolean) => void }
+const [asked, setAsked] = createSignal<Ask>()
 export const askedSite = asked
-export function noteAsked(origin: string) {
-  setAsked(origin)
+export function noteAsked(origin: string, kind: "read" | "act") {
+  const a = asked()
+  if (a?.kind === "confirm") return // a pending confirm outranks a refused ask
+  setAsked({ origin, kind })
+}
+function clearAsked(origin: string) {
+  const a = asked()
+  if (a && a.origin === origin && a.kind !== "confirm") setAsked(undefined)
 }
 export function dismissAsked() {
+  const a = asked()
+  a?.resolve?.(false)
   setAsked(undefined)
 }
 
-/** What the agent is doing in the pane right now: the control strip's text. Clears itself. */
-export type Activity = { origin: string; doing: string; at: number }
+/**
+ * Ask the person to allow ONE irreversible click. Resolves false on Deny, on Stop, on another
+ * confirm replacing it, or after `timeoutMs` with no answer: silence is a no.
+ */
+export function confirmAct(origin: string, label: string, timeoutMs = 60_000): Promise<boolean> {
+  asked()?.resolve?.(false)
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      if (asked()?.kind === "confirm" && asked()?.label === label) setAsked(undefined)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    setAsked({ origin, kind: "confirm", label, resolve: finish })
+  })
+}
+export function answerConfirm(ok: boolean) {
+  const a = asked()
+  if (a?.kind === "confirm") a.resolve(ok)
+}
+
+// ── What the agent is doing right now: the control strip's text. Clears itself. ──────────────
+export type Activity = { origin: string; doing: string; mode: PageMode; at: number }
 const [activity, setActivity] = createSignal<Activity>()
 export const browserActivity = activity
 let clear: ReturnType<typeof setTimeout> | undefined
-export function noteActivity(origin: string, doing: string, holdMs = 2500) {
-  setActivity({ origin, doing, at: Date.now() })
+export function noteActivity(origin: string, doing: string, mode: PageMode = "read") {
+  setActivity({ origin, doing, mode, at: Date.now() })
   clearTimeout(clear)
-  clear = setTimeout(() => setActivity(undefined), holdMs)
+  clear = setTimeout(() => setActivity(undefined), mode === "act" ? 6000 : 2500)
 }
 
-/**
- * The one decision, pure: may the agent run this page operation now?
- * `act` (click, type, select) is refused outright until B2 ships it.
- */
+/** The one decision, pure: may the agent run this page operation now? */
 export function pageRefusal(input: {
-  mode: "read" | "act"
+  mode: PageMode
   url: string | undefined
-  granted: string[]
+  grants: Grant[]
+  takenOver?: string[]
 }): string | undefined {
-  if (input.mode === "act") return "acting in the Browser pane (click, type, select) isn't available yet; it can only read"
   const origin = originOf(input.url)
   if (!origin) return "the Browser pane has no web page open: open one first"
-  if (!input.granted.includes(origin)) {
-    return `the person hasn't let IRIS use ${hostOf(origin)}. Ask them to click "Let IRIS use this page" in the Browser bar (it is showing an Allow button now), then try again`
+  const host = hostOf(origin)
+  if (!isGranted(origin, "read", input.grants)) {
+    return `the person hasn't let IRIS use ${host}. Ask them to click "Let IRIS use this page" (it is showing Allow in the Browser bar now), then try again`
+  }
+  if (input.mode === "act") {
+    if (!isGranted(origin, "act", input.grants)) {
+      return `the person allowed IRIS to READ ${host}, not to click or type there. Ask them to click "Allow clicking" in the Browser bar (it is showing now), then try again`
+    }
+    if (input.takenOver?.includes(origin)) {
+      return `the person took over on ${host}: wait until they hand back before clicking or typing there`
+    }
   }
   return undefined
+}
+
+/** What the strip under the Browser bar shows for the page on screen, most urgent first. */
+export type StripState =
+  | "confirm" // an irreversible click is waiting for Allow once
+  | "ask-read" // the agent was refused: offer Allow
+  | "ask-act" // the agent may read but was refused a click: offer Allow clicking
+  | "taken" // the person has the wheel: offer Hand back
+  | "acting" // the agent is clicking/typing right now: Take over · Stop
+  | "reading" // the agent is reading right now
+  | "can-act" // idle, allowed to read and act
+  | "can-read" // idle, allowed to read
+  | "off" // nothing allowed: offer Let IRIS use this page
+
+export function stripState(input: {
+  origin: string | undefined
+  grants: Grant[]
+  asked?: Ask
+  takenOver?: string[]
+  activity?: Activity
+}): StripState | undefined {
+  const o = input.origin
+  if (!o) return undefined
+  const a = input.asked?.origin === o ? input.asked : undefined
+  if (a?.kind === "confirm") return "confirm"
+  if (input.takenOver?.includes(o)) return "taken"
+  if (a?.kind === "read" && !isGranted(o, "read", input.grants)) return "ask-read"
+  if (a?.kind === "act" && !isGranted(o, "act", input.grants)) return "ask-act"
+  if (!isGranted(o, "read", input.grants)) return "off"
+  const busy = input.activity?.origin === o ? input.activity : undefined
+  if (busy) return busy.mode === "act" ? "acting" : "reading"
+  return isGranted(o, "act", input.grants) ? "can-act" : "can-read"
 }
