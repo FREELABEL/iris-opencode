@@ -36,3 +36,34 @@ export function browserStep(input: Record<string, unknown>): string {
   }
 }
 
+
+/** What a side_panel call did, in words: "Showed Browser", "Opened card #193186". */
+export function panelStep(input: Record<string, unknown>): string {
+  const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : "")
+  const name = (id: string) => (id ? id.charAt(0).toUpperCase() + id.slice(1) : "")
+  switch (str("action")) {
+    case "show":
+      return `Showed ${name(str("surface")) || "a product"}${str("sub") ? ` › ${name(str("sub"))}` : ""}`
+    case "browse": {
+      let host = str("url")
+      try {
+        host = new URL(host).hostname.replace(/^www\./, "")
+      } catch {}
+      return `Opened ${host} in the Browser`
+    }
+    case "artifact":
+      return "Showed an artifact"
+    case "card":
+      return typeof input.item === "number" ? `Opened card #${input.item}` : "Opened a card"
+    case "tab":
+      return `Showed ${name(str("tab"))}`
+    case "open":
+      return "Opened the side panel"
+    case "close":
+      return "Closed the side panel"
+    case "state":
+      return "Checked what's on screen"
+    default:
+      return str("action")
+  }
+}

@@ -13,6 +13,8 @@ import {
   type JSX,
   type ComponentProps,
 } from "solid-js"
+import { ToolMark } from "./tool-mark"
+import { panelStep } from "./browser-step"
 import { browserStep } from "./browser-step"
 import { readAloudAvailable, readAloudOptions, readingId, toggleReading } from "./read-aloud"
 import { createStore } from "solid-js/store"
@@ -1993,24 +1995,24 @@ ToolRegistry.register({
   },
 })
 
-/** The Browser mark: a window with IRIS's pointer in it. The pointer taps while the step runs. */
-function BrowserMark(props: { working: boolean }) {
-  return (
-    <span data-slot="web-globe" data-browser="true" data-spinning={props.working ? "true" : undefined} aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
-        <rect x="1.75" y="2.25" width="12.5" height="10.5" rx="2" />
-        <path d="M1.75 5.25h12.5" />
-        <path
-          data-slot="browser-mark-pointer"
-          d="M8.2 7.3l4.3 1.9-1.9.5-.6 1.9z"
-          fill="currentColor"
-          stroke-linejoin="round"
-          stroke-width="0.9"
-        />
-      </svg>
-    </span>
-  )
-}
+ToolRegistry.register({
+  name: "side_panel",
+  render(props) {
+    const pending = createMemo(() => props.status === "pending" || props.status === "running")
+    return (
+      <BasicTool
+        {...props}
+        hideDetails
+        icon="window-cursor"
+        trigger={{
+          title: "Panel",
+          subtitle: panelStep(props.input),
+          lead: () => <ToolMark product="panel" working={pending()} />,
+        }}
+      />
+    )
+  },
+})
 
 ToolRegistry.register({
   name: "browser",
@@ -2026,7 +2028,7 @@ ToolRegistry.register({
         trigger={{
           title: title(),
           subtitle: browserStep(props.input),
-          lead: () => <BrowserMark working={pending()} />,
+          lead: () => <ToolMark product="browser" working={pending()} />,
         }}
       />
     )
@@ -2079,22 +2081,6 @@ ToolRegistry.register({
   },
 })
 
-/**
- * The web-search mark: a small globe before "Exa Web Search", so it reads as "IRIS is out on the
- * internet", not looking in your files. Its meridian turns while the search runs.
- */
-function WebGlobe(props: { spinning: boolean }) {
-  return (
-    <span data-slot="web-globe" data-spinning={props.spinning ? "true" : undefined} aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
-        <circle cx="8" cy="8" r="6.25" />
-        <path d="M1.9 6h12.2M1.9 10h12.2" stroke-linecap="round" />
-        <ellipse data-slot="web-globe-meridian" cx="8" cy="8" rx="2.6" ry="6.25" />
-      </svg>
-    </span>
-  )
-}
-
 ToolRegistry.register({
   name: "websearch",
   render(props) {
@@ -2114,7 +2100,7 @@ ToolRegistry.register({
           title: title(),
           subtitle: query(),
           subtitleClass: "exa-tool-query",
-          lead: (pending) => <WebGlobe spinning={pending} />,
+          lead: (pending) => <ToolMark product="websearch" working={pending} />,
         }}
       >
         <ExaOutput output={props.output} />
