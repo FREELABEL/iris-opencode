@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ASK_STALE_MS,
+  noteAsked,
   answerConfirm,
   browserMode,
   setBrowserMode,
@@ -167,3 +169,10 @@ describe("Always allow mode", () => {
     expect(browserMode()).toBe("ask")
   })
 })
+
+test("an ask nobody is waiting on any more goes away by itself", async () => {
+  noteAsked("https://stale.example", "read")
+  expect(askedSite()?.origin).toBe("https://stale.example")
+  await Bun.sleep(ASK_STALE_MS + 100)
+  expect(askedSite()).toBeUndefined()
+}, ASK_STALE_MS + 2000)

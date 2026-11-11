@@ -160,10 +160,22 @@ export type Ask =
   | { origin: string; kind: "confirm"; label: string; resolve: (ok: boolean) => void }
 const [asked, setAsked] = createSignal<Ask>()
 export const askedSite = asked
+/**
+ * The agent re-asks every 1.5 s while it waits (panel-page.ts). When it stops waiting (it gave
+ * up, the turn ended, the chat was stopped), the asks stop, and so the prompt goes away by itself
+ * instead of hanging on screen with nobody waiting for it.
+ */
+export const ASK_STALE_MS = 8_000
+let askTimer: ReturnType<typeof setTimeout> | undefined
 export function noteAsked(origin: string, kind: "read" | "act") {
   const a = asked()
   if (a?.kind === "confirm") return // a pending confirm outranks a refused ask
-  setAsked({ origin, kind })
+  if (a?.origin !== origin || a.kind !== kind) setAsked({ origin, kind })
+  clearTimeout(askTimer)
+  askTimer = setTimeout(() => {
+    const now = asked()
+    if (now && now.kind !== "confirm") setAsked(undefined)
+  }, ASK_STALE_MS)
 }
 function clearAsked(origin: string) {
   const a = asked()

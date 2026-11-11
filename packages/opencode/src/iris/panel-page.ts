@@ -50,8 +50,9 @@ export class PanelPage extends ScriptedPage {
   private doing?: string
   /** Set by the tool just before an irreversible click: the label the person will be asked about. */
   confirmNext?: string
-  /** How long a page operation waits for the person's Allow, and how often it looks. */
-  allowWaitMs = 60_000
+  /** How long a page operation waits for the person's Allow (like a question: the agent is paused
+   * on them, it never goes ahead without it), and how often it looks. */
+  allowWaitMs = 5 * 60_000
   allowPollMs = 1_500
 
   constructor(
