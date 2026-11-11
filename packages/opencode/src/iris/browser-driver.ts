@@ -17,6 +17,7 @@
  * can never be. One place decides what may be opened; if that place moves, the tests that prove
  * the refusals move with it.
  */
+import { withCursor } from "./agent-cursor"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -266,6 +267,20 @@ export class PageSession extends ScriptedPage {
   get kind(): { saved: boolean; visible: boolean } {
     return { saved: !!this.opts.profileDir, visible: this.opts.headless === false }
   }
+  // A VISIBLE window is watched by the person: IRIS's cursor glides to what it acts on there too.
+  // Headless, nobody is watching, so no glide and no wait.
+  override clickRef(ref: number) {
+    return this.kind.visible ? withCursor((e) => this.evaluate(e), ref, () => super.clickRef(ref)) : super.clickRef(ref)
+  }
+  override typeRef(ref: number, text: string) {
+    return this.kind.visible ? withCursor((e) => this.evaluate(e), ref, () => super.typeRef(ref, text)) : super.typeRef(ref, text)
+  }
+  override selectRef(ref: number, value: string) {
+    return this.kind.visible
+      ? withCursor((e) => this.evaluate(e), ref, () => super.selectRef(ref, value))
+      : super.selectRef(ref, value)
+  }
+
 
   private get timeout() {
     return this.opts.timeoutMs ?? 30_000

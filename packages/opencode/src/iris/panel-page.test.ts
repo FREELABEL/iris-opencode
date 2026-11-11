@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { CONFIRM_TIMEOUT_MS, flashScript, PanelPage, unpackPageAnswer } from "./panel-page"
+import { CONFIRM_TIMEOUT_MS, PanelPage, unpackPageAnswer } from "./panel-page"
+import { cursorMoveScript, cursorPressScript } from "./agent-cursor"
 import type { Panel } from "./panel"
 
 const outcome = (state?: Partial<Panel.Stored>): Panel.Outcome => ({
@@ -111,10 +112,20 @@ describe("PanelPage", () => {
     expect(page.confirmNext).toBeUndefined()
   })
 
-  test("the element flashes before the act, as a read", async () => {
-    const { sent, page } = desktop(() => ({ result: env(true) }))
+  test("IRIS's cursor glides to the element and presses, as reads, before the act", async () => {
+    const { sent, page } = desktop(() => ({ result: env(0) }))
     await page.clickRef(4)
-    expect(sent[0]).toEqual({ action: "page", op: "eval", script: flashScript(4), mode: "read" })
+    expect(sent[0]).toEqual({ action: "page", op: "eval", script: cursorMoveScript(4), mode: "read" })
+    expect(sent[1]).toEqual({ action: "page", op: "eval", script: cursorPressScript(), mode: "read" })
+    expect((sent[2] as { mode?: string }).mode).toBe("act")
+  })
+
+  test("a cursor that can't be drawn never stops the act", async () => {
+    const { sent, page } = desktop((c) =>
+      c.action === "page" && c.op === "eval" && c.script.includes("__irisCursor") ? { error: "page threw" } : { result: env(true) },
+    )
+    expect(await page.clickRef(4)).toBe(true)
+    expect(sent.some((c) => c.action === "page" && c.op === "eval" && c.mode === "act")).toBe(true)
   })
 
   test("a person's Deny reaches the agent and the act fails", async () => {

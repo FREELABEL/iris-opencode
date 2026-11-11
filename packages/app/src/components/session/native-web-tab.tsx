@@ -281,6 +281,14 @@ export function NativeWebTab(props: {
               {p.children}
             </button>
           )
+          // The "IRIS is asking you" mark: gold, the app's attention colour (same tokens as the question dock).
+          const Ask = () => (
+            <svg class="session-web__agent-ask" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M8 1.6 14.6 13.4H1.4z" fill="currentColor" fill-opacity=".18" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+              <path d="M8 6v3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              <circle cx="8" cy="11.4" r=".9" fill="currentColor" />
+            </svg>
+          )
           const StopBtn = () => (
             <Btn onClick={() => revokeSite(o())} title="IRIS can't read or click on this site until you allow it again">
               Stop
@@ -290,6 +298,7 @@ export function NativeWebTab(props: {
             <div class="session-web__agent" data-slot="browser-agent-strip" data-state={stripState()}>
               <Switch>
                 <Match when={stripState() === "confirm"}>
+                  <Ask />
                   <span>
                     Let IRIS click <b>"{confirmLabel()}"</b>?
                   </span>
@@ -297,6 +306,7 @@ export function NativeWebTab(props: {
                   <Btn onClick={() => answerConfirm(false)}>Deny</Btn>
                 </Match>
                 <Match when={stripState() === "ask-read"}>
+                  <Ask />
                   <span>
                     Let IRIS use <b>{host()}</b>?
                   </span>
@@ -304,6 +314,7 @@ export function NativeWebTab(props: {
                   <Btn onClick={dismissAsked}>Not now</Btn>
                 </Match>
                 <Match when={stripState() === "ask-act"}>
+                  <Ask />
                   <span>
                     Let IRIS use <b>{host()}</b>?
                   </span>

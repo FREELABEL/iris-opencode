@@ -15,9 +15,10 @@
  * which go as `act`: the app checks the person allowed CLICKING on that site, separately from
  * reading, and refuses while they have taken over. An irreversible click carries its label as
  * `confirm`, and the app asks the person to allow it once; that wait is why such a call gets a
- * long timeout. The element about to be acted on flashes, so the person sees where.
+ * long timeout. IRIS's cursor glides to the element first (agent-cursor.ts), so the person sees where.
  */
 import { ScriptedPage } from "./browser-driver"
+import { withCursor } from "./agent-cursor"
 import type { Panel } from "./panel"
 
 export type PanelSend = (command: Panel.Command, timeoutMs?: number) => Promise<Panel.Outcome>
@@ -37,11 +38,6 @@ export function unpackPageAnswer(o: Panel.Outcome, explainSilence: (o: Panel.Out
   }
   if (!env || env.ok !== true) throw new Error(`the page script failed: ${env?.error ?? "no reason given"}`)
   return env.value
-}
-
-/** Outline the element holding this ref for a moment: the person sees where the agent works. */
-export function flashScript(ref: number): string {
-  return `(() => { const el = document.querySelector('[data-iris-ref="${Math.trunc(ref)}"]'); if (!el) return false; const o = el.style.outline, f = el.style.outlineOffset; el.style.outline = '3px solid #14b8a6'; el.style.outlineOffset = '2px'; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { el.style.outline = o; el.style.outlineOffset = f }, 1200); return true })()`
 }
 
 /** How long the person has to answer an Allow once prompt, plus the round trip. */
@@ -107,13 +103,19 @@ export class PanelPage extends ScriptedPage {
   }
 
   private async acting<T>(ref: number, doing: string, fn: () => Promise<T>): Promise<T> {
-    // The flash is a read: it only outlines. A failure to flash never stops the act.
-    await this.evaluate(flashScript(ref)).catch(() => undefined)
-    await Bun.sleep(350)
-    this.mode = "act"
-    this.doing = doing
+    // The cursor glides there first (reads: it only draws), so the person sees where IRIS works.
+    // The strip already says "IRIS is working" while it moves.
+    this.mode = "read"
     try {
-      return await fn()
+      return await withCursor(
+        (e) => this.evaluate(e),
+        ref,
+        async () => {
+          this.mode = "act"
+          this.doing = doing
+          return fn()
+        },
+      )
     } finally {
       this.mode = "read"
       this.doing = undefined

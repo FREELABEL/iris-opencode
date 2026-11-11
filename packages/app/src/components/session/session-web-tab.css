@@ -129,10 +129,6 @@
   color: var(--text-strong);
   font-weight: 600;
 }
-.session-web__agent[data-state="asked"] {
-  background: var(--surface-warning-weak, var(--background-element));
-  color: var(--text-base);
-}
 .session-web__agent-dot {
   width: 7px;
   height: 7px;
@@ -178,12 +174,32 @@
   font-size: 12px;
 }
 .session-web__agent-link:hover { color: var(--text-strong); }
+/* IRIS is asking: a gold tint over the whole strip (never an edge bar), a gold mark, a gold Allow. */
 .session-web__agent[data-state="confirm"],
 .session-web__agent[data-state="ask-read"],
 .session-web__agent[data-state="ask-act"] {
-  min-height: 34px;
-  background: var(--background-element);
-  color: var(--text-base);
+  min-height: 36px;
+  /* Mixed from the theme's gold, not --surface-warning-weak: that one is near-white in dark mode. */
+  background: color-mix(in srgb, var(--icon-warning-base, #fbb73c) 13%, var(--background-base, #101010));
+  color: var(--text-strong);
+}
+.session-web__agent-ask {
+  flex-shrink: 0;
+  color: var(--icon-warning-base, #d4a017);
+}
+.session-web__agent[data-state="confirm"] .session-web__agent-btn[data-primary],
+.session-web__agent[data-state="ask-read"] .session-web__agent-btn[data-primary],
+.session-web__agent[data-state="ask-act"] .session-web__agent-btn[data-primary] {
+  background: var(--icon-warning-base, #d4a017);
+  /* Dark ink on gold in both themes (--text-on-warning-strong is white in dark mode). */
+  color: #1f1500;
+  animation: session-web-ask 2.4s ease-in-out 2;
+}
+@keyframes session-web-ask {
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--icon-warning-base, #d4a017) 28%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-web__agent-btn[data-primary] { animation: none !important; }
 }
 .session-web__agent-dot[data-paused] {
   background: var(--icon-warning-base, #f59e0b);
