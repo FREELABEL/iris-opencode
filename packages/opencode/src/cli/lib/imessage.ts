@@ -83,10 +83,34 @@ export function setQueryForTests(fn: ((sql: string) => string) | null): void {
 export function query(sql: string): string {
   if (queryOverride) return queryOverride(sql).trim()
   const escaped = sql.replace(/"/g, '\\"')
-  return execSync(`sqlite3 "${MESSAGES_DB}" "${escaped}"`, {
-    encoding: "utf-8",
-    timeout: 10000,
-  }).trim()
+  try {
+    return execSync(`sqlite3 "${MESSAGES_DB}" "${escaped}"`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      // #193251: stderr used to be inherited, so a failing query printed sqlite3's raw error, the
+      // full SQL and the user's chat.db path straight onto the terminal. Capture it instead.
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim()
+  } catch (err: any) {
+    throw new Error(describeQueryFailure(err))
+  }
+}
+
+/**
+ * One clean line saying why sqlite3 failed — never the SQL, never the database path.
+ * execSync's own message is `Command failed: sqlite3 "/Users/<you>/Library/Messages/chat.db" …`
+ * followed by the whole query, which is what leaked in #193251.
+ */
+export function describeQueryFailure(err: any): string {
+  if (err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM") return "iMessage database query timed out"
+  const stderr = String(err?.stderr ?? "")
+  const line = stderr.split("\n").map((l) => l.trim()).find(Boolean) ?? ""
+  const clean = line
+    .split(MESSAGES_DB).join("chat.db")
+    .split(homedir()).join("~")
+    .replace(/^(Parse error|Runtime error|Error)( near line \d+)?:\s*/i, "")
+    .slice(0, 160)
+  return clean ? `iMessage database query failed: ${clean}` : "iMessage database query failed"
 }
 
 // ── Self handle ("me" / "self" target) ──
@@ -257,8 +281,10 @@ export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number
         chat_identifier: senderHandle || undefined,
       } satisfies Message
     }).filter(Boolean) as Message[]
-  } catch {
-    return []
+  } catch (err) {
+    // #193251: this used to `return []`, so a query that FAILED read as "no messages" and the
+    // command exited 0. Callers (search / read / read-group) report it and exit non-zero.
+    throw err
   }
 }
 
