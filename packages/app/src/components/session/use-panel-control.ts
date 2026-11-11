@@ -11,6 +11,7 @@ import {
   hostOf,
   noteActivity,
   noteAsked,
+  recentlyDeclined,
   originOf,
   pageRefusal,
   takenOverSites,
@@ -302,6 +303,9 @@ export function usePanelControl(input: { open: () => boolean }) {
       const s = await nb.state()
       const origin = originOf(s?.url)
       const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites() })
+      if (why && recentlyDeclined(origin)) {
+        return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+      }
       if (why) {
         // Offer the missing permission right there in the strip (never while the person has the wheel).
         if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)

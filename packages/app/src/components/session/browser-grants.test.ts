@@ -54,7 +54,7 @@ describe("pageRefusal", () => {
   test("act on a READ-only site: refused, and says how to allow clicking", () => {
     const why = pageRefusal({ mode: "act", url: "https://www.youtube.com/feed", grants })
     expect(why).toContain("READ youtube.com")
-    expect(why).toContain("Allow clicking")
+    expect(why).toContain("click Allow")
   })
   test("act on an act site: yes", () => {
     expect(pageRefusal({ mode: "act", url: "https://www.airbnb.com/s/Tokyo", grants })).toBeUndefined()
@@ -65,7 +65,7 @@ describe("pageRefusal", () => {
     expect(pageRefusal({ mode: "read", url: "https://www.airbnb.com/", grants, takenOver })).toBeUndefined()
   })
   test("a site never granted, and another subdomain, are refused", () => {
-    expect(pageRefusal({ mode: "read", url: "https://x.com/home", grants })).toContain("Let IRIS use this page")
+    expect(pageRefusal({ mode: "read", url: "https://x.com/home", grants })).toContain("click Allow")
     expect(pageRefusal({ mode: "read", url: "https://studio.youtube.com/", grants })).toBeDefined()
   })
   test("no page open", () => {

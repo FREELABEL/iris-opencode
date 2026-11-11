@@ -51,6 +51,29 @@ describe("PanelPage", () => {
     expect(sent[0]).toEqual({ action: "page", op: "eval", script: "document.body ? document.body.innerText : ''", mode: "read" })
   })
 
+  test("not allowed yet: it waits for the person's one Allow, then carries on (no second ask)", async () => {
+    let allowed = false
+    const { sent, page } = desktop(() =>
+      allowed
+        ? { result: env("feed") }
+        : { error: "the person hasn't let IRIS use youtube.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" },
+    )
+    page.allowPollMs = 5
+    setTimeout(() => (allowed = true), 30)
+    expect(await page.text()).toBe("feed")
+    expect(sent.length).toBeGreaterThan(1)
+  })
+
+  test("waiting gives up after its window, and Not now (any other refusal) ends it at once", async () => {
+    const never = desktop(() => ({ error: "the person hasn't let IRIS use x.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" }))
+    never.page.allowPollMs = 5
+    never.page.allowWaitMs = 30
+    await expect(never.page.text()).rejects.toThrow("click Allow")
+    const no = desktop(() => ({ error: "the person chose Not now for x.com. Don't try again unless they ask" }))
+    await expect(no.page.text()).rejects.toThrow("Not now")
+    expect(no.sent.length).toBe(1)
+  })
+
   test("attach learns where the pane is", async () => {
     const { page } = desktop(() => ({ result: env("https://www.youtube.com/") }))
     expect(await page.attach()).toBe("https://www.youtube.com/")

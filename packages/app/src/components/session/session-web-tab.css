@@ -148,29 +148,41 @@
 @media (prefers-reduced-motion: reduce) {
   .session-web__agent-dot[data-busy] { animation: none; }
 }
+/* Actions: the message takes the room; the one filled button sits last, the rest are plain words. */
+.session-web__agent > span:not(.session-web__agent-dot) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-web__agent-btn {
-  margin-left: auto;
-  padding: 2px 10px;
-  border: 1px solid var(--border-base);
+  flex-shrink: 0;
+  padding: 3px 8px;
   border-radius: 6px;
-  color: var(--text-base);
-  font-size: 12px;
-}
-.session-web__agent-btn + .session-web__agent-btn { margin-left: 0; }
-.session-web__agent-btn[data-primary] {
-  border-color: var(--text-interactive-base);
-  color: var(--text-interactive-base);
-}
-.session-web__agent-link {
   color: var(--text-weak);
   font-size: 12px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+}
+.session-web__agent-btn:hover { color: var(--text-strong); }
+.session-web__agent-btn[data-primary] {
+  order: 9;
+  padding: 3px 12px;
+  background: var(--text-strong);
+  color: var(--background-base);
+  font-weight: 600;
+}
+.session-web__agent-btn[data-primary]:hover { opacity: 0.9; color: var(--background-base); }
+.session-web__agent-link {
+  flex-shrink: 0;
+  color: var(--text-weak);
+  font-size: 12px;
 }
 .session-web__agent-link:hover { color: var(--text-strong); }
 .session-web__agent[data-state="confirm"],
+.session-web__agent[data-state="ask-read"],
 .session-web__agent[data-state="ask-act"] {
-  background: var(--surface-warning-weak, var(--background-element));
+  min-height: 34px;
+  background: var(--background-element);
   color: var(--text-base);
 }
 .session-web__agent-dot[data-paused] {
@@ -178,54 +190,78 @@
 }
 .session-web__agent-link + .session-web__agent-btn { margin-left: auto; }
 
-/* Use my Chrome sign-ins (S3b): drawn where the page was; the native page hides while it is open. */
+/* Sign in with Chrome (S3b): one button, a calm wait, a quiet done. Theme tokens only. */
 .session-web__body { position: relative; }
-.session-web__import {
+.session-web__hero {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  text-align: center;
+}
+.session-web__chrome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 16px;
+  border-radius: 10px;
+  background: var(--text-strong);
+  color: var(--background-base);
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.session-web__chrome:hover { opacity: 0.9; }
+.session-web__chrome:active { transform: scale(0.99); }
+.session-web__chrome-hint {
+  margin-top: -4px;
+  color: var(--text-weak);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: center;
+}
+.session-web__chrome-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-base);
+  font-size: 13px;
+}
+.session-web__chrome-check { color: var(--text-interactive-base); font-weight: 700; }
+.session-web__bar-chrome {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: 6px;
+  background: var(--text-strong);
+  color: var(--background-base);
+  font-size: 12px;
+  font-weight: 600;
+}
+.session-web__wait {
   position: absolute;
   inset: 0;
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 20px 16px;
-  max-width: 520px;
-  margin: 0 auto;
-  background: var(--background-base);
-  overflow: hidden;
-}
-.session-web__import-head { display: flex; align-items: center; justify-content: space-between; }
-.session-web__import-why { color: var(--text-weak); font-size: 13px; line-height: 1.45; }
-.session-web__import-select {
-  padding: 4px 8px;
-  border: 1px solid var(--border-base);
-  border-radius: 6px;
-  background: var(--background-element);
-  color: var(--text-base);
-  font-size: 12px;
-}
-.session-web__import-tools { display: flex; align-items: center; gap: 12px; }
-.session-web__import-tools .session-web__reason { margin-left: auto; }
-.session-web__import-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  border: 1px solid var(--border-weak-base);
-  border-radius: 8px;
-}
-.session-web__import-row {
-  display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  font-size: 13px;
-  color: var(--text-base);
-  border-bottom: 1px solid var(--border-weak-base);
-  cursor: pointer;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: var(--background-base);
 }
-.session-web__import-row:last-child { border-bottom: 0; }
-.session-web__import-go { margin-left: 0; align-self: flex-start; padding: 6px 14px; font-size: 13px; }
-.session-web__import-go:disabled { opacity: 0.5; }
-.session-web__reason[data-error] { color: var(--text-on-critical-base, var(--text-strong)); }
+.session-web__wait .session-web__chrome-hint { max-width: 300px; margin-top: 0; }
+.session-web__spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border-base);
+  border-top-color: var(--text-strong);
+  animation: session-web-spin 0.8s linear infinite;
+}
+@keyframes session-web-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .session-web__spinner { animation-duration: 2.4s; } }
 .session-web__import-notice {
   padding: 4px 12px;
   border-bottom: 1px solid var(--border-weak-base);

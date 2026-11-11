@@ -5,10 +5,10 @@
  * that grant a site and the code that enforces them are both on the person's side of the line,
  * where no tool call can reach.
  *
- * Two levels per site (origin): READ (B1) and ACT (B2: click, type, select). They are separate
- * on purpose: a site someone allowed to be read was not allowed to be clicked, and must not
- * become clickable because a later build learned to click. Grants from the read-only build
- * (v1, a list of origins) come back as read-only.
+ * Two levels per site (origin): READ (B1) and ACT (B2: click, type, select). The person's one
+ * Allow grants both (one click, not three: people asked IRIS to do something there). The levels
+ * stay separate in storage so grants from the read-only build (v1, a list of origins) come back
+ * read-only: a site allowed before clicking existed never becomes clickable by itself.
  *
  * Plus the person's controls while the agent works:
  *  - Take over: the agent's next act on that site is refused until Hand back. Reading continues.
@@ -93,6 +93,7 @@ export function isGranted(origin: string | undefined, mode: PageMode = "read", l
 export function grantSite(origin: string, act = false) {
   if (!originOf(origin)) return
   const cur = grants().find((x) => x.origin === origin)
+  if (declined?.origin === origin) declined = undefined
   if (cur && (cur.act || !act)) return clearAsked(origin)
   save([...grants().filter((x) => x.origin !== origin), { origin, act: act || !!cur?.act }].slice(-MAX))
   clearAsked(origin)
@@ -139,7 +140,14 @@ function clearAsked(origin: string) {
 export function dismissAsked() {
   const a = asked()
   a?.resolve?.(false)
+  if (a && a.kind !== "confirm") declined = { origin: a.origin, at: Date.now() }
   setAsked(undefined)
+}
+
+/** "Not now" is an answer: the agent waiting for Allow stops instead of asking again for a minute. */
+let declined: { origin: string; at: number } | undefined
+export function recentlyDeclined(origin: string | undefined, now = Date.now()): boolean {
+  return !!origin && declined?.origin === origin && now - declined.at < 60_000
 }
 
 /**
@@ -188,11 +196,11 @@ export function pageRefusal(input: {
   if (!origin) return "the Browser pane has no web page open: open one first"
   const host = hostOf(origin)
   if (!isGranted(origin, "read", input.grants)) {
-    return `the person hasn't let IRIS use ${host}. Ask them to click "Let IRIS use this page" (it is showing Allow in the Browser bar now), then try again`
+    return `the person hasn't let IRIS use ${host} yet. Ask them to click Allow in the Browser bar (it is showing now), then try again`
   }
   if (input.mode === "act") {
     if (!isGranted(origin, "act", input.grants)) {
-      return `the person allowed IRIS to READ ${host}, not to click or type there. Ask them to click "Allow clicking" in the Browser bar (it is showing now), then try again`
+      return `the person allowed IRIS to READ ${host}, not to click or type there. Ask them to click Allow in the Browser bar (it is showing now), then try again`
     }
     if (input.takenOver?.includes(origin)) {
       return `the person took over on ${host}: wait until they hand back before clicking or typing there`

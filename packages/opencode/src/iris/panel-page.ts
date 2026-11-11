@@ -46,12 +46,17 @@ export function flashScript(ref: number): string {
 
 /** How long the person has to answer an Allow once prompt, plus the round trip. */
 export const CONFIRM_TIMEOUT_MS = 75_000
+/** The app's refusal while its Allow is on screen (browser-grants pageRefusal). */
+export const WAITING_FOR_ALLOW = /click Allow in the Browser bar/
 
 export class PanelPage extends ScriptedPage {
   private mode: "read" | "act" = "read"
   private doing?: string
   /** Set by the tool just before an irreversible click: the label the person will be asked about. */
   confirmNext?: string
+  /** How long a page operation waits for the person's Allow, and how often it looks. */
+  allowWaitMs = 60_000
+  allowPollMs = 1_500
 
   constructor(
     private readonly send: PanelSend,
@@ -64,18 +69,27 @@ export class PanelPage extends ScriptedPage {
     // The confirm rides only the FIRST act script (the click itself), never the reads after it.
     const confirm = this.mode === "act" ? this.confirmNext : undefined
     if (confirm) this.confirmNext = undefined
-    const o = await this.send(
-      {
-        action: "page",
-        op: "eval",
-        script: expression,
-        mode: this.mode,
-        ...(confirm ? { confirm } : {}),
-        ...(this.mode === "act" && this.doing ? { doing: this.doing } : {}),
-      },
-      confirm ? CONFIRM_TIMEOUT_MS : undefined,
-    )
-    return unpackPageAnswer(o, this.explainSilence) as T
+    const command: Panel.Command = {
+      action: "page",
+      op: "eval",
+      script: expression,
+      mode: this.mode,
+      ...(confirm ? { confirm } : {}),
+      ...(this.mode === "act" && this.doing ? { doing: this.doing } : {}),
+    }
+    // Not allowed yet: the app is showing Allow in the Browser bar right now. Wait for the
+    // person's one click instead of making them click, then tell the agent to try again (#193200).
+    // Each try is a quick round trip; the same command (confirm included) is re-sent.
+    const until = Date.now() + this.allowWaitMs
+    for (;;) {
+      const o = await this.send(command, confirm ? CONFIRM_TIMEOUT_MS : undefined)
+      try {
+        return unpackPageAnswer(o, this.explainSilence) as T
+      } catch (err) {
+        if (!(err instanceof Error) || !WAITING_FOR_ALLOW.test(err.message) || Date.now() >= until) throw err
+        await Bun.sleep(this.allowPollMs)
+      }
+    }
   }
 
   /** The page the person has open in the pane: what a first read of the pane reads. */

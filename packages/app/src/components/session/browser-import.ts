@@ -1,73 +1,77 @@
 /**
- * Bring your Chrome sign-ins into the Browser (S3b, #193051): the app's half, pure.
+ * "Sign in with Chrome" (S3b, #193051): the app's half, pure.
  *
- * The Rust side (chrome_cookies.rs) lists Chrome profiles and the sites each is signed into
- * (names and counts, nothing decrypted), and imports the sites the person ticks. Cookie VALUES
- * never come here. What is kept here is only the person's CHOICE (which profile, which sites),
- * so that where the Browser's store forgets on quit (macOS 13) the same sites come back at launch.
+ * ONE button. The Rust side (chrome_cookies.rs) finds the person's Chrome profiles (names and
+ * counts, nothing decrypted); we take their main one (the most sites) and bring in every site it
+ * is signed into. macOS shows its own Keychain prompt; that prompt is the consent. Cookie VALUES
+ * never come here, and a sign-in being here does not let the agent use the site: the per-site
+ * Allow (browser-grants.ts) still decides that.
+ *
+ * Kept here: only THAT it was done (and whether the store keeps it), so the start page can say
+ * "Signed in from Chrome" and, where the store forgets on quit (macOS 13), it is redone at launch.
  */
-import type { NativeBrowserImportSource } from "@/context/platform"
-import { QUICK_SITES } from "./native-browser-model"
+import type { NativeBrowser, NativeBrowserImportSource } from "@/context/platform"
 
-const KEY = "iris.browser.signins.v1"
+const KEY = "iris.browser.signins.v2"
 
-/** Sites people most often want signed in, ticked for them when Chrome has them. Never banks. */
-const LIKELY = ["heb.com", "amazon.com", "airbnb.com", "facebook.com", "reddit.com", "notion.so", "discord.com", "twitch.tv"]
-
-export function siteOfUrl(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "").split(".").slice(-2).join(".")
-  } catch {
-    return ""
-  }
-}
-
-/** Which of this profile's sites start ticked: the quick tiles' sites plus a few common ones. */
-export function presetSites(source: NativeBrowserImportSource | undefined): string[] {
-  if (!source) return []
-  const wanted = new Set([...QUICK_SITES.map((s) => siteOfUrl(s.url)), "google.com", ...LIKELY])
-  return source.sites.map((s) => s.site).filter((s) => wanted.has(s))
-}
-
-export function filterSites(source: NativeBrowserImportSource | undefined, query: string) {
-  const q = query.trim().toLowerCase()
-  const all = source?.sites ?? []
-  return q ? all.filter((s) => s.site.includes(q)) : all
-}
-
-/** The profile to show first: the one with the most sites (most likely the person's main one). */
+/** The profile to use: the one with the most sites (the person's main one). */
 export function primarySource(list: NativeBrowserImportSource[]): NativeBrowserImportSource | undefined {
   return [...list].sort((a, b) => b.sites.length - a.sites.length)[0]
 }
 
-export type SignInChoice = { source: string; sites: string[]; persistent: boolean; at: number }
+export type SignedIn = { from: string; sites: number; persistent: boolean; at: number }
 
-export function parseChoice(raw: string | null | undefined): SignInChoice | undefined {
+export function parseSignedIn(raw: string | null | undefined): SignedIn | undefined {
   try {
     const v = raw ? JSON.parse(raw) : undefined
-    if (!v || typeof v.source !== "string" || !Array.isArray(v.sites)) return undefined
-    const sites = v.sites.filter((s: unknown): s is string => typeof s === "string" && s.length > 0 && s.length < 256)
-    return { source: v.source, sites, persistent: v.persistent !== false, at: Number(v.at) || 0 }
+    if (!v || typeof v.from !== "string") return undefined
+    return { from: v.from, sites: Number(v.sites) || 0, persistent: v.persistent !== false, at: Number(v.at) || 0 }
   } catch {
     return undefined
   }
 }
 
-export function loadChoice(storage = globalThis.localStorage): SignInChoice | undefined {
+export function loadSignedIn(storage = globalThis.localStorage): SignedIn | undefined {
   try {
-    return parseChoice(storage?.getItem(KEY))
+    return parseSignedIn(storage?.getItem(KEY))
   } catch {
     return undefined
   }
 }
 
-export function saveChoice(choice: SignInChoice, storage = globalThis.localStorage) {
+function save(v: SignedIn, storage: Storage | undefined) {
   try {
-    storage?.setItem(KEY, JSON.stringify(choice))
+    storage?.setItem(KEY, JSON.stringify(v))
   } catch {}
 }
 
-/** Re-import at launch only where the store forgets (macOS 13): elsewhere the cookies are still there. */
-export function shouldReimport(choice: SignInChoice | undefined): choice is SignInChoice {
-  return !!choice && !choice.persistent && choice.sites.length > 0
+/** Redo at launch only where the Browser forgets on quit (macOS 13). */
+export function shouldRedo(v: SignedIn | undefined): boolean {
+  return !!v && !v.persistent
+}
+
+export type SignInResult =
+  | { ok: true; sites: number; from: string }
+  | { ok: false; reason: "none" | "denied" | "error"; message?: string }
+
+/** The whole flow behind the button. */
+export async function signInWithChrome(
+  b: Pick<NativeBrowser, "importSources" | "importSignIns">,
+  storage: Storage | undefined = globalThis.localStorage,
+): Promise<SignInResult> {
+  if (!b.importSources || !b.importSignIns) return { ok: false, reason: "none" }
+  try {
+    const src = primarySource(await b.importSources())
+    if (!src || !src.sites.length) return { ok: false, reason: "none" }
+    const r = await b.importSignIns(
+      src.id,
+      src.sites.map((s) => s.site),
+    )
+    const from = `${src.browser}${src.profile && src.profile !== "Default" ? ` · ${src.profile}` : ""}`
+    save({ from, sites: r.sites.length, persistent: r.persistent, at: Date.now() }, storage)
+    return { ok: true, sites: r.sites.length, from }
+  } catch (e) {
+    const message = String(e)
+    return { ok: false, reason: /didn't give IRIS the key|Deny/i.test(message) ? "denied" : "error", message }
+  }
 }
