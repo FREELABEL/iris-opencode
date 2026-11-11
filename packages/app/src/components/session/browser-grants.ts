@@ -83,6 +83,37 @@ const save = (next: Grant[]) => {
 
 export const browserGrants = grants
 
+// ── Mode: Ask (default) or Always allow ──────────────────────────────────────────────────────
+// Ask: one Allow per site, remembered. Always allow: every site, no asks, so the agent can work
+// as it needs to. Even then an IRREVERSIBLE click (pay, order, send, delete) still waits for the
+// person's Allow once, and Take over / Stop still win. Stop in Always allow goes back to Ask.
+export type BrowserMode = "ask" | "always"
+const MODE_KEY = "iris.browser.mode.v1"
+const loadMode = (): BrowserMode => {
+  try {
+    return globalThis.localStorage?.getItem(MODE_KEY) === "always" ? "always" : "ask"
+  } catch {
+    return "ask"
+  }
+}
+const [mode, setModeRaw] = createSignal<BrowserMode>(loadMode())
+export const browserMode = mode
+export function setBrowserMode(next: BrowserMode) {
+  setModeRaw(next)
+  try {
+    globalThis.localStorage?.setItem(MODE_KEY, next)
+  } catch {}
+  if (next === "always") {
+    const a = asked()
+    if (a && a.kind !== "confirm") setAsked(undefined)
+    declined = undefined
+  }
+}
+/** The grants as the mode sees them: in Always allow, any web page counts as allowed to act. */
+function effective(origin: string, list: Grant[], always?: boolean): Grant[] {
+  return always && !list.some((g) => g.origin === origin && g.act) ? [...list, { origin, act: true }] : list
+}
+
 export function isGranted(origin: string | undefined, mode: PageMode = "read", list = grants()): boolean {
   if (!origin) return false
   const g = list.find((x) => x.origin === origin)
@@ -101,6 +132,7 @@ export function grantSite(origin: string, act = false) {
 
 /** Stop: the site's grant goes, read and act, and any take-over or prompt for it ends. */
 export function revokeSite(origin: string) {
+  if (mode() === "always") setBrowserMode("ask")
   save(grants().filter((x) => x.origin !== origin))
   handBack(origin)
   const a = asked()
@@ -191,15 +223,17 @@ export function pageRefusal(input: {
   url: string | undefined
   grants: Grant[]
   takenOver?: string[]
+  always?: boolean
 }): string | undefined {
   const origin = originOf(input.url)
   if (!origin) return "the Browser pane has no web page open: open one first"
   const host = hostOf(origin)
-  if (!isGranted(origin, "read", input.grants)) {
+  const grants = effective(origin, input.grants, input.always)
+  if (!isGranted(origin, "read", grants)) {
     return `the person hasn't let IRIS use ${host} yet. Ask them to click Allow in the Browser bar (it is showing now), then try again`
   }
   if (input.mode === "act") {
-    if (!isGranted(origin, "act", input.grants)) {
+    if (!isGranted(origin, "act", grants)) {
       return `the person allowed IRIS to READ ${host}, not to click or type there. Ask them to click Allow in the Browser bar (it is showing now), then try again`
     }
     if (input.takenOver?.includes(origin)) {
@@ -227,9 +261,11 @@ export function stripState(input: {
   asked?: Ask
   takenOver?: string[]
   activity?: Activity
+  always?: boolean
 }): StripState | undefined {
   const o = input.origin
   if (!o) return undefined
+  input = { ...input, grants: effective(o, input.grants, input.always) }
   const a = input.asked?.origin === o ? input.asked : undefined
   if (a?.kind === "confirm") return "confirm"
   if (input.takenOver?.includes(o)) return "taken"

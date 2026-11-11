@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   answerConfirm,
+  browserMode,
+  setBrowserMode,
   askedSite,
   confirmAct,
   grantSite,
@@ -141,5 +143,27 @@ describe("stripState: most urgent first", () => {
   })
   test("no page → no strip", () => {
     expect(stripState({ origin: undefined, grants: act })).toBeUndefined()
+  })
+})
+
+describe("Always allow mode", () => {
+  const o = "https://www.heb.com"
+  test("every site may be read and clicked, with no asks", () => {
+    expect(pageRefusal({ mode: "act", url: "https://www.heb.com/cart", grants: [], always: true })).toBeUndefined()
+    expect(pageRefusal({ mode: "read", url: "https://news.example/", grants: [], always: true })).toBeUndefined()
+    expect(stripState({ origin: o, grants: [], always: true })).toBe("can-act")
+  })
+  test("Take over still wins, and so does a pending Allow once (irreversible clicks still ask)", () => {
+    expect(pageRefusal({ mode: "act", url: o, grants: [], always: true, takenOver: [o] })).toContain("took over")
+    expect(
+      stripState({ origin: o, grants: [], always: true, asked: { origin: o, kind: "confirm", label: "Place order", resolve: () => {} } }),
+    ).toBe("confirm")
+  })
+  test("Ask is the default; Stop in Always allow goes back to Ask", () => {
+    expect(pageRefusal({ mode: "read", url: o, grants: [] })).toContain("click Allow")
+    setBrowserMode("always")
+    expect(browserMode()).toBe("always")
+    revokeSite(o)
+    expect(browserMode()).toBe("ask")
   })
 })

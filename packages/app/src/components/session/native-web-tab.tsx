@@ -6,6 +6,8 @@ import {
   answerConfirm,
   askedSite,
   browserActivity,
+  browserMode,
+  setBrowserMode,
   browserGrants,
   dismissAsked,
   grantSite,
@@ -80,6 +82,7 @@ export function NativeWebTab(props: {
       asked: askedSite(),
       takenOver: takenOverSites(),
       activity: browserActivity(),
+      always: browserMode() === "always",
     })
   const activityHere = () => {
     const a = browserActivity()
@@ -312,6 +315,9 @@ export function NativeWebTab(props: {
                   </span>
                   <Btn primary onClick={() => grantSite(o(), true)}>Allow</Btn>
                   <Btn onClick={dismissAsked}>Not now</Btn>
+                  <Btn onClick={() => setBrowserMode("always")} title="IRIS won't ask on any site again. It still asks before paying, ordering, sending or deleting">
+                    Always allow
+                  </Btn>
                 </Match>
                 <Match when={stripState() === "ask-act"}>
                   <Ask />
@@ -320,6 +326,9 @@ export function NativeWebTab(props: {
                   </span>
                   <Btn primary onClick={() => grantSite(o(), true)}>Allow</Btn>
                   <Btn onClick={dismissAsked}>Not now</Btn>
+                  <Btn onClick={() => setBrowserMode("always")} title="IRIS won't ask on any site again. It still asks before paying, ordering, sending or deleting">
+                    Always allow
+                  </Btn>
                 </Match>
                 <Match when={stripState() === "taken"}>
                   <span class="session-web__agent-dot" data-paused="true" />
@@ -349,8 +358,15 @@ export function NativeWebTab(props: {
                 <Match when={stripState() === "can-act" || stripState() === "can-read"}>
                   <span class="session-web__agent-dot" />
                   <span>
-                    IRIS can {stripState() === "can-act" ? "use" : "read"} <b>{host()}</b>
+                    <Show when={browserMode() === "always"} fallback={<>IRIS can {stripState() === "can-act" ? "use" : "read"} <b>{host()}</b></>}>
+                      IRIS can use any site
+                    </Show>
                   </span>
+                  <Show when={browserMode() === "always"}>
+                    <button type="button" class="session-web__agent-link" onClick={() => setBrowserMode("ask")} title="Go back to asking once per site">
+                      Ask first
+                    </button>
+                  </Show>
                   <Show when={stripState() === "can-read"}>
                     <button type="button" class="session-web__agent-link" onClick={() => grantSite(o(), true)}>
                       Let it click

@@ -11,6 +11,7 @@ import {
   hostOf,
   noteActivity,
   noteAsked,
+  browserMode,
   recentlyDeclined,
   originOf,
   pageRefusal,
@@ -302,7 +303,7 @@ export function usePanelControl(input: { open: () => boolean }) {
       }
       const s = await nb.state()
       const origin = originOf(s?.url)
-      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites() })
+      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
       if (why && recentlyDeclined(origin)) {
         return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
       }
@@ -318,7 +319,7 @@ export function usePanelControl(input: { open: () => boolean }) {
           return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
         }
         // They may have taken over or stopped while the prompt was up.
-        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites() })
+        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
         if (again) return reply({ error: again })
       }
       noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
