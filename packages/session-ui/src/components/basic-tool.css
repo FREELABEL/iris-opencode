@@ -356,3 +356,77 @@ body:not([data-new-layout]) {
     }
   }
 }
+
+/* IRIS tool marks (tool-mark.tsx): the product strip's glyphs, in their colours. */
+[data-slot="tool-mark"] {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--tool-mark-color);
+  opacity: 0.72;
+  transition: opacity 200ms ease, filter 200ms ease;
+}
+[data-slot="tool-mark"][data-working] {
+  opacity: 1;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--tool-mark-color) 55%, transparent));
+}
+[data-slot="tool-mark"] svg,
+[data-slot="tool-mark"] [data-part] {
+  transform-box: view-box;
+}
+/* One small motion each, only while running. */
+[data-slot="tool-mark"][data-working][data-motion="turn"] [data-part="spin"] {
+  transform-origin: 12px 12px;
+  animation: tool-mark-turn 1.6s linear infinite;
+}
+[data-slot="tool-mark"][data-working][data-motion="sweep"] svg {
+  transform-origin: 11px 11px;
+  animation: tool-mark-sweep 1.4s ease-in-out infinite;
+}
+[data-slot="tool-mark"][data-working][data-motion="tap"] svg {
+  transform-origin: 5px 19px;
+  animation: tool-mark-tap 0.9s ease-in-out infinite;
+}
+[data-slot="tool-mark"][data-working][data-motion="rise"] [data-part="bar"] {
+  transform-origin: 12px 17px;
+  animation: tool-mark-rise 1.2s ease-in-out infinite;
+}
+[data-slot="tool-mark"][data-working][data-motion="rise"] [data-part="bar"]:nth-of-type(3) { animation-delay: 0.15s; }
+[data-slot="tool-mark"][data-working][data-motion="rise"] [data-part="bar"]:nth-of-type(4) { animation-delay: 0.3s; }
+[data-slot="tool-mark"][data-working][data-motion="slide"] [data-part="divider"] {
+  animation: tool-mark-slide 1.2s ease-in-out infinite;
+}
+[data-slot="tool-mark"][data-working][data-motion="bob"] svg {
+  animation: tool-mark-bob 1.2s ease-in-out infinite;
+}
+@keyframes tool-mark-turn {
+  0%, 100% { transform: scaleX(1); }
+  25% { transform: scaleX(0.08); }
+  75% { transform: scaleX(1.8); opacity: 0.45; }
+}
+@keyframes tool-mark-sweep {
+  0%, 100% { transform: rotate(-14deg) translate(-0.6px, 0); }
+  50% { transform: rotate(14deg) translate(0.6px, 0); }
+}
+@keyframes tool-mark-tap {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(-16deg); }
+}
+@keyframes tool-mark-rise {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.55); }
+}
+@keyframes tool-mark-slide {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-3px); }
+}
+@keyframes tool-mark-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="tool-mark"][data-working] svg,
+  [data-slot="tool-mark"][data-working] [data-part] {
+    animation: none !important;
+  }
+}
