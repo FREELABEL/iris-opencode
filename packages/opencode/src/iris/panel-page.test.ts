@@ -65,6 +65,19 @@ describe("PanelPage", () => {
     expect(sent.length).toBeGreaterThan(1)
   })
 
+  test("a \"prove you're human\" page: it waits while the person finishes the check, then carries on", async () => {
+    let passed = false
+    const { sent, page } = desktop(() =>
+      passed
+        ? { result: env("jobs") }
+        : { error: "the site is checking for a human: the person needs to finish the check in the Browser" },
+    )
+    page.allowPollMs = 5
+    setTimeout(() => (passed = true), 30)
+    expect(await page.text()).toBe("jobs")
+    expect(sent.length).toBeGreaterThan(1)
+  })
+
   test("waiting gives up after its window, and Not now (any other refusal) ends it at once", async () => {
     const never = desktop(() => ({ error: "the person hasn't let IRIS use x.com yet. Ask them to click Allow in the Browser bar (it is showing now), then try again" }))
     never.page.allowPollMs = 5

@@ -170,6 +170,32 @@ fn macos_has_data_stores() -> bool {
         .unwrap_or(false)
 }
 
+/// What the Browser tells sites it is: Safari, which it is (Safari's own engine). Left alone, the
+/// macOS web view sends Safari's string MINUS "Version/x Safari/605.1.15", which bot checks
+/// (Cloudflare on indeed.com, 2026-11-11) read as "not a browser" and answer with a challenge
+/// that never finishes. Built from this Mac's real Safari version, so it stays true as Safari
+/// updates. The platform part is frozen by Apple ("Intel Mac OS X 10_15_7" on every Mac).
+pub fn safari_user_agent_for(version: &str) -> Option<String> {
+    let v = version.trim();
+    let ok = !v.is_empty() && v.split('.').count() <= 3 && v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    ok.then(|| {
+        format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{v} Safari/605.1.15")
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn safari_user_agent() -> Option<String> {
+    static UA: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    UA.get_or_init(|| {
+        let out = std::process::Command::new("/usr/bin/defaults")
+            .args(["read", "/Applications/Safari.app/Contents/Info", "CFBundleShortVersionString"])
+            .output()
+            .ok()?;
+        safari_user_agent_for(&String::from_utf8(out.stdout).ok()?)
+    })
+    .clone()
+}
+
 fn builder(app: &AppHandle, url: Url) -> WebviewBuilder<tauri::Wry> {
     let engine_port = crate::engine_port_hint();
     let nav_app = app.clone();
@@ -218,6 +244,10 @@ fn builder(app: &AppHandle, url: Url) -> WebviewBuilder<tauri::Wry> {
     #[cfg(target_os = "macos")]
     {
         b = if macos_has_data_stores() { b.data_store_identifier(MACOS_STORE_ID) } else { b.incognito(true) };
+        // No Safari to read (never on a real Mac): keep the web view's own string.
+        if let Some(ua) = safari_user_agent() {
+            b = b.user_agent(&ua);
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -378,6 +408,18 @@ mod tests {
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn says_it_is_safari_with_this_macs_safari_version() {
+        assert_eq!(
+            safari_user_agent_for("18.1.1\n").as_deref(),
+            Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.15")
+        );
+        assert!(safari_user_agent_for("17.4").unwrap().contains("Version/17.4 Safari/605.1.15"));
+        for bad in ["", "18.1 beta", "18..1", "1.2.3.4", "18;rm"] {
+            assert_eq!(safari_user_agent_for(bad), None, "{bad}");
+        }
     }
 
     #[test]

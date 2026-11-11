@@ -308,6 +308,23 @@ export function NativeWebTab(props: {
                   <Btn primary onClick={() => answerConfirm(true)}>Allow once</Btn>
                   <Btn onClick={() => answerConfirm(false)}>Deny</Btn>
                 </Match>
+                <Match when={stripState() === "check"}>
+                  {/* A "prove you're human" page (human-check.ts): the person's to finish, never IRIS's. */}
+                  <Ask />
+                  <span>
+                    <b>{host()}</b> wants to check you're human. Finish it below and IRIS will carry on.
+                  </span>
+                  <Btn
+                    onClick={() => {
+                      const u = page()?.url
+                      if (u) props.openExternal(u)
+                    }}
+                    title="If the check won't finish here, open the page in your own browser"
+                  >
+                    Open in your browser
+                  </Btn>
+                  <Btn onClick={dismissAsked} title="IRIS stops waiting and moves on">Not now</Btn>
+                </Match>
                 <Match when={stripState() === "ask-read"}>
                   <Ask />
                   <span>

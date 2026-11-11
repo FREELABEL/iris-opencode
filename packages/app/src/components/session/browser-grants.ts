@@ -156,7 +156,8 @@ export function handBack(origin: string) {
 
 // ── What the agent asked for, shown in the strip ─────────────────────────────────────────────
 export type Ask =
-  | { origin: string; kind: "read" | "act"; resolve?: undefined; label?: undefined }
+  // "check": the site is showing a "prove you're human" page (human-check.ts): the person finishes it.
+  | { origin: string; kind: "read" | "act" | "check"; resolve?: undefined; label?: undefined }
   | { origin: string; kind: "confirm"; label: string; resolve: (ok: boolean) => void }
 const [asked, setAsked] = createSignal<Ask>()
 export const askedSite = asked
@@ -167,7 +168,7 @@ export const askedSite = asked
  */
 export const ASK_STALE_MS = 8_000
 let askTimer: ReturnType<typeof setTimeout> | undefined
-export function noteAsked(origin: string, kind: "read" | "act") {
+export function noteAsked(origin: string, kind: "read" | "act" | "check") {
   const a = asked()
   if (a?.kind === "confirm") return // a pending confirm outranks a refused ask
   if (a?.origin !== origin || a.kind !== kind) setAsked({ origin, kind })
@@ -180,6 +181,11 @@ export function noteAsked(origin: string, kind: "read" | "act") {
 function clearAsked(origin: string) {
   const a = asked()
   if (a && a.origin === origin && a.kind !== "confirm") setAsked(undefined)
+}
+/** The human check is done (the page is the real one again): take the "finish the check" ask down. */
+export function clearHumanCheck(origin: string | undefined) {
+  const a = asked()
+  if (a?.kind === "check" && a.origin === origin) setAsked(undefined)
 }
 export function dismissAsked() {
   const a = asked()
@@ -262,6 +268,7 @@ export type StripState =
   | "ask-act" // the agent may read but was refused a click: offer Allow clicking
   | "taken" // the person has the wheel: offer Hand back
   | "acting" // the agent is clicking/typing right now: Take over · Stop
+  | "check" // the site wants a human: the agent waits while the person finishes the check
   | "reading" // the agent is reading right now
   | "can-act" // idle, allowed to read and act
   | "can-read" // idle, allowed to read
@@ -281,6 +288,7 @@ export function stripState(input: {
   const a = input.asked?.origin === o ? input.asked : undefined
   if (a?.kind === "confirm") return "confirm"
   if (input.takenOver?.includes(o)) return "taken"
+  if (a?.kind === "check") return "check"
   if (a?.kind === "read" && !isGranted(o, "read", input.grants)) return "ask-read"
   if (a?.kind === "act" && !isGranted(o, "act", input.grants)) return "ask-act"
   if (!isGranted(o, "read", input.grants)) return "off"
