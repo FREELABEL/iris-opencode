@@ -82,3 +82,44 @@ describe("campaign onboarding: after setup (#192627)", () => {
     })
   })
 })
+
+import { afterMake, boardTag, KINDS, nameText } from "./iris-campaign-onboarding-model"
+
+describe("marketing + wizard (#193233)", () => {
+  test("offers exactly the three kinds, campaign review first", () => {
+    expect(KINDS.map((k) => k.kind)).toEqual(["campaign", "landing", "brand"])
+  })
+  test("one board goes to the name step for a page or a kit, to confirm for a campaign", () => {
+    expect(afterBoards({ measured: true, boards: [acme] }, "landing")).toEqual({ at: "name", board: acme, boards: [acme] })
+    expect(afterBoards({ measured: true, boards: [acme] }, "brand")).toMatchObject({ at: "name" })
+    expect(afterBoards({ measured: true, boards: [acme] }, "campaign")).toMatchObject({ at: "confirm" })
+  })
+  test("the board badge marks only boards you edit but don't own", () => {
+    expect(boardTag(acme)).toBeNull()
+    expect(boardTag(client)).toBe("shared")
+  })
+  test("a made landing page is pinned under its own name", () => {
+    expect(afterMake("landing", acme, { ok: true, slug: "spring-launch", name: "Spring launch" })).toEqual({
+      do: "pin",
+      slug: "spring-launch",
+      label: "Spring launch",
+      already: false,
+    })
+  })
+  test("a made brand kit is shown, not pinned — a kit is not a page", () => {
+    expect(afterMake("brand", acme, { ok: true, id: 51, slug: "acme", name: "Acme" })).toEqual({
+      do: "made",
+      step: { at: "made", board: acme, name: "Acme" },
+    })
+  })
+  test("a refusal says why in plain words and retries only what can succeed later", () => {
+    const n = afterMake("landing", acme, { ok: false, error: { kind: "not_allowed", message: "Ask its owner." } })
+    expect(n).toMatchObject({ do: "say", step: { tone: "error", retry: false, body: "Ask its owner." } })
+    const b = afterMake("brand", acme, { ok: false, error: { kind: "unreachable", message: "Later." } })
+    expect(b).toMatchObject({ do: "say", step: { retry: true } })
+  })
+  test("the name step's words carry no ids", () => {
+    expect(nameText("landing", acme)).not.toMatch(noIds)
+    expect(nameText("brand", acme)).not.toMatch(noIds)
+  })
+})

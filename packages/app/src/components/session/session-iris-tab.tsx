@@ -3270,6 +3270,12 @@ export function SessionIrisTab() {
     } catch {}
   }
 
+  // #193233: a brand kit just made from Marketing › + is edited in Genesis › Brand kits.
+  const openBrandKits = () => {
+    chooseSurface("pages")
+    chooseSub("brands", "pages")
+  }
+
   // `target` is explicit for a caller that has just chosen a surface.
   function chooseSub(id: string, target: SurfaceId = surface()) {
     const next = { ...subviews(), [target]: id }
@@ -4467,8 +4473,12 @@ export function SessionIrisTab() {
               <IrisMarketing
                 doFetch={doFetch}
                 openExternal={(url) => platform.openExternal(url)}
-                emptyActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} />}
-                pickerActions={(ctx) => <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} compact />}
+                emptyActions={(ctx) => (
+                  <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} onActive={ctx.focus} openBrandKits={openBrandKits} />
+                )}
+                pickerActions={(ctx) => (
+                  <IrisCampaignOnboarding doFetch={doFetch} pin={ctx.pin} onActive={ctx.focus} openBrandKits={openBrandKits} compact />
+                )}
               />
             </Match>
             <Match when={pane() === "browser"}>

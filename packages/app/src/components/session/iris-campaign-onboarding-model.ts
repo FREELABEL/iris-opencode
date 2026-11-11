@@ -27,8 +27,31 @@ export type CampaignSetup = {
   datasets?: Array<{ slug: string; state: string }>
 }
 
+/** What the wizard makes (#193233). A campaign review is the #192627 flow; the other two name a thing first. */
+export type MakeKind = "campaign" | "landing" | "brand"
+
+export const KINDS: Array<{ kind: MakeKind; title: string; hint: string }> = [
+  { kind: "campaign", title: "Campaign review", hint: "A private page where your team reviews and approves your ads" },
+  { kind: "landing", title: "Landing page", hint: "A page for an offer or an event. It stays a draft until you publish it" },
+  { kind: "brand", title: "Brand kit", hint: "Your logo, colours and type, for every page and ad you make" },
+]
+
+export const kindTitle = (k: MakeKind) => KINDS.find((x) => x.kind === k)!.title
+
+/** The result of making a brand kit or landing page (engine /iris/marketing/*). */
+export type MakeResult = {
+  ok: boolean
+  error?: { kind: "signed_out" | "not_allowed" | "not_deployed" | "invalid" | "busy" | "unreachable" | "failed"; message: string }
+  id?: number
+  slug?: string
+  name?: string
+}
+
 export type Step =
   | { at: "idle" }
+  | { at: "choose" }
+  | { at: "name"; board: CampaignBoard; boards: CampaignBoard[] }
+  | { at: "made"; board: CampaignBoard; name: string }
   | { at: "loading" }
   | { at: "pick"; boards: CampaignBoard[] }
   | { at: "confirm"; board: CampaignBoard; boards: CampaignBoard[] }
@@ -42,7 +65,7 @@ export type Next = { do: "pin"; slug: string; label: string; already: boolean } 
 export const DATASETS_SENTENCE = "campaigns, creatives, feedback and templates"
 
 /** After the board list: an error, nothing to set up on, a picker — or straight to confirm when there is one board. */
-export function afterBoards(r: CampaignBoards): Step {
+export function afterBoards(r: CampaignBoards, kind: MakeKind = "campaign"): Step {
   if (!r.measured)
     return { at: "message", tone: "error", title: "Your boards couldn't be read", body: r.reason ?? "Try again in a moment.", retry: true }
   if (r.boards.length === 0)
@@ -50,10 +73,11 @@ export function afterBoards(r: CampaignBoards): Step {
       at: "message",
       tone: "info",
       title: "No board to set up on",
-      body: "A campaign board is made on a board you own or can edit. Make a board in Atlas first, or ask its owner to make you an editor.",
+      body: "Everything here is made on a board you own or can edit. Make a board in Atlas first, or ask its owner to make you an editor.",
       retry: false,
     }
-  if (r.boards.length === 1) return { at: "confirm", board: r.boards[0], boards: r.boards }
+  if (r.boards.length === 1)
+    return kind === "campaign" ? { at: "confirm", board: r.boards[0], boards: r.boards } : { at: "name", board: r.boards[0], boards: r.boards }
   return { at: "pick", boards: r.boards }
 }
 
@@ -106,4 +130,43 @@ export function pinRefused(board: CampaignBoard, slug: string, reason: string): 
     board,
     retry: true,
   }
+}
+
+/**
+ * The board picker's badge (#193233). Every board offered is one you own or edit, so "yours" on
+ * every row said nothing. Only a board you edit but don't own is marked.
+ */
+export const boardTag = (b: CampaignBoard): string | null => (b.role === "editor" ? "shared" : null)
+
+/** What the name step says will be made. */
+export function nameText(kind: Exclude<MakeKind, "campaign">, board: CampaignBoard): string {
+  return kind === "landing"
+    ? `A draft page on ${board.name}, with a headline and a footer to start from. Nobody can see it until you publish it.`
+    : `A brand kit on ${board.name}. Add its logo, colours and type next, in Genesis › Brand kits.`
+}
+
+/** After making a landing page or brand kit: pin the page, show the kit, or say why not. */
+export function afterMake(
+  kind: Exclude<MakeKind, "campaign">,
+  board: CampaignBoard,
+  r: MakeResult,
+): Next | { do: "made"; step: Extract<Step, { at: "made" }> } {
+  const what = kind === "landing" ? "landing page" : "brand kit"
+  if (!r.ok) {
+    const k = r.error?.kind ?? "failed"
+    const title =
+      k === "not_deployed"
+        ? `Making a ${what} isn't available yet`
+        : k === "signed_out"
+          ? "Sign in to IRIS first"
+          : k === "not_allowed"
+            ? `You can't add a ${what} to ${board.name}`
+            : `Couldn't make the ${what}`
+    const retry = k === "busy" || k === "unreachable" || k === "failed"
+    return { do: "say", step: { at: "message", tone: k === "not_deployed" ? "info" : "error", title, body: r.error?.message ?? "Nothing was made.", board, retry } }
+  }
+  if (kind === "brand") return { do: "made", step: { at: "made", board, name: r.name ?? "Your brand" } }
+  if (!r.slug)
+    return { do: "say", step: { at: "message", tone: "error", title: "The page was made, but IRIS didn't say where", body: "Find it in Genesis › Pages.", board, retry: false } }
+  return { do: "pin", slug: r.slug, label: r.name ?? "Landing page", already: false }
 }

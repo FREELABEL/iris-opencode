@@ -130,3 +130,62 @@
   font-size: 11px;
   color: var(--text-weaker);
 }
+
+/* #193233: the wizard, once open, is all there is — Marketing hides the search and list. */
+.iris-camp--active .iris-camp__card {
+  max-width: 460px;
+  margin: 24px auto 0;
+  padding: 16px 18px;
+  gap: 8px;
+}
+.iris-camp--active .iris-camp__title {
+  font-size: 15px;
+}
+.iris-camp__step {
+  font-size: 11px;
+  color: var(--text-weaker);
+}
+.iris-camp__kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.iris-camp__kind {
+  appearance: none;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-base);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  text-align: left;
+}
+.iris-camp__kind:hover,
+.iris-camp__kind:focus-visible {
+  background: var(--surface-raised-base-hover, var(--background-element));
+}
+.iris-camp__kind-title {
+  font-size: 13px;
+  color: var(--text-strong);
+}
+.iris-camp__kind-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-weak);
+}
+.iris-camp__input {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text-strong);
+  background: var(--background-base);
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 6px;
+  outline: none;
+}
+.iris-camp__input:focus {
+  border-color: var(--border-interactive-base, var(--border-base));
+}

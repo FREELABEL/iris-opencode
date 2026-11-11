@@ -2113,6 +2113,8 @@ export const IrisPaths = {
   pagePin: `${root}/page-pin`,
   campaignBoards: `${root}/campaigns/boards`,
   campaignSetup: `${root}/campaigns/setup`,
+  marketingBrand: `${root}/marketing/brand`,
+  marketingLanding: `${root}/marketing/landing-page`,
   panel: `${root}/panel`,
   panelState: `${root}/panel/state`,
   panelCommand: `${root}/panel/command`,
@@ -2175,6 +2177,24 @@ const PanelCommandResponse = Schema.Struct({
   refused: Schema.optional(described(Schema.String, "Why the command was not sent.")),
   state: Schema.optional(PanelReport),
 }).annotate({ identifier: "IrisPanelCommandResult" })
+
+// Desktop › Marketing › + (#193233): a brand kit or a landing page, made on a board.
+const MarketingMakePayload = Schema.Struct({
+  bloq_id: described(Schema.Finite, "The board it belongs to."),
+  name: described(Schema.String, "What the person called it. The slug is made from it."),
+})
+const MarketingMakeResult = Schema.Struct({
+  ok: Schema.Boolean,
+  error: Schema.optional(
+    Schema.Struct({
+      kind: Schema.Literals(["signed_out", "not_allowed", "not_deployed", "invalid", "busy", "unreachable", "failed"]),
+      message: described(Schema.String, "What to tell the person — no ids, no HTTP codes."),
+    }),
+  ),
+  id: Schema.optional(Schema.Finite),
+  slug: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+})
 
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
@@ -3690,6 +3710,26 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Set a board up for campaigns",
           description:
             "#192627. Runs fl-api POST /api/v1/campaigns/setup (#192625; idempotent): the four campaign datasets on the board and its private review page /p/<board-slug>-campaigns. Refusals come back as ok=false with a kind and a plain message.",
+        }),
+      ),
+      HttpApiEndpoint.post("marketingBrand", IrisPaths.marketingBrand, {
+        payload: MarketingMakePayload,
+        success: described(MarketingMakeResult.annotate({ identifier: "IrisMarketingBrand" }), "What was made, in client terms"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.marketingBrand",
+          summary: "Make a brand kit on a board",
+          description: "#193233. Desktop › Marketing › + › Brand kit: fl-api POST /api/v1/brands with bloq_id (the CLI's `iris brand create --bloq`). A taken slug is retried once with a suffix.",
+        }),
+      ),
+      HttpApiEndpoint.post("marketingLanding", IrisPaths.marketingLanding, {
+        payload: MarketingMakePayload,
+        success: described(MarketingMakeResult.annotate({ identifier: "IrisMarketingLanding" }), "What was made, in client terms"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.marketingLanding",
+          summary: "Make a draft landing page on a board",
+          description: "#193233. Desktop › Marketing › + › Landing page: iris-api POST /api/v1/pages, owned by the board, draft (the CLI's `iris pages create --template landing`). A taken slug is retried once with a suffix.",
         }),
       ),
       HttpApiEndpoint.get("panel", IrisPaths.panel, {
