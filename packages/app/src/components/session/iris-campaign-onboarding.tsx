@@ -25,6 +25,7 @@ import {
   type MakeResult,
   type Step,
 } from "./iris-campaign-onboarding-model"
+import { IrisProductIcon } from "./iris-product-icon"
 import "./iris-campaign-onboarding.css"
 
 /**
@@ -171,9 +172,20 @@ export function IrisCampaignOnboarding(props: {
             <div class="iris-camp__kinds" role="list">
               <For each={KINDS}>
                 {(k) => (
-                  <button type="button" role="listitem" class="iris-camp__kind" data-kind={k.kind} onClick={() => loadBoards(k.kind)}>
-                    <span class="iris-camp__kind-title">{k.title}</span>
-                    <span class="iris-camp__kind-hint">{k.hint}</span>
+                  <button
+                    type="button"
+                    role="listitem"
+                    class="iris-camp__kind"
+                    data-kind={k.kind}
+                    onClick={() => loadBoards(k.kind)}
+                  >
+                    <span class="iris-camp__kind-icon" aria-hidden="true">
+                      <IrisProductIcon id={k.kind} set="make" size={22} stroke={1.5} />
+                    </span>
+                    <span class="iris-camp__kind-text">
+                      <span class="iris-camp__kind-title">{k.title}</span>
+                      <span class="iris-camp__kind-hint">{k.hint}</span>
+                    </span>
                   </button>
                 )}
               </For>
@@ -196,7 +208,10 @@ export function IrisCampaignOnboarding(props: {
 
         <Match when={s.step.at === "pick"}>
           <div class="iris-camp__card" data-slot="campaign-pick">
-            <div class="iris-camp__step">{kindTitle(s.kind)}</div>
+            <div class="iris-camp__step">
+              <IrisProductIcon id={s.kind} set="make" size={12} />
+              {kindTitle(s.kind)}
+            </div>
             <div class="iris-camp__title">Which board is this for?</div>
             <div class="iris-camp__text">Boards you own or can edit.</div>
             <Show when={boards().length > FILTER_FROM}>
@@ -266,7 +281,10 @@ export function IrisCampaignOnboarding(props: {
         <Match when={s.step.at === "confirm" && (s.step as Extract<Step, { at: "confirm" }>)}>
           {(st) => (
             <div class="iris-camp__card" data-slot="campaign-confirm">
-              <div class="iris-camp__step">{kindTitle("campaign")}</div>
+              <div class="iris-camp__step">
+                <IrisProductIcon id="campaign" set="make" size={12} />
+                {kindTitle("campaign")}
+              </div>
               <div class="iris-camp__title">Create a campaign review on {st().board.name}?</div>
               <div class="iris-camp__text">{confirmText(st().board)}</div>
               <div class="iris-camp__actions">
@@ -293,7 +311,10 @@ export function IrisCampaignOnboarding(props: {
                   void runMake(st().board)
                 }}
               >
-                <div class="iris-camp__step">{kindTitle(kind())}</div>
+                <div class="iris-camp__step">
+                  <IrisProductIcon id={kind()} set="make" size={12} />
+                  {kindTitle(kind())}
+                </div>
                 <label class="iris-camp__title" for="iris-camp-name">
                   {kind() === "landing" ? "What's the page called?" : "What's the brand called?"}
                 </label>

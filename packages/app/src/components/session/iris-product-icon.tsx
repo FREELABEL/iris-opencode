@@ -99,6 +99,32 @@ const GLOBE: Shape[] = [
   ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
   ["path", { d: "M2 12h20" }],
 ]
+// lucide "panels-top-left" — a landing page (#193233, Marketing › + ).
+const PANELS_TOP_LEFT: Shape[] = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
+  ["path", { d: "M3 9h18" }],
+  ["path", { d: "M9 21V9" }],
+]
+// lucide "palette" — a brand kit (#193233).
+const PALETTE: Shape[] = [
+  ["path", { d: "M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" }],
+  ["circle", { cx: "13.5", cy: "6.5", r: ".5" }],
+  ["circle", { cx: "17.5", cy: "10.5", r: ".5" }],
+  ["circle", { cx: "6.5", cy: "12.5", r: ".5" }],
+  ["circle", { cx: "8.5", cy: "7.5", r: ".5" }],
+]
+
+/**
+ * What Marketing › + makes (#193233) → glyph and colour, drawn by IrisProductIcon like a surface.
+ * A campaign review is Marketing's own megaphone; a landing page is a Genesis page, in Genesis lime;
+ * a brand kit is a palette in violet, a colour no tab uses.
+ */
+export const MAKE_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
+  campaign: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500, as Marketing
+  landing: { shapes: PANELS_TOP_LEFT, color: "#84cc16" }, // lime-500, as Genesis
+  brand: { shapes: PALETTE, color: "#8b5cf6" }, // violet-500
+}
+
 /** Surface id → glyph and colour. Colours are Tailwind's, as the site uses them. */
 export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
   atlas: { shapes: CHART_COLUMN, color: "#f59e0b" }, // amber-500
@@ -116,8 +142,8 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
 }
 
-export function IrisProductIcon(props: { id: string; size?: number }) {
-  const icon = () => PRODUCT_ICONS[props.id]
+export function IrisProductIcon(props: { id: string; size?: number; set?: "product" | "make"; stroke?: number }) {
+  const icon = () => (props.set === "make" ? MAKE_ICONS : PRODUCT_ICONS)[props.id]
   return (
     <Show when={icon()}>
       {(i) => (
@@ -129,7 +155,7 @@ export function IrisProductIcon(props: { id: string; size?: number }) {
           viewBox="0 0 24 24"
           fill="none"
           stroke={i().color ?? "currentColor"}
-          stroke-width="2"
+          stroke-width={String(props.stroke ?? 2)}
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
