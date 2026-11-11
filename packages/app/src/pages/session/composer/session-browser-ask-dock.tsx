@@ -29,9 +29,12 @@ export function SessionBrowserAskDock() {
                 <Icon name="warning" size="normal" />
               </span>
               <div data-slot="permission-header-title">
-                <Show when={a.kind === "confirm"} fallback={<>Let IRIS use {hostOf(a.origin)}?</>}>
-                  Let IRIS click "{a.label}" on {hostOf(a.origin)}?
-                </Show>
+                <Switch fallback={<>Let IRIS use {hostOf(a.origin)}?</>}>
+                  <Match when={a.kind === "confirm"}>
+                    Let IRIS click "{a.label}" on {hostOf(a.origin)}?
+                  </Match>
+                  <Match when={a.kind === "check"}>{hostOf(a.origin)} wants to check you're human</Match>
+                </Switch>
               </div>
             </div>
           }
@@ -48,7 +51,12 @@ export function SessionBrowserAskDock() {
                       Allow once
                     </Button>
                   </Match>
-                  <Match when={a.kind !== "confirm"}>
+                  <Match when={a.kind === "check"}>
+                    <Button variant="ghost" size="normal" onClick={dismissAsked}>
+                      Not now
+                    </Button>
+                  </Match>
+                  <Match when={a.kind === "read" || a.kind === "act"}>
                     <Button variant="ghost" size="normal" onClick={dismissAsked}>
                       Not now
                     </Button>
@@ -67,12 +75,12 @@ export function SessionBrowserAskDock() {
           <div data-slot="permission-row">
             <span data-slot="permission-spacer" aria-hidden="true" />
             <div data-slot="permission-hint">
-              <Show
-                when={a.kind === "confirm"}
-                fallback="IRIS wants to read and click in the Browser. Always allow covers every site; it still asks before paying, ordering, sending or deleting."
-              >
-                This can't be undone. IRIS waits for you.
-              </Show>
+              <Switch fallback="IRIS wants to read and click in the Browser. Always allow covers every site; it still asks before paying, ordering, sending or deleting.">
+                <Match when={a.kind === "confirm"}>This can't be undone. IRIS waits for you.</Match>
+                <Match when={a.kind === "check"}>
+                  Finish the check in the Browser tab. IRIS is waiting and carries on by itself.
+                </Match>
+              </Switch>
             </div>
           </div>
         </DockPrompt>

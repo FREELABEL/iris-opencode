@@ -13,6 +13,7 @@ TWO BROWSERS (target). Leave target out unless you have a reason: in IRIS Deskto
   · An irreversible click (book, pay, send, delete, submit…) also needs confirm: true, and then waits for the PERSON to press "Allow once" in the app. Tell them what you are about to click before you call it. A Deny is final: do not try again unless they ask.
   · If they "took over", do not click or type there until they hand back; reading still works.
   · The element you act on flashes, so they can see where you are working.
+  · If a site shows a "prove you're human" check (Cloudflare "Just a moment", "Verify you are human", a captcha), it is for the PERSON. Never click, solve or work around it, and never switch to the other browser to get past it. Tell them in one short line to finish the check in the Browser; your next call waits up to 5 minutes for them. If it still won't pass, tell them they can open the page in Chrome from the Browser bar.
   · If the pane shows a site LOGGED OUT (a Sign in button, an empty feed), don't work around it: tell them to click "Sign in with Chrome" in the Browser bar to bring that site's sign-in in from Chrome, or to sign in in the pane themselves. Never ask for a password.
   · Without open, panel reads the page they already have. close leaves their page open.
 
@@ -22,6 +23,9 @@ Actions:
 - find: query. Searches the WHOLE page and returns the matching lines with their line numbers and neighbours. A row inside a table comes back with its HEADER row, so you can tell which column is which. On a long page use this FIRST; it is the difference between answering and guessing.
 - window: line (and optional radius, default 5). Reads the lines around a line number that find gave you. Use this to see more around a hit instead of re-reading the page with a bigger budget.
 - elements: lists every control on the page as a numbered menu — [4] button "Run search". Run it again after anything changes the page; the numbers are rebuilt each time.
+  · Each row also says what the control IS: "→ /viewjob?jk=…" is where it leads, "data-jk=…" the site's id for the item, "checked"/"not checked" for a choice. When a pop-up is open, only its controls are listed: choose its options (radio rows) and press its button.
+- inspect: for one ref, where it leads without clicking: its links (each with where it came from), the site's ids, the card it sits in, the page's canonical address. Give the person ONLY addresses it found. Never build a link from an id or a URL pattern; if you have only an id, say so, or click it and read the page address after.
+- Every answer ends with "page: <address>": where the pane is now, read fresh. When a click changes it, it says so. Use that address when the person asks for a link.
 - click: ref. Clicks that element. A control that looks irreversible (delete, pay, send, submit…) is refused unless you pass confirm: true — and you tell the user what you are about to do BEFORE you do it. What actually changed is reported back to you; if it says nothing changed, nothing changed.
 - type: ref, text. Types into that field. A ref that is not a text field is refused.
 - select: ref, value. Sets a dropdown to one of ITS options — `elements` lists them. A value it does not offer is refused, with the real options.

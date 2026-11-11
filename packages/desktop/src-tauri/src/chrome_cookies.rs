@@ -106,6 +106,22 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
 }
 
+/// A bot-protection cookie (Cloudflare, Akamai, DataDome, PerimeterX, Imperva). Each one says
+/// "this browser already passed the check", and is tied to the browser that passed it: its
+/// fingerprint, often its connection. Sent from our Browser it looks stolen, and the site answers
+/// with a harder check (indeed.com, 2026-11-11). Left out, the site checks our Browser once and
+/// gives it its own. Sign-in cookies are unaffected.
+pub fn is_bot_check_cookie(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "cf_clearance", "__cf_bm", "_cfuvid", "cf_chl_rc_i", "cf_chl_rc_ni", "cf_chl_rc_m", // Cloudflare
+        "_abck", "ak_bmsc", "bm_sz", "bm_sv", "bm_mi", "bm_so", "bm_ss", "bm_s", "bm_lso", // Akamai
+        "datadome", // DataDome
+        "reese84", // Imperva
+    ];
+    const PREFIX: &[&str] = &["cf_chl_", "_px", "incap_ses_", "visid_incap_", "nlbi_"];
+    EXACT.contains(&name) || PREFIX.iter().any(|p| name.starts_with(p))
+}
+
 /// A row → a cookie for the Browser's store. None when expired or unreadable.
 pub fn to_cookie(row: &Row, key: &[u8; 16], db_version: i64, now_unix: i64) -> Option<tauri::webview::Cookie<'static>> {
     use tauri::webview::cookie::{time::OffsetDateTime, Cookie, SameSite};
@@ -303,7 +319,11 @@ mod mac {
         let (_, _, folder, service, account) = BROWSERS.iter().find(|b| b.0 == bid).ok_or("unknown browser")?;
         let db = root(folder).ok_or("no home folder")?.join(dir).join("Cookies");
         let (version, rows) = read_rows(&db)?;
-        let picked: Vec<&Row> = rows.iter().filter(|r| sites.iter().any(|s| *s == site_of(&r.host_key))).collect();
+        // Bot-check cookies stay in Chrome: they only vouch for the browser that earned them.
+        let picked: Vec<&Row> = rows
+            .iter()
+            .filter(|r| sites.iter().any(|s| *s == site_of(&r.host_key)) && !is_bot_check_cookie(&r.name))
+            .collect();
         if picked.is_empty() {
             return Ok((vec![], 0));
         }
@@ -345,6 +365,7 @@ pub async fn browser_import(app: tauri::AppHandle, source: String, sites: Vec<St
             .await
             .map_err(|e| e.to_string())??;
         let w = crate::browser::ensure_browser(&app)?;
+        crate::browser::remember_imported(&cookies);
         let mut imported = 0;
         for c in cookies {
             match w.set_cookie(c) {
@@ -401,6 +422,16 @@ mod tests {
             derive_key(b"peanuts").iter().map(|b| format!("{b:02x}")).collect::<String>(),
             "d9a09d499b4e1b7461f28e67972c6dbd"
         );
+    }
+
+    #[test]
+    fn bot_check_cookies_stay_in_chrome_sign_ins_come_over() {
+        for n in ["cf_clearance", "__cf_bm", "cf_chl_2", "_abck", "ak_bmsc", "datadome", "_px3", "_pxvid", "incap_ses_123_45", "reese84"] {
+            assert!(is_bot_check_cookie(n), "{n}");
+        }
+        for n in ["SID", "CTK", "INDEED_CSRF_TOKEN", "session", "__Secure-1PSID", "PPID", "cf_session", "pxl"] {
+            assert!(!is_bot_check_cookie(n), "{n}");
+        }
     }
 
     #[test]

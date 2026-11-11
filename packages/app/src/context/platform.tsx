@@ -66,7 +66,8 @@ export type NativeBrowserImported = { imported: number; skipped: number; sites: 
 
 type PlatformBase = {
   /** Desktop only: the native Browser. Absent on the web build, which keeps the iframe. */
-  nativeBrowser?: NativeBrowser
+  /** One page per chat: the Browser of chat `chat` (a session id, or "new" before it has one). */
+  nativeBrowser?: (chat: string) => NativeBrowser
 
   /** App version */
   version?: string

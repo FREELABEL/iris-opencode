@@ -19,6 +19,7 @@ import {
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
+  renderInspect,
   windowOfLines,
 } from "@/iris/browser-verbs"
 import { ARTIFACT_EVENT } from "./genesis-artifact"
@@ -51,6 +52,7 @@ export const Parameters = Schema.Struct({
     "find",
     "window",
     "elements",
+    "inspect",
     "click",
     "type",
     "select",
@@ -78,7 +80,7 @@ export const Parameters = Schema.Struct({
   }),
   line: Schema.optional(Schema.Number).annotate({ description: "Line number to read around (window)" }),
   radius: Schema.optional(Schema.Number).annotate({ description: "Lines either side, default 5 (window)" }),
-  ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type)" }),
+  ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type, select, inspect)" }),
   text: Schema.optional(Schema.String).annotate({ description: "What to type (type)" }),
   value: Schema.optional(Schema.String).annotate({ description: "Option to choose (select)" }),
   direction: Schema.optional(Schema.Literals(["up", "down", "top", "bottom"])).annotate({
@@ -100,6 +102,8 @@ type Metadata = {
   truncated?: boolean
   artifact?: string
   bytes?: number
+  /** The address changed during this call (a click, a route change inside the site). */
+  navigated?: boolean
 }
 
 /**
@@ -145,8 +149,12 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
     return {
       description: DESCRIPTION,
       parameters: Parameters,
-      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
-        Effect.gen(function* () {
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) => {
+        // The page this call worked on, and where it was when the call began: every answer ends
+        // with where the page is NOW, read fresh (#193242: an Indeed click changed the address
+        // and nothing said so).
+        let used: { page: ScriptedPage; startUrl?: string } | undefined
+        return Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
           const target = params.target ?? Panel.defaultBrowser(Panel.get(session))
           // One page per target per root session: the pane and the agent's Chrome never share.
@@ -227,6 +235,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           if (!page) {
             return yield* Effect.fail(new Error("no page is open — call action=open with a url first"))
           }
+          used = { page, startUrl: page.currentUrl ?? undefined }
 
           if (params.action === "read") {
             const got = yield* attempt(() => page.text())
@@ -271,8 +280,20 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
 
             return {
               title: `${got.value.length} elements`,
-              output: `${renderElements(got.value)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}.`,
+              output: `${renderElements(got.value, page.currentUrl ?? undefined)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}. To see where an item leads or its id without clicking: {"action":"inspect","ref":N}.`,
               metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
+            }
+          }
+
+          if (params.action === "inspect") {
+            if (!params.ref) return yield* Effect.fail(new Error("inspect needs a ref — run action=elements first"))
+            const got = yield* attempt(() => page.inspect(params.ref!))
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            if (!got.value) return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+            return {
+              title: `inspect [${params.ref}]`,
+              output: renderInspect(params.ref, got.value),
+              metadata: { ref: params.ref },
             }
           }
 
@@ -434,6 +455,20 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             metadata: { artifact: meta.id, bytes: png.length, url: page.currentUrl ?? undefined },
           }
         }).pipe(
+          Effect.flatMap((result) =>
+            Effect.gen(function* () {
+              if (!used) return result
+              const now = yield* attempt(() => used!.page.where())
+              if (!now.ok || !now.value.url) return result
+              const moved = !!used.startUrl && now.value.url !== used.startUrl
+              const where = `\n\npage: ${now.value.url}${now.value.title ? ` ("${now.value.title.slice(0, 80)}")` : ""}${moved ? ` · the address changed (was ${used.startUrl})` : ""}`
+              return {
+                ...result,
+                output: result.output + where,
+                metadata: { ...result.metadata, url: now.value.url, ...(moved ? { navigated: true } : {}) },
+              }
+            }),
+          ),
           // One line per call in engine.log, so a slow or silent Browser leaves a trace (2026-11-11:
           // a 45 s stall on Vonlane left none). No page text, no typed text: action, target, timing.
           Effect.tap(() =>
@@ -449,7 +484,8 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           ),
           Effect.withLogSpan("browser"),
           Effect.orDie,
-        ),
+        )
+      },
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )

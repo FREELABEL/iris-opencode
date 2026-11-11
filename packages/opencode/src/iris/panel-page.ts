@@ -44,8 +44,9 @@ export function unpackPageAnswer(o: Panel.Outcome, explainSilence: (o: Panel.Out
 export const CONFIRM_TIMEOUT_MS = 75_000
 /** One page script round trip: the desktop gives a script 10 s, plus the trip both ways. */
 export const PAGE_TIMEOUT_MS = 16_000
-/** The app's refusal while its Allow is on screen (browser-grants pageRefusal). */
-export const WAITING_FOR_ALLOW = /click Allow in the Browser bar/
+/** The app's answers while the person is being asked: its Allow is on screen (browser-grants
+ * pageRefusal), or the site is showing a "prove you're human" check (app human-check.ts). */
+export const WAITING_FOR_ALLOW = /click Allow in the Browser bar|finish the check in the Browser/
 
 export class PanelPage extends ScriptedPage {
   private mode: "read" | "act" = "read"

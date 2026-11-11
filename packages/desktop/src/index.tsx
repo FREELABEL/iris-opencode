@@ -67,29 +67,30 @@ const platform: Platform = {
   updater: createUpdaterPlatform(),
 
   // #193062: the side panel's native Browser (src-tauri/src/browser.rs).
-  nativeBrowser: {
-    show: (url, bounds) => invoke("browser_show", { url: url ?? null, bounds }),
-    bounds: (bounds) => invoke("browser_bounds", { bounds }),
-    hide: () => invoke("browser_hide"),
-    navigate: (url) => invoke<string>("browser_navigate", { url }),
-    go: (action) => invoke("browser_go", { action }),
-    state: () => invoke("browser_state"),
-    eval: (script) => invoke<string>("browser_eval", { script }),
-    screenshot: () => invoke<string>("browser_screenshot"),
+  // One page per chat (2026-11-11): every call names the chat whose page it is.
+  nativeBrowser: (chat) => ({
+    show: (url, bounds) => invoke("browser_show", { chat, url: url ?? null, bounds }),
+    bounds: (bounds) => invoke("browser_bounds", { chat, bounds }),
+    hide: () => invoke("browser_hide", { chat }),
+    navigate: (url) => invoke<string>("browser_navigate", { chat, url }),
+    go: (action) => invoke("browser_go", { chat, action }),
+    state: () => invoke("browser_state", { chat }),
+    eval: (script) => invoke<string>("browser_eval", { chat, script }),
+    screenshot: () => invoke<string>("browser_screenshot", { chat }),
     importSources: () => invoke("browser_import_sources"),
     importSignIns: (source, sites) => invoke("browser_import", { source, sites }),
     onState(handler) {
       let off: (() => void) | undefined
       let gone = false
-      void listen<{ url: string; title?: string | null; loading: boolean }>("iris-browser://state", (e) =>
-        handler(e.payload),
-      ).then((u) => (gone ? u() : (off = u)))
+      void listen<{ chat: string; url: string; title?: string | null; loading: boolean }>("iris-browser://state", (e) => {
+        if (e.payload.chat === chat) handler(e.payload)
+      }).then((u) => (gone ? u() : (off = u)))
       return () => {
         gone = true
         off?.()
       }
     },
-  },
+  }),
 
   async openDirectoryPickerDialog(opts) {
     const result = await open({

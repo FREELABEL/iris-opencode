@@ -16,7 +16,9 @@ import {
   originOf,
   pageRefusal,
   takenOverSites,
+  clearHumanCheck,
 } from "./browser-grants"
+import { HUMAN_CHECK_WAIT, humanCheckShowing } from "./human-check"
 import type { NativeBrowser } from "@/context/platform"
 import { deliverReport } from "./panel-report"
 import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
@@ -289,7 +291,8 @@ export function usePanelControl(input: { open: () => boolean }) {
    */
   const runPage = async (cmd: PageCommand, ack: string) => {
     const reply = (r: { result?: string; error?: string }) => post({ ...untrack(snapshot), ack, ...r })
-    const nb = platform.nativeBrowser
+    // This chat's own page: an agent in one chat never reads or drives another chat's.
+    const nb = params.id ? platform.nativeBrowser?.(params.id) : undefined
     if (!nb || !nativeBrowserEnabled(globalThis.localStorage, true)) {
       return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
     }
@@ -300,10 +303,23 @@ export function usePanelControl(input: { open: () => boolean }) {
         requestIrisNav({ surface: "browser", session: params.id })
         showTab("iris")
         const landed = await waitForPage(nb, cmd.url, before)
+        // Landed on a "prove you're human" page: ask the person now; the agent's next look waits.
+        const o = originOf(landed.url)
+        if (o && (await humanCheckShowing((x) => nb.eval(x)))) noteAsked(o, "check")
         return reply({ result: JSON.stringify({ ok: true, value: landed }) })
       }
       const s = await nb.state()
       const origin = originOf(s?.url)
+      // A "prove you're human" page is for the PERSON (human-check.ts): never read or click it.
+      // The agent waits on this answer the way it waits for Allow.
+      if (await humanCheckShowing((x) => nb.eval(x))) {
+        if (recentlyDeclined(origin)) {
+          return reply({ error: `the person chose not to finish ${hostOf(origin)}'s human check. Don't try again unless they ask` })
+        }
+        if (origin) noteAsked(origin, "check")
+        return reply({ error: HUMAN_CHECK_WAIT })
+      }
+      clearHumanCheck(origin)
       if (cmd.op === "screenshot") {
         // Looking is reading: the same per-site Allow (or Always allow).
         const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
