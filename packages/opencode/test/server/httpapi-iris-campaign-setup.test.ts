@@ -104,7 +104,8 @@ describe("/iris/campaigns/boards (#192627)", () => {
       expect(yield* boards()).toEqual({
         measured: true,
         boards: [
-          { id: 912, name: "Acme Shoes", role: "owner" },
+          // #193233: the list count rides along when the platform sends lists; absent otherwise.
+          { id: 912, name: "Acme Shoes", role: "owner", lists: 0 },
           { id: 40, name: "Client board", role: "editor" },
         ],
       })

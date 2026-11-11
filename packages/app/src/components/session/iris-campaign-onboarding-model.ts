@@ -13,7 +13,7 @@
  * or an HTTP status.
  */
 
-export type CampaignBoard = { id: number; name: string; role: "owner" | "editor" }
+export type CampaignBoard = { id: number; name: string; role: "owner" | "editor"; lists?: number }
 export type CampaignBoards = { measured: boolean; reason?: string; boards: CampaignBoard[] }
 export type CampaignSetupKind = "signed_out" | "not_allowed" | "not_deployed" | "conflict" | "busy" | "unreachable" | "failed"
 export type CampaignSetup = {
@@ -179,7 +179,30 @@ export function filterBoards(boards: CampaignBoard[], q: string): CampaignBoard[
   const words = q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return boards
   return boards.filter((b) => {
-    const n = b.name.toLowerCase()
-    return words.every((w) => n.includes(w))
+    const n = `${b.name.toLowerCase()} #${b.id}`
+    return words.every((w) => n.includes(w.replace(/^#?(\d+)$/, "#$1")) || n.includes(w))
   })
+}
+
+/**
+ * A board's face in the picker (#193233). Boards carry no icon or image on the platform, so: the
+ * emoji a name starts with ("🎮 IRIS Games"), else up to two initials on a hue fixed by the board's
+ * id — the same board is the same colour every time, and neighbours rarely match.
+ */
+export function boardFace(b: CampaignBoard): { emoji?: string; initials: string; hue: number; title: string } {
+  const m = b.name.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)\s*(.*)$/u)
+  const title = (m ? m[2] : b.name).trim() || b.name
+  const words = title
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+  const initials = (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase()
+  const hue = Math.round(((b.id * 137.508) % 360 + 360) % 360)
+  return { ...(m ? { emoji: m[1] } : {}), initials, hue, title }
+}
+
+/** The line under a board's name: "#905 · 6 lists". */
+export function boardMeta(b: CampaignBoard): string {
+  const n = b.lists
+  return n === undefined ? `#${b.id}` : `#${b.id} · ${n} ${n === 1 ? "list" : "lists"}`
 }

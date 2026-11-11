@@ -16,7 +16,8 @@ import { PAGE_SLUG } from "./page-signin"
  * is limited to one list is still offered, and fl-api's refusal is then shown as "not allowed".
  */
 
-export type CampaignBoard = { id: number; name: string; role: "owner" | "editor" }
+/** `lists`: how many lists the board has (#193233 — shown in the picker so boards are told apart). */
+export type CampaignBoard = { id: number; name: string; role: "owner" | "editor"; lists?: number }
 
 export type CampaignBoards = { measured: boolean; reason?: string; boards: CampaignBoard[] }
 
@@ -63,8 +64,9 @@ export async function listCampaignBoards(): Promise<CampaignBoards> {
     const id = Number(b.id)
     if (!Number.isInteger(id) || id <= 0) return []
     const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : "Untitled board"
-    if (b.is_owner === true) return [{ id, name, role: "owner" }]
-    if (b.user_permission === "editor") return [{ id, name, role: "editor" }]
+    const lists = Array.isArray(b.lists) ? { lists: b.lists.length } : {}
+    if (b.is_owner === true) return [{ id, name, role: "owner", ...lists }]
+    if (b.user_permission === "editor") return [{ id, name, role: "editor", ...lists }]
     return []
   })
   return { measured: true, boards }

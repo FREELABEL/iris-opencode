@@ -189,3 +189,49 @@
 .iris-camp__input:focus {
   border-color: var(--border-interactive-base, var(--border-base));
 }
+
+/* #193233: each board row gets a face (emoji or initials), its name, and "#id · N lists". */
+.iris-camp__board {
+  justify-content: flex-start;
+  padding: 6px 8px;
+}
+.iris-camp__face {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: hsl(var(--face-hue) 55% 32%);
+  background: hsl(var(--face-hue) 70% 90%);
+}
+.iris-camp__face--emoji {
+  font-size: 16px;
+  background: var(--background-base);
+}
+[data-color-scheme="dark"] .iris-camp__face:not(.iris-camp__face--emoji) {
+  color: hsl(var(--face-hue) 70% 82%);
+  background: hsl(var(--face-hue) 35% 24%);
+}
+.iris-camp__board-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.iris-camp__board-text .iris-camp__board-name {
+  line-height: 16px;
+}
+.iris-camp__board-meta {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-weak);
+  font-variant-numeric: tabular-nums;
+}
+.iris-camp--active .iris-camp__boards {
+  max-height: 320px;
+}

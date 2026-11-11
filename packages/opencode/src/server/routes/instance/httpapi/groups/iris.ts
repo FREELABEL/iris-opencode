@@ -3670,6 +3670,7 @@ export const IrisApi = HttpApi.make("iris").add(
                 id: Schema.Finite,
                 name: Schema.String,
                 role: described(Schema.Literals(["owner", "editor"]), "The account's role on the board. Viewers are not offered."),
+                lists: Schema.optional(described(Schema.Finite, "#193233. How many lists the board has. Absent when not returned.")),
               }).annotate({ identifier: "IrisCampaignBoard" }),
             ),
           }).annotate({ identifier: "IrisCampaignBoards" }),

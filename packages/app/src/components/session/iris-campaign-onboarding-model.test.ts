@@ -137,3 +137,29 @@ describe("board filter (#193233)", () => {
     expect(filterBoards(list, "zzz")).toEqual([])
   })
 })
+
+import { boardFace, boardMeta } from "./iris-campaign-onboarding-model"
+
+describe("board faces (#193233)", () => {
+  test("a name that starts with an emoji uses it, and drops it from the title", () => {
+    expect(boardFace({ id: 862, name: "🎮 IRIS Games", role: "owner" })).toMatchObject({ emoji: "🎮", title: "IRIS Games", initials: "IG" })
+  })
+  test("otherwise two initials, ignoring punctuation", () => {
+    expect(boardFace({ id: 891, name: "Nicole — Texting & Connection", role: "owner" }).initials).toBe("NT")
+    expect(boardFace({ id: 1, name: "Defense", role: "owner" }).initials).toBe("DE")
+  })
+  test("the same board is always the same colour; neighbours differ", () => {
+    const a = boardFace({ id: 905, name: "x", role: "owner" }).hue
+    expect(boardFace({ id: 905, name: "y", role: "owner" }).hue).toBe(a)
+    expect(boardFace({ id: 906, name: "x", role: "owner" }).hue).not.toBe(a)
+  })
+  test("meta line shows the id and list count", () => {
+    expect(boardMeta({ id: 905, name: "x", role: "owner", lists: 6 })).toBe("#905 · 6 lists")
+    expect(boardMeta({ id: 905, name: "x", role: "owner", lists: 1 })).toBe("#905 · 1 list")
+    expect(boardMeta({ id: 905, name: "x", role: "owner" })).toBe("#905")
+  })
+  test("the filter finds a board by its id", () => {
+    expect(filterBoards([acme, client], "912")).toEqual([acme])
+    expect(filterBoards([acme, client], "#40")).toEqual([client])
+  })
+})

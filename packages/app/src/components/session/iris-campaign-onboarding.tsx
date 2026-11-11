@@ -8,6 +8,8 @@ import {
   afterBoards,
   afterMake,
   afterSetup,
+  boardFace,
+  boardMeta,
   boardTag,
   filterBoards,
   FILTER_FROM,
@@ -226,7 +228,25 @@ export function IrisCampaignOnboarding(props: {
                     data-board={b.name}
                     onClick={() => chooseBoard(b, boards())}
                   >
-                    <span class="iris-camp__board-name">{b.name}</span>
+                    {(() => {
+                      const f = boardFace(b)
+                      return (
+                        <>
+                          <span
+                            class="iris-camp__face"
+                            classList={{ "iris-camp__face--emoji": !!f.emoji }}
+                            style={{ "--face-hue": String(f.hue) }}
+                            aria-hidden="true"
+                          >
+                            {f.emoji ?? f.initials}
+                          </span>
+                          <span class="iris-camp__board-text">
+                            <span class="iris-camp__board-name">{f.title}</span>
+                            <span class="iris-camp__board-meta">{boardMeta(b)}</span>
+                          </span>
+                        </>
+                      )
+                    })()}
                     <Show when={boardTag(b)}>{(t) => <span class="iris-camp__tag">{t()}</span>}</Show>
                   </button>
                 )}
