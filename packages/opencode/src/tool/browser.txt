@@ -23,6 +23,9 @@ Actions:
 - find: query. Searches the WHOLE page and returns the matching lines with their line numbers and neighbours. A row inside a table comes back with its HEADER row, so you can tell which column is which. On a long page use this FIRST; it is the difference between answering and guessing.
 - window: line (and optional radius, default 5). Reads the lines around a line number that find gave you. Use this to see more around a hit instead of re-reading the page with a bigger budget.
 - elements: lists every control on the page as a numbered menu — [4] button "Run search". Run it again after anything changes the page; the numbers are rebuilt each time.
+  · Each row also says what the control IS: "→ /viewjob?jk=…" is where it leads, "data-jk=…" the site's id for the item, "checked"/"not checked" for a choice. When a pop-up is open, only its controls are listed: choose its options (radio rows) and press its button.
+- inspect: for one ref, where it leads without clicking: its links (each with where it came from), the site's ids, the card it sits in, the page's canonical address. Give the person ONLY addresses it found. Never build a link from an id or a URL pattern; if you have only an id, say so, or click it and read the page address after.
+- Every answer ends with "page: <address>": where the pane is now, read fresh. When a click changes it, it says so. Use that address when the person asks for a link.
 - click: ref. Clicks that element. A control that looks irreversible (delete, pay, send, submit…) is refused unless you pass confirm: true — and you tell the user what you are about to do BEFORE you do it. What actually changed is reported back to you; if it says nothing changed, nothing changed.
 - type: ref, text. Types into that field. A ref that is not a text field is refused.
 - select: ref, value. Sets a dropdown to one of ITS options — `elements` lists them. A value it does not offer is refused, with the real options.

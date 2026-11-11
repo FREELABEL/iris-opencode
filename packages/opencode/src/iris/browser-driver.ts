@@ -18,6 +18,7 @@
  * the refusals move with it.
  */
 import { withCursor } from "./agent-cursor"
+import type { PageElement } from "./browser-verbs"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -34,6 +35,17 @@ const CHROMES = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
 ]
+
+/** What inspect found. Every link says where it came from. */
+export type InspectedElement = {
+  tag: string
+  attributes: Record<string, string>
+  ids: Record<string, string>
+  links: { url: string; source: "anchor" | "ancestor-anchor" | "card-anchor"; where: string }[]
+  ancestors: { tag: string; role?: string; id?: string; ids?: Record<string, string> }[]
+  canonical?: string
+  page: string
+}
 
 export async function findChrome(): Promise<string | null> {
   if (process.env["IRIS_BROWSER_CHROME"]) return process.env["IRIS_BROWSER_CHROME"]!
@@ -103,14 +115,12 @@ export abstract class ScriptedPage {
    * not found, rather than hitting whatever now sits in that position. Never coordinates: a
    * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
    */
-  async elements(limit = 150): Promise<
-    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[]; optionLabels?: string[] }>
-  > {
+  async elements(limit = 150): Promise<PageElement[]> {
     const js = `(() => {
-      const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
+      const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=option], [contenteditable=true]'
       const roleOf = (el) => {
         const r = el.getAttribute('role')
-        if (r) return r
+        if (r) return r === 'menuitemradio' ? 'radio' : r === 'menuitemcheckbox' ? 'checkbox' : r
         const tag = el.tagName.toLowerCase()
         if (tag === 'a') return 'link'
         if (tag === 'button') return 'button'
@@ -125,39 +135,134 @@ export abstract class ScriptedPage {
         }
         return 'textbox'
       }
-      const nameOf = (el) =>
-        (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
-         (el.innerText || el.value || '').trim() || el.getAttribute('name') || '').replace(/\\s+/g, ' ').slice(0, 120)
-      const out = []
-      let ref = 0
-      for (const el of document.querySelectorAll(SEL)) {
+      const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim()
+      const nameOf = (el, label) =>
+        clean(el.getAttribute('aria-label') || (label && label.innerText) || el.getAttribute('placeholder') || el.getAttribute('title') ||
+         (el.innerText || (el.type === 'radio' || el.type === 'checkbox' ? '' : el.value) || '').trim() || el.getAttribute('name') || '').slice(0, 120)
+      const shown = (el) => {
         const rect = el.getBoundingClientRect()
         const style = getComputedStyle(el)
-        if (style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0)) continue
+        return !(style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0))
+      }
+      // A choice drawn by the site: the real radio/checkbox is hidden (0 size, opacity 0, off
+      // screen) and its LABEL is what a person clicks (Toast, 2026-11-11: the protein choices).
+      const labelOf = (el) => (el.labels && el.labels[0]) || el.closest('label')
+      const tiny = (el) => { const r = el.getBoundingClientRect(); return r.width < 2 || r.height < 2 || Number(getComputedStyle(el).opacity) === 0 }
+      // An open pop-up is the page right now: what is behind it is inert. List only the pop-up,
+      // so a long page behind it (a whole menu) can't push its choices past the limit.
+      const modals = Array.from(document.querySelectorAll('[aria-modal=true], dialog[open], [role=dialog], [role=alertdialog]')).filter(shown)
+      const root = modals.length ? modals[modals.length - 1] : document
+      // What the element IS, not only what it says: its link and the site's ids for the record.
+      const ID_ATTR = /^data-(.*[-_])?(id|jk|sku|key|slug|uuid|item|listing|product|job)([-_]?id)?$/i
+      const idsOf = (el) => {
+        const ids = {}
+        let n = 0
+        for (let x = el; x && x !== document.body && n < 4; x = x.parentElement) {
+          for (const a of Array.from(x.attributes || [])) {
+            if (n < 4 && ID_ATTR.test(a.name) && a.value && a.value.length <= 80 && !(a.name in ids)) { ids[a.name] = a.value; n++ }
+          }
+        }
+        return n ? ids : undefined
+      }
+      const hrefOf = (el) => {
+        const a = el.closest('a[href]')
+        if (!a) return undefined
+        const h = a.href
+        return /^https?:/.test(h) ? h : undefined
+      }
+      const out = []
+      let ref = 0
+      for (const el of root.querySelectorAll(SEL)) {
+        const isChoice = el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
+        const label = isChoice ? labelOf(el) : null
+        const box = isChoice && (!shown(el) || tiny(el)) && label && shown(label) ? label : el
+        if (!shown(box)) continue
         ref++
         if (ref > ${limit}) break
         el.setAttribute('data-iris-ref', String(ref))
+        const rect = box.getBoundingClientRect()
         const isSelect = el.tagName.toLowerCase() === 'select'
         const opts = isSelect ? Array.from(el.options).slice(0, 60) : []
         const options = isSelect ? opts.map((o) => o.value) : undefined
         // What a person reads in the dropdown: "Austin: DoubleTree University Area", not "30".
         const optionLabels = isSelect ? opts.map((o) => (o.label || o.textContent || '').trim()) : undefined
+        const aria = el.getAttribute('aria-checked')
         out.push({
           options,
           optionLabels,
           ref,
           role: roleOf(el),
-          name: nameOf(el),
+          name: nameOf(el, label),
           tag: el.tagName.toLowerCase(),
-          value: el.value === undefined ? undefined : String(el.value),
+          value: isChoice || el.value === undefined ? undefined : String(el.value),
+          checked: isChoice ? !!el.checked : aria === 'true' ? true : aria === 'false' ? false : undefined,
           enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
           inViewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
+          href: hrefOf(el),
+          ids: idsOf(el),
+          inDialog: root !== document ? true : undefined,
         })
       }
       return out
     })()`
 
-    return (await this.evaluate<any[]>(js)) ?? []
+    return (await this.evaluate<PageElement[]>(js)) ?? []
+  }
+
+  /**
+   * Everything that identifies ONE element without clicking it: its attributes, the links and
+   * ids on it and around it (the card it sits in), and the page's canonical address. Facts with
+   * where each came from; nothing is built from a guessed URL pattern.
+   */
+  async inspect(ref: number): Promise<InspectedElement | null> {
+    return await this.evaluate<InspectedElement | null>(`(() => {
+      const el = document.querySelector('[data-iris-ref="${ref}"]')
+      if (!el) return null
+      const ID_ATTR = /^data-(.*[-_])?(id|jk|sku|key|slug|uuid|item|listing|product|job)([-_]?id)?$/i
+      const SKIP = /^(style|class|data-iris-ref|on.*)$/i
+      const attrs = (x) => {
+        const o = {}
+        for (const a of Array.from(x.attributes || [])) if (!SKIP.test(a.name) && a.value.length <= 300) o[a.name] = a.value
+        return o
+      }
+      const web = (h) => (/^https?:/.test(h || '') ? h : undefined)
+      const found = []
+      const seen = new Set()
+      const add = (url, source, where) => { if (url && !seen.has(url)) { seen.add(url); found.push({ url, source, where }) } }
+      if (el.tagName.toLowerCase() === 'a') add(web(el.href), 'anchor', 'the element')
+      const up = el.closest('a[href]')
+      if (up && up !== el) add(web(up.href), 'ancestor-anchor', 'a link around the element')
+      const ancestors = []
+      const ids = {}
+      let card = null
+      for (let x = el.parentElement, i = 0; x && x !== document.body && i < 8; x = x.parentElement, i++) {
+        const own = {}
+        for (const a of Array.from(x.attributes || [])) if (ID_ATTR.test(a.name) && a.value.length <= 120) { own[a.name] = a.value; if (!(a.name in ids)) ids[a.name] = a.value }
+        const r = x.getAttribute('role')
+        if (!card && (Object.keys(own).length || /^(li|article)$/i.test(x.tagName) || r === 'listitem' || r === 'article')) card = x
+        ancestors.push({ tag: x.tagName.toLowerCase(), role: r || undefined, id: x.id || undefined, ids: Object.keys(own).length ? own : undefined })
+      }
+      for (const a of Array.from(el.attributes || [])) if (ID_ATTR.test(a.name)) ids[a.name] = a.value
+      if (card) for (const a of Array.from(card.querySelectorAll('a[href]')).slice(0, 10)) add(web(a.href), 'card-anchor', 'a link in the same card: ' + (a.innerText || a.getAttribute('aria-label') || '').trim().slice(0, 60))
+      const canon = document.querySelector('link[rel=canonical]')
+      return {
+        tag: el.tagName.toLowerCase(),
+        attributes: attrs(el),
+        ids,
+        links: found,
+        ancestors,
+        canonical: canon ? web(canon.href) : undefined,
+        page: location.href,
+      }
+    })()`)
+  }
+
+  /** Where the page is now, read fresh: a site that routes in place (pushState) changes this
+   * without loading a page. */
+  async where(): Promise<{ url: string; title: string }> {
+    const w = await this.evaluate<{ url: string; title: string }>("({ url: location.href, title: document.title })")
+    if (w?.url) this.currentUrl = w.url
+    return w ?? { url: this.currentUrl ?? "", title: "" }
   }
 
   /** Everything the change check compares, taken before and after an action. */

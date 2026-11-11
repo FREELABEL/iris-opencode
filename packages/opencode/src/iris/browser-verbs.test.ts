@@ -11,6 +11,8 @@ import {
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
+  renderInspect,
+  shortHref,
   windowOfLines,
 } from "./browser-verbs"
 
@@ -317,5 +319,35 @@ describe("dropdowns show what each option MEANS (Vonlane: '30' is Austin)", () =
     expect(refuseOptionReason([el], 12, "Fort Worth: Hilton")).toBeNull()
     expect(refuseOptionReason([el], 12, "30")).toBeNull()
     expect(refuseOptionReason([el], 12, "Dallas")).toContain('14 "Fort Worth: Hilton"')
+  })
+})
+
+describe("what an element IS (#193242)", () => {
+  test("rows say where they lead, their ids and whether a choice is checked", () => {
+    const out = renderElements(
+      [
+        { ref: 1, role: "link", name: "Engineer", tag: "a", enabled: true, inViewport: true, href: "https://www.indeed.com/viewjob?jk=abc", ids: { "data-jk": "abc" } },
+        { ref: 2, role: "radio", name: "Hemp Protein", tag: "input", enabled: true, inViewport: true, checked: false, inDialog: true },
+      ],
+      "https://www.indeed.com/jobs?q=ai",
+    )
+    expect(out).toContain("A pop-up is open")
+    expect(out).toContain("→ /viewjob?jk=abc · data-jk=abc")
+    expect(out).toContain("Hemp Protein  · not checked")
+  })
+
+  test("other sites' links stay whole; long ones are cut", () => {
+    expect(shortHref("https://b.com/x", "https://a.com/")).toBe("https://b.com/x")
+    expect(shortHref("https://a.com/" + "x".repeat(200), "https://a.com/").length).toBe(120)
+  })
+
+  test("inspect gives real links with their source, and never makes one from an id", () => {
+    const base = { tag: "button", attributes: { "aria-label": "full details" }, ancestors: [{ tag: "li", ids: { "data-jk": "abc" } }], page: "https://www.indeed.com/jobs" }
+    const found = renderInspect(3, { ...base, ids: { "data-jk": "abc" }, links: [{ url: "https://www.indeed.com/viewjob?jk=abc", source: "card-anchor", where: "a link in the same card" }] })
+    expect(found).toContain("https://www.indeed.com/viewjob?jk=abc  · card-anchor")
+    const idOnly = renderInspect(3, { ...base, ids: { "data-jk": "abc" }, links: [] })
+    expect(idOnly).toContain("links: none")
+    expect(idOnly).toContain("Don't build a link from an id")
+    expect(idOnly).not.toContain("viewjob")
   })
 })
