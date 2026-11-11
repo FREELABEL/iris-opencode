@@ -433,7 +433,23 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             attachments: [{ type: "file" as const, mime, url: dataUri, filename: "screenshot" }],
             metadata: { artifact: meta.id, bytes: png.length, url: page.currentUrl ?? undefined },
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          // One line per call in engine.log, so a slow or silent Browser leaves a trace (2026-11-11:
+          // a 45 s stall on Vonlane left none). No page text, no typed text: action, target, timing.
+          Effect.tap(() =>
+            Effect.logInfo("browser", { action: params.action, target: params.target ?? "default", ok: true, ref: params.ref }),
+          ),
+          Effect.tapError((e) =>
+            Effect.logWarning("browser", {
+              action: params.action,
+              target: params.target ?? "default",
+              ok: false,
+              error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+            }),
+          ),
+          Effect.withLogSpan("browser"),
+          Effect.orDie,
+        ),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )

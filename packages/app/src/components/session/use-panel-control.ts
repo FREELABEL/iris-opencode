@@ -399,6 +399,7 @@ export function sameSite(a: string | undefined, b: string | undefined): boolean 
 
 async function waitForPage(nb: NativeBrowser, url: string, before: string | undefined) {
   const started = Date.now()
+  const stillOn = (u?: string) => (u && u !== "about:blank" ? ` The pane still shows ${u}.` : "")
   while (Date.now() - started < 20_000) {
     await new Promise((r) => setTimeout(r, 300))
     const s = await nb.state().catch(() => null)
@@ -406,8 +407,18 @@ async function waitForPage(nb: NativeBrowser, url: string, before: string | unde
       // The address changes before the page has painted: give it a moment, then read the title.
       await new Promise((r) => setTimeout(r, 800))
       const now = (await nb.state().catch(() => null)) ?? s
+      // A page that fails to load puts the pane back on the page it was on: never report THAT
+      // page as where we landed (Vonlane, 2026-11-11: www.vonlane.com "opened" Google Maps).
+      if (!sameSite(now.url, url)) {
+        throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(now.url)} Try the address without www, or the site's main page.`)
+      }
       return { url: now.url, title: now.title ?? "" }
     }
+    // Gave up loading and went back: say so now, not after 20 s.
+    if (s && !s.loading && s.url === before && Date.now() - started > 6_000) {
+      throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(s.url)} Try the address without www, or the site's main page.`)
+    }
   }
-  throw new Error(`the Browser pane did not reach ${url} within 20 s`)
+  const last = await nb.state().catch(() => null)
+  throw new Error(`${url} didn't load within 20 s.${stillOn(last?.url)}`)
 }

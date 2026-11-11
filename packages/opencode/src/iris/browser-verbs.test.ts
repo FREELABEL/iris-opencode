@@ -303,3 +303,19 @@ describe("S3.1 — select and scroll", () => {
     expect(refuseScrollReason("sideways")).toContain("up, down, top, bottom")
   })
 })
+
+describe("dropdowns show what each option MEANS (Vonlane: '30' is Austin)", () => {
+  const el = {
+    ref: 12, role: "combobox", name: "source", tag: "select", enabled: true, inViewport: true,
+    options: ["", "29", "30", "14"],
+    optionLabels: ["Where are you starting?", "Austin-Arboretum: DoubleTree Northwest", "Austin: DoubleTree University Area", "Fort Worth: Hilton"],
+  }
+  test("elements lists the value with its words", () => {
+    expect(renderElements([el])).toContain('30 "Austin: DoubleTree University Area"')
+  })
+  test("the words a person sees choose the option too", () => {
+    expect(refuseOptionReason([el], 12, "Fort Worth: Hilton")).toBeNull()
+    expect(refuseOptionReason([el], 12, "30")).toBeNull()
+    expect(refuseOptionReason([el], 12, "Dallas")).toContain('14 "Fort Worth: Hilton"')
+  })
+})

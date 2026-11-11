@@ -243,6 +243,15 @@ export type PageElement = {
   inViewport: boolean
   /** For a dropdown: what it can actually be set to. A closed set cannot be invented. */
   options?: string[]
+  /** What each option says (same order as options), when it differs from its value. */
+  optionLabels?: string[]
+}
+
+/** "30 Austin: DoubleTree University Area": the value to pass AND what it means. */
+function optionText(e: PageElement, i: number): string {
+  const v = e.options![i]!
+  const l = e.optionLabels?.[i]
+  return l && l !== v ? `${v} "${l.slice(0, 40)}"` : v
 }
 
 const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
@@ -260,7 +269,9 @@ export function renderElements(els: PageElement[]): string {
         e.enabled ? "" : "disabled",
         e.inViewport ? "" : "off-screen",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
-        e.options?.length ? `options: ${e.options.slice(0, 12).join(", ")}${e.options.length > 12 ? " …" : ""}` : "",
+        e.options?.length
+          ? `options: ${e.options.slice(0, 12).map((_, i) => optionText(e, i)).join(", ")}${e.options.length > 12 ? ` … (${e.options.length} in all)` : ""}`
+          : "",
       ].filter(Boolean)
 
       return `[${e.ref}] ${e.role.padEnd(10)} ${e.name.slice(0, 60)}${flags.length ? `  · ${flags.join(" · ")}` : ""}`
@@ -295,8 +306,10 @@ export function refuseOptionReason(els: PageElement[], ref: number, value: strin
   const options = el.options ?? []
   if (!options.length) return `[${ref}] has no options to choose from`
   if (options.includes(value)) return null
+  const want = value.trim().toLowerCase()
+  if (el.optionLabels?.some((l) => l.trim().toLowerCase() === want)) return null
 
-  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).join(", ")}`
+  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).map((_, i) => optionText(el, i)).join(", ")}`
 }
 
 /** Why this scroll cannot be done, or null. Four directions, named in the refusal. */

@@ -42,6 +42,8 @@ export function unpackPageAnswer(o: Panel.Outcome, explainSilence: (o: Panel.Out
 
 /** How long the person has to answer an Allow once prompt, plus the round trip. */
 export const CONFIRM_TIMEOUT_MS = 75_000
+/** One page script round trip: the desktop gives a script 10 s, plus the trip both ways. */
+export const PAGE_TIMEOUT_MS = 16_000
 /** The app's refusal while its Allow is on screen (browser-grants pageRefusal). */
 export const WAITING_FOR_ALLOW = /click Allow in the Browser bar/
 
@@ -77,7 +79,9 @@ export class PanelPage extends ScriptedPage {
     // Not allowed yet: the app is showing Allow in the Browser bar right now. Wait for the
     // person's one click instead of making them click, then tell the agent to try again (#193200).
     // Each try is a quick round trip; the same command (confirm included) is re-sent.
-    return (await this.sendWaiting(command, confirm ? CONFIRM_TIMEOUT_MS : undefined)) as T
+    // Longer than the desktop's own 10 s page timeout, so its "the page took too long" answer
+    // arrives instead of a bare "the desktop did not answer" (Vonlane, 2026-11-11).
+    return (await this.sendWaiting(command, confirm ? CONFIRM_TIMEOUT_MS : PAGE_TIMEOUT_MS)) as T
   }
 
   /** Send, and while the app says "click Allow", wait for that click and send again. */

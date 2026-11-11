@@ -104,7 +104,7 @@ export abstract class ScriptedPage {
    * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
    */
   async elements(limit = 150): Promise<
-    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[] }>
+    Array<{ ref: number; role: string; name: string; tag: string; value?: string; enabled: boolean; inViewport: boolean; options?: string[]; optionLabels?: string[] }>
   > {
     const js = `(() => {
       const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [contenteditable=true]'
@@ -137,11 +137,14 @@ export abstract class ScriptedPage {
         ref++
         if (ref > ${limit}) break
         el.setAttribute('data-iris-ref', String(ref))
-        const options = el.tagName.toLowerCase() === 'select'
-          ? Array.from(el.options).map((o) => o.value).slice(0, 60)
-          : undefined
+        const isSelect = el.tagName.toLowerCase() === 'select'
+        const opts = isSelect ? Array.from(el.options).slice(0, 60) : []
+        const options = isSelect ? opts.map((o) => o.value) : undefined
+        // What a person reads in the dropdown: "Austin: DoubleTree University Area", not "30".
+        const optionLabels = isSelect ? opts.map((o) => (o.label || o.textContent || '').trim()) : undefined
         out.push({
           options,
+          optionLabels,
           ref,
           role: roleOf(el),
           name: nameOf(el),
@@ -213,7 +216,10 @@ export abstract class ScriptedPage {
       `(() => {
         const el = document.querySelector('[data-iris-ref="${ref}"]')
         if (!el) return false
-        el.value = ${JSON.stringify(value)}
+        const want = ${JSON.stringify(value)}
+        // A value or the words a person sees: both pick the same option.
+        const opt = el.options ? Array.from(el.options).find((o) => o.value === want) || Array.from(el.options).find((o) => (o.label || o.textContent || '').trim().toLowerCase() === want.trim().toLowerCase()) : null
+        el.value = opt ? opt.value : want
         el.dispatchEvent(new Event('input', { bubbles: true }))
         el.dispatchEvent(new Event('change', { bubbles: true }))
         return true
