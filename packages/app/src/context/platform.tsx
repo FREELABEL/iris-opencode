@@ -48,7 +48,19 @@ export type NativeBrowser = {
   eval(script: string): Promise<string>
   /** Address/title/loading as the page changes. Returns the unsubscribe. */
   onState(handler: (state: NativeBrowserState) => void): () => void
+  /** Chrome-family profiles and the sites each is signed into: names and counts only (S3b). */
+  importSources?(): Promise<NativeBrowserImportSource[]>
+  /** Copy the picked sites' sign-ins from one profile into the Browser. macOS asks for the key. */
+  importSignIns?(source: string, sites: string[]): Promise<NativeBrowserImported>
 }
+
+export type NativeBrowserImportSource = {
+  id: string
+  browser: string
+  profile: string
+  sites: { site: string; cookies: number }[]
+}
+export type NativeBrowserImported = { imported: number; skipped: number; sites: string[]; persistent: boolean }
 
 type PlatformBase = {
   /** Desktop only: the native Browser. Absent on the web build, which keeps the iframe. */

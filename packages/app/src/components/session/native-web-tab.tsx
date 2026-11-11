@@ -18,9 +18,13 @@ import {
   takenOverSites,
 } from "./browser-grants"
 import { webReloadKey, webUrl } from "./web-nav"
+import { BrowserImportPicker } from "./browser-import-picker"
+import { loadChoice, shouldReimport } from "./browser-import"
 
 /** The last chat link opened, across remounts (one native view, one link history). */
 let lastLink: string | undefined
+/** Where the Browser forgets on quit (macOS 13), the person's picked sign-ins come back once per launch. */
+let reimported = false
 
 /**
  * The Browser tab on desktop, spike #193062 (epic #193051).
@@ -43,6 +47,15 @@ export function NativeWebTab(props: {
   const [page, setPage] = createSignal<NativeBrowserState | null>(null)
   const [opened, setOpened] = createSignal(false)
   const [error, setError] = createSignal<string>()
+  const [picking, setPicking] = createSignal(false)
+  const [notice, setNotice] = createSignal<string>()
+  const canImport = () => !!props.browser.importSources && !!props.browser.importSignIns
+  const imported = (n: number, sites: number) => {
+    setPicking(false)
+    setNotice(n ? `Signed in to ${sites} site${sites === 1 ? "" : "s"} from Chrome` : "Nothing new to bring in")
+    setTimeout(() => setNotice(undefined), 5000)
+    if (opened()) void props.browser.go("reload")
+  }
   let body!: HTMLDivElement
   let input!: HTMLInputElement
   let last: NativeBrowserBounds | undefined
@@ -142,6 +155,14 @@ export function NativeWebTab(props: {
     window.addEventListener("resize", schedule)
     document.addEventListener("visibilitychange", schedule)
     const off = props.browser.onState(report)
+    const choice = loadChoice()
+    if (!reimported && shouldReimport(choice) && props.browser.importSignIns) {
+      reimported = true
+      void props.browser
+        .importSignIns(choice.source, choice.sites)
+        .then((r) => r.imported && imported(r.imported, r.sites.length))
+        .catch(() => undefined)
+    }
     // Switching products unmounts this pane but not the native view: pick its page back up
     // instead of showing the start tiles over a page that is still loaded.
     void props.browser
@@ -211,6 +232,17 @@ export function NativeWebTab(props: {
           }}
           onFocus={(e) => e.currentTarget.select()}
         />
+        <Show when={canImport()}>
+          <button
+            type="button"
+            class="session-web__agent-link"
+            data-slot="browser-signins"
+            onClick={() => setPicking(true)}
+            title="Bring your sign-ins in from Chrome"
+          >
+            Sign-ins
+          </button>
+        </Show>
         <IconButton
           icon="square-arrow-top-right"
           variant="ghost"
@@ -317,10 +349,22 @@ export function NativeWebTab(props: {
           )
         }}
       </Show>
+      <Show when={notice()}>
+        {(n) => (
+          <div class="session-web__import-notice" data-slot="browser-import-notice">
+            {n()}
+          </div>
+        )}
+      </Show>
       <div class="session-web__body" ref={body} data-slot="native-browser-body">
         <Show when={!opened()}>
           <div class="session-web__start">
             <div class="session-web__note-title">Browse beside the chat</div>
+            <Show when={canImport()}>
+              <button type="button" class="session-web__agent-btn session-web__import-go" data-primary="true" onClick={() => setPicking(true)}>
+                Use my Chrome sign-ins
+              </button>
+            </Show>
             <div class="session-web__start-grid">
               <For each={QUICK_SITES}>
                 {(s) => (
@@ -330,8 +374,15 @@ export function NativeWebTab(props: {
                 )}
               </For>
             </div>
-            <div class="session-web__reason">Sign-ins here stay here: this browser has its own cookies, separate from IRIS.</div>
+            <div class="session-web__reason">This browser keeps its own sign-ins, separate from IRIS and from Chrome.</div>
           </div>
+        </Show>
+        <Show when={picking()}>
+          <BrowserImportPicker
+            browser={props.browser}
+            onClose={() => setPicking(false)}
+            onDone={(r) => imported(r.imported, r.sites.length)}
+          />
         </Show>
         <Show when={error()}>
           {(e) => (

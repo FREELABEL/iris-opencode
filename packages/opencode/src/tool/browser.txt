@@ -14,6 +14,7 @@ TWO BROWSERS (target). Leave target out unless you have a reason: in IRIS Deskto
   · An irreversible click (book, pay, send, delete, submit…) also needs confirm: true, and then waits for the PERSON to press "Allow once" in the app. Tell them what you are about to click before you call it. A Deny is final: do not try again unless they ask.
   · If they "took over", do not click or type there until they hand back; reading still works.
   · The element you act on flashes, so they can see where you are working.
+  · If the pane shows a site LOGGED OUT (a Sign in button, an empty feed), don't work around it: tell them to click "Sign-ins" in the Browser bar ("Use my Chrome sign-ins" on the start page) to bring that site's sign-in in from Chrome, or to sign in in the pane themselves. Never ask for a password.
   · Without open, panel reads the page they already have. close leaves their page open.
 
 Actions:

@@ -145,6 +145,18 @@ fn emit_state(app: &AppHandle, url: &Url, title: Option<String>, loading: bool) 
 #[cfg(target_os = "macos")]
 const MACOS_STORE_ID: [u8; 16] = *b"iris-browser-v1\0";
 
+/// Whether the Browser's cookies survive a quit (macOS 13 has no named data stores).
+pub fn store_is_persistent() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_has_data_stores()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn macos_has_data_stores() -> bool {
     // WKWebsiteDataStore(forIdentifier:) is macOS 14+. Read the version the cheap way.
@@ -214,6 +226,24 @@ fn builder(app: &AppHandle, url: Url) -> WebviewBuilder<tauri::Wry> {
         }
     }
     b
+}
+
+/// The browser webview, created hidden (off screen, 1x1) when it doesn't exist yet: importing
+/// sign-ins needs its cookie store before the person has opened a page.
+pub fn ensure_browser(app: &AppHandle) -> Result<Webview, String> {
+    if let Some(w) = browser(app) {
+        return Ok(w);
+    }
+    let window = app.get_window("main").ok_or("no main window")?;
+    let w = window
+        .add_child(
+            builder(app, Url::parse("about:blank").expect("static url")),
+            LogicalPosition::new(-10.0, -10.0),
+            LogicalSize::new(1.0, 1.0),
+        )
+        .map_err(|e| e.to_string())?;
+    let _ = w.hide();
+    Ok(w)
 }
 
 /// Show the browser over the panel, creating it on first use. `url` navigates when given.

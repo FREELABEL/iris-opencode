@@ -177,3 +177,58 @@
   background: var(--icon-warning-base, #f59e0b);
 }
 .session-web__agent-link + .session-web__agent-btn { margin-left: auto; }
+
+/* Use my Chrome sign-ins (S3b): drawn where the page was; the native page hides while it is open. */
+.session-web__body { position: relative; }
+.session-web__import {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 16px;
+  max-width: 520px;
+  margin: 0 auto;
+  background: var(--background-base);
+  overflow: hidden;
+}
+.session-web__import-head { display: flex; align-items: center; justify-content: space-between; }
+.session-web__import-why { color: var(--text-weak); font-size: 13px; line-height: 1.45; }
+.session-web__import-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--background-element);
+  color: var(--text-base);
+  font-size: 12px;
+}
+.session-web__import-tools { display: flex; align-items: center; gap: 12px; }
+.session-web__import-tools .session-web__reason { margin-left: auto; }
+.session-web__import-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-weak-base);
+  border-radius: 8px;
+}
+.session-web__import-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--text-base);
+  border-bottom: 1px solid var(--border-weak-base);
+  cursor: pointer;
+}
+.session-web__import-row:last-child { border-bottom: 0; }
+.session-web__import-go { margin-left: 0; align-self: flex-start; padding: 6px 14px; font-size: 13px; }
+.session-web__import-go:disabled { opacity: 0.5; }
+.session-web__reason[data-error] { color: var(--text-on-critical-base, var(--text-strong)); }
+.session-web__import-notice {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-weak-base);
+  color: var(--text-base);
+  font-size: 12px;
+}
