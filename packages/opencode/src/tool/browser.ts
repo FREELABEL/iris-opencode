@@ -60,7 +60,7 @@ export const Parameters = Schema.Struct({
   ]).annotate({ description: "What to do" }),
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
-      "Which browser. agent (default): your own logged-out browser, invisible to the person. panel: the IRIS Browser pane the person is looking at, signed in as them; only on sites they allowed, read-only for now",
+      "Which browser. Leave it out to use the one the person can see: in IRIS Desktop that is panel (the Browser pane, signed in as them, only on sites they allowed); elsewhere agent. agent: your own separate Chrome, invisible and logged out unless you pass profile/visible",
   }),
   profile: Schema.optional(Schema.Literals(["fresh", "saved"])).annotate({
     description:
@@ -148,7 +148,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
-          const target = params.target ?? "agent"
+          const target = params.target ?? Panel.defaultBrowser(Panel.get(session))
           // One page per target per root session: the pane and the agent's Chrome never share.
           const key = target === "panel" ? `${session}:panel` : session
           let page = sessionsOpen.get(key)

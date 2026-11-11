@@ -111,6 +111,9 @@ export function usePanelControl(input: { open: () => boolean }) {
       artifact: irisOpenArtifact(),
       url: webUrl() ?? undefined,
       card: irisOpenCard(),
+      // The Browser pane can take the agent's page commands (#193145): the engine's browser tool
+      // defaults to it instead of a hidden Chrome when this is true.
+      browser: !!platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true),
     }
   }
 
