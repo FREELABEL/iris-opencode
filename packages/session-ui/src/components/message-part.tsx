@@ -13,6 +13,7 @@ import {
   type JSX,
   type ComponentProps,
 } from "solid-js"
+import { readAloudAvailable, readAloudOptions, readingId, toggleReading } from "./read-aloud"
 import { createStore } from "solid-js/store"
 import stripAnsi from "strip-ansi"
 import { Dynamic } from "solid-js/web"
@@ -244,7 +245,7 @@ export interface MessagePartProps {
 
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset"
+    icon: "check" | "copy" | "reset" | "speaker" | "speaker-stop"
     label: JSX.Element
     useV2?: boolean
   },
@@ -1822,6 +1823,17 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
               onClick={handleCopy}
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
             />
+            {/* Read aloud (Settings › Audio): the Mac's own voices, works offline. */}
+            <Show when={props.message.role === "assistant" && readAloudAvailable() && readAloudOptions().enabled}>
+              <MessageActionButton
+                icon={readingId() === part().id ? "speaker-stop" : "speaker"}
+                label={readingId() === part().id ? "Stop reading" : "Read aloud"}
+                useV2={props.useV2Actions}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => toggleReading(part().id, text() ?? "")}
+                aria-label={readingId() === part().id ? "Stop reading" : "Read aloud"}
+              />
+            </Show>
             <Show when={meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}

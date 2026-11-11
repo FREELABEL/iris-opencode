@@ -1,4 +1,5 @@
-import { Component, Show, createMemo, createResource } from "solid-js"
+import { Component, Show, createMemo, createResource, createSignal, onCleanup, onMount } from "solid-js"
+import { previewVoice, readAloudAvailable, readingId } from "@opencode-ai/session-ui/read-aloud"
 import { createMediaQuery } from "@solid-primitives/media"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
@@ -341,6 +342,89 @@ const MicrophoneSection = () => {
         </SettingsRowV2>
       </SettingsListV2>
     </div>
+  )
+}
+
+/** Speeds people pick between; the value is the speech rate. */
+const READ_SPEEDS = [
+  { rate: 0.85, label: "Slower" },
+  { rate: 1, label: "Normal" },
+  { rate: 1.2, label: "Faster" },
+  { rate: 1.5, label: "Fastest" },
+]
+type VoiceOption = { uri: string; label: string }
+
+/**
+ * Read aloud: the speaker button on IRIS's replies. Only this computer's own voices are offered
+ * (localService), so it always works offline. Voices load late on some systems: listen for them.
+ */
+const ReadAloudSection = () => {
+  const settings = useSettings()
+  const [voices, setVoices] = createSignal<VoiceOption[]>([])
+  const load = () => {
+    const all = typeof speechSynthesis === "undefined" ? [] : speechSynthesis.getVoices()
+    const lang = (navigator.language || "en").split("-")[0]!.toLowerCase()
+    const local = all
+      .filter((v) => v.localService)
+      .sort((a, b) => {
+        const am = a.lang.toLowerCase().startsWith(lang) ? 0 : 1
+        const bm = b.lang.toLowerCase().startsWith(lang) ? 0 : 1
+        return am - bm || a.name.localeCompare(b.name)
+      })
+      .map((v) => ({ uri: v.voiceURI, label: `${v.name} (${v.lang})` }))
+    setVoices([{ uri: "", label: "System voice" }, ...local])
+  }
+  onMount(() => {
+    load()
+    if (typeof speechSynthesis === "undefined") return
+    speechSynthesis.addEventListener("voiceschanged", load)
+    onCleanup(() => speechSynthesis.removeEventListener("voiceschanged", load))
+  })
+  const options = () => ({ enabled: true, voice: settings.audio.voice(), rate: settings.audio.rate(), volume: 1 })
+  return (
+    <Show when={readAloudAvailable()}>
+      <div class="settings-v2-section">
+        <h3 class="settings-v2-section-title">Read aloud</h3>
+        <SettingsListV2>
+          <SettingsRowV2 title="Speaker button" description="Show a speaker on IRIS's replies. Click it to hear the reply. Works offline.">
+            <div data-action="settings-read-aloud">
+              <Switch checked={settings.audio.readAloud()} onChange={(checked) => settings.audio.setReadAloud(checked)} />
+            </div>
+          </SettingsRowV2>
+          <SettingsRowV2 title="Voice" description="Voices on this computer.">
+            <SelectV2
+              appearance="inline"
+              data-action="settings-read-aloud-voice"
+              options={voices()}
+              current={voices().find((v) => v.uri === settings.audio.voice()) ?? voices()[0]}
+              value={(v) => v.uri}
+              label={(v) => v.label}
+              onSelect={(v) => v && settings.audio.setVoice(v.uri)}
+              placement="bottom-end"
+              gutter={6}
+            />
+          </SettingsRowV2>
+          <SettingsRowV2 title="Speed" description="How fast IRIS reads.">
+            <SelectV2
+              appearance="inline"
+              data-action="settings-read-aloud-speed"
+              options={READ_SPEEDS}
+              current={READ_SPEEDS.find((s) => s.rate === settings.audio.rate()) ?? READ_SPEEDS[1]}
+              value={(s) => String(s.rate)}
+              label={(s) => s.label}
+              onSelect={(s) => s && settings.audio.setRate(s.rate)}
+              placement="bottom-end"
+              gutter={6}
+            />
+          </SettingsRowV2>
+          <SettingsRowV2 title="Try it" description="Hear the voice and speed you picked.">
+            <ButtonV2 data-action="settings-read-aloud-test" onClick={() => previewVoice(options())}>
+              {readingId() === "__preview__" ? "Playing…" : "Play sample"}
+            </ButtonV2>
+          </SettingsRowV2>
+        </SettingsListV2>
+      </div>
+    </Show>
   )
 }
 
@@ -698,6 +782,7 @@ export const SettingsGeneralV2: Component<{
 
         <SoundsSection controller={sounds} />
         <MicrophoneSection />
+        <ReadAloudSection />
         <WorkingGlowSection />
 
         <Show when={desktop()}>
