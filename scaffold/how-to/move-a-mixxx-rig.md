@@ -80,7 +80,7 @@ The next `apply` uses the edited row. It also regenerates the page so the page m
 
 ```bash
 iris atlas pull 569 ./rig-board
-$EDITOR ./rig-board/*/rigs-*/mixxx-rig-iris-hive-002-*.md   # edit the block, not the tables
+$EDITOR ./rig-board/rigs-*/mixxx-rig-iris-hive-002-*.md   # edit the block, not the tables
 iris atlas diff ./rig-board && iris atlas push ./rig-board
 ```
 
