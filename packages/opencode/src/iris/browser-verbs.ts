@@ -253,6 +253,38 @@ export type PageElement = {
   ids?: Record<string, string>
   /** Listed from an open pop-up; the page behind it is left out. */
   inDialog?: boolean
+  /** Not a button in the markup but a box the site made clickable (pointer cursor, onclick):
+   * Southwest's fare cells (#193331). Clicked the same way. */
+  area?: boolean
+}
+
+/** How one `elements` listing was cut. */
+export type ElementListing = {
+  /** Every control on the page (or the open pop-up). */
+  total: number
+  /** Those that matched the query (all of them when there is none). */
+  matched: number
+  /** Matching controls left out because the list was full: above the screen, and below or beside it. */
+  above: number
+  below: number
+  query?: string
+}
+
+/**
+ * The line under the list: what was left out and how to reach it. A list cut silently reads as
+ * "this is everything", and the agent gives up on a page whose button is simply further down.
+ */
+export function listingFooter(listed: number, l: ElementListing | null): string {
+  if (!l) return ""
+  if (l.query) {
+    if (!l.matched) return `Nothing among the page's ${l.total} controls matches "${l.query}". Try a shorter word, or scroll and run elements without a query.`
+    const more = l.matched - listed
+    return `${l.matched} of the page's ${l.total} controls match "${l.query}"${more > 0 ? ` (${more} more not shown — narrow the query)` : ""}.`
+  }
+  const left = l.above + l.below
+  if (left <= 0) return ""
+  const where = [l.below ? `${l.below} below or beside the screen` : "", l.above ? `${l.above} above it` : ""].filter(Boolean).join(" and ")
+  return `Showing ${listed} of ${l.total} controls, what is on screen first. Not listed: ${where}. Scroll there and run elements again, or ask for one by its words: {"action":"elements","query":"$155"}.`
 }
 
 /** A link as short as it can be read: a path on this page's site, the full address elsewhere. */
@@ -290,6 +322,7 @@ export function renderElements(els: PageElement[], pageUrl?: string): string {
         e.enabled ? "" : "disabled",
         e.checked === true ? "checked" : e.checked === false ? "not checked" : "",
         e.inViewport ? "" : "off-screen",
+        e.area ? "click area" : "",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
         e.options?.length
           ? `options: ${e.options.slice(0, 12).map((_, i) => optionText(e, i)).join(", ")}${e.options.length > 12 ? ` … (${e.options.length} in all)` : ""}`

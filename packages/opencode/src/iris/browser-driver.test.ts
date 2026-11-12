@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { PageSession, findChrome } from "./browser-driver"
-import { clampPageText, describeChange, findInPage, refuseOptionReason, refuseTargetReason } from "./browser-verbs"
+import { clampPageText, describeChange, findInPage, listingFooter, refuseOptionReason, refuseTargetReason } from "./browser-verbs"
 
 /**
  * The driver, against a REAL Chrome and a real page.
@@ -33,6 +33,16 @@ const server = Bun.serve({
         `<label style="display:block;padding:8px">${n}<input type="radio" name="protein" style="position:absolute;opacity:0;width:0;height:0"></label>`
       return html(`<title>Menu</title><body>${menu}<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;background:#fff">
         <h2>ORIGINATOR</h2>${choice("Hemp Protein")}${choice("Pea Protein")}<button>Add to Cart</button></div></body>`)
+    }
+    // Southwest's results (#193331): a header of 200 links, then a fare grid whose prices are
+    // <div>s that answer a click — no button, no role. The old list stopped at 150 in document
+    // order and never reached them; scrolling could not help.
+    if (new URL(req.url).pathname === "/fares") {
+      const nav = Array.from({ length: 200 }, (_, i) => `<a href="/nav${i}">Menu link ${i}</a>`).join(" ")
+      const fare = (id: string, price: string) =>
+        `<div class="row"><span>${id}</span><div class="fare" style="cursor:pointer;padding:10px;display:inline-block" onclick="document.title='picked ${id} ${price}'"><span>$${price}</span><span> 4 left</span></div></div>`
+      return html(`<title>Select flights</title><body><nav>${nav}</nav><div style="height:3000px"></div>
+        <section id="grid">${fare("WN404", "170")}${fare("WN1050", "155")}${fare("WN409", "170")}</section><div style="height:2000px"></div></body>`)
     }
     if (new URL(req.url).pathname === "/second") {
       return new Response("<!doctype html><title>Second</title><body><h1>Second page</h1></body>", {
@@ -210,6 +220,38 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(refuseTargetReason(els, hemp.ref, "click")).toBeNull()
     await session.clickRef(hemp.ref)
     expect((await session.elements())[0]!.checked).toBe(true)
+  }, 60_000)
+
+  test("a fare cell that is only a clickable <div>, past 200 header links, is listed and clicked (#193331)", async () => {
+    await session.open(`${url}fares`)
+    const top = await session.elements()
+    expect(top.length).toBe(150)
+    expect(session.lastListing?.total).toBe(203)
+    // the cut is reported, not silent
+    expect(listingFooter(top.length, session.lastListing)).toContain("Not listed: 53 below")
+    const navRef = top.find((e) => e.name === "Menu link 0")!.ref
+
+    // asked for by its words: found at once, from anywhere on the page
+    const hit = await session.elements(150, { query: "$155" })
+    expect(hit.length).toBe(1)
+    expect(hit[0]).toMatchObject({ role: "button", area: true })
+    expect(hit[0].name).toContain("$155")
+
+    // scrolled to: on screen comes FIRST, and nothing already seen was renumbered
+    await session.evaluate("document.getElementById('grid').scrollIntoView({block:'center'})")
+    const there = await session.elements()
+    expect(there[0].area).toBe(true)
+    expect(there.slice(0, 3).map((e) => e.name.replace(/\s+/g, " "))).toEqual(["$170 4 left", "$155 4 left", "$170 4 left"])
+    expect(there.find((e) => e.ref === hit[0].ref)?.name).toContain("$155")
+
+    // a ref beyond the cut still resolves for the action that names it
+    const withNav = await session.elements(1, { include: navRef })
+    expect(withNav.map((e) => e.ref)).toContain(navRef)
+
+    expect(refuseTargetReason(there, hit[0].ref, "click")).toBeNull()
+    expect(await session.clickRef(hit[0].ref)).toBe(true)
+    expect((await session.where()).title).toBe("picked WN1050 155")
+    await session.open(url)
   }, 60_000)
 
   test("closing twice is not an error — the session may end after the user already closed it", async () => {

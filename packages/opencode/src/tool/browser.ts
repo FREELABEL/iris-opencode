@@ -18,6 +18,7 @@ import {
   refuseScrollReason,
   refuseTargetReason,
   refuseUrlReason,
+  listingFooter,
   renderElements,
   renderInspect,
   windowOfLines,
@@ -73,7 +74,7 @@ export const Parameters = Schema.Struct({
       "target agent, on open: true opens your browser as a window on the person's screen, so they can watch, take over, or sign in once (with profile saved). Default false: invisible",
   }),
   url: Schema.optional(Schema.String).annotate({ description: "The page to open (open)" }),
-  query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find)" }),
+  query: Schema.optional(Schema.String).annotate({ description: "Text to search the page for (find), or the words on the control you want (elements)" }),
   title: Schema.optional(Schema.String).annotate({ description: "Title for the saved screenshot (screenshot)" }),
   max_chars: Schema.optional(Schema.Number).annotate({
     description: "Budget for page text, default 3000 (read). Past it, use find.",
@@ -275,12 +276,13 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           }
 
           if (params.action === "elements") {
-            const got = yield* attempt(() => page.elements())
+            const got = yield* attempt(() => page.elements(150, { query: params.query }))
             if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            const footer = listingFooter(got.value.length, page.lastListing)
 
             return {
               title: `${got.value.length} elements`,
-              output: `${renderElements(got.value, page.currentUrl ?? undefined)}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}. To see where an item leads or its id without clicking: {"action":"inspect","ref":N}.`,
+              output: `${renderElements(got.value, page.currentUrl ?? undefined)}${footer ? `\n\n${footer}` : ""}\n\nUse the number: {"action":"click","ref":N} or {"action":"type","ref":N,"text":"…"}. To see where an item leads or its id without clicking: {"action":"inspect","ref":N}.`,
               metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
             }
           }
@@ -319,7 +321,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           if (params.action === "select") {
             if (!params.ref) return yield* Effect.fail(new Error("select needs a ref — run action=elements first"))
             if (params.value === undefined) return yield* Effect.fail(new Error("select needs a value"))
-            const listed = yield* attempt(() => page.elements())
+            const listed = yield* attempt(() => page.elements(150, { include: params.ref }))
             if (!listed.ok) return yield* Effect.fail(new Error(listed.message))
             const wrongTarget = refuseTargetReason(listed.value, params.ref, "select")
             if (wrongTarget) return yield* Effect.fail(new Error(wrongTarget))
@@ -351,7 +353,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
 
             // The menu is rebuilt for every action, because after one click the legal set has
             // changed and a stale action space is a stale decision.
-            const listed = yield* attempt(() => page.elements())
+            const listed = yield* attempt(() => page.elements(150, { include: params.ref }))
             if (!listed.ok) return yield* Effect.fail(new Error(listed.message))
             const refusal = refuseTargetReason(listed.value, params.ref, params.action)
             if (refusal) return yield* Effect.fail(new Error(refusal))

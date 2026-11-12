@@ -18,7 +18,7 @@
  * the refusals move with it.
  */
 import { withCursor } from "./agent-cursor"
-import type { PageElement } from "./browser-verbs"
+import type { ElementListing, PageElement } from "./browser-verbs"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -96,6 +96,8 @@ type CdpMessage = { id?: number; method?: string; params?: unknown; result?: any
  */
 export abstract class ScriptedPage {
   currentUrl: string | null = null
+  /** How the last `elements` call was cut: what exists, what matched, what was left out where. */
+  lastListing: ElementListing | null = null
 
   abstract evaluate<T>(expression: string): Promise<T>
   abstract open(url: string): Promise<{ url: string; title: string; status: string }>
@@ -115,9 +117,14 @@ export abstract class ScriptedPage {
    * not found, rather than hitting whatever now sits in that position. Never coordinates: a
    * screenshot-and-click loop misses when a banner shifts the layout by ten pixels.
    */
-  async elements(limit = 150): Promise<PageElement[]> {
+  async elements(limit = 150, opts: { query?: string; include?: number } = {}): Promise<PageElement[]> {
+    const query = JSON.stringify(String(opts.query ?? "").trim().toLowerCase())
+    const include = Number.isInteger(opts.include) ? Number(opts.include) : -1
     const js = `(() => {
       const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=option], [contenteditable=true]'
+      const LIMIT = ${Math.max(1, Math.trunc(limit))}
+      const QUERY = ${query}
+      const INCLUDE = ${include}
       const roleOf = (el) => {
         const r = el.getAttribute('role')
         if (r) return r === 'menuitemradio' ? 'radio' : r === 'menuitemcheckbox' ? 'checkbox' : r
@@ -148,6 +155,23 @@ export abstract class ScriptedPage {
       // screen) and its LABEL is what a person clicks (Toast, 2026-11-11: the protein choices).
       const labelOf = (el) => (el.labels && el.labels[0]) || el.closest('label')
       const tiny = (el) => { const r = el.getBoundingClientRect(); return r.width < 2 || r.height < 2 || Number(getComputedStyle(el).opacity) === 0 }
+      // A control drawn by the site with no button under it: a <div> that answers a click
+      // (Southwest's fare cells, #193331). A person knows it by the pointer cursor, so do we.
+      // Only the OUTERMOST such box, and never one that holds or sits in a real control — that
+      // control is listed itself.
+      const SKIP_TAG = /^(html|body|script|style|noscript|template|svg|path|g|use|iframe|img|br|hr)$/i
+      const isArea = (el) => {
+        if (SKIP_TAG.test(el.tagName)) return false
+        const own = el.hasAttribute('onclick') || (el.hasAttribute('tabindex') && el.tabIndex >= 0) || getComputedStyle(el).cursor === 'pointer'
+        if (!own) return false
+        const p = el.parentElement
+        if (p && p !== document.body && getComputedStyle(p).cursor === 'pointer' && !p.matches(SEL)) return false
+        if (el.closest(SEL) || el.querySelector(SEL)) return false
+        const r = el.getBoundingClientRect()
+        if (r.width < 8 || r.height < 8) return false
+        if (r.width * r.height > innerWidth * innerHeight * 0.5) return false // a page-sized wrapper is not a button
+        return !!(clean(el.innerText) || el.getAttribute('aria-label') || el.getAttribute('title'))
+      }
       // An open pop-up is the page right now: what is behind it is inert. List only the pop-up,
       // so a long page behind it (a whole menu) can't push its choices past the limit.
       const modals = Array.from(document.querySelectorAll('[aria-modal=true], dialog[open], [role=dialog], [role=alertdialog]')).filter(shown)
@@ -170,43 +194,96 @@ export abstract class ScriptedPage {
         const h = a.href
         return /^https?:/.test(h) ? h : undefined
       }
-      const out = []
-      let ref = 0
-      for (const el of root.querySelectorAll(SEL)) {
-        const isChoice = el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
-        const label = isChoice ? labelOf(el) : null
-        const box = isChoice && (!shown(el) || tiny(el)) && label && shown(label) ? label : el
-        if (!shown(box)) continue
-        ref++
-        if (ref > ${limit}) break
-        el.setAttribute('data-iris-ref', String(ref))
-        const rect = box.getBoundingClientRect()
-        const isSelect = el.tagName.toLowerCase() === 'select'
+
+      // 1. Every control on the page, in document order.
+      const found = []
+      for (const el of root.querySelectorAll('*')) {
+        if (el.matches(SEL)) {
+          const isChoice = el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
+          const label = isChoice ? labelOf(el) : null
+          const box = isChoice && (!shown(el) || tiny(el)) && label && shown(label) ? label : el
+          if (shown(box)) found.push({ el, box, label, area: false })
+        } else if (isArea(el) && shown(el)) {
+          found.push({ el, box: el, label: null, area: true })
+        }
+      }
+
+      // 2. Numbers that stay put. A control keeps the number it was given on an earlier listing,
+      // so scrolling, or asking for a subset, never renumbers what the agent already saw; a new
+      // control gets the next free number. A node copied with its number (a carousel's clone) is
+      // given a new one, so one number is never two places.
+      let next = 1
+      for (const x of document.querySelectorAll('[data-iris-ref]')) next = Math.max(next, (parseInt(x.getAttribute('data-iris-ref'), 10) || 0) + 1)
+      const taken = new Set()
+      for (const f of found) {
+        const had = parseInt(f.el.getAttribute('data-iris-ref') || '', 10)
+        f.ref = had > 0 && !taken.has(had) ? had : next++
+        taken.add(f.ref)
+        f.el.setAttribute('data-iris-ref', String(f.ref))
+      }
+
+      // 3. What a person can see first, then what is below, then what is above. A long header
+      // must not push the part of the page they are looking at off the list (#193331).
+      const H = innerHeight
+      const W = innerWidth
+      for (const f of found) {
+        const r = f.box.getBoundingClientRect()
+        f.rect = r
+        f.zone = r.bottom <= 0 ? 'above' : r.top >= H ? 'below' : r.right <= 0 || r.left >= W ? 'aside' : 'view'
+      }
+      const rank = { view: 0, below: 1, aside: 2, above: 3 }
+      const ordered = found.slice().sort((a, b) =>
+        rank[a.zone] - rank[b.zone] ||
+        (a.zone === 'view' ? 0 : a.zone === 'above' ? b.rect.bottom - a.rect.bottom : a.rect.top - b.rect.top))
+
+      const matches = QUERY
+        ? ordered.filter((f) => (nameOf(f.el, f.label) + ' ' + clean(f.box.innerText).slice(0, 200)).toLowerCase().includes(QUERY))
+        : ordered
+      const picked = matches.slice(0, LIMIT)
+      if (INCLUDE > 0 && !picked.some((f) => f.ref === INCLUDE)) {
+        const extra = found.find((f) => f.ref === INCLUDE)
+        if (extra) picked.push(extra)
+      }
+      const left = matches.slice(LIMIT)
+
+      const items = picked.map((f) => {
+        const el = f.el
+        const isChoice = !f.area && el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
+        const isSelect = !f.area && el.tagName.toLowerCase() === 'select'
         const opts = isSelect ? Array.from(el.options).slice(0, 60) : []
-        const options = isSelect ? opts.map((o) => o.value) : undefined
-        // What a person reads in the dropdown: "Austin: DoubleTree University Area", not "30".
-        const optionLabels = isSelect ? opts.map((o) => (o.label || o.textContent || '').trim()) : undefined
         const aria = el.getAttribute('aria-checked')
-        out.push({
-          options,
-          optionLabels,
-          ref,
-          role: roleOf(el),
-          name: nameOf(el, label),
+        return {
+          options: isSelect ? opts.map((o) => o.value) : undefined,
+          // What a person reads in the dropdown: "Austin: DoubleTree University Area", not "30".
+          optionLabels: isSelect ? opts.map((o) => (o.label || o.textContent || '').trim()) : undefined,
+          ref: f.ref,
+          role: f.area ? 'button' : roleOf(el),
+          area: f.area || undefined,
+          name: nameOf(el, f.label),
           tag: el.tagName.toLowerCase(),
-          value: isChoice || el.value === undefined ? undefined : String(el.value),
+          value: f.area || isChoice || el.value === undefined ? undefined : String(el.value),
           checked: isChoice ? !!el.checked : aria === 'true' ? true : aria === 'false' ? false : undefined,
           enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
-          inViewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
+          inViewport: f.zone === 'view',
           href: hrefOf(el),
           ids: idsOf(el),
           inDialog: root !== document ? true : undefined,
-        })
+        }
+      })
+      return {
+        items,
+        total: found.length,
+        matched: matches.length,
+        above: left.filter((f) => f.zone === 'above').length,
+        below: left.filter((f) => f.zone !== 'above').length,
       }
-      return out
     })()`
 
-    return (await this.evaluate<PageElement[]>(js)) ?? []
+    const got = await this.evaluate<{ items: PageElement[]; total: number; matched: number; above: number; below: number } | null>(js)
+    this.lastListing = got
+      ? { total: got.total, matched: got.matched, above: got.above, below: got.below, query: opts.query?.trim() || undefined }
+      : null
+    return got?.items ?? []
   }
 
   /**
