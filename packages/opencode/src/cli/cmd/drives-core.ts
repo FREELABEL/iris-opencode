@@ -541,7 +541,7 @@ export const DRIVES_BOARD_DESCRIPTION =
  * (copied verbatim from its heredocs). Change one, change both — the two must build the same board.
  */
 export const DRIVES_DATASETS: Array<{ slug: string; name: string; fields: any[] }> = [
-  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"},{"key":"free_gb","type":"number","label":"Free (GB)"},{"key":"last_seen_on","type":"text","label":"Last seen on"},{"key":"last_seen_at","type":"datetime","label":"Last seen at"}]`) },
+  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"},{"key":"free_gb","type":"number","label":"Free (GB)"},{"key":"last_seen_on","type":"text","label":"Last seen on"},{"key":"last_seen_at","type":"datetime","label":"Last seen at"},{"key":"scan_count","type":"number","label":"Scans (all time)"},{"key":"scan_month","type":"text","label":"Scan month"},{"key":"scans_in_month","type":"number","label":"Scans that month"},{"key":"last_scan_ms","type":"number","label":"Last scan took (ms)"},{"key":"files_cataloged","type":"number","label":"Files cataloged"},{"key":"bytes_cataloged","type":"number","label":"Bytes cataloged"},{"key":"manifest_bytes","type":"number","label":"Encrypted file list (bytes)"},{"key":"scanned_by_version","type":"text","label":"Scanned by"}]`) },
   { slug: "drive-folders", name: "Drive folders", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Folder ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"folder","type":"text","label":"Folder"},{"key":"main_kind","type":"enum","label":"Mostly","options":[{"label":"video","value":"video"},{"label":"audio","value":"audio"},{"label":"image","value":"image"},{"label":"project","value":"project"},{"label":"code","value":"code"},{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"},{"label":"document","value":"document"},{"label":"archive","value":"archive"},{"label":"other","value":"other"}]},{"key":"files","type":"number","label":"Files"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"kinds","type":"text","label":"Kinds"},{"key":"newest","type":"date","label":"Newest file"},{"key":"sensitive_files","type":"number","label":"Sensitive files"}]`) },
   { slug: "drive-findings", name: "Drive findings", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Finding ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"}]},{"key":"size_kb","type":"number","label":"Size (KB)"},{"key":"drive_encrypted","type":"boolean","label":"Drive encrypted"},{"key":"status","type":"enum","label":"Status","options":[{"label":"exposed","value":"exposed"},{"label":"contained","value":"contained"},{"label":"moved","value":"moved"}]},{"key":"found","type":"date","label":"Found"}]`) },
   // One row per `iris drives get`: who read which file, from which machine, why, and what it hashed to.
@@ -625,4 +625,128 @@ export function utcIso(d: Date): string {
 /** What a scan says about the drive right now: free space, and which machine saw it when. */
 export function liveDriveFields(st: { bavail: number; bsize: number }, host: string, now: Date) {
   return { free_gb: round((st.bavail * st.bsize) / 1e9, 1), last_seen_on: host, last_seen_at: utcIso(now) }
+}
+
+// ── the meter (#193356) ───────────────────────────────────────────────────────────
+//
+// What a client could be billed on lives on the drive's OWN record in Atlas, written by every
+// scan. It does not depend on analytics consent (that can be switched off), and it is the
+// client's data: they can see it on their Drives board and with `iris drives usage`.
+//
+// Import MERGES into an existing record, so a scanner that does not know these fields leaves
+// them untouched rather than blanking them — drive_scan.py writes the same fields, the same way.
+
+export const METER_FIELDS = [
+  { key: "scan_count", type: "number", label: "Scans (all time)" },
+  { key: "scan_month", type: "text", label: "Scan month" },
+  { key: "scans_in_month", type: "number", label: "Scans that month" },
+  { key: "last_scan_ms", type: "number", label: "Last scan took (ms)" },
+  { key: "files_cataloged", type: "number", label: "Files cataloged" },
+  { key: "bytes_cataloged", type: "number", label: "Bytes cataloged" },
+  { key: "manifest_bytes", type: "number", label: "Encrypted file list (bytes)" },
+  { key: "scanned_by_version", type: "text", label: "Scanned by" },
+] as const
+
+/** "2026-11" — UTC, so two machines in different zones agree which month a scan belongs to. */
+export function meterMonth(d: Date): string {
+  return d.toISOString().slice(0, 7)
+}
+
+const count = (v: unknown): number | null => {
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
+}
+
+/**
+ * The meter fields one scan writes onto its drive record. `prev` is the record as Atlas holds it
+ * (or undefined for a new drive). A drive scanned before the meter existed has a last_scanned date
+ * but no scan_count: that earlier scan counts as one, so the total is never under the truth by more
+ * than the scans before metering began.
+ *
+ * `manifestBytes` null = the upload failed and the drive keeps its previous list, so the previous
+ * manifest_bytes is left as it is (merge keeps it).
+ */
+export function meterFields(
+  prev: Record<string, any> | undefined,
+  s: { files: number; bytes: number; manifestBytes: number | null; durationMs: number; version: string; now: Date },
+): Record<string, number | string> {
+  const month = meterMonth(s.now)
+  const scannedBefore = !!prev?.last_scanned
+  const total = count(prev?.scan_count) ?? (scannedBefore ? 1 : 0)
+  const sameMonth = prev?.scan_month ? prev.scan_month === month : String(prev?.last_scanned ?? "").startsWith(month)
+  const inMonth = sameMonth ? (count(prev?.scans_in_month) ?? (scannedBefore ? 1 : 0)) : 0
+  return {
+    scan_count: total + 1,
+    scan_month: month,
+    scans_in_month: inMonth + 1,
+    last_scan_ms: Math.max(0, Math.round(s.durationMs)),
+    files_cataloged: s.files,
+    bytes_cataloged: s.bytes,
+    ...(s.manifestBytes != null ? { manifest_bytes: s.manifestBytes } : {}),
+    scanned_by_version: s.version,
+  }
+}
+
+// ── usage: what this account would be metered on (#193356) ───────────────────────────
+
+export type UsageReport = {
+  month: string
+  drives: number
+  files: number
+  bytes: number
+  /** drives whose byte count is the disk's used space, not counted file by file (scanned before metering) */
+  bytes_estimated_drives: number
+  manifest_bytes: number
+  scans_this_month: number
+  scans_total: number
+  gets_this_month: number | null
+  get_bytes_this_month: number | null
+  sensitive_contained: number
+  sensitive_exposed: number
+}
+
+/**
+ * Everything read from Atlas: drive records (the meter), drive-reads rows (one per `get`),
+ * drive-findings rows, and the board's attachments (each drive's encrypted list, for drives
+ * scanned before manifest_bytes existed). `reads` null = the reads could not be loaded.
+ */
+export function usageReport(i: {
+  drives: any[]
+  reads: any[] | null
+  findings: any[]
+  attachments: Array<{ id: number; size: number | null }>
+  now: Date
+}): UsageReport {
+  const month = meterMonth(i.now)
+  const sizeById = new Map(i.attachments.map((f) => [String(f.id), f.size]))
+  let files = 0, bytes = 0, estimated = 0, manifest = 0, scansMonth = 0, scansTotal = 0
+  for (const d of i.drives) {
+    files += count(d.files_cataloged) ?? count(d.files) ?? 0
+    const b = count(d.bytes_cataloged)
+    if (b != null) bytes += b
+    else {
+      const gb = Number(d.used_gb)
+      if (Number.isFinite(gb) && gb > 0) { bytes += Math.round(gb * 1e9); estimated++ }
+    }
+    const m = String(d.manifest ?? "")
+    const att = m.startsWith("atlas-file:") ? sizeById.get(m.slice("atlas-file:".length)) : null
+    manifest += count(att) ?? count(d.manifest_bytes) ?? 0
+    const scanned = !!d.last_scanned
+    scansTotal += count(d.scan_count) ?? (scanned ? 1 : 0)
+    if (d.scan_month) { if (d.scan_month === month) scansMonth += count(d.scans_in_month) ?? 1 }
+    else if (String(d.last_scanned ?? "").startsWith(month)) scansMonth += 1
+  }
+  let gets: number | null = null, getBytes: number | null = null
+  if (i.reads) {
+    const mine = i.reads.filter((r) => String(r?.at ?? "").startsWith(month))
+    gets = mine.length
+    getBytes = mine.reduce((n, r) => n + (count(r?.bytes) ?? 0), 0)
+  }
+  const live = i.findings.filter((f) => f?.status !== "moved")
+  return {
+    month, drives: i.drives.length, files, bytes, bytes_estimated_drives: estimated, manifest_bytes: manifest,
+    scans_this_month: scansMonth, scans_total: scansTotal, gets_this_month: gets, get_bytes_this_month: getBytes,
+    sensitive_contained: live.filter((f) => f?.status === "contained").length,
+    sensitive_exposed: live.filter((f) => f?.status === "exposed").length,
+  }
 }

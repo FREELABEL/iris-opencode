@@ -36,7 +36,7 @@ describe("uploadManifest", () => {
   ] as Array<[string, UploadResult]>) {
     test(`${label} is a FAILED upload: no id/key returned, older manifests kept`, async () => {
       const h = harness(result)
-      expect(await uploadManifest(h.deps, "fs:abc", h.tsv, "2026-11-09")).toEqual({ fid: null, key: null })
+      expect(await uploadManifest(h.deps, "fs:abc", h.tsv, "2026-11-09")).toEqual({ fid: null, key: null, bytes: null })
       expect(h.removed).toEqual([])
       fs.rmSync(h.dir, { recursive: true, force: true })
     })
@@ -102,7 +102,7 @@ describe("resolveDrivesBoard", () => {
     const { api, calls } = fakeBoards([{ id: 3, name: "Music", is_owner: true }])
     expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
     expect(calls).toEqual([
-      "list", "board:Drives", "dataset:drives@4242:19", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
+      "list", "board:Drives", "dataset:drives@4242:27", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
       "dataset:drive-reads@4242:10",
     ])
     expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings", "drive-reads"])
