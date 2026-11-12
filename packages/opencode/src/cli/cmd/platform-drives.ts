@@ -35,6 +35,9 @@ import {
   type ManifestRow, normalizeExcludes, kindOf, SENSITIVE, BUNDLES, APP_BUNDLES, sha256File, bundleMembers,
   bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport,
 } from "./drives-core"
+import { runRemoteGet, liveRemoteDeps, SERVE_MARK, type ServeReply } from "./drives-remote"
+import { nameMatches } from "./hive-tailscale"
+import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
 import { Installation } from "../../installation"
 
@@ -842,7 +845,13 @@ export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8)
 // sensitive file needs --confirm. No unlocking: an encrypted drive that is not mounted is simply
 // "not connected" (unlocking is the machine's business, not the CLI's).
 
-export type GetArgs = { ref: string; to: string; why?: string; confirm?: boolean }
+export type GetArgs = {
+  ref: string; to: string; why?: string; confirm?: boolean
+  /** Serving another of the user's machines (#193362): same checks, nothing recorded here — the
+   *  asking machine records the read once the copy has arrived and checked out. A plain file is
+   *  hashed in place (dest = the original); a bundle is zipped into `to`, a fresh stage folder. */
+  serve?: boolean
+}
 export type GetDeps = {
   drives: () => Promise<any[]>
   /** drive-findings rows (their data) for one drive */
@@ -858,7 +867,7 @@ export type GetDeps = {
 }
 export type GetResult = { code: number; out: string[]; err: string[]; dest?: string; row?: any; bundle?: boolean; sensitive?: boolean }
 
-function insidePrivate(rel: string, excludes: readonly string[]): boolean {
+export function insidePrivate(rel: string, excludes: readonly string[]): boolean {
   const rl = rel.toLowerCase()
   return normalizeExcludes(excludes).some((x) => rl === x || rl.startsWith(x + "/"))
 }
@@ -963,6 +972,10 @@ export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
       `${rel} is a sensitive file (${sensitiveKind}) on ${name}${drive.encrypted ? "" : ", and that drive is NOT encrypted"}.\n` +
         `Copying it puts a second copy on this computer. If you mean to, add --confirm. The read is recorded either way.`,
     )
+  if (a.serve && !isBundle) {
+    const sha256 = hash(real)
+    return { code: 0, out, err, dest: real, row: { drive_id: driveId, drive_label: name, path: relReal, bytes: st.size, sha256, file_sha256: sha256, bundle: false } }
+  }
 
   const to = path.resolve(a.to)
   fs.mkdirSync(to, { recursive: true })
@@ -988,9 +1001,11 @@ export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
     }
   } catch (e: any) {
     fs.rmSync(dest, { force: true })
-    if (e instanceof MismatchError) return fail(1, `The copy of ${rel} did not match the original (sha256). It was removed; nothing was recorded. Try again.`)
+    if (e instanceof MismatchError) return fail(GET_EXIT.mismatch, `The copy of ${rel} did not match the original (sha256). It was removed; nothing was recorded. Try again.`)
     return fail(1, `Could not copy ${rel}: ${e?.message ?? e}. Nothing was recorded.`)
   }
+
+  if (a.serve) return { code: 0, out, err, dest, row: { drive_id: driveId, drive_label: name, path: relReal, bytes, sha256, file_sha256: hash(dest), bundle: true } }
 
   const at = utcIso(deps.now())
   const row = {
@@ -1013,50 +1028,112 @@ export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
 
 class MismatchError extends Error {}
 
+/** `get` exit codes. 2 and 3 mean what they mean for `path`; 4 and 5 are the remote ones (#193362). */
+export const GET_EXIT = { refused: 1, notConnected: 2, moved: 3, nodeOffline: 4, mismatch: 5 } as const
+
+/** The Atlas side of `get` and `serve`, for the signed-in account's board. */
+function liveGetDeps(userId: number, bloq: number): GetDeps {
+  const reads = DRIVES_DATASETS.find((d) => d.slug === "drive-reads")!
+  return {
+    drives: () => atlasDrives(bloq),
+    findings: async (driveId) => (await atlasRecords("drive-findings", bloq, { drive_id: driveId })).map((x) => x?.data ?? {}),
+    ensureReadsDataset: async () => { await liveBoardApi(userId).createDataset(reads.slug, reads.name, reads.fields, bloq) },
+    writeAudit: (rows) => importRows("drive-reads", bloq, rows),
+    account: async () => {
+      const res = await irisFetch("/api/user")
+      const b = res.ok ? ((await res.json()) as any) : {}
+      const u = b?.data ?? b
+      return String(u?.email || u?.name || `user ${userId}`)
+    },
+    host: os.hostname(),
+    now: () => new Date(),
+  }
+}
+
 const GetCommand = cmd({
   command: "get <ref>",
-  describe: "copy ONE file (or one project bundle, as .zip) off a drive plugged into this computer — checked, and recorded with your reason",
+  describe: "copy ONE file (or one project bundle, as .zip) off a drive — plugged into this computer or into another of your machines — checked, and recorded with your reason",
   builder: (y) =>
     y
       .positional("ref", { type: "string", demandOption: true, describe: "<drive>:<path inside the drive>, as iris drives find shows it" })
       .option("to", { type: "string", demandOption: true, describe: "the folder to copy it into" })
       .option("why", { type: "string", describe: "REQUIRED: why you are reading it — saved with the record" })
       .option("confirm", { type: "boolean", default: false, describe: "needed for a sensitive file (passwords, keys, database dumps)" })
+      .option("from", { type: "string", describe: "the machine (Hive node) the drive is plugged into — default: found for you" })
+      .option("json", { type: "boolean", default: false, describe: "one JSON result, for scripts and agents" })
       .option("bloq", BLOQ_OPTION)
       .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "one file, checked and recorded")
+      .example('$0 drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "mixdown" --json', "the drive is plugged in at another of your machines: found, sent over your Hive, JSON result")
+      .example('$0 drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "mixdown" --from studio-mac', "say which machine has the drive")
       .example('$0 drives get "Studio:Songs/Demo.logicx" --to ~/Desktop --why "mixdown"', "a project bundle arrives as Demo.logicx.zip")
       .example('$0 drives get "Old site:app/.env" --to ~/secure --why "rotate the key" --confirm', "a sensitive file needs --confirm")
-      .epilogue(HOWTO),
+      .epilogue(
+        "Exit codes: 0 copied · 1 refused or failed · 2 drive not connected (here, or on any of your machines) · " +
+          "3 file moved or deleted since the last scan · 4 the machine with the drive is not answering · 5 the copy did not match (sha256). " +
+          "From another machine the file travels over ssh on Tailscale, never through IRIS servers. " + HOWTO,
+      ),
   handler: metered("get", async (args: any, run: DrivesRun) => {
-    if (!String(args.why ?? "").trim()) {
-      console.error('  --why is required: say why you are reading this file, e.g. --why "send the brief to the client". It goes on the record.')
-      return exitDrives(1)
+    const json = args.json === true
+    const report = async (r: GetResult & { served_by?: string }) => {
+      // A remote result carries bundle/sensitive on its read row; the event takes only the counts (#193356).
+      run.set(getFacts({ ...r, bundle: r.bundle ?? r.row?.bundle === true, sensitive: r.sensitive ?? r.row?.sensitive === true }))
+      if (json) {
+        const error = [...r.err, ...(r.code ? r.out : [])].join("\n") || undefined
+        console.log(JSON.stringify({ ok: r.code === 0, code: r.code, ...(error ? { error } : {}), dest: r.dest ?? null, served_by: r.served_by ?? null, read: r.row ?? null }, null, 2))
+      } else {
+        for (const l of r.out) console.log(l)
+        for (const l of r.err) console.error(`  ${l}`)
+      }
+      if (r.code) return exitDrives(r.code)
     }
+    if (!String(args.why ?? "").trim())
+      return report({ code: 1, out: [], err: ['--why is required: say why you are reading this file, e.g. --why "send the brief to the client". It goes on the record.'] })
     const userId = await signedIn()
     const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
-    const reads = DRIVES_DATASETS.find((d) => d.slug === "drive-reads")!
-    const r = await runGet(
-      { ref: String(args.ref), to: String(args.to), why: args.why as string | undefined, confirm: args.confirm === true },
-      {
-        drives: () => atlasDrives(bloq),
-        findings: async (driveId) => (await atlasRecords("drive-findings", bloq, { drive_id: driveId })).map((x) => x?.data ?? {}),
-        ensureReadsDataset: async () => { await liveBoardApi(userId).createDataset(reads.slug, reads.name, reads.fields, bloq) },
-        writeAudit: (rows) => importRows("drive-reads", bloq, rows),
-        account: async () => {
-          const res = await irisFetch("/api/user")
-          const b = res.ok ? ((await res.json()) as any) : {}
-          const u = b?.data ?? b
-          return String(u?.email || u?.name || `user ${userId}`)
-        },
-        host: os.hostname(),
-        now: () => new Date(),
-      },
-    )
-    run.set(getFacts(r))
-    for (const l of r.out) console.log(l)
-    for (const l of r.err) console.error(`  ${l}`)
-    if (r.code) return exitDrives(r.code)
+    const deps = liveGetDeps(userId, bloq)
+    const a = { ref: String(args.ref), to: String(args.to), why: args.why as string | undefined, confirm: args.confirm === true }
+    const from = args.from ? String(args.from) : undefined
+    // This computer first (unless --from names another machine); then whichever machine has it (#193362).
+    if (!from || nameMatches(from, deps.host)) {
+      const r = await runGet(a, deps)
+      if (r.code !== GET_EXIT.notConnected || from) return report(r)
+    }
+    const remote = liveRemoteDeps(async () => (await fetchNodes(userId)) as any)
+    return report(await runRemoteGet({ ...a, from, bloq }, { ...deps, ...remote }))
   }),
+})
+
+// `serve`: the other half of a remote get, run over ssh on the machine that has the drive. Not for
+// people: it prints one machine-readable line, and the ASKING machine writes the audit row.
+const ServeCommand = cmd({
+  command: "serve <ref>",
+  describe: false as unknown as string,
+  builder: (y) =>
+    y
+      .positional("ref", { type: "string", demandOption: true })
+      .option("why", { type: "string", demandOption: true })
+      .option("confirm", { type: "boolean", default: false })
+      .option("for", { type: "string" }) // the machine asking, for the serving side's logs
+      .option("bloq", BLOQ_OPTION),
+  async handler(args) {
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), "iris-drives-serve-"))
+    let r: GetResult
+    try {
+      r = await runGet({ ref: String(args.ref), to: stage, why: String(args.why), confirm: args.confirm === true, serve: true }, liveGetDeps(userId, bloq))
+    } catch (e: any) {
+      r = { code: 1, out: [], err: [`could not read it: ${e?.message ?? e}`] }
+    }
+    const bundle = r.code === 0 && r.row?.bundle === true
+    if (!bundle) fs.rmSync(stage, { recursive: true, force: true })
+    const reply: ServeReply = {
+      ok: r.code === 0, code: r.code, ...(r.code ? { error: [...r.err, ...r.out].join("\n") } : {}),
+      ...(r.code === 0 ? { file: r.dest, stage: bundle ? stage : null, ...r.row } : {}), host: os.hostname(),
+    }
+    console.log(SERVE_MARK + JSON.stringify(reply))
+    if (r.code) process.exit(r.code)
+  },
 })
 
 /** The numbers a `get` event carries — never the path, drive name or reason (those stay in drive-reads). */
@@ -1148,6 +1225,7 @@ export const PlatformDrivesCommand = cmd({
       .command(ListCommand)
       .command(CopiesCommand)
       .command(GetCommand)
+      .command(ServeCommand)
       .command(UsageCommand)
       .demandCommand(1, "Specify: scan, find, path, list, copies, get, usage")
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
@@ -1159,6 +1237,7 @@ export const PlatformDrivesCommand = cmd({
       .example("$0 drives list", "every drive: encrypted?, sensitive files, free space, connected here?")
       .example("$0 drives copies final mix", "how many identical copies exist, and on which drives")
       .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "copy one file off a plugged-in drive — recorded in your Drives board")
+      .example('$0 drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "mixdown"', "the drive is plugged in at another of your machines: fetched over your Hive")
       .example("$0 drives usage", "drives, files and TB cataloged, encrypted storage, scans and copies this month")
       .epilogue(HOWTO),
   async handler() {},
