@@ -30,6 +30,7 @@ export const VERBS = [
   "click",
   "type",
   "select",
+  "press",
   "scroll",
   "screenshot",
   "close",
@@ -256,6 +257,8 @@ export type PageElement = {
   /** Not a button in the markup but a box the site made clickable (pointer cursor, onclick):
    * Southwest's fare cells (#193331). Clicked the same way. */
   area?: boolean
+  /** What sits on top of it where a person would click (a cookie overlay, a sticky bar). */
+  covered?: string
 }
 
 /** How one `elements` listing was cut. */
@@ -267,8 +270,25 @@ export type ElementListing = {
   /** Matching controls left out because the list was full: above the screen, and below or beside it. */
   above: number
   below: number
+  /** A blocking pop-up is open and only its controls were listed: how many are behind it. */
+  behind?: number
   query?: string
+  /** What the page looked like, for the bot-check test (humanCheckReason). */
+  signals?: PageSignals
 }
+
+/** The few facts that tell a "prove you're human" or block page from a real one (#193355 item 11). */
+export type PageSignals = {
+  url: string
+  title: string
+  heading: string
+  text: string
+  textLength: number
+  frames: string[]
+  cfChallenge: boolean
+  blockWidget: boolean
+}
+
 
 /**
  * The line under the list: what was left out and how to reach it. A list cut silently reads as
@@ -276,6 +296,14 @@ export type ElementListing = {
  */
 export function listingFooter(listed: number, l: ElementListing | null): string {
   if (!l) return ""
+  const behind = l.behind
+    ? `${l.behind} more control${l.behind === 1 ? " is" : "s are"} BEHIND the pop-up on the page. To reach them, close it first (its close or accept button, or {"action":"press","key":"Escape"}).`
+    : ""
+  const rest = cutFooter(listed, l)
+  return [rest, behind].filter(Boolean).join(" ")
+}
+
+function cutFooter(listed: number, l: ElementListing): string {
   if (l.query) {
     if (!l.matched) return `Nothing among the page's ${l.total} controls matches "${l.query}". Try a shorter word, or scroll and run elements without a query.`
     const more = l.matched - listed
@@ -323,6 +351,7 @@ export function renderElements(els: PageElement[], pageUrl?: string): string {
         e.checked === true ? "checked" : e.checked === false ? "not checked" : "",
         e.inViewport ? "" : "off-screen",
         e.area ? "click area" : "",
+        e.covered ? `covered by "${e.covered}": a click lands on that, clear it first` : "",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
         e.options?.length
           ? `options: ${e.options.slice(0, 12).map((_, i) => optionText(e, i)).join(", ")}${e.options.length > 12 ? ` … (${e.options.length} in all)` : ""}`
@@ -378,17 +407,100 @@ export function refuseScrollReason(direction: string): string | null {
 }
 
 const IRREVERSIBLE =
-  /\b(delete|remove|destroy|erase|wipe|pay|buy|purchase|checkout|order|send|submit|transfer|withdraw|confirm|cancel subscription|unsubscribe|deactivate|archive|publish|post|sign out|log out)\b/i
+  /\b(delete|remove|destroy|erase|wipe|pay|buy|purchase|checkout|check out|order|send|submit|transfer|withdraw|confirm|cancel (my |your |the )?(subscription|booking|reservation|order|trip|flight)|unsubscribe|deactivate|archive|publish|post|sign out|log out|book|reserve|complete (my |your |the )?(booking|reservation|purchase|order|payment)|finish (my |your |the )?(booking|reservation)|make (a |the )?(reservation|booking|payment))\b/i
+
+/**
+ * Words that LOOK like a commit but are a list, a field or a setting (#193355): "Sort order",
+ * "Order history", "Confirm dates", "Send code", "Post code". They are taken out before the test
+ * above, so the same label still asks if it ALSO says pay, book, delete…
+ */
+const HARMLESS =
+  /\b(sort (order|by)|order (history|status|details|summary|number|by)|track (my |your |an |the )?order|view (my |your |the )?orders?|my orders|past orders|confirm (the |your )?(dates?|selection|location|address|guests?|passengers?|travell?ers?|time|filters?|search|email|e-mail)|(re)?send (me )?(a |the |my )?(new )?(verification |security |login |sign-in |one[- ]time |confirmation )?(code|otp|pin|link)|post ?code|postal code|book(ing)? (details|summary|reference)|address book)\b/gi
 
 /**
  * Does this control look like it cannot be undone?
  *
  * The cheap half of a risk gate: the agent must say it meant it, and the refusal names the word
  * that triggered it, so a wrong gate is obvious rather than mysterious. The page is untrusted
- * input — one of these clicks spends money or sends something in the user's name.
+ * input — one of these clicks spends money, books a seat or sends something in the user's name.
  */
 export function looksIrreversible(label: string): boolean {
-  return IRREVERSIBLE.test(String(label ?? ""))
+  return IRREVERSIBLE.test(String(label ?? "").replace(HARMLESS, " "))
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
+/**
+ * A date as an <input type=date> takes it: YYYY-MM-DD, or null when the text is not a date.
+ *
+ * A date field ignores "12/10/2026" and stays empty, silently (#193355). US order first (M/D/Y),
+ * day-first only when the first number cannot be a month. Month names in either order.
+ */
+export function normalizeDate(text: string): string | null {
+  const t = String(text ?? "").trim().toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ")
+  const out = (y: number, m: number, d: number) => {
+    const year = y < 100 ? 2000 + y : y
+    const ok = m >= 1 && m <= 12 && d >= 1 && d <= new Date(Date.UTC(year, m, 0)).getUTCDate() && year >= 1000 && year <= 9999
+    return ok ? `${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : null
+  }
+  const iso = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)
+  if (iso) return out(+iso[1]!, +iso[2]!, +iso[3]!)
+  const num = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/)
+  if (num) {
+    const a = +num[1]!
+    const b = +num[2]!
+    return a > 12 ? out(+num[3]!, b, a) : out(+num[3]!, a, b)
+  }
+  const month = (w: string) => MONTHS.indexOf(w.slice(0, 3)) + 1
+  const md = t.match(/^(?:[a-z]+ )?([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)? (\d{4})$/)
+  if (md && month(md[1]!) > 0) return out(+md[3]!, month(md[1]!), +md[2]!)
+  const dm = t.match(/^(?:[a-z]+ )?(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})\.? (\d{4})$/)
+  if (dm && month(dm[2]!) > 0) return out(+dm[3]!, month(dm[2]!), +dm[1]!)
+  return null
+}
+
+const BLOCK_PHRASES =
+  /^(just a moment|attention required|access denied|blocked|you have been blocked|you've been blocked|request blocked|sorry, you have been blocked|access to this page has been denied|pardon our interruption|are you a (human|robot)|verify(ing)? you are (a )?human|please verify you are a human|checking (if the site connection is secure|your browser)|one more step|bot or not|security check|additional verification required)\s*[.!?…]*\s*([|–—-].*)?$/i
+
+/**
+ * Is this page a "prove you're human" check or a block page, and whose? null when it is a page.
+ *
+ * Measured live (#193355): Yelp and Hertz came back blank with 0 controls, Kayak sent the agent to
+ * /help/bots.html, Expedia said "Bot or Not?". The agent read each as an empty or odd page and kept
+ * trying. The check is for a PERSON; the agent's part is to say so and stop.
+ */
+export function humanCheckReason(s: PageSignals | null | undefined): string | null {
+  if (!s) return null
+  const frames = s.frames.join(" ")
+  if (s.cfChallenge || /challenges\.cloudflare\.com/.test(frames) || /^(just a moment|attention required)/i.test(s.title.trim())) {
+    return "a Cloudflare check"
+  }
+  if (/captcha-delivery\.com|datadome/i.test(frames)) return "a DataDome check"
+  if (/px-captcha|perimeterx|human\.com/i.test(frames) || (s.textLength < 2000 && /press (&|and) hold/i.test(s.text))) {
+    return "a PerimeterX check"
+  }
+  let path = ""
+  try {
+    path = new URL(s.url).pathname
+  } catch {}
+  if (/\/help\/bots?\b|\/(bot|captcha|blocked)(\.html?)?$/i.test(path)) return "the site's bot page"
+  if (BLOCK_PHRASES.test(s.title.trim()) || (s.textLength < 3000 && BLOCK_PHRASES.test(s.heading.trim()))) {
+    return "a block page"
+  }
+  if (s.blockWidget) return "a human check"
+  if (s.textLength < 300 && /recaptcha|hcaptcha|turnstile|captcha/i.test(frames)) return "a captcha"
+  if (s.textLength < 1500 && /verify (that )?you are (a )?human|complete the security check|not a robot/i.test(s.text)) {
+    return "a human check"
+  }
+  return null
+}
+
+/** What the agent is told when it meets one: hand it to the person, never get past it. */
+export function humanCheckAdvice(kind: string, target: "agent" | "panel"): string {
+  const never = "It is for a PERSON: do not click, solve, retry or work around it, and do not switch browsers to get past it."
+  return target === "panel"
+    ? `STOP: this page is ${kind}, not the site. ${never} Tell the person in one short line to finish the check in the Browser; your next call waits for them.`
+    : `STOP: this page is ${kind}, not the site: the site turned your browser away. ${never} Tell the person in one short line that the site asked for a human check, and leave that site to them (they can open it themselves).`
 }
 
 export type PageState = {

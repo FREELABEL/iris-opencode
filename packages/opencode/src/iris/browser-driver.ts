@@ -18,7 +18,7 @@
  * the refusals move with it.
  */
 import { withCursor } from "./agent-cursor"
-import type { ElementListing, PageElement } from "./browser-verbs"
+import { normalizeDate, type ElementListing, type PageElement, type PageSignals } from "./browser-verbs"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -84,7 +84,137 @@ export async function profileInUse(dir: string): Promise<boolean> {
   }
 }
 
-type CdpMessage = { id?: number; method?: string; params?: unknown; result?: any; error?: { message: string } }
+
+type CdpMessage = { id?: number; method?: string; params?: any; result?: any; error?: { message: string } }
+
+/**
+ * The page-script prelude every verb shares (#193355): the page is more than `document`.
+ *
+ * A web component keeps its buttons in an (open) shadow root and an embedded checkout lives in a
+ * same-origin iframe; `document.querySelectorAll` sees neither, so the list missed them and a ref
+ * stamped inside one could never be found again. One walker, one lookup, used by every script, so a
+ * control that is listed is a control that can be clicked, typed into, inspected and read back.
+ * A cross-origin frame stays closed: the browser refuses, and so do we.
+ */
+const DEEP = `
+const frameDoc = (el) => { if (el.tagName !== 'IFRAME' && el.tagName !== 'FRAME') return null; try { const d = el.contentDocument; return d && d.documentElement ? d : null } catch (e) { return null } };
+const deepEach = (root, fn) => { for (const el of root.querySelectorAll('*')) { fn(el); if (el.shadowRoot) deepEach(el.shadowRoot, fn); const d = frameDoc(el); if (d) deepEach(d, fn) } };
+const byRef = (n) => {
+  const sel = '[data-iris-ref="' + n + '"]';
+  const look = (root) => {
+    const hit = root.querySelector(sel);
+    if (hit) return hit;
+    for (const el of root.querySelectorAll('*')) {
+      const inner = el.shadowRoot || frameDoc(el);
+      if (inner) { const x = look(inner); if (x) return x }
+    }
+    return null;
+  };
+  return look(document);
+};
+const upOf = (x) => x.parentNode || x.host || (x.defaultView && x.defaultView.frameElement) || null;
+const within = (root, el) => { for (let x = el; x; x = upOf(x)) if (x === root) return true; return false };
+const viewOf = (el) => (el.ownerDocument && el.ownerDocument.defaultView) || window;
+const cs = (el) => viewOf(el).getComputedStyle(el);
+const rectOf = (el) => {
+  const r = el.getBoundingClientRect();
+  let dx = 0, dy = 0;
+  for (let w = viewOf(el); w !== window && w.frameElement; w = w.parent) { const f = w.frameElement.getBoundingClientRect(); dx += f.left + w.frameElement.clientLeft; dy += f.top + w.frameElement.clientTop }
+  return { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy, width: r.width, height: r.height };
+};
+const deepHit = (doc, x, y) => {
+  let h = doc.elementFromPoint(x, y);
+  while (h && h.shadowRoot) { const inner = h.shadowRoot.elementFromPoint(x, y); if (!inner || inner === h) break; h = inner }
+  return h;
+};
+const deepActive = () => {
+  let a = document.activeElement;
+  for (;;) {
+    if (a && a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue }
+    const d = a && frameDoc(a);
+    if (d && d.activeElement && d.activeElement !== d.body) { a = d.activeElement; continue }
+    return a;
+  }
+};
+`
+
+/**
+ * Wait-for-the-page support (#193355 item 5). A click arms a watch on the page: when the DOM last
+ * changed, whether the page is leaving, and the timers, fetches and XHRs the click's OWN handlers
+ * started. A click that navigates 900 ms later (an async router) is then waited for instead of being
+ * read back as "nothing changed" and clicked again. Only work started by the action is followed,
+ * so a page's own clock does not hold every click to the cap.
+ */
+const SETTLE = `
+const arm = () => {
+  const old = window.__irisSettle;
+  if (old && old.mo) old.mo.disconnect();
+  const s = window.__irisSettle = { url: location.href, last: performance.now(), until: 0, pending: 0, leaving: false, mo: null };
+  try { s.mo = new MutationObserver(() => { s.last = performance.now() }); s.mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }) } catch (e) {}
+  const leave = () => { s.leaving = true };
+  addEventListener('beforeunload', leave, { once: true });
+  addEventListener('pagehide', leave, { once: true });
+  return s;
+};
+const track = (s, fn) => {
+  const st = window.setTimeout, f = window.fetch, XS = window.XMLHttpRequest && XMLHttpRequest.prototype.send;
+  window.setTimeout = function (cb, ms, ...a) {
+    const d = Number(ms) || 0;
+    if (typeof cb !== 'function' || d > 2500) return st.call(window, cb, ms, ...a);
+    s.until = Math.max(s.until, performance.now() + d);
+    return st.call(window, function () { return track(s, () => cb.apply(this, a)) }, ms);
+  };
+  if (f) window.fetch = function () { s.pending++; const p = f.apply(this, arguments); p.then(() => s.pending--, () => s.pending--); return p };
+  if (XS) XMLHttpRequest.prototype.send = function () { s.pending++; this.addEventListener('loadend', () => s.pending--, { once: true }); return XS.apply(this, arguments) };
+  try { return fn() } finally { window.setTimeout = st; if (f) window.fetch = f; if (XS) XMLHttpRequest.prototype.send = XS }
+};
+`
+
+const SETTLE_READ = `(() => {
+  const s = window.__irisSettle;
+  if (!s) return { fresh: true, ready: document.readyState };
+  const now = performance.now();
+  return { fresh: false, leaving: s.leaving, pending: s.pending, wait: s.until - now, quiet: now - s.last };
+})()`
+
+const SETTLE_DONE = `(() => { const s = window.__irisSettle; if (s && s.mo) s.mo.disconnect(); window.__irisSettle = undefined; return true })()`
+
+/** The keys `press` knows, with the codes old widgets still read off the event. */
+export const KEYS = {
+  Enter: 13,
+  Escape: 27,
+  Tab: 9,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  Backspace: 8,
+} as const
+export type Key = keyof typeof KEYS
+
+/** What Enter would do where it is pressed: the tool gates a submit or a send on it. */
+export type EnterEffect = {
+  found: boolean
+  /** submit: submits a form (label: its submit button or the form's name). activate: presses a
+   * button or link (label: its name). newline: a message box, where Enter often SENDS. */
+  kind: "submit" | "activate" | "newline" | "none"
+  label: string
+}
+
+const SIGNALS = `(() => {
+  const text = (document.body && document.body.innerText) || '';
+  const h = document.querySelector('h1, h2');
+  return {
+    url: location.href,
+    title: document.title || '',
+    heading: ((h && h.textContent) || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+    text: text.slice(0, 600),
+    textLength: text.trim().length,
+    frames: Array.from(document.querySelectorAll('iframe')).slice(0, 20).map((f) => f.src || ''),
+    cfChallenge: typeof window._cf_chl_opt === 'object' && window._cf_chl_opt !== null,
+    blockWidget: !!document.querySelector('#challenge-form, #challenge-stage, #cf-challenge-running, #px-captcha, #sec-if-cpt-container, iframe[src*="captcha-delivery.com"]'),
+  };
+})()`
 
 /**
  * What every browser target can do to a page, written ONCE (#193145, epic #193144 B0).
@@ -98,15 +228,29 @@ export abstract class ScriptedPage {
   currentUrl: string | null = null
   /** How the last `elements` call was cut: what exists, what matched, what was left out where. */
   lastListing: ElementListing | null = null
+  /** What the last action did that its diff cannot show (a new tab kept in this one, a date the
+   * field refused). Read once with takeNotes. */
+  protected notes: string[] = []
 
   abstract evaluate<T>(expression: string): Promise<T>
   abstract open(url: string): Promise<{ url: string; title: string; status: string }>
   abstract screenshot(): Promise<Uint8Array>
   abstract close(): Promise<void>
 
+  takeNotes(): string[] {
+    const out = [...new Set(this.notes)]
+    this.notes = []
+    return out
+  }
+
   /** The text a person would read, not the markup. */
   async text(): Promise<string> {
     return (await this.evaluate<string>("document.body ? document.body.innerText : ''")) ?? ""
+  }
+
+  /** The facts a bot check is recognised by; browser-verbs decides. */
+  async signals(): Promise<PageSignals | null> {
+    return await this.evaluate<PageSignals | null>(SIGNALS)
   }
 
   /**
@@ -121,6 +265,7 @@ export abstract class ScriptedPage {
     const query = JSON.stringify(String(opts.query ?? "").trim().toLowerCase())
     const include = Number.isInteger(opts.include) ? Number(opts.include) : -1
     const js = `(() => {
+      ${DEEP}
       const SEL = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=tab], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=option], [contenteditable=true]'
       const LIMIT = ${Math.max(1, Math.trunc(limit))}
       const QUERY = ${query}
@@ -143,69 +288,82 @@ export abstract class ScriptedPage {
         return 'textbox'
       }
       const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim()
+      // aria-labelledby points at other elements by id, in the element's own tree.
+      const byIds = (el, attr) => {
+        const ids = (el.getAttribute(attr) || '').split(/\\s+/).filter(Boolean)
+        if (!ids.length) return ''
+        const root = el.getRootNode()
+        return ids.map((id) => { const x = (root.getElementById && root.getElementById(id)) || el.ownerDocument.getElementById(id); return x ? (x.innerText || x.textContent || '') : '' }).join(' ')
+      }
+      // An icon button says what it does in its svg <title> or its image's alt, not in text.
+      const iconName = (el) => { const t = el.querySelector && el.querySelector('svg title'); const i = el.querySelector && el.querySelector('img[alt]'); return (t && t.textContent) || (i && i.getAttribute('alt')) || '' }
       const nameOf = (el, label) =>
-        clean(el.getAttribute('aria-label') || (label && label.innerText) || el.getAttribute('placeholder') || el.getAttribute('title') ||
-         (el.innerText || (el.type === 'radio' || el.type === 'checkbox' ? '' : el.value) || '').trim() || el.getAttribute('name') || '').slice(0, 120)
+        clean(byIds(el, 'aria-labelledby') || el.getAttribute('aria-label') || (label && label.innerText) || el.getAttribute('placeholder') || el.getAttribute('title') ||
+         (el.innerText || (el.type === 'radio' || el.type === 'checkbox' ? '' : el.type === 'password' ? '' : el.value) || '').trim() || iconName(el) || el.getAttribute('name') || '').slice(0, 120)
       const shown = (el) => {
         const rect = el.getBoundingClientRect()
-        const style = getComputedStyle(el)
+        const style = cs(el)
         return !(style.display === 'none' || style.visibility === 'hidden' || (rect.width === 0 && rect.height === 0))
       }
       // A choice drawn by the site: the real radio/checkbox is hidden (0 size, opacity 0, off
       // screen) and its LABEL is what a person clicks (Toast, 2026-11-11: the protein choices).
       const labelOf = (el) => (el.labels && el.labels[0]) || el.closest('label')
-      const tiny = (el) => { const r = el.getBoundingClientRect(); return r.width < 2 || r.height < 2 || Number(getComputedStyle(el).opacity) === 0 }
+      const tiny = (el) => { const r = el.getBoundingClientRect(); return r.width < 2 || r.height < 2 || Number(cs(el).opacity) === 0 }
       // A control drawn by the site with no button under it: a <div> that answers a click
       // (Southwest's fare cells, #193331). A person knows it by the pointer cursor, so do we.
       // Only the OUTERMOST such box, and never one that holds or sits in a real control — that
       // control is listed itself.
-      const SKIP_TAG = /^(html|body|script|style|noscript|template|svg|path|g|use|iframe|img|br|hr)$/i
+      const SKIP_TAG = /^(html|body|head|script|style|noscript|template|svg|path|g|use|iframe|img|br|hr)$/i
       const isArea = (el) => {
         if (SKIP_TAG.test(el.tagName)) return false
-        const own = el.hasAttribute('onclick') || (el.hasAttribute('tabindex') && el.tabIndex >= 0) || getComputedStyle(el).cursor === 'pointer'
+        const own = el.hasAttribute('onclick') || (el.hasAttribute('tabindex') && el.tabIndex >= 0) || cs(el).cursor === 'pointer'
         if (!own) return false
         const p = el.parentElement
-        if (p && p !== document.body && getComputedStyle(p).cursor === 'pointer' && !p.matches(SEL)) return false
+        if (p && p !== el.ownerDocument.body && cs(p).cursor === 'pointer' && !p.matches(SEL)) return false
         if (el.closest(SEL) || el.querySelector(SEL)) return false
         const r = el.getBoundingClientRect()
         if (r.width < 8 || r.height < 8) return false
         if (r.width * r.height > innerWidth * innerHeight * 0.5) return false // a page-sized wrapper is not a button
         return !!(clean(el.innerText) || el.getAttribute('aria-label') || el.getAttribute('title'))
       }
-      // An open pop-up is the page right now: what is behind it is inert. List only the pop-up,
-      // so a long page behind it (a whole menu) can't push its choices past the limit.
-      const modals = Array.from(document.querySelectorAll('[aria-modal=true], dialog[open], [role=dialog], [role=alertdialog]')).filter(shown)
-      const root = modals.length ? modals[modals.length - 1] : document
-      // What the element IS, not only what it says: its link and the site's ids for the record.
-      const ID_ATTR = /^data-(.*[-_])?(id|jk|sku|key|slug|uuid|item|listing|product|job)([-_]?id)?$/i
-      const idsOf = (el) => {
-        const ids = {}
-        let n = 0
-        for (let x = el; x && x !== document.body && n < 4; x = x.parentElement) {
-          for (const a of Array.from(x.attributes || [])) {
-            if (n < 4 && ID_ATTR.test(a.name) && a.value && a.value.length <= 80 && !(a.name in ids)) { ids[a.name] = a.value; n++ }
-          }
-        }
-        return n ? ids : undefined
+
+      // 0. Everything, across open shadow roots and same-origin frames (#193355).
+      const all = []
+      deepEach(document, (el) => all.push(el))
+
+      // An open pop-up that BLOCKS the page is the page right now: list only it, so a long page
+      // behind it (a whole menu) can't push its choices past the limit. A pop-up that does not
+      // block — a cookie banner along the bottom, a sign-in flyout at the side — is just more of
+      // the page (Southwest: a OneTrust banner hid 157 of 159 controls, #193355).
+      const H = innerHeight
+      const W = innerWidth
+      const blocking = (d) => {
+        if (d.getAttribute('aria-modal') === 'true' || d.getAttribute('role') === 'alertdialog') return true
+        try { if (d.matches('dialog:modal')) return true } catch (e) {}
+        const r = rectOf(d)
+        if (!(r.left <= W / 2 && W / 2 <= r.right && r.top <= H / 2 && H / 2 <= r.bottom)) return false
+        const hit = deepHit(document, W / 2, H / 2)
+        return !!hit && within(d, hit)
       }
-      const hrefOf = (el) => {
-        const a = el.closest('a[href]')
-        if (!a) return undefined
-        const h = a.href
-        return /^https?:/.test(h) ? h : undefined
-      }
+      const modals = all.filter((el) => el.matches('[aria-modal=true], dialog[open], [role=dialog], [role=alertdialog]') && shown(el) && blocking(el))
+      const root = modals.length ? modals[modals.length - 1] : null
 
       // 1. Every control on the page, in document order.
       const found = []
-      for (const el of root.querySelectorAll('*')) {
+      let behind = 0
+      for (const el of all) {
+        let entry = null
         if (el.matches(SEL)) {
           const isChoice = el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
           const label = isChoice ? labelOf(el) : null
           const box = isChoice && (!shown(el) || tiny(el)) && label && shown(label) ? label : el
-          if (shown(box)) found.push({ el, box, label, area: false })
+          if (shown(box)) entry = { el, box, label, area: false }
         } else if (isArea(el) && shown(el)) {
-          found.push({ el, box: el, label: null, area: true })
+          entry = { el, box: el, label: null, area: true }
         }
+        if (!entry) continue
+        if (root && !within(root, el)) behind++
+        else found.push(entry)
       }
 
       // 2. Numbers that stay put. A control keeps the number it was given on an earlier listing,
@@ -213,7 +371,7 @@ export abstract class ScriptedPage {
       // control gets the next free number. A node copied with its number (a carousel's clone) is
       // given a new one, so one number is never two places.
       let next = 1
-      for (const x of document.querySelectorAll('[data-iris-ref]')) next = Math.max(next, (parseInt(x.getAttribute('data-iris-ref'), 10) || 0) + 1)
+      for (const x of all) { const n = x.getAttribute('data-iris-ref'); if (n) next = Math.max(next, (parseInt(n, 10) || 0) + 1) }
       const taken = new Set()
       for (const f of found) {
         const had = parseInt(f.el.getAttribute('data-iris-ref') || '', 10)
@@ -224,10 +382,8 @@ export abstract class ScriptedPage {
 
       // 3. What a person can see first, then what is below, then what is above. A long header
       // must not push the part of the page they are looking at off the list (#193331).
-      const H = innerHeight
-      const W = innerWidth
       for (const f of found) {
-        const r = f.box.getBoundingClientRect()
+        const r = rectOf(f.box)
         f.rect = r
         f.zone = r.bottom <= 0 ? 'above' : r.top >= H ? 'below' : r.right <= 0 || r.left >= W ? 'aside' : 'view'
       }
@@ -246,7 +402,55 @@ export abstract class ScriptedPage {
       }
       const left = matches.slice(LIMIT)
 
-      const items = picked.map((f) => {
+      // 4. Two controls with the same words are two different things: say which (#193355). A
+      // calendar's "10" carries its month, a results row's "Select" its flight.
+      const contextOf = (el, name) => {
+        const t = el.closest('table, [role=grid], fieldset')
+        if (t) {
+          const cap = t.tagName === 'TABLE' && t.caption ? t.caption.innerText : t.tagName === 'FIELDSET' && t.querySelector('legend') ? t.querySelector('legend').innerText : ''
+          const lab = clean(cap || t.getAttribute('aria-label') || byIds(t, 'aria-labelledby'))
+          if (lab) return lab.slice(0, 60)
+        }
+        for (let x = el.parentElement, i = 0; x && x !== x.ownerDocument.body && i < 6; x = x.parentElement, i++) {
+          const txt = clean(x.innerText)
+          if (txt.length > 160) break
+          const rest = clean(txt.split(name).join(' '))
+          if (rest && rest.length <= 80 && !/^[\\d\\s]+$/.test(rest)) return rest
+        }
+        for (let x = el, i = 0; x && x !== x.ownerDocument.body && i < 8; x = x.parentElement, i++) {
+          for (let s = x.previousElementSibling, j = 0; s && j < 10; s = s.previousElementSibling, j++) {
+            const h = s.matches('h1, h2, h3, h4, h5, h6, [role=heading]') ? s : Array.from(s.querySelectorAll('h1, h2, h3, h4, h5, h6, [role=heading]')).pop()
+            if (h && clean(h.innerText)) return clean(h.innerText).slice(0, 60)
+          }
+        }
+        return ''
+      }
+      const names = picked.map((f) => nameOf(f.el, f.label))
+      const seen = {}
+      for (const n of names) seen[n.toLowerCase()] = (seen[n.toLowerCase()] || 0) + 1
+      picked.forEach((f, i) => {
+        if (!names[i] || seen[names[i].toLowerCase()] < 2) return
+        const c = contextOf(f.box, names[i])
+        if (c && c !== names[i]) names[i] = names[i] + ' (' + c + ')'
+      })
+
+      // 5. Something on top of it (a cookie overlay, a sticky bar): a person's click would land
+      // there, so say so and let the agent clear it first (#193355).
+      const coveredBy = (f) => {
+        if (f.zone !== 'view') return undefined
+        const r = f.box.getBoundingClientRect()
+        const doc = f.box.ownerDocument
+        const x = r.left + r.width / 2, y = r.top + r.height / 2
+        const v = viewOf(f.box)
+        if (x < 0 || y < 0 || x > v.innerWidth || y > v.innerHeight) return undefined
+        const hit = deepHit(doc, x, y)
+        if (!hit || within(f.box, hit) || within(hit, f.box) || within(f.el, hit) || (f.label && within(f.label, hit))) return undefined
+        const cov = hit.closest('[role=dialog], [role=alertdialog], dialog, [aria-modal]') || hit
+        const said = clean(cov.getAttribute('aria-label') || cov.innerText).slice(0, 40)
+        return said || cov.tagName.toLowerCase() + (cov.id ? '#' + cov.id : '')
+      }
+
+      const items = picked.map((f, i) => {
         const el = f.el
         const isChoice = !f.area && el.tagName.toLowerCase() === 'input' && (el.type === 'radio' || el.type === 'checkbox')
         const isSelect = !f.area && el.tagName.toLowerCase() === 'select'
@@ -259,15 +463,27 @@ export abstract class ScriptedPage {
           ref: f.ref,
           role: f.area ? 'button' : roleOf(el),
           area: f.area || undefined,
-          name: nameOf(el, f.label),
+          name: names[i],
           tag: el.tagName.toLowerCase(),
-          value: f.area || isChoice || el.value === undefined ? undefined : String(el.value),
+          // A password is never read back, not even to the agent that typed it.
+          value: f.area || isChoice || el.value === undefined ? undefined : el.type === 'password' ? (el.value ? '(hidden)' : '') : String(el.value),
           checked: isChoice ? !!el.checked : aria === 'true' ? true : aria === 'false' ? false : undefined,
           enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
           inViewport: f.zone === 'view',
-          href: hrefOf(el),
-          ids: idsOf(el),
-          inDialog: root !== document ? true : undefined,
+          href: (() => { const a = el.closest('a[href]'); return a && /^https?:/.test(a.href) ? a.href : undefined })(),
+          ids: (() => {
+            const ID_ATTR = /^data-(.*[-_])?(id|jk|sku|key|slug|uuid|item|listing|product|job)([-_]?id)?$/i
+            const ids = {}
+            let n = 0
+            for (let x = el; x && x !== el.ownerDocument.body && n < 4; x = x.parentElement) {
+              for (const a of Array.from(x.attributes || [])) {
+                if (n < 4 && ID_ATTR.test(a.name) && a.value && a.value.length <= 80 && !(a.name in ids)) { ids[a.name] = a.value; n++ }
+              }
+            }
+            return n ? ids : undefined
+          })(),
+          inDialog: root ? true : undefined,
+          covered: coveredBy(f),
         }
       })
       return {
@@ -276,12 +492,30 @@ export abstract class ScriptedPage {
         matched: matches.length,
         above: left.filter((f) => f.zone === 'above').length,
         below: left.filter((f) => f.zone !== 'above').length,
+        behind: root ? behind : undefined,
+        signals: ${SIGNALS},
       }
     })()`
 
-    const got = await this.evaluate<{ items: PageElement[]; total: number; matched: number; above: number; below: number } | null>(js)
+    const got = await this.evaluate<{
+      items: PageElement[]
+      total: number
+      matched: number
+      above: number
+      below: number
+      behind?: number
+      signals?: PageSignals
+    } | null>(js)
     this.lastListing = got
-      ? { total: got.total, matched: got.matched, above: got.above, below: got.below, query: opts.query?.trim() || undefined }
+      ? {
+          total: got.total,
+          matched: got.matched,
+          above: got.above,
+          below: got.below,
+          behind: got.behind,
+          query: opts.query?.trim() || undefined,
+          signals: got.signals,
+        }
       : null
     return got?.items ?? []
   }
@@ -293,13 +527,15 @@ export abstract class ScriptedPage {
    */
   async inspect(ref: number): Promise<InspectedElement | null> {
     return await this.evaluate<InspectedElement | null>(`(() => {
-      const el = document.querySelector('[data-iris-ref="${ref}"]')
+      ${DEEP}
+      const el = byRef(${Math.trunc(ref)})
       if (!el) return null
       const ID_ATTR = /^data-(.*[-_])?(id|jk|sku|key|slug|uuid|item|listing|product|job)([-_]?id)?$/i
       const SKIP = /^(style|class|data-iris-ref|on.*)$/i
       const attrs = (x) => {
         const o = {}
         for (const a of Array.from(x.attributes || [])) if (!SKIP.test(a.name) && a.value.length <= 300) o[a.name] = a.value
+        if (x.type === 'password') delete o.value
         return o
       }
       const web = (h) => (/^https?:/.test(h || '') ? h : undefined)
@@ -312,7 +548,7 @@ export abstract class ScriptedPage {
       const ancestors = []
       const ids = {}
       let card = null
-      for (let x = el.parentElement, i = 0; x && x !== document.body && i < 8; x = x.parentElement, i++) {
+      for (let x = el.parentElement, i = 0; x && x !== el.ownerDocument.body && i < 8; x = x.parentElement, i++) {
         const own = {}
         for (const a of Array.from(x.attributes || [])) if (ID_ATTR.test(a.name) && a.value.length <= 120) { own[a.name] = a.value; if (!(a.name in ids)) ids[a.name] = a.value }
         const r = x.getAttribute('role')
@@ -345,49 +581,272 @@ export abstract class ScriptedPage {
   /** Everything the change check compares, taken before and after an action. */
   async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string> }> {
     const js = `(() => {
+      ${DEEP}
       const text = document.body ? document.body.innerText : ''
       let h = 0
       for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
       const values = {}
-      for (const el of document.querySelectorAll('[data-iris-ref]')) {
-        if (el.value !== undefined) values[el.getAttribute('data-iris-ref')] = String(el.value)
-      }
+      deepEach(document, (el) => {
+        const n = el.getAttribute('data-iris-ref')
+        if (n && el.value !== undefined) values[n] = el.type === 'password' ? (el.value ? '(hidden)' : '') : String(el.value)
+      })
       return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values }
     })()`
 
     return await this.evaluate(js)
   }
 
-  /** Click the element holding this ref. Returns false when the ref is no longer on the page. */
+  /**
+   * Wait until the page has finished answering an action: it navigated and the new page is up, or
+   * its DOM has been quiet for 300 ms with nothing the action started still pending. Capped, so a
+   * page that never stops moving costs one wait, not a hang. (#193355 item 5)
+   */
+  protected async settle(capMs = 2500): Promise<void> {
+    const start = Date.now()
+    await Bun.sleep(60)
+    while (Date.now() - start < capMs) {
+      // An error is a page between documents: look again. An answer that is not the watch's is a
+      // target that does not run it: stop waiting.
+      const s = await this.evaluate<
+        { fresh: true; ready: string } | { fresh: false; leaving: boolean; pending: number; wait: number; quiet: number } | null
+      >(SETTLE_READ).catch(() => undefined)
+      if (s !== undefined && (s === null || typeof s !== "object")) break
+      if (s?.fresh === true && s.ready !== "loading") break
+      if (s?.fresh === false && !s.leaving && s.pending <= 0 && s.wait <= 0 && s.quiet >= 300) break
+      await Bun.sleep(100)
+    }
+    await this.evaluate(SETTLE_DONE).catch(() => undefined)
+    this.currentUrl = (await this.evaluate<string>("location.href").catch(() => null)) ?? this.currentUrl
+  }
+
+  /**
+   * Click the element holding this ref, the way a mouse does (#193355 item 3): pointer and mouse
+   * events at its centre, focus, then the click. Menus and pickers built on pointerdown/mousedown
+   * (Radix, MUI, react-select) never saw a bare el.click(). The click is dispatched once, here;
+   * nothing else fires one. Returns false when the ref is no longer on the page.
+   */
   async clickRef(ref: number): Promise<boolean> {
-    const ok = await this.evaluate<boolean>(
-      `(() => { const el = document.querySelector('[data-iris-ref="${ref}"]'); if (!el) return false; el.scrollIntoView({block:'center'}); el.click(); return true })()`,
-    )
-    await Bun.sleep(400) // let a navigation or a re-render start before the state is read back
-    this.currentUrl = await this.evaluate<string>("location.href")
+    const ok = await this.evaluate<boolean>(`(() => {
+      ${DEEP}
+      ${SETTLE}
+      const el = byRef(${Math.trunc(ref)})
+      if (!el) return false
+      el.scrollIntoView({ block: 'center', inline: 'center' })
+      const s = arm()
+      track(s, () => {
+        const V = viewOf(el)
+        const lab = (el.labels && el.labels[0]) || null
+        const r0 = el.getBoundingClientRect()
+        const r = (r0.width < 2 || r0.height < 2) && lab ? lab.getBoundingClientRect() : r0
+        const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, screenX: r.left + r.width / 2, screenY: r.top + r.height / 2, bubbles: true, cancelable: true, composed: true, view: V }
+        const P = V.PointerEvent || V.MouseEvent
+        const ptr = (type, buttons, extra) => el.dispatchEvent(new P(type, Object.assign({}, at, { pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons }, extra || {})))
+        const mouse = (type, buttons, extra) => el.dispatchEvent(new V.MouseEvent(type, Object.assign({}, at, { button: 0, buttons }, extra || {})))
+        ptr('pointerover', 0)
+        ptr('pointerenter', 0, { bubbles: false, cancelable: false })
+        mouse('mouseover', 0)
+        mouse('mousemove', 0)
+        // A cancelled pointerdown suppresses the mouse events after it, as in a browser.
+        const down = ptr('pointerdown', 1)
+        const mdown = down ? mouse('mousedown', 1, { detail: 1 }) : true
+        if (mdown && typeof el.focus === 'function' && el.isConnected) el.focus({ preventScroll: true })
+        if (!el.isConnected) return
+        ptr('pointerup', 0)
+        if (down) mouse('mouseup', 0, { detail: 1 })
+        if (el.isConnected) mouse('click', 0, { detail: 1 })
+      })
+      return true
+    })()`)
+    if (ok) await this.settle()
+    else this.currentUrl = (await this.evaluate<string>("location.href").catch(() => null)) ?? this.currentUrl
 
     return !!ok
   }
 
-  /** Type into the element holding this ref, firing the events a real keystroke would. */
+  /**
+   * Type into the element holding this ref, one key at a time (#193355 item 4): keydown,
+   * keypress, beforeinput, input, keyup per character, through the field's NATIVE value setter so
+   * React sees it. Autocompletes that listen on keyup now suggest; editors that build their text
+   * from beforeinput (Lexical, ProseMirror) now receive it. A new line is a line break, never an
+   * Enter key: Enter can SEND, and that goes through `press`, where it is gated.
+   *
+   * A date field takes ISO only; "12/10/2026" is turned into 2026-12-10 first (normalizeDate). If
+   * the field still ends empty, a note says so instead of reporting success.
+   */
   async typeRef(ref: number, text: string): Promise<boolean> {
-    const ok = await this.evaluate<boolean>(
-      `(() => {
-        const el = document.querySelector('[data-iris-ref="${ref}"]')
-        if (!el) return false
-        el.focus()
-        const v = ${JSON.stringify(text)}
-        if (el.isContentEditable) { el.textContent = v }
-        else {
-          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
-          setter ? setter.call(el, v) : (el.value = v)
+    const iso = normalizeDate(text)
+    const got = await this.evaluate<{ ok: boolean; empty?: boolean; date?: boolean } | null>(`(() => {
+      ${DEEP}
+      ${SETTLE}
+      const el = byRef(${Math.trunc(ref)})
+      if (!el) return { ok: false }
+      const V = viewOf(el)
+      const D = el.ownerDocument
+      const v = ${JSON.stringify(text)}
+      const ISO = ${JSON.stringify(iso)}
+      el.scrollIntoView({ block: 'center' })
+      el.focus()
+      const s = arm()
+      const proto = el.tagName === 'TEXTAREA' ? V.HTMLTextAreaElement.prototype : el.tagName === 'INPUT' ? V.HTMLInputElement.prototype : Object.getPrototypeOf(el)
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+      const setVal = (x) => (desc && desc.set ? desc.set.call(el, x) : (el.value = x))
+      const ed = el.isContentEditable
+      const charwise = ed || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && /^(text|search|email|url|tel|password|)$/i.test(el.getAttribute('type') || ''))
+      const codeOf = (ch) => /[a-z]/i.test(ch) ? 'Key' + ch.toUpperCase() : /[0-9]/.test(ch) ? 'Digit' + ch : ch === ' ' ? 'Space' : ''
+      const key = (type, ch) => {
+        const ev = new V.KeyboardEvent(type, { key: ch, code: codeOf(ch), bubbles: true, cancelable: true, composed: true, view: V })
+        const c = type === 'keypress' ? ch.charCodeAt(0) : ch.toUpperCase().charCodeAt(0)
+        try { Object.defineProperty(ev, 'keyCode', { get: () => c }); Object.defineProperty(ev, 'which', { get: () => c }); if (type === 'keypress') Object.defineProperty(ev, 'charCode', { get: () => c }) } catch (e) {}
+        return el.dispatchEvent(ev)
+      }
+      const beforeInput = (inputType, data) => el.dispatchEvent(new V.InputEvent('beforeinput', { inputType, data, bubbles: true, cancelable: true, composed: true }))
+      const input = (inputType, data) => el.dispatchEvent(new V.InputEvent('input', { inputType, data, bubbles: true, composed: true }))
+      const toEnd = () => { const sel = V.getSelection(); if (!sel) return; const r = D.createRange(); r.selectNodeContents(el); r.collapse(false); sel.removeAllRanges(); sel.addRange(r) }
+      track(s, () => {
+        // Replace, never append: what was in the field goes first.
+        if (ed) {
+          if (el.textContent) {
+            const sel = V.getSelection(); if (sel) { const r = D.createRange(); r.selectNodeContents(el); sel.removeAllRanges(); sel.addRange(r) }
+            if (beforeInput('deleteContentBackward', null)) { if (!D.execCommand('delete')) { el.textContent = ''; input('deleteContentBackward', null) } }
+          }
+        } else if (el.value) {
+          if (beforeInput('deleteContentBackward', null)) { setVal(''); input('deleteContentBackward', null) }
         }
-        el.dispatchEvent(new Event('input', { bubbles: true }))
-        el.dispatchEvent(new Event('change', { bubbles: true }))
-        return true
-      })()`,
-    )
-    await Bun.sleep(150)
+        if (!charwise) {
+          for (const ch of v) { key('keydown', ch); key('keypress', ch); key('keyup', ch) }
+          if (beforeInput('insertText', v)) { setVal(el.type === 'date' && ISO ? ISO : v); input('insertText', v) }
+          return
+        }
+        for (const ch of v) {
+          const nl = ch === '\\n'
+          if (!nl && !key('keydown', ch)) { key('keyup', ch); continue }
+          if (!nl) key('keypress', ch)
+          const it = nl ? (el.tagName === 'TEXTAREA' ? 'insertLineBreak' : ed ? 'insertParagraph' : '') : 'insertText'
+          if (it && beforeInput(it, nl ? null : ch)) {
+            if (ed) {
+              toEnd()
+              if (!D.execCommand(nl ? 'insertLineBreak' : 'insertText', false, nl ? undefined : ch)) { el.appendChild(D.createTextNode(ch)); input(it, nl ? null : ch) }
+            } else if (!(el.maxLength > 0 && el.value.length >= el.maxLength)) {
+              setVal(el.value + ch)
+              input(it, nl ? null : ch)
+            }
+          }
+          if (!nl) key('keyup', ch)
+        }
+      })
+      if (!ed) el.dispatchEvent(new V.Event('change', { bubbles: true }))
+      const now = ed ? el.textContent : el.value
+      return { ok: true, empty: v.trim() !== '' && !String(now || '').trim(), date: el.type === 'date' }
+    })()`)
+    if (got?.ok) await this.settle(1500)
+    if (got?.empty) {
+      this.notes.push(
+        got.date
+          ? "the date field is still EMPTY: it did not take that date. Type it as YYYY-MM-DD (e.g. 2026-12-10), or pick it in the site's calendar."
+          : "the field is still EMPTY after typing: the site did not take the text. Look at it (screenshot) before going on.",
+      )
+    }
+
+    return !!got?.ok
+  }
+
+  /**
+   * What Enter would do on this ref, or on whatever has focus: the tool asks before an Enter that
+   * submits a pay/send form, or presses Enter in a message box (where Enter often sends).
+   */
+  async enterEffect(ref?: number): Promise<EnterEffect> {
+    return await this.evaluate<EnterEffect>(`(() => {
+      ${DEEP}
+      const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim()
+      const REF = ${ref === undefined ? "null" : Math.trunc(ref)}
+      const el = REF === null ? deepActive() : byRef(REF)
+      if (!el) return { found: REF === null, kind: 'none', label: '' }
+      const nameOf = (x) => clean(x.getAttribute('aria-label') || x.innerText || x.value || x.getAttribute('title') || '').slice(0, 80)
+      if (el.isContentEditable || el.tagName === 'TEXTAREA') return { found: true, kind: 'newline', label: nameOf(el) || 'a message box' }
+      if (el.tagName === 'INPUT' && el.form && !/^(button|submit|reset|image|checkbox|radio|file|color|range)$/i.test(el.type)) {
+        const btn = el.form.querySelector('button:not([type]), button[type=submit], input[type=submit], input[type=image]')
+        return { found: true, kind: 'submit', label: btn ? nameOf(btn) : clean(el.form.getAttribute('aria-label') || el.form.getAttribute('name') || nameOf(el)) }
+      }
+      if (el.matches('a[href], button, [role=button], [role=link], summary, input[type=submit], input[type=button]')) return { found: true, kind: 'activate', label: nameOf(el) }
+      return { found: true, kind: 'none', label: nameOf(el) }
+    })()`)
+  }
+
+  /**
+   * Press one key on this ref, or on whatever has focus (#193355 item 4): keydown (and keypress
+   * for Enter), then what the browser itself would do if the page did not stop it, then keyup.
+   * Enter in a form submits it (its submit button, or requestSubmit when there is none — a search
+   * box with no button); Tab moves focus; Backspace deletes; Escape closes a <dialog>. Then waits
+   * for the page to settle, like a click.
+   */
+  async pressKey(ref: number | undefined, key: Key): Promise<boolean> {
+    const ok = await this.evaluate<boolean>(`(() => {
+      ${DEEP}
+      ${SETTLE}
+      const REF = ${ref === undefined ? "null" : Math.trunc(ref)}
+      const KEY = ${JSON.stringify(key)}
+      const CODE = ${KEYS[key]}
+      const found = REF === null ? deepActive() : byRef(REF)
+      if (REF !== null && !found) return false
+      const el = found || document.body
+      if (REF !== null) { el.scrollIntoView({ block: 'center' }); if (typeof el.focus === 'function') el.focus() }
+      const V = viewOf(el)
+      const D = el.ownerDocument
+      const send = (type) => {
+        const ev = new V.KeyboardEvent(type, { key: KEY, code: KEY, bubbles: true, cancelable: true, composed: true, view: V })
+        try { Object.defineProperty(ev, 'keyCode', { get: () => CODE }); Object.defineProperty(ev, 'which', { get: () => CODE }) } catch (e) {}
+        return el.dispatchEvent(ev)
+      }
+      const s = arm()
+      track(s, () => {
+        let go = send('keydown')
+        if (go && KEY === 'Enter') go = send('keypress')
+        if (go) {
+          const proto = el.tagName === 'TEXTAREA' ? V.HTMLTextAreaElement.prototype : V.HTMLInputElement.prototype
+          const desc = Object.getOwnPropertyDescriptor(proto, 'value')
+          const setVal = (x) => (desc && desc.set ? desc.set.call(el, x) : (el.value = x))
+          const textual = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(button|submit|reset|image|checkbox|radio|file|color|range|hidden)$/i.test(el.type))
+          const bi = (inputType) => el.dispatchEvent(new V.InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true, composed: true }))
+          const inp = (inputType) => el.dispatchEvent(new V.InputEvent('input', { inputType, bubbles: true, composed: true }))
+          if (KEY === 'Enter') {
+            if (el.tagName === 'INPUT' && textual && el.form) {
+              const btn = el.form.querySelector('button:not([type]), button[type=submit], input[type=submit], input[type=image]')
+              if (btn) { if (!btn.disabled) btn.click() }
+              else if (el.form.requestSubmit) el.form.requestSubmit()
+              else el.form.submit()
+            } else if (el.tagName === 'TEXTAREA') {
+              if (bi('insertLineBreak')) { setVal(el.value + '\\n'); inp('insertLineBreak') }
+            } else if (el.isContentEditable) {
+              if (bi('insertParagraph')) D.execCommand('insertParagraph')
+            } else if (el.matches('a[href], button, [role=button], [role=link], summary, input[type=submit], input[type=button], input[type=checkbox], input[type=radio]')) {
+              el.click()
+            }
+          } else if (KEY === 'Backspace') {
+            if (textual && el.value) { if (bi('deleteContentBackward')) { setVal(el.value.slice(0, -1)); inp('deleteContentBackward') } }
+            else if (el.isContentEditable && bi('deleteContentBackward')) D.execCommand('delete')
+          } else if (KEY === 'Tab') {
+            const all = Array.from(D.querySelectorAll('a[href], button, input, select, textarea, [tabindex], [contenteditable=true]'))
+              .filter((x) => !x.disabled && x.tabIndex >= 0 && x.getClientRects().length && x.type !== 'hidden')
+            const i = all.indexOf(el)
+            const nx = all[i + 1] || all[0]
+            if (nx) nx.focus()
+          } else if (KEY === 'Escape') {
+            const d = el.closest('dialog') || D.querySelector('dialog[open]')
+            if (d && d.open) { const c = new V.Event('cancel', { cancelable: true }); if (d.dispatchEvent(c)) d.close() }
+          } else if ((KEY === 'ArrowDown' || KEY === 'ArrowUp') && el.tagName === 'SELECT') {
+            const n = el.selectedIndex + (KEY === 'ArrowDown' ? 1 : -1)
+            if (n >= 0 && n < el.options.length) { el.selectedIndex = n; el.dispatchEvent(new V.Event('input', { bubbles: true })); el.dispatchEvent(new V.Event('change', { bubbles: true })) }
+          }
+        }
+        // keyup goes to what has focus now (Tab moved it).
+        const after = deepActive() || el
+        const up = new V.KeyboardEvent('keyup', { key: KEY, code: KEY, bubbles: true, cancelable: true, composed: true, view: V })
+        try { Object.defineProperty(up, 'keyCode', { get: () => CODE }) } catch (e) {}
+        ;(after.isConnected ? after : D.body).dispatchEvent(up)
+      })
+      return true
+    })()`)
+    if (ok) await this.settle()
 
     return !!ok
   }
@@ -396,7 +855,8 @@ export abstract class ScriptedPage {
   async selectRef(ref: number, value: string): Promise<boolean> {
     const ok = await this.evaluate<boolean>(
       `(() => {
-        const el = document.querySelector('[data-iris-ref="${ref}"]')
+        ${DEEP}
+        const el = byRef(${Math.trunc(ref)})
         if (!el) return false
         const want = ${JSON.stringify(value)}
         // A value or the words a person sees: both pick the same option.
@@ -423,8 +883,41 @@ export abstract class ScriptedPage {
     await this.evaluate(`(() => { ${js}; return true })()`)
     await Bun.sleep(250)
   }
-
 }
+
+/**
+ * The agent's Chrome keeps one tab (#193355 item 6). A link with target=_blank or a window.open
+ * opened a tab nobody was driving, and the click read back "nothing changed". Here it opens in
+ * THIS tab instead, and the binding tells the session so the answer can say it. Installed only in
+ * PageSession: the desktop Browser pane decides its own tabs.
+ */
+const SAME_TAB = `(() => {
+  const note = (u) => { try { window.__irisNewTab(String(u || '')) } catch (e) {} };
+  const SELF = /^(_self|_parent|_top)$/i;
+  const open = window.open;
+  window.open = function (u, t, f) {
+    if (!u || (t && SELF.test(String(t)))) return open.apply(this, arguments);
+    let to = String(u);
+    try { to = new URL(to, location.href).href } catch (e) {}
+    note(to);
+    location.assign(to);
+    return null;
+  };
+  const retarget = (e) => {
+    const path = e.composedPath ? e.composedPath() : [];
+    for (const x of path) {
+      if (!x || !x.tagName) continue;
+      const tag = x.tagName.toUpperCase();
+      if ((tag === 'A' || tag === 'AREA' || tag === 'FORM') && x.target && !SELF.test(x.target)) {
+        note(tag === 'FORM' ? x.action : x.href);
+        x.target = '_self';
+        return;
+      }
+    }
+  };
+  addEventListener('click', retarget, true);
+  addEventListener('submit', retarget, true);
+})()`
 
 /**
  * One Chrome, one tab, for the life of a tool session.
@@ -467,6 +960,11 @@ export class PageSession extends ScriptedPage {
     return this.kind.visible
       ? withCursor((e) => this.evaluate(e), ref, () => super.selectRef(ref, value))
       : super.selectRef(ref, value)
+  }
+  override pressKey(ref: number | undefined, key: Key) {
+    return this.kind.visible && ref !== undefined
+      ? withCursor((e) => this.evaluate(e), ref, () => super.pressKey(ref, key))
+      : super.pressKey(ref, key)
   }
 
 
@@ -535,6 +1033,10 @@ export class PageSession extends ScriptedPage {
     })
     this.ws.addEventListener("message", (e) => this.onMessage(String(e.data)))
     await this.send("Page.enable")
+    // One tab: new-tab links and window.open land here, and say so (#193355 item 6).
+    await this.send("Runtime.enable")
+    await this.send("Runtime.addBinding", { name: "__irisNewTab" })
+    await this.send("Page.addScriptToEvaluateOnNewDocument", { source: SAME_TAB })
   }
 
   /** Ask Chrome to quit in order (flushes cookies), over its BROWSER endpoint. */
@@ -599,6 +1101,12 @@ export class PageSession extends ScriptedPage {
     try {
       msg = JSON.parse(raw)
     } catch {
+      return
+    }
+    if (msg.method === "Runtime.bindingCalled" && msg.params?.name === "__irisNewTab") {
+      this.notes.push(
+        `the page asked for a NEW TAB${msg.params.payload ? ` (${String(msg.params.payload).slice(0, 160)})` : ""}; it opened in this tab instead. To get back, open the previous address again.`,
+      )
       return
     }
     if (typeof msg.id !== "number") return

@@ -5,13 +5,15 @@ import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { Artifacts } from "@/iris/artifacts"
-import { PageSession, savedProfileDir, type ScriptedPage } from "@/iris/browser-driver"
+import { KEYS, PageSession, savedProfileDir, type Key, type ScriptedPage } from "@/iris/browser-driver"
 import { PanelPage } from "@/iris/panel-page"
 import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
   findInPage,
+  humanCheckAdvice,
+  humanCheckReason,
   looksIrreversible,
   refuseNavigationReason,
   refuseOptionReason,
@@ -57,6 +59,7 @@ export const Parameters = Schema.Struct({
     "click",
     "type",
     "select",
+    "press",
     "scroll",
     "screenshot",
     "close",
@@ -85,6 +88,9 @@ export const Parameters = Schema.Struct({
   ref: Schema.optional(Schema.Number).annotate({ description: "Element number from `elements` (click, type, select, inspect)" }),
   text: Schema.optional(Schema.String).annotate({ description: "What to type (type)" }),
   value: Schema.optional(Schema.String).annotate({ description: "Option to choose (select)" }),
+  key: Schema.optional(Schema.Literals(Object.keys(KEYS) as [Key, ...Key[]])).annotate({
+    description: "Key to press (press): Enter, Escape, Tab, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Backspace",
+  }),
   direction: Schema.optional(Schema.Literals(["up", "down", "top", "bottom"])).annotate({
     description: "Where to scroll (scroll)",
   }),
@@ -282,9 +288,15 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               p instanceof PageSession
                 ? `\n(${p.kind.visible ? "a window on the person's screen" : "invisible"}, ${p.kind.saved ? "saved profile: their earlier sign-ins in it apply" : "fresh profile: logged out"})`
                 : "\n(in the person's Browser pane)"
+            // A bot check is not the page: say so before the agent reads it as one (#193355).
+            // The pane recognises its own checks and waits for the person (app human-check.ts).
+            const sig = target === "panel" ? undefined : yield* attempt(() => p.signals())
+            const check = sig?.ok ? humanCheckReason(sig.value) : null
             return {
               title: landed.title || landed.url,
-              output: `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
+              output: check
+                ? `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\n${humanCheckAdvice(check, target === "panel" ? "panel" : "agent")}`
+                : `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
               metadata: { url: landed.url, title: landed.title },
             }
           }
@@ -335,6 +347,14 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const got = yield* attempt(() => page.elements(150, { query: params.query }))
             if (!got.ok) return yield* Effect.fail(new Error(got.message))
             const footer = listingFooter(got.value.length, page.lastListing)
+            const check = humanCheckReason(page.lastListing?.signals)
+            if (check) {
+              return {
+                title: "human check",
+                output: humanCheckAdvice(check, target === "panel" ? "panel" : "agent"),
+                metadata: { elements: got.value.length, url: page.currentUrl ?? undefined },
+              }
+            }
 
             return {
               title: `${got.value.length} elements`,
@@ -401,6 +421,63 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             }
           }
 
+          if (params.action === "press") {
+            if (!params.key) return yield* Effect.fail(new Error(`press needs a key: ${Object.keys(KEYS).join(", ")}`))
+            const key = params.key
+            if (params.ref) {
+              const listed = yield* attempt(() => page.elements(150, { include: params.ref }))
+              if (!listed.ok) return yield* Effect.fail(new Error(listed.message))
+              if (!listed.value.some((e) => e.ref === params.ref)) {
+                return yield* Effect.fail(new Error(`there is no [${params.ref}] on this page — run elements again`))
+              }
+            }
+            // Enter can submit a form or send a message: the same gate as clicking its button.
+            if (key === "Enter") {
+              const fx = yield* attempt(() => page.enterEffect(params.ref))
+              if (!fx.ok) return yield* Effect.fail(new Error(fx.message))
+              if (!fx.value.found) {
+                return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+              }
+              const gated = fx.value.kind === "newline" || (fx.value.kind !== "none" && looksIrreversible(fx.value.label))
+              if (gated && !params.confirm) {
+                return yield* Effect.fail(
+                  new Error(
+                    fx.value.kind === "newline"
+                      ? `Enter in "${fx.value.label}" may SEND it. If you mean to send, repeat with confirm: true — and tell the user what you are sending first. For a new line inside the text, type it with \\n instead.`
+                      : `Enter here would ${fx.value.kind === "submit" ? "submit" : "press"} "${fx.value.label}", which looks like it cannot be undone. If you mean it, repeat with confirm: true — and tell the user what you are about to do first.`,
+                  ),
+                )
+              }
+              if (gated && page instanceof PanelPage) page.confirmNext = (fx.value.label || "Enter").slice(0, 80)
+            }
+            page.takeNotes()
+            const before = yield* attempt(() => page.state())
+            if (!before.ok) return yield* Effect.fail(new Error(before.message))
+            const pressed = yield* attempt(() => page.pressKey(params.ref, key))
+            if (!pressed.ok) return yield* Effect.fail(new Error(pressed.message))
+            if (!pressed.value) {
+              return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
+            }
+            const after = yield* attempt(() => page.state())
+            if (!after.ok) return yield* Effect.fail(new Error(after.message))
+            const offOrigin = refuseNavigationReason(before.value.url, after.value.url)
+            if (offOrigin && after.value.url !== before.value.url) {
+              yield* attempt(() => page.open(before.value.url))
+              return {
+                title: "navigation refused",
+                output: `that key went to ${after.value.url} — ${offOrigin}. Came back to ${before.value.url}. Open it deliberately if you meant to.`,
+                metadata: { url: before.value.url, changed: false },
+              }
+            }
+            const changed = describeChange(before.value, after.value)
+            const notes = page.takeNotes()
+            return {
+              title: `press ${key}${params.ref ? ` [${params.ref}]` : ""}`,
+              output: [changed, ...notes].join("\n"),
+              metadata: { ref: params.ref, url: after.value.url, changed: !changed.startsWith("nothing changed") },
+            }
+          }
+
           if (params.action === "click" || params.action === "type") {
             if (!params.ref) return yield* Effect.fail(new Error(`${params.action} needs a ref — run action=elements first`))
             if (params.action === "type" && params.text === undefined) {
@@ -428,6 +505,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (page instanceof PanelPage && params.action === "click" && looksIrreversible(el.name)) {
               page.confirmNext = el.name.slice(0, 80)
             }
+            page.takeNotes()
             const before = yield* attempt(() => page.state())
             if (!before.ok) return yield* Effect.fail(new Error(before.message))
             const acted =
@@ -456,10 +534,16 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             }
 
             const changed = describeChange(before.value, after.value)
+            // What the diff cannot show: a new tab kept in this one, a field that refused the
+            // text, an overlay a person's click would have hit instead (#193355).
+            const notes = [
+              ...page.takeNotes(),
+              ...(el.covered ? [`note: [${params.ref}] was covered by "${el.covered}" — a person's click would have landed on that.`] : []),
+            ]
 
             return {
               title: `${params.action} [${params.ref}] ${el.name.slice(0, 40)}`,
-              output: changed,
+              output: [changed, ...notes].join("\n"),
               metadata: { ref: params.ref, url: after.value.url, changed: !changed.startsWith("nothing changed") },
             }
           }

@@ -17,7 +17,7 @@
  * `confirm`, and the app asks the person to allow it once; that wait is why such a call gets a
  * long timeout. IRIS's cursor glides to the element first (agent-cursor.ts), so the person sees where.
  */
-import { ScriptedPage } from "./browser-driver"
+import { ScriptedPage, type Key } from "./browser-driver"
 import { withCursor } from "./agent-cursor"
 import type { Panel } from "./panel"
 
@@ -146,20 +146,18 @@ export class PanelPage extends ScriptedPage {
     return this.tabs ?? []
   }
 
-  private async acting<T>(ref: number, doing: string, fn: () => Promise<T>): Promise<T> {
+  private async acting<T>(ref: number | undefined, doing: string, fn: () => Promise<T>): Promise<T> {
     // The cursor glides there first (reads: it only draws), so the person sees where IRIS works.
-    // The strip already says "IRIS is working" while it moves.
+    // The strip already says "IRIS is working" while it moves. A key pressed on whatever has
+    // focus has nowhere to glide to.
     this.mode = "read"
+    const act = async () => {
+      this.mode = "act"
+      this.doing = doing
+      return fn()
+    }
     try {
-      return await withCursor(
-        (e) => this.evaluate(e),
-        ref,
-        async () => {
-          this.mode = "act"
-          this.doing = doing
-          return fn()
-        },
-      )
+      return ref === undefined ? await act() : await withCursor((e) => this.evaluate(e), ref, act)
     } finally {
       this.mode = "read"
       this.doing = undefined
@@ -174,6 +172,10 @@ export class PanelPage extends ScriptedPage {
   }
   override selectRef(ref: number, value: string) {
     return this.acting(ref, `choosing "${value.slice(0, 30)}"`, () => super.selectRef(ref, value))
+  }
+  override pressKey(ref: number | undefined, key: Key) {
+    const where = ref === undefined ? "" : ` in [${ref}]`
+    return this.acting(ref, this.confirmNext ? `pressing ${key} on "${this.confirmNext}"` : `pressing ${key}${where}`, () => super.pressKey(ref, key))
   }
 
   /** A JPEG of what the person sees in the pane (macOS for now). Same Allow as reading. */

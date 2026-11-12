@@ -125,6 +125,21 @@ describe("PanelPage", () => {
     expect(page.confirmNext).toBeUndefined()
   })
 
+  test("press on the focused field acts with no cursor, and an Enter that submits carries its label once (#193355)", async () => {
+    const sent: { c: Panel.Command; t?: number }[] = []
+    const page = new PanelPage(async (c, t) => {
+      sent.push({ c, t })
+      return outcome({ result: env(true) })
+    }, silence)
+    page.confirmNext = "Place order"
+    expect(await page.pressKey(undefined, "Enter")).toBe(true)
+    const acts = sent.filter((x) => x.c.action === "page" && x.c.op === "eval" && x.c.mode === "act")
+    expect(acts.length).toBe(sent.length)
+    expect(acts.filter((x) => (x.c as { confirm?: string }).confirm === "Place order").length).toBe(1)
+    expect((acts[0]!.c as { doing?: string }).doing).toBe('pressing Enter on "Place order"')
+    expect(page.confirmNext).toBeUndefined()
+  })
+
   test("IRIS's cursor glides to the element and presses, as reads, before the act", async () => {
     const { sent, page } = desktop(() => ({ result: env(0) }))
     await page.clickRef(4)
