@@ -42,6 +42,9 @@ export function isAvailable(): boolean {
     execSync(`sqlite3 "${MESSAGES_DB}" "SELECT 1 FROM message LIMIT 1"`, {
       encoding: "utf-8",
       timeout: 3000,
+      // #193251: inherited stderr printed sqlite3's error — with the chat.db path — on every
+      // access probe. Capture it; diagnoseAccess() turns it into one clean sentence.
+      stdio: ["ignore", "pipe", "pipe"],
     })
     return true
   } catch {
@@ -54,11 +57,14 @@ export function isAvailable(): boolean {
  */
 export function diagnoseAccess(): string {
   if (process.platform !== "darwin") return "iMessage is only available on macOS."
-  if (!existsSync(MESSAGES_DB)) return `Messages database not found at ${MESSAGES_DB}. Is Messages.app installed?`
+  if (!existsSync(MESSAGES_DB)) return "Messages database not found (~/Library/Messages/chat.db). Is Messages.app installed?"
   try {
     execSync(`sqlite3 "${MESSAGES_DB}" "SELECT 1 FROM message LIMIT 1"`, {
       encoding: "utf-8",
       timeout: 3000,
+      // #193251: inherited stderr printed sqlite3's error — with the chat.db path — on every
+      // access probe. Capture it; diagnoseAccess() turns it into one clean sentence.
+      stdio: ["ignore", "pipe", "pipe"],
     })
     return "accessible" // shouldn't reach here if isAvailable() returned false
   } catch (err: any) {
@@ -66,7 +72,7 @@ export function diagnoseAccess(): string {
     if (msg.includes("authorization denied") || msg.includes("not permitted")) {
       return "Full Disk Access required. Go to System Settings > Privacy & Security > Full Disk Access and enable your terminal app, then restart it."
     }
-    return `Cannot read Messages database: ${msg.slice(0, 200)}`
+    return `Cannot read Messages database: ${describeQueryFailure(err).replace(/^iMessage database query failed:?\s*/, "") || "unknown error"}`
   }
 }
 
