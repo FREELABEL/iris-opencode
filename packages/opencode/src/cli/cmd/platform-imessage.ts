@@ -294,7 +294,7 @@ const ImessageChatsCommand = cmd({
     const raw = queryOrFail(args.json, () => queryMessages(sql))
     try {
       if (!raw) {
-        if (args.json) { console.log("[]"); return }
+        if (args.json) { await writeJson([]); return }
         prompts.log.info(`No conversations ${label}`)
         prompts.outro("Done")
         return
@@ -326,15 +326,13 @@ const ImessageChatsCommand = cmd({
       if (args.json) {
         // `unresolved` is emitted explicitly rather than left implicit in `name: null` (#58896),
         // so an automated consumer can act on a resolution gap instead of having to infer one.
-        console.log(
-          JSON.stringify(
-            chats.map((c) => {
-              const name = phoneMap.get(c.identifier) ?? null
-              return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
-            }),
-            null,
-            2,
-          ),
+        // writeJson, not console.log: the CLI ends in process.exit(), which drops whatever a pipe
+        // has not drained yet — `chats --json | jq` was cut off at exactly 65536 bytes (#193286).
+        await writeJson(
+          chats.map((c) => {
+            const name = phoneMap.get(c.identifier) ?? null
+            return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
+          }),
         )
         return
       }
@@ -1114,7 +1112,7 @@ const ImessageGroupsCommand = cmd({
     }
     const filtered = groups.filter(g => matchesQuery(g.guid, g.display_name))
     if (!filtered.length) {
-      if (args.json) { console.log("[]"); return }
+      if (args.json) { await writeJson([]); return }
       prompts.log.info(`No group chats match ${bold(String(args.query))}`)
       prompts.outro("Done")
       return
