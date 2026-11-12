@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "os"
 import { join } from "path"
 
 /**
- * `iris hive vault put|get|ls|status` on an encrypted PHI vault (#192914).
+ * `iris hive vault put|get|ls|status` on an encrypted PHI vault (#192912, epic #192914).
  *
  * The bug: `vault create --encrypted` made a vault that `vault list` showed, and `vault put` then
  * said `no vault named "<name>"` — put/get/ls/status only looked at replicated vaults — and the
@@ -64,7 +64,13 @@ for (const src of sources) {
     let env: Record<string, string>
 
     async function iris(...argv: string[]) {
-      const proc = Bun.spawn(["bun", ENTRY, "hive", "vault", ...argv], { cwd: ROOT, stdout: "pipe", stderr: "pipe", env })
+      return irisIn(undefined, ...argv)
+    }
+    async function irisIn(stdin: string | undefined, ...argv: string[]) {
+      const proc = Bun.spawn(["bun", ENTRY, "hive", "vault", ...argv], {
+        cwd: ROOT, stdout: "pipe", stderr: "pipe", env,
+        stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
+      })
       const [code, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()])
       return { code, stdout: strip(stdout), stderr: strip(stderr) }
     }
@@ -93,6 +99,7 @@ for (const src of sources) {
         v.createVault({ name: "phi-test", bloqId: "503", phi: true })
         v.createVault({ name: "phi-locked", bloqId: "503", phi: true })
         v.lock("phi-locked")
+        ${src.real ? `v.createVault({ name: "phi-pass", bloqId: "503", phi: true, passphrase: "correct horse battery" })` : ""}
       `], { env, cwd: work })
       if (setup.exitCode !== 0) throw new Error("setup failed: " + setup.stderr.toString())
     })
@@ -156,14 +163,76 @@ for (const src of sources) {
       }
     }, 120_000)
 
-    test("replicated vaults behave as before (and win a name clash)", async () => {
+    test("--json failures: JSON only on stdout, the sentence on stderr, exit 1", async () => {
+      const r = await iris("ls", "nope", "--json")
+      expect(r.code).toBe(1)
+      expect(JSON.parse(r.stdout)).toEqual({ ok: false, error: 'no vault named "nope" on this machine. Run: iris hive vault list' })
+      expect(r.stderr.trim()).toBe('error: no vault named "nope" on this machine. Run: iris hive vault list')
+    }, 120_000)
+
+    test("--replicated on a name that is only an encrypted vault says so", async () => {
+      const r = await iris("ls", "phi-test", "--replicated")
+      expect(r.code).toBe(1)
+      expect(r.stderr.trim()).toBe('error: no replicated vault named "phi-test" on this machine. Run: iris hive vault list')
+      const both = await iris("ls", "phi-test", "--replicated", "--encrypted")
+      expect(both.code).toBe(1)
+      expect(both.stderr.trim()).toBe("error: pass --encrypted or --replicated, not both")
+    }, 120_000)
+
+    if (src.real) {
+      test("passphrase vault: put → ls → get round-trips with --passphrase-stdin", async () => {
+        const bytes = Buffer.concat([randomBytes(1024 * 1024 + 3), Buffer.from("invented, not real data")])
+        writeFileSync(join(work, "pass.bin"), bytes)
+        const pass = "correct horse battery\n"
+
+        const put = await irisIn(pass, "put", "phi-pass", join(work, "pass.bin"), "--passphrase-stdin", "--json")
+        expect(put.stderr).toBe("")
+        expect(put.code).toBe(0)
+        expect(JSON.parse(put.stdout).results[0]).toMatchObject({ ok: true, vault_path: "pass.bin", sha256: sha(bytes) })
+
+        const ls = await irisIn(pass, "ls", "phi-pass", "--passphrase-stdin", "--json")
+        expect(ls.code).toBe(0)
+        expect(JSON.parse(ls.stdout).files.map((f: any) => f.name)).toEqual(["pass.bin"])
+
+        const get = await irisIn(pass, "get", "phi-pass", "pass.bin", "--out", join(work, "pass-out"), "--passphrase-stdin")
+        expect(get.code).toBe(0)
+        expect(readFileSync(join(work, "pass-out", "pass.bin")).equals(bytes)).toBe(true)
+
+        const found = Bun.spawnSync(["grep", "-rl", "invented, not real data", join(home, ".iris", "vaults")])
+        expect(found.stdout.toString()).toBe("")
+      }, 120_000)
+
+      test("passphrase vault: a wrong passphrase, or none, refuses on stderr", async () => {
+        writeFileSync(join(work, "b.txt"), "hello")
+        const wrong = await irisIn("not the passphrase\n", "put", "phi-pass", join(work, "b.txt"), "--passphrase-stdin")
+        expect(wrong.code).toBe(1)
+        expect(wrong.stderr.trim()).toBe('error: wrong passphrase for vault "phi-pass"')
+        expect(wrong.stdout.trim()).toBe("")
+        const none = await iris("put", "phi-pass", join(work, "b.txt"))
+        expect(none.code).toBe(1)
+        expect(none.stderr.trim()).toBe('error: vault "phi-pass" is passphrase-protected — run this in a terminal, or pass --passphrase-stdin')
+      }, 120_000)
+    }
+
+    test("a name that is both kinds is refused until a flag says which", async () => {
       const c = await iris("create", "phi-test", "--json") // same name as the encrypted vault
       expect(c.code).toBe(0)
-      const ls = await iris("ls", "phi-test", "--json")
-      expect(ls.code).toBe(0)
-      const body = JSON.parse(ls.stdout)
+      const clash = await iris("ls", "phi-test")
+      expect(clash.code).toBe(1)
+      expect(clash.stdout.trim()).toBe("")
+      expect(clash.stderr.trim()).toBe(
+        'error: "phi-test" is the name of a replicated vault AND an encrypted PHI vault on this machine — say which: --replicated or --encrypted',
+      )
+
+      const rep = await iris("ls", "phi-test", "--replicated", "--json")
+      expect(rep.code).toBe(0)
+      const body = JSON.parse(rep.stdout)
       expect(body.encrypted).toBeUndefined()
       expect(body).toMatchObject({ ok: true, vault: "phi-test", seq: 0, files: [] })
+
+      const enc = await iris("ls", "phi-test", "--encrypted", "--json")
+      expect(enc.code).toBe(0)
+      expect(JSON.parse(enc.stdout)).toMatchObject({ ok: true, vault: "phi-test", encrypted: true })
     }, 120_000)
   })
 }

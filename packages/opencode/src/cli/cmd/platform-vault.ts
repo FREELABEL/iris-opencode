@@ -96,21 +96,41 @@ async function findReplicated(nameOrId: string): Promise<VaultMeta | null> {
 }
 
 /**
- * One name, two kinds. A replicated vault (this file) wins a name clash, so existing replicated
- * behaviour is unchanged; otherwise an encrypted PHI vault on THIS node (#192914 — `put` used to
- * look only at replicated vaults, so a vault `list` showed could not be filled).
+ * One name, two kinds: a replicated vault (this file) or an encrypted PHI vault on THIS node
+ * (#192912 — `put` used to look only at replicated vaults, so a vault `list` showed could not be
+ * filled). When a name exists as both, neither silently wins: the command refuses and asks for
+ * --replicated or --encrypted, because putting PHI into the wrong kind is not reversible.
  */
 type AnyVault =
   | { kind: "replicated"; meta: VaultMeta }
   | { kind: "encrypted"; entry: any; mod: EncryptedVaultModule }
 
-async function resolveAnyVault(nameOrId: string): Promise<AnyVault> {
-  const meta = await findReplicated(nameOrId)
-  if (meta) return { kind: "replicated", meta }
-  const mod = loadEncryptedVaultModule()
+export type VaultKind = "replicated" | "encrypted"
+
+/** Which kind the flags ask for: --encrypted / --replicated (both is a mistake). */
+export function kindFromFlags(argv: { encrypted?: boolean; replicated?: boolean }): VaultKind | undefined {
+  if (argv.encrypted && argv.replicated) throw new VaultUserError("pass --encrypted or --replicated, not both")
+  if (argv.encrypted) return "encrypted"
+  if (argv.replicated) return "replicated"
+  return undefined
+}
+
+async function resolveAnyVault(nameOrId: string, want?: VaultKind): Promise<AnyVault> {
+  const meta = want === "encrypted" ? null : await findReplicated(nameOrId)
+  const mod = want === "replicated" ? null : loadEncryptedVaultModule()
   const entry = findEncryptedVault(mod, nameOrId)
+  if (meta && mod && entry) {
+    throw new VaultUserError(
+      `"${nameOrId}" is the name of a replicated vault AND an encrypted PHI vault on this machine — say which: --replicated or --encrypted`,
+    )
+  }
+  if (meta) return { kind: "replicated", meta }
   if (mod && entry) return { kind: "encrypted", entry, mod }
-  throw new VaultUserError(`no vault named "${nameOrId}" on this machine. Run: iris hive vault list`)
+  if (want === "encrypted" && !loadEncryptedVaultModule()) {
+    throw new VaultUserError(`no encrypted vault named "${nameOrId}": the IRIS daemon is not installed on this machine (encrypted vaults live in it). Run: iris bridge start`)
+  }
+  const kind = want ? `${want} ` : ""
+  throw new VaultUserError(`no ${kind}vault named "${nameOrId}" on this machine. Run: iris hive vault list`)
 }
 
 /** Open an encrypted vault for this process, refusing a locked one with how to fix it. */
@@ -123,16 +143,23 @@ async function openEncrypted(v: { entry: any; mod: EncryptedVaultModule }, argv:
 }
 
 /**
- * Every failure of these commands ends here: one plain sentence on stderr (or one JSON object on
- * stdout with --json) and exit 1. Before #192914 an unknown vault name reached the top-level
- * handler and came out as "Unexpected error" plus a dump of the minified bundle.
+ * Every failure of these commands ends here: one plain sentence on stderr and exit 1. With --json
+ * stdout also gets one JSON object (and nothing else), so a script can read either stream. Before
+ * #192912 an unknown vault name reached the top-level handler and came out on STDOUT as
+ * "Unexpected error" plus a dump of the minified bundle, with stderr empty.
  */
 async function vaultFail(e: unknown, json: boolean): Promise<never> {
   const msg = e instanceof Error ? e.message : String(e)
+  process.stderr.write(`error: ${msg}\n`)
   if (json) await writeJson({ ok: false, error: msg })
-  else process.stderr.write(`error: ${msg}\n`)
   process.exit(1)
 }
+
+/** --encrypted / --replicated on put|get|ls|status: only needed when one name is both kinds. */
+const KIND_OPTIONS = {
+  encrypted: { type: "boolean", describe: "the encrypted PHI vault of this name (only needed if a replicated vault has the same name)" },
+  replicated: { type: "boolean", describe: "the replicated vault of this name (only needed if an encrypted vault has the same name)" },
+} as const
 
 async function latestManifest(id: string): Promise<VaultManifest | null> {
   const dir = join(vaultDir(id), "manifests")
@@ -261,7 +288,7 @@ async function listReplicated(argv: any) {
 const PutCommand = cmd({
   command: "put <vault> <path..>",
   describe: "add file(s): chunk, encrypt locally, replicate to your own nodes, verify",
-  builder: (y) => y
+  builder: (y) => y.options(KIND_OPTIONS)
     .positional("vault", { describe: "vault name or id", type: "string", demandOption: true })
     .positional("path", { describe: "local file(s)", type: "string", demandOption: true })
     .option("as", { describe: "path inside the vault (single file only)", type: "string" })
@@ -272,7 +299,7 @@ const PutCommand = cmd({
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     try {
-      const v = await resolveAnyVault(String(argv.vault))
+      const v = await resolveAnyVault(String(argv.vault), kindFromFlags(argv as any))
       if (v.kind === "encrypted") return await putEncrypted(v, argv)
       await putReplicated(v.meta, argv)
     } catch (e) {
@@ -292,6 +319,7 @@ async function putEncrypted(v: { entry: any; mod: EncryptedVaultModule }, argv: 
   const results = await encryptedPut(v.mod, entry, paths.map((p) => ({ src: p, as: paths.length === 1 && argv.as ? String(argv.as) : undefined })))
   const ok = results.every((r) => r.ok)
   if (argv.json) {
+    for (const r of results) if (!r.ok) process.stderr.write(`error: ${r.path}: ${r.error}\n`)
     await writeJson({ ok, vault: entry.name, encrypted: true, results })
     if (!ok) process.exit(1)
     return
@@ -387,6 +415,7 @@ async function putReplicated(meta: VaultMeta, argv: any) {
       await writeManifest(meta.id, m)
     }
 
+    for (const r of results) if (!r.ok) process.stderr.write(`error: ${r.path}: ${r.error}\n`)
     if (argv.json) {
       await writeJson({ ok: results.every((r) => r.ok), results })
       if (!results.every((r) => r.ok)) process.exit(1)
@@ -395,7 +424,7 @@ async function putReplicated(meta: VaultMeta, argv: any) {
 
     console.log()
     for (const r of results) {
-      if (!r.ok) { console.log(`  ${dim("✗")} ${r.path}\n     ${r.error}`); continue }
+      if (!r.ok) continue // already on stderr
       console.log(`  ${success("✓")} ${bold(r.vault_path)}  ${dim(`${r.size} bytes · ${r.chunks} chunk(s)`)}`)
       console.log(`     ${dim("sha256 " + r.plain_sha256)}`)
       const held = ["this machine", ...r.replicated_to]
@@ -411,7 +440,7 @@ async function putReplicated(meta: VaultMeta, argv: any) {
 const GetCommand = cmd({
   command: "get <vault> <path>",
   describe: "retrieve a file, fetching missing chunks from your nodes and verifying end to end",
-  builder: (y) => y
+  builder: (y) => y.options(KIND_OPTIONS)
     .positional("vault", { type: "string", demandOption: true })
     .positional("path", { describe: "path inside the vault", type: "string", demandOption: true })
     .option("out", { describe: "output directory", type: "string", default: "." })
@@ -421,7 +450,7 @@ const GetCommand = cmd({
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     try {
-      const v = await resolveAnyVault(String(argv.vault))
+      const v = await resolveAnyVault(String(argv.vault), kindFromFlags(argv as any))
       if (v.kind === "encrypted") {
         const entry = await openEncrypted(v, argv)
         const r = await encryptedGet(v.mod, entry, String(argv.path), String(argv.out))
@@ -450,7 +479,7 @@ async function getReplicated(meta: VaultMeta, argv: any) {
     const man = await latestManifest(meta.id)
     const vpath = normalizePath(String(argv.path))
     const entry = man?.entries?.[vpath]
-    if (!entry) { console.error(`\n  "${vpath}" is not in vault ${meta.name}. Run: iris vault ls ${meta.name}\n`); process.exit(1) }
+    if (!entry) throw new VaultUserError(`"${vpath}" is not in vault ${meta.name}. Run: iris hive vault ls ${meta.name}`)
 
     const blobs = new Map<string, Buffer>()
     const fetchedFrom: string[] = []
@@ -490,9 +519,7 @@ async function getReplicated(meta: VaultMeta, argv: any) {
     try {
       out = reassemble(key, entry, blobs)
     } catch (e: any) {
-      if (argv.json) await writeJson({ ok: false, path: vpath, error: String(e?.message ?? e) })
-      else console.error(`\n  ${bold("CANNOT RESTORE")} ${vpath}\n  ${String(e?.message ?? e)}\n`)
-      process.exit(1)
+      throw new VaultUserError(`cannot restore ${vpath}: ${String(e?.message ?? e)}`)
     }
 
     await mkdir(String(argv.out), { recursive: true })
@@ -511,13 +538,13 @@ async function getReplicated(meta: VaultMeta, argv: any) {
 const LsCommand = cmd({
   command: "ls <vault>",
   describe: "list files in a vault",
-  builder: (y) => y
+  builder: (y) => y.options(KIND_OPTIONS)
     .positional("vault", { type: "string", demandOption: true })
     .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     try {
-      const v = await resolveAnyVault(String(argv.vault))
+      const v = await resolveAnyVault(String(argv.vault), kindFromFlags(argv as any))
       if (v.kind === "encrypted") {
         const entry = await openEncrypted(v, argv)
         const files = await encryptedLs(v.mod, entry)
@@ -552,14 +579,14 @@ async function lsReplicated(meta: VaultMeta, argv: any) {
 const StatusCommand = cmd({
   command: "status <vault>",
   describe: "replication health — ASKS each node what it holds, never a local ledger",
-  builder: (y) => y
+  builder: (y) => y.options(KIND_OPTIONS)
     .positional("vault", { type: "string", demandOption: true })
     .option("user", { type: "string" })
     .option("user-id", { type: "number" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     try {
-      const v = await resolveAnyVault(String(argv.vault))
+      const v = await resolveAnyVault(String(argv.vault), kindFromFlags(argv as any))
       if (v.kind === "encrypted") {
         // Needs no key: name, binding, lock state and counts are plaintext in the registry.
         const s = v.mod.summary(v.entry)
