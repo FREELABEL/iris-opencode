@@ -60,6 +60,7 @@ export const Parameters = Schema.Struct({
     "scroll",
     "screenshot",
     "close",
+    "tabs",
   ]).annotate({ description: "What to do" }),
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
@@ -89,6 +90,16 @@ export const Parameters = Schema.Struct({
   }),
   confirm: Schema.optional(Schema.Boolean).annotate({
     description: "Required for a click that cannot be undone (delete, pay, send…)",
+  }),
+  tab: Schema.optional(Schema.Union([Schema.String, Schema.Number])).annotate({
+    description:
+      "Browser pane only: which of this chat's tabs, by number (1, 2…) or label (\"Map\"). Leave it out for the tab the person is looking at. A click or type in another tab brings it to the front first. With close: closes that tab",
+  }),
+  new_tab: Schema.optional(Schema.Boolean).annotate({
+    description: "open, Browser pane: open the address in a NEW tab of this chat instead of replacing the page (at most 6 tabs)",
+  }),
+  label: Schema.optional(Schema.String).annotate({
+    description: "open with new_tab: a short name for the tab the person sees (\"Car rental\", \"Map\", \"Itinerary\")",
   }),
 })
 
@@ -123,6 +134,20 @@ const attempt = <T>(fn: () => Promise<T>) =>
     }
   })
 
+/** This chat's tabs, one line: which is showing, what each is (#193328). */
+export function renderTabs(tabs: { n: number; label?: string; title?: string; url?: string; active: boolean }[]): string {
+  if (!tabs.length) return ""
+  const name = (t: (typeof tabs)[number]) => {
+    let host = ""
+    try {
+      host = t.url ? new URL(t.url).hostname.replace(/^www\./, "") : ""
+    } catch {}
+    const what = t.label ?? t.title?.slice(0, 40) ?? (host || "new tab")
+    return `${t.n} ${what}${t.label && host ? ` (${host})` : ""}${t.active ? " ← the person is looking at this one" : ""}`
+  }
+  return `tabs: ${tabs.map(name).join(" · ")}. Name one with tab: N.`
+}
+
 /** Default text budget. The cap is why `find` exists — see browser-verbs. */
 const DEFAULT_MAX_CHARS = 3000
 
@@ -155,6 +180,8 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
         // with where the page is NOW, read fresh (#193242: an Indeed click changed the address
         // and nothing said so).
         let used: { page: ScriptedPage; startUrl?: string } | undefined
+        // The pane this call used, for the closing list of the chat's tabs (#193328).
+        let pane: PanelPage | undefined
         return Effect.gen(function* () {
           const session = String(yield* rootOf(ctx.sessionID))
           const target = params.target ?? Panel.defaultBrowser(Panel.get(session))
@@ -178,6 +205,32 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               sessionsOpen.set(key, panel)
               page = panel
             }
+          }
+
+          const tabRef = params.tab === undefined ? undefined : String(params.tab).trim() || undefined
+          if (target !== "panel" && (tabRef || params.new_tab || params.action === "tabs")) {
+            return yield* Effect.fail(
+              new Error("tabs are in the person's Browser pane (target panel). Your own browser (target agent) has one page"),
+            )
+          }
+          if (page instanceof PanelPage) {
+            page.tab = tabRef
+            pane = page
+          }
+
+          if (params.action === "tabs") {
+            if (!(page instanceof PanelPage)) return yield* Effect.fail(new Error("no Browser pane is open"))
+            const got = yield* attempt(() => (page as PanelPage).listTabs())
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            pane = undefined // the list IS the answer
+            return { title: `${got.value.length} tabs`, output: renderTabs(got.value) || "One tab.", metadata: {} }
+          }
+
+          if (params.action === "close" && tabRef && page instanceof PanelPage) {
+            const got = yield* attempt(() => (page as PanelPage).closeTab(tabRef))
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            pane = undefined
+            return { title: `closed tab ${tabRef}`, output: `Closed tab ${tabRef}.\n${renderTabs(got.value)}`, metadata: {} }
           }
 
           if (params.action === "close") {
@@ -214,13 +267,16 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const p: ScriptedPage =
               page ??
               new PageSession({ headless: !want.visible, profileDir: want.saved ? savedProfileDir() : undefined })
-            const opened = yield* attempt(() => p.open(params.url!))
+            const opened = yield* attempt(() =>
+              p instanceof PanelPage ? p.open(params.url!, { newTab: params.new_tab, label: params.label }) : p.open(params.url!),
+            )
             if (!opened.ok) {
               if (target !== "panel") yield* attempt(() => p.close())
               return yield* Effect.fail(new Error(opened.message))
             }
             const landed = opened.value
             sessionsOpen.set(key, p)
+            if (p instanceof PanelPage) pane = p
 
             const how =
               p instanceof PageSession
@@ -459,14 +515,15 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
         }).pipe(
           Effect.flatMap((result) =>
             Effect.gen(function* () {
-              if (!used) return result
+              const tabsLine = pane?.tabs && pane.tabs.length > 1 ? `\n\n${renderTabs(pane.tabs)}` : ""
+              if (!used) return tabsLine ? { ...result, output: result.output + tabsLine } : result
               const now = yield* attempt(() => used!.page.where())
               if (!now.ok || !now.value.url) return result
               const moved = !!used.startUrl && now.value.url !== used.startUrl
               const where = `\n\npage: ${now.value.url}${now.value.title ? ` ("${now.value.title.slice(0, 80)}")` : ""}${moved ? ` · the address changed (was ${used.startUrl})` : ""}`
               return {
                 ...result,
-                output: result.output + where,
+                output: result.output + where + tabsLine,
                 metadata: { ...result.metadata, url: now.value.url, ...(moved ? { navigated: true } : {}) },
               }
             }),
@@ -474,7 +531,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
           // One line per call in engine.log, so a slow or silent Browser leaves a trace (2026-11-11:
           // a 45 s stall on Vonlane left none). No page text, no typed text: action, target, timing.
           Effect.tap(() =>
-            Effect.logInfo("browser", { action: params.action, target: params.target ?? "default", ok: true, ref: params.ref }),
+            Effect.logInfo("browser", { action: params.action, target: params.target ?? "default", ok: true, ref: params.ref, tab: params.tab }),
           ),
           Effect.tapError((e) =>
             Effect.logWarning("browser", {

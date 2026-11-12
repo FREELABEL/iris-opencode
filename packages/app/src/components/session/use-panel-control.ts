@@ -23,6 +23,18 @@ import type { NativeBrowser } from "@/context/platform"
 import { deliverReport } from "./panel-report"
 import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
 import { navigateWeb, WEB_TAB, webUrl } from "./web-nav"
+import {
+  activeTab,
+  addTab,
+  closeTab,
+  describeTabs,
+  forgetTabPage,
+  MAX_TABS,
+  pageKey,
+  resolveTab,
+  setActiveTab,
+  setPendingOpen,
+} from "./browser-tabs"
 
 /**
  * THE AGENT'S SIDE PANEL, DESKTOP HALF (#190093). The engine half is src/iris/panel.ts.
@@ -53,7 +65,8 @@ type Command =
   | PageCommand
 
 /** The Browser pane's page (#193145): run a browser-tool script there, or open an address. */
-type PageCommand =
+/** Every page command may name a tab (#193328): its number, id or label; none = the one showing. */
+type PageCommand = { tab?: string } & (
   | {
       action: "page"
       op: "eval"
@@ -64,8 +77,14 @@ type PageCommand =
       /** What the strip says the agent is doing ("clicking 'Search'"). */
       doing?: string
     }
-  | { action: "page"; op: "open"; url: string }
+  /** `newTab`: open the address in a new tab of this chat, called `label`. */
+  | { action: "page"; op: "open"; url: string; newTab?: boolean; label?: string }
   | { action: "page"; op: "screenshot" }
+  /** This chat's tabs, changing nothing. */
+  | { action: "page"; op: "tabs" }
+  /** Close one of this chat's tabs (never the last). */
+  | { action: "page"; op: "close-tab" }
+)
 
 /** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
 const SETTLE_MS = 5000
@@ -304,16 +323,54 @@ export function usePanelControl(input: { open: () => boolean }) {
    * `read` mode.
    */
   const runPage = async (cmd: PageCommand, ack: string) => {
-    const reply = (r: { result?: string; error?: string }) => post({ ...untrack(snapshot), ack, ...r })
-    // This chat's own page: an agent in one chat never reads or drives another chat's.
-    const nb = params.id ? platform.nativeBrowser?.(params.id) : undefined
-    if (!nb || !nativeBrowserEnabled(globalThis.localStorage, true)) {
+    const chat = params.id
+    // Every answer carries this chat's tabs, so the agent always knows which one the person sees.
+    const reply = (r: { result?: string; error?: string }) =>
+      post({ ...untrack(snapshot), ack, ...(chat ? { browserTabs: describeTabs(chat) } : {}), ...r })
+    // This chat's own pages: an agent in one chat never reads or drives another chat's.
+    if (!chat || !platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) {
       return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
     }
+    const noSuchTab = (t?: string) =>
+      `there is no tab "${t}" in this chat. Its tabs: ${describeTabs(chat)
+        .map((x) => `${x.n} ${x.label ?? x.title ?? "New tab"}${x.active ? " (showing)" : ""}`)
+        .join(", ")}`
+    if (cmd.op === "tabs") return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+    if (cmd.op === "close-tab") {
+      const id = resolveTab(chat, cmd.tab)
+      if (!id || !cmd.tab) return reply({ error: cmd.tab ? noSuchTab(cmd.tab) : "close-tab needs a tab" })
+      const key = pageKey(chat, id)
+      if (closeTab(chat, id) === undefined) return reply({ error: "that is this chat's only tab: it stays open" })
+      forgetTabPage(key)
+      await platform.nativeBrowser(key).close?.().catch(() => undefined)
+      return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+    }
+    const fresh = cmd.op === "open" && cmd.newTab
+    const tab = fresh ? addTab(chat, cmd.label, { show: false }) : resolveTab(chat, cmd.tab)
+    if (!tab) {
+      return reply({
+        error: fresh
+          ? `this chat already has ${MAX_TABS} tabs open: close one first ({"action":"close","tab":N}) or open in an existing tab`
+          : noSuchTab(cmd.tab),
+      })
+    }
+    const key = pageKey(chat, tab)
+    const nb = platform.nativeBrowser(key)
+    const showing = activeTab(chat) === tab
     try {
       if (cmd.op === "open") {
-        const before = (await nb.state())?.url
-        navigateWeb(cmd.url)
+        const before = fresh ? undefined : (await nb.state())?.url
+        if (fresh) {
+          // The new tab opens on this address when it first shows.
+          setPendingOpen(key, cmd.url)
+          setActiveTab(chat, tab)
+        } else if (!showing) {
+          // A tab in the background: navigate its page if it is alive, else open there when shown.
+          await nb.navigate(cmd.url).catch(() => setPendingOpen(key, cmd.url))
+          setActiveTab(chat, tab)
+        } else {
+          navigateWeb(cmd.url)
+        }
         requestIrisNav({ surface: "browser", session: params.id })
         showTab("iris")
         const landed = await waitForPage(nb, cmd.url, before)
@@ -321,6 +378,18 @@ export function usePanelControl(input: { open: () => boolean }) {
         const o = originOf(landed.url)
         if (o && (await humanCheckShowing((x) => nb.eval(x)))) noteAsked(o, "check")
         return reply({ result: JSON.stringify({ ok: true, value: landed }) })
+      }
+      // The agent never acts out of sight: a click or type in a background tab, or a picture of
+      // it, brings that tab to the front first. Reading one does not switch, unless its page was
+      // closed to make room (then showing it reopens it).
+      if (!showing) {
+        const acting = (cmd.op === "eval" && cmd.mode === "act") || cmd.op === "screenshot"
+        const alive = acting ? false : await nb.eval("true").then(() => true, () => false)
+        if (!alive) {
+          setActiveTab(chat, tab)
+          requestIrisNav({ surface: "browser", session: params.id })
+          await new Promise((r) => setTimeout(r, 900))
+        }
       }
       const s = await nb.state()
       const origin = originOf(s?.url)

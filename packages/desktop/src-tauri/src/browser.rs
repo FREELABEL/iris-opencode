@@ -32,21 +32,43 @@ use tauri::{
 pub const BROWSER_PREFIX: &str = "browser-";
 /// The hidden webview Sign in with Chrome writes through when no chat has opened its Browser yet.
 pub const SIGNIN_LABEL: &str = "browser-signin";
-/// Chats that keep a live page at once. Each is a WebKit process (~100 MB); past this the chat
-/// used longest ago is closed, and reopens on the address it was on.
-const MAX_LIVE: usize = 4;
+/// Pages kept live at once, across every chat and tab. Each is a WebKit process (~100 MB); past
+/// this the page used longest ago is closed, and reopens on the address it was on.
+const MAX_LIVE: usize = 8;
 
-/// A chat id → its Browser's label. Ids are the engine's ("ses_…"): letters, digits, _ and -.
+/// A page key → its Browser's label. A chat's first tab is the chat id ("ses_…": letters, digits,
+/// _ and -); its other tabs are "<chat id>:<tab>" (#193328), the tab a short [a-z0-9] id.
 pub fn label_for(chat: &str) -> Result<String, String> {
-    let ok = !chat.is_empty()
-        && chat.len() <= 64
-        && chat != "signin"
-        && chat.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    let id_ok = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    };
+    let ok = match chat.split_once(':') {
+        Some((c, t)) => {
+            id_ok(c, 64) && c != "signin" && !t.is_empty() && t.len() <= 8 && t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        }
+        None => id_ok(chat, 64) && chat != "signin",
+    };
     if !ok {
         return Err(format!("not a chat id: {chat}"));
     }
     Ok(format!("{BROWSER_PREFIX}{chat}"))
 }
+
+/// Whether a link that asks for a new window is a sign-in pop-up, which stays in its own tab: the
+/// sign-in finishes by coming back to the page that opened it (Google Sign in, 2026-11-11).
+pub fn opens_in_same_tab(url: &Url) -> bool {
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    const SIGN_IN_HOSTS: [&str; 6] =
+        ["accounts.google.com", "appleid.apple.com", "login.microsoftonline.com", "login.live.com", "auth0.com", "okta.com"];
+    if SIGN_IN_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+        return true;
+    }
+    let path = url.path().to_ascii_lowercase();
+    ["/oauth", "/authorize", "/signin", "/sign-in", "/login", "/sso", "/dialog/oauth"].iter().any(|p| path.contains(p))
+}
+
+/// The event the app hears when a page asks for a new window: it opens a tab (#193328).
+pub const NEW_TAB_EVENT: &str = "iris-browser://new-tab";
 
 /// Which live pages to close so that `keep` fits under `max`: never `keep`; pages no chat has used
 /// first, then the least recently used (`recent` is newest first).
@@ -59,6 +81,12 @@ pub fn to_close(live: &[String], recent: &[String], keep: &str, max: usize) -> V
     // oldest first: unknown (usize::MAX) before the oldest known
     others.sort_by_key(|l| std::cmp::Reverse(recent.iter().position(|r| r == *l).unwrap_or(usize::MAX)));
     others.iter().take(others.len() - fits).map(|l| l.to_string()).collect()
+}
+
+#[derive(Clone, serde::Serialize)]
+struct NewTab {
+    chat: String,
+    url: String,
 }
 
 /// The event the app listens to for the browser's address, title and loading state.
@@ -295,8 +323,10 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
                 emit_state(&title_app, &title_label, &url, Some(title), false);
             }
         })
-        // target=_blank / window.open: open in the same tab (tabs are S2). Never a new webview
-        // window: that window would carry no gate of its own.
+        // target=_blank / window.open: a new TAB in the same chat (#193328), opened by the app so
+        // it carries the same gates; a sign-in pop-up stays in this tab. Never a new webview
+        // window: that window would carry no gate of its own. If the app does not open a tab (it
+        // is full, or an older app), it navigates this page instead (browser_navigate).
         //
         // The navigate is posted from another thread so it runs AFTER this handler returns.
         // WebKit calls this from inside its own click handling, on the main thread, and Tauri
@@ -306,6 +336,13 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
         // it also runs at once.
         .on_new_window(move |url, _features| {
             if navigation_allowed(&url, crate::engine_port_hint()) {
+                if !opens_in_same_tab(&url) {
+                    let chat = win_label.trim_start_matches(BROWSER_PREFIX).to_string();
+                    if chat != "signin" {
+                        let _ = win_app.emit_to("main", NEW_TAB_EVENT, NewTab { chat, url: url.to_string() });
+                        return NewWindowResponse::Deny;
+                    }
+                }
                 if let Some(w) = win_app.get_webview(&win_label) {
                     std::thread::spawn(move || {
                         let _ = w.navigate(url);
@@ -427,6 +464,22 @@ pub fn browser_navigate(app: AppHandle, chat: String, url: String) -> Result<Str
     Ok(target.to_string())
 }
 
+/// Close a tab's page for good (#193328): the person closed the tab, or the agent did. Forgets
+/// where it was, so the key opens blank if it is ever used again.
+#[tauri::command]
+pub fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
+    let label = label_for(&chat)?;
+    with_tabs(|t| {
+        t.urls.remove(&label);
+        t.titles.remove(&label);
+        t.recent.retain(|l| l != &label);
+    });
+    match app.get_webview(&label) {
+        Some(w) => w.close().map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
 /// back | forward | reload. History lives in the page, so back/forward are the page's own.
 #[tauri::command]
 pub fn browser_go(app: AppHandle, chat: String, action: String) -> Result<(), String> {
@@ -512,8 +565,38 @@ mod tests {
     fn every_chat_has_its_own_page_and_a_chat_id_is_checked() {
         assert_eq!(label_for("ses_1a2B-c").unwrap(), "browser-ses_1a2B-c");
         assert_ne!(label_for("ses_a").unwrap(), label_for("ses_b").unwrap());
-        for bad in ["", "signin", "../x", "a b", "ses:1", &"x".repeat(65)] {
+        for bad in ["", "signin", "../x", "a b", "ses:", "ses:A", "ses:a-b", "ses:123456789", ":t2", "signin:t2", "a:b:c", &"x".repeat(65)] {
             assert!(label_for(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_chats_other_tabs_are_their_own_pages() {
+        assert_eq!(label_for("ses_1a2B-c:t2").unwrap(), "browser-ses_1a2B-c:t2");
+        assert_ne!(label_for("ses_a").unwrap(), label_for("ses_a:t2").unwrap());
+        assert_ne!(label_for("ses_a:t2").unwrap(), label_for("ses_b:t2").unwrap());
+        // still never an app webview
+        assert!(!ipc_allowed(&label_for("ses_a:t2").unwrap()));
+    }
+
+    #[test]
+    fn sign_in_pop_ups_stay_in_their_tab_other_new_windows_get_a_tab() {
+        for same in [
+            "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+            "https://appleid.apple.com/auth/authorize",
+            "https://login.microsoftonline.com/common/oauth2",
+            "https://www.facebook.com/v18.0/dialog/oauth?client_id=1",
+            "https://example.com/login?next=/",
+            "https://shop.example/oauth/start",
+        ] {
+            assert!(opens_in_same_tab(&u(same)), "{same}");
+        }
+        for tab in [
+            "https://www.google.com/maps/dir/Austin/Phoenix",
+            "https://www.hertz.com/rentacar/reservation/",
+            "https://docs.example.com/itinerary.pdf",
+        ] {
+            assert!(!opens_in_same_tab(&u(tab)), "{tab}");
         }
     }
 

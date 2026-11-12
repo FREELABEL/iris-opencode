@@ -16,7 +16,7 @@ import { needsSystemBrowser,
   webUrl,
 } from "./web-nav"
 import { GithubPrView } from "./github-pr-view"
-import { NativeWebTab } from "./native-web-tab"
+import { NativeBrowserTabs } from "./native-browser-tabs"
 import { nativeBrowserEnabled } from "./native-browser-model"
 import { isGithubPrUrl } from "./github-pr-model"
 import "./session-web-tab.css"
@@ -56,15 +56,17 @@ export function SessionWebTab() {
   const native = platform.nativeBrowser
   const params = useSessionParams()
   if (native && nativeBrowserEnabled(globalThis.localStorage, true)) {
-    // Each chat its own page (2026-11-11: one page shared by every chat meant changing it in one
-    // changed it in all). Switching chats remounts the tab on that chat's page.
+    // Each chat its own tabs (2026-11-11: one page shared by every chat meant changing it in one
+    // changed it in all; #193328: several pages per chat). Switching chats remounts on that chat's.
     return (
       <Show when={params.id ?? "new"} keyed>
         {(chat) => (
-          <NativeWebTab
-            browser={native(chat)}
+          <NativeBrowserTabs
+            chat={chat}
+            native={native}
             zoom={() => platform.webviewZoom?.() ?? 1}
             openExternal={(u) => platform.openExternal(u)}
+            onNewTab={platform.onBrowserNewTab}
           />
         )}
       </Show>

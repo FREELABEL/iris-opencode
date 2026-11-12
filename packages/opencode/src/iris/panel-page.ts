@@ -57,6 +57,11 @@ export class PanelPage extends ScriptedPage {
    * on them, it never goes ahead without it), and how often it looks. */
   allowWaitMs = 5 * 60_000
   allowPollMs = 1_500
+  /** Which of the chat's tabs the next commands are for (#193328): number, id or label.
+   * Undefined: the one the person is looking at. Set by the tool per call. */
+  tab?: string
+  /** The chat's tabs as the desktop last described them; undefined from an older desktop. */
+  tabs?: Panel.BrowserTab[]
 
   constructor(
     private readonly send: PanelSend,
@@ -72,6 +77,7 @@ export class PanelPage extends ScriptedPage {
     const command: Panel.Command = {
       action: "page",
       op: "eval",
+      ...(this.tab ? { tab: this.tab } : {}),
       script: expression,
       mode: this.mode,
       ...(confirm ? { confirm } : {}),
@@ -90,6 +96,7 @@ export class PanelPage extends ScriptedPage {
     const until = Date.now() + this.allowWaitMs
     for (;;) {
       const o = await this.send(command, timeoutMs)
+      if (o.state?.browserTabs) this.tabs = o.state.browserTabs
       try {
         return unpackPageAnswer(o, this.explainSilence)
       } catch (err) {
@@ -106,11 +113,37 @@ export class PanelPage extends ScriptedPage {
   }
 
   /** Navigate the pane. The person sees it happen; the app waits for the page to load. */
-  async open(url: string): Promise<{ url: string; title: string; status: string }> {
-    const o = await this.send({ action: "page", op: "open", url }, 25_000)
+  async open(url: string, opts: { newTab?: boolean; label?: string } = {}): Promise<{ url: string; title: string; status: string }> {
+    const command: Panel.Command = {
+      action: "page",
+      op: "open",
+      url,
+      ...(this.tab && !opts.newTab ? { tab: this.tab } : {}),
+      ...(opts.newTab ? { newTab: true, ...(opts.label ? { label: opts.label } : {}) } : {}),
+    }
+    const o = await this.send(command, 25_000)
+    if (o.state?.browserTabs) this.tabs = o.state.browserTabs
     const v = (unpackPageAnswer(o, this.explainSilence) ?? {}) as { url?: string; title?: string }
     this.currentUrl = v.url ?? url
+    // The new tab is the one showing now: later calls without a tab mean it.
+    if (opts.newTab) this.tab = undefined
     return { url: this.currentUrl, title: v.title ?? "", status: "ok" }
+  }
+
+  /** The chat's tabs, changing nothing (#193328). */
+  async listTabs(): Promise<Panel.BrowserTab[]> {
+    const o = await this.send({ action: "page", op: "tabs" }, PAGE_TIMEOUT_MS)
+    const v = unpackPageAnswer(o, this.explainSilence) as Panel.BrowserTab[]
+    this.tabs = Array.isArray(v) ? v : this.tabs
+    return this.tabs ?? []
+  }
+
+  /** Close one of the chat's tabs (never its last). */
+  async closeTab(tab: string): Promise<Panel.BrowserTab[]> {
+    const o = await this.send({ action: "page", op: "close-tab", tab }, PAGE_TIMEOUT_MS)
+    const v = unpackPageAnswer(o, this.explainSilence) as Panel.BrowserTab[]
+    this.tabs = Array.isArray(v) ? v : this.tabs
+    return this.tabs ?? []
   }
 
   private async acting<T>(ref: number, doing: string, fn: () => Promise<T>): Promise<T> {
@@ -145,7 +178,7 @@ export class PanelPage extends ScriptedPage {
 
   /** A JPEG of what the person sees in the pane (macOS for now). Same Allow as reading. */
   async screenshot(): Promise<Uint8Array> {
-    const b64 = await this.sendWaiting({ action: "page", op: "screenshot" }, 20_000)
+    const b64 = await this.sendWaiting({ action: "page", op: "screenshot", ...(this.tab ? { tab: this.tab } : {}) }, 20_000)
     if (typeof b64 !== "string" || !b64) throw new Error("the Browser sent no picture")
     return new Uint8Array(Buffer.from(b64, "base64"))
   }

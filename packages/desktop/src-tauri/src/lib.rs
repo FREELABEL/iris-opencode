@@ -150,6 +150,7 @@ fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
             browser::browser_show,
             browser::browser_bounds,
             browser::browser_hide,
+            browser::browser_close,
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_state,

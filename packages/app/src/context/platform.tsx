@@ -41,6 +41,8 @@ export type NativeBrowser = {
   show(url: string | undefined, bounds: NativeBrowserBounds): Promise<void>
   bounds(bounds: NativeBrowserBounds): Promise<void>
   hide(): Promise<void>
+  /** Close this tab's page for good (#193328). Absent on an older desktop. */
+  close?(): Promise<void>
   navigate(url: string): Promise<string>
   go(action: "back" | "forward" | "reload"): Promise<void>
   state(): Promise<NativeBrowserState | null>
@@ -68,6 +70,8 @@ type PlatformBase = {
   /** Desktop only: the native Browser. Absent on the web build, which keeps the iframe. */
   /** One page per chat: the Browser of chat `chat` (a session id, or "new" before it has one). */
   nativeBrowser?: (chat: string) => NativeBrowser
+  /** A page in the Browser asked for a new window: `chat` is that page's key (#193328). */
+  onBrowserNewTab?(handler: (e: { chat: string; url: string }) => void): () => void
 
   /** App version */
   version?: string

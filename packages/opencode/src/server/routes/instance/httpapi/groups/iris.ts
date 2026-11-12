@@ -2158,6 +2158,21 @@ export const PanelStatePayload = Schema.Struct({
   result: Schema.optional(
     described(Schema.String, "A page command's answer (#193145): the JSON envelope {ok,value|error}. Handed to the waiting call only, never stored."),
   ),
+  browserTabs: Schema.optional(
+    described(
+      Schema.Array(
+        Schema.Struct({
+          n: Schema.Finite,
+          id: Schema.String,
+          label: Schema.optional(Schema.String),
+          title: Schema.optional(Schema.String),
+          url: Schema.optional(Schema.String),
+          active: Schema.Boolean,
+        }),
+      ),
+      "The chat's Browser tabs (#193328), sent with page answers: which one the person is looking at.",
+    ),
+  ),
 }).annotate({ identifier: "IrisPanelState" })
 const PanelReport = Schema.Struct({
   ...PanelStatePayload.fields,

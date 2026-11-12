@@ -18,7 +18,11 @@ TWO BROWSERS (target). Leave target out unless you have a reason: in IRIS Deskto
   · Without open, panel reads the page they already have. close leaves their page open.
 
 Actions:
-- open: url. Navigates and returns where it landed and the page title. One page at a time; opening again replaces it.
+- open: url. Navigates and returns where it landed and the page title. Opening again replaces the page in that tab.
+  · TABS (Browser pane): a chat can keep up to 6 pages side by side. new_tab: true with a short label opens the address in a new tab and shows it: {"action":"open","url":"https://www.hertz.com","new_tab":true,"label":"Car rental"}. Use a new tab when the person will want to come back to what is open (the booking stays while you open the map); otherwise reuse the tab.
+  · Every other action takes tab (its number or label) to work in that tab; without it, it works in the tab the person is looking at. Reading another tab leaves the person where they are; a click, type or screenshot there brings that tab to the front first, so they always see what you do.
+  · When there is more than one tab, every answer ends with the list ("tabs: 1 Car rental · 2 Map ← the person is looking at this one"). tabs lists them; close with tab closes one (never the last). A link that opens a new window opens a new tab (sign-in pop-ups stay in their tab).
+  · Your own browser (target agent) has one page; tabs are the pane's.
 - read: returns the page text, cut to a budget. If it says truncated, the rest is still there — use find.
 - find: query. Searches the WHOLE page and returns the matching lines with their line numbers and neighbours. A row inside a table comes back with its HEADER row, so you can tell which column is which. On a long page use this FIRST; it is the difference between answering and guessing.
 - window: line (and optional radius, default 5). Reads the lines around a line number that find gave you. Use this to see more around a hit instead of re-reading the page with a bigger budget.

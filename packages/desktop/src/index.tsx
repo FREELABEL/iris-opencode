@@ -72,6 +72,7 @@ const platform: Platform = {
     show: (url, bounds) => invoke("browser_show", { chat, url: url ?? null, bounds }),
     bounds: (bounds) => invoke("browser_bounds", { chat, bounds }),
     hide: () => invoke("browser_hide", { chat }),
+    close: () => invoke("browser_close", { chat }),
     navigate: (url) => invoke<string>("browser_navigate", { chat, url }),
     go: (action) => invoke("browser_go", { chat, action }),
     state: () => invoke("browser_state", { chat }),
@@ -91,6 +92,18 @@ const platform: Platform = {
       }
     },
   }),
+  // A page asked for a new window (target=_blank, window.open): the app opens a tab (#193328).
+  onBrowserNewTab(handler) {
+    let off: (() => void) | undefined
+    let gone = false
+    void listen<{ chat: string; url: string }>("iris-browser://new-tab", (e) => handler(e.payload)).then((u) =>
+      gone ? u() : (off = u),
+    )
+    return () => {
+      gone = true
+      off?.()
+    }
+  },
 
   async openDirectoryPickerDialog(opts) {
     const result = await open({
