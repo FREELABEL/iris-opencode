@@ -281,7 +281,7 @@ describe("iris drives get", () => {
     const { d, audit } = deps()
     const out = fresh()
     const r = await runGet({ ref: "Studio:Shoots/brief.pdf", to: out, why: "x" }, { ...d, hashFile: (p) => (p.startsWith(out) ? "bad" : sha256File(p)) })
-    expect(r.code).toBe(1)
+    expect(r.code).toBe(5) // its own exit code since #193362
     expect(r.err.join("\n")).toMatch(/did not match/)
     expect(fs.readdirSync(out)).toEqual([])
     expect(audit).toEqual([])

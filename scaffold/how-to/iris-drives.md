@@ -36,7 +36,7 @@ Product page: [heyiris.io/p/drives](https://heyiris.io/p/drives) · Guided playb
 | `iris drives find <words>` | Which drive has this file? | No |
 | `iris drives copies <words>` | How many identical copies of this file exist, and where? | No |
 | `iris drives path <drive>:<path>` | Where is that file on this computer right now? | Yes, here |
-| `iris drives get <drive>:<path>` | Copy one file off the drive, with a recorded reason | Yes, here |
+| `iris drives get <drive>:<path>` | Copy one file off the drive, with a recorded reason | Yes: here, or at another of your machines |
 
 Every command has examples in its own help: `iris drives scan --help`, `iris drives get --help`.
 
@@ -257,8 +257,8 @@ Copied Acme/brief.pdf from Client projects → /Users/you/Desktop/brief.pdf
 **What it means:** the copy was checked against the original, and a row was added to the **Drive
 reads** list on your Drives board: who read it, from which computer, when, why, and its fingerprint.
 
-- The drive has to be plugged into this computer; if it is not, `get` says so and exits with code 2,
-  like `path`.
+- If the drive is not plugged into this computer, `get` looks for it on your other machines (next
+  step). If no machine has it, `get` exits with code 2, like `path`.
 - `--why` is required. Without it: `--why is required: say why you are reading this file`.
 - If the copy does not match the original, the copy is deleted and nothing is recorded. If the
   record cannot be saved, the copy is deleted too.
@@ -279,6 +279,52 @@ reads** list on your Drives board: who read it, from which computer, when, why, 
 - `get` never overwrites: if the file already exists in `--to`, pick another folder.
 - `get` never unlocks an encrypted drive. Unlock it the usual way first (Finder, BitLocker,
   VeraCrypt), then run `get`.
+
+## Step 5d: Get a file from a drive plugged in at another of your machines
+
+Away from home, with the drive plugged into the computer there? Run the same command. `get` finds
+the machine that has the drive and has it send you the one file:
+
+```bash
+iris drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "finish the mixdown"
+```
+
+```
+Copied Stems/kick.wav from Studio on studio-mac → /Users/you/Desktop/kick.wav
+  4 MB · sha256 9be1f07c55d3a2e1… verified end to end · sent machine to machine over your Hive (Tailscale) · recorded in your Drives board (Drive reads)
+```
+
+**What happens:**
+
+1. The checks that need no drive run on this computer first: `--why`, private folders, and
+   `--confirm` for a sensitive file. If one fails, no other machine is contacted.
+2. IRIS asks the machine the drive was last seen on, then your other machines that are online. A
+   cataloged folder lives on one machine, so only that machine is asked. To choose the machine
+   yourself, add `--from <machine>` (names as in `iris hive nodes list`).
+3. That machine checks right now that the drive is plugged in and the file is still there, and runs
+   the same checks again before it reads anything.
+4. The file is copied straight from that machine to this one over ssh on Tailscale. It does not
+   go through IRIS servers. Its sha256 is checked against the original when it arrives.
+5. One row goes into **Drive reads**: who read it, **Read on** (this computer), `served_by` (the
+   machine with the drive), why, when, and the fingerprint.
+
+**What you need:** both machines signed in to the same IRIS account and in your Hive, Tailscale on
+both, and ssh login from this computer to the other one (the same setup as `iris hive fs`; on a Mac,
+turn on Remote Login). The other machine needs an IRIS version that includes this feature
+(`iris update` there).
+
+**For scripts and agents:** add `--json` for one result object (`ok`, `code`, `error`, `dest`,
+`served_by`, and the `read` record).
+
+**When it does not work:**
+
+| Exit code | Meaning | What to do |
+|---|---|---|
+| 2 | No machine has the drive plugged in. The message names where it was last seen. | Plug it in there, or pass `--from` |
+| 3 | The machine has the drive, but the file moved or was deleted since the last scan | Scan the drive again, then `find` it |
+| 4 | The machine with the drive is not answering (off, asleep, or not on Tailscale) | Wake it, then try again |
+| 5 | The copy that arrived did not match the original. It was deleted and nothing was recorded. | Try again |
+| 1 | Refused (private folder, sensitive file without `--confirm`), or IRIS on the other machine needs updating | Read the message |
 
 ## Step 6: Encrypt a drive that holds sensitive files
 
