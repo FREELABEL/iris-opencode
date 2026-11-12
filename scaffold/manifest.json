@@ -33,6 +33,12 @@
       "purpose": "NDAs, BAAs, multi-party signing, and gating access on an executed agreement. Distinct from payment-gate-contracts, which sells rather than gates."
     },
     {
+      "src": "how-to/move-a-mixxx-rig.md",
+      "dest": "how-to/move-a-mixxx-rig.md",
+      "managed": true,
+      "purpose": "Move a Mixxx DJ rig (controller mappings + audio routing) between Macs via `iris app-config` or by hand with Atlas files, the mixxx-rig dataset and atlas pull/push."
+    },
+    {
       "src": "how-to/atlas-datasets.md",
       "dest": "how-to/atlas-datasets.md",
       "managed": true,
