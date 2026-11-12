@@ -17,6 +17,8 @@ export type IrisNavRequest = {
   bloqId?: number
   /** Atlas: open this card once the board is on screen — a notification about it, clicked (#189799). */
   itemId?: number
+  /** Atlas › Schemas: open this dataset (schema slug) on its Records tab once the list has it. */
+  schema?: string
   /**
    * The chat whose panel this is for (#191484). With chats side by side, every panel read this
    * one signal and all of them followed an agent's "show Hive". Unset — a titlebar pill, a card —
@@ -131,6 +133,11 @@ export const setIrisPanelView = setPanelView
 const [openCard, setOpenCard] = createSignal<{ id: number; bloq?: number } | undefined>()
 export const irisOpenCard = openCard
 export const setIrisOpenCard = setOpenCard
+
+/** Atlas › Schemas: the dataset whose Records are on screen, and its board. Written by SessionIrisTab. */
+const [openDataset, setOpenDataset] = createSignal<{ slug: string; bloq?: number } | undefined>()
+export const irisOpenDataset = openDataset
+export const setIrisOpenDataset = setOpenDataset
 
 const [openArtifact, setOpenArtifact] = createSignal<string | undefined>()
 export const irisOpenArtifact = openArtifact

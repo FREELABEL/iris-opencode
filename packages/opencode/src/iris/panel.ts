@@ -49,6 +49,8 @@ export namespace Panel {
     browser?: boolean
     /** Atlas: the card open in the card editor, and the board it is on (#191507). */
     card?: { id: number; bloq?: number }
+    /** Atlas › Schemas: the dataset open on its Records tab, by schema slug, and its board. */
+    dataset?: { slug: string; bloq?: number }
     /** What the desktop can show: product id → its sub-view ids. Lets callers validate. */
     catalog?: { id: string; label: string; hint?: string; subs: { id: string; label: string; hint?: string }[] }[]
     /** The command this report answers, if any. */
@@ -74,6 +76,8 @@ export namespace Panel {
     | { action: "browse"; url: string }
     /** Atlas on this board with this card open — the app's ?project=<bloq>&row=<list>&card=<item> (#191507). */
     | { action: "card"; bloq: number; item: number; list?: number }
+    /** Atlas › Schemas on this board with this dataset's Records open — its rows, not its fields. */
+    | { action: "dataset"; bloq: number; schema: string }
     /** Change nothing; answer with what is on screen now. A live `state` (#191506). */
     | { action: "report" }
     /**
@@ -190,6 +194,10 @@ export namespace Panel {
       if (!id(cmd.bloq)) return `card needs bloq: the board id (the ?project= in an Atlas link)`
       if (!id(cmd.item)) return `card needs item: the card id (the ?card= in an Atlas link)`
       if (cmd.list !== undefined && !id(cmd.list)) return `card list must be a list id (the ?row= in an Atlas link)`
+    }
+    if (cmd.action === "dataset") {
+      if (!(typeof cmd.bloq === "number" && Number.isInteger(cmd.bloq) && cmd.bloq > 0)) return `dataset needs bloq: the board id`
+      if (!/^[A-Za-z0-9_-]{1,120}$/.test(cmd.schema ?? "")) return `dataset needs schema: the dataset's slug (e.g. rental-candidates)`
     }
     if (cmd.action === "show" && catalog?.length) {
       const s = catalog.find((x) => x.id === cmd.surface || x.label.toLowerCase() === cmd.surface.toLowerCase())
@@ -332,6 +340,7 @@ export namespace Panel {
     if (s.artifact) lines.push(`artifact selected: ${s.artifact}`)
     if (s.url) lines.push(`browser: ${s.url}`)
     if (s.card) lines.push(`card open: #${s.card.id}${s.card.bloq ? ` on board #${s.card.bloq}` : ""}`)
+    if (s.dataset) lines.push(`dataset open: ${s.dataset.slug} (records)${s.dataset.bloq ? ` on board #${s.dataset.bloq}` : ""}`)
     if (s.error) lines.push(`desktop said: ${s.error}`)
     return lines.join("\n")
   }

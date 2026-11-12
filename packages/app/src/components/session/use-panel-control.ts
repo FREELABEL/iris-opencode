@@ -3,7 +3,7 @@ import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { focusArtifact, irisOpenArtifact, irisOpenCard, irisPanelView, requestIrisNav } from "./iris-nav"
+import { focusArtifact, irisOpenArtifact, irisOpenCard, irisOpenDataset, irisPanelView, requestIrisNav } from "./iris-nav"
 import { nativeBrowserEnabled } from "./native-browser-model"
 import {
   browserGrants,
@@ -48,6 +48,7 @@ type Command =
   | { action: "tab"; tab: string }
   | { action: "browse"; url: string }
   | { action: "card"; bloq: number; item: number; list?: number }
+  | { action: "dataset"; bloq: number; schema: string }
   | { action: "report" }
   | PageCommand
 
@@ -116,6 +117,7 @@ export function usePanelControl(input: { open: () => boolean }) {
       artifact: irisOpenArtifact(),
       url: webUrl() ?? undefined,
       card: irisOpenCard(),
+      dataset: irisOpenDataset(),
       // The Browser pane can take the agent's page commands (#193145): the engine's browser tool
       // defaults to it instead of a hidden Chrome when this is true.
       browser: !!platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true),
@@ -198,6 +200,11 @@ export function usePanelControl(input: { open: () => boolean }) {
         requestIrisNav({ surface: "atlas", sub: "lists", bloqId: cmd.bloq, itemId: cmd.item, session: params.id })
         showTab("iris")
         return
+      case "dataset":
+        // The board, the Schemas view, then the dataset on its Records tab — its rows, not its fields.
+        requestIrisNav({ surface: "atlas", sub: "schemas", bloqId: cmd.bloq, schema: cmd.schema, session: params.id })
+        showTab("iris")
+        return
       case "report":
         return
     }
@@ -230,6 +237,13 @@ export function usePanelControl(input: { open: () => boolean }) {
         if (s.tab !== "iris" || s.surface !== "atlas") return "Atlas did not open"
         if (s.bloq?.id !== cmd.bloq) return `the board is #${s.bloq?.id ?? "?"}, not #${cmd.bloq}`
         return s.card?.id === cmd.item ? undefined : `card ${cmd.item} did not open on board #${cmd.bloq}`
+      case "dataset":
+        if (!s.open) return "the panel did not open (the window may be too narrow for it)"
+        if (s.tab !== "iris" || s.surface !== "atlas" || s.sub !== "schemas") return "Atlas › Schemas did not open"
+        if (s.bloq?.id !== cmd.bloq) return `the board is #${s.bloq?.id ?? "?"}, not #${cmd.bloq}`
+        return s.dataset?.slug === cmd.schema
+          ? undefined
+          : `dataset ${cmd.schema} is not open — it may not be on board #${cmd.bloq}'s first page of schemas`
       case "report":
         return undefined
     }

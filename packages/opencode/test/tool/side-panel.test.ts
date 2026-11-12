@@ -81,6 +81,8 @@ function fakeDesktop(session: string) {
     if (command.action === "artifact") Object.assign(s, { surface: "pages", sub: "artifacts", artifact: command.id })
     if (command.action === "card")
       Object.assign(s, { surface: "atlas", sub: "lists", bloq: { id: command.bloq }, card: { id: command.item, bloq: command.bloq } })
+    if (command.action === "dataset")
+      Object.assign(s, { surface: "atlas", sub: "schemas", bloq: { id: command.bloq }, dataset: { slug: command.schema, bloq: command.bloq } })
     if (command.action === "report") Object.assign(s, { tab: "context" })
     queueMicrotask(() => Panel.report(s))
   }
@@ -239,6 +241,33 @@ describe("side_panel tool — live state, honest timeouts, cards", () => {
       } finally {
         desk.stop()
       }
+    }),
+  )
+
+  it.instance("dataset opens Atlas › Schemas on the board with that dataset's records (#193285)", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog })
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "dataset", bloq: 544, schema: "rental-candidates" }, ctxFor(s.id))
+        expect(desk.seen[0].payload.properties.command).toEqual({ action: "dataset", bloq: 544, schema: "rental-candidates" })
+        expect(r.metadata.answered).toBe(true)
+        expect(r.output).toContain("dataset open: rental-candidates (records) on board #544")
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("dataset without a schema, or with a slug that is not one, is an error", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      expect((yield* run({ action: "dataset", bloq: 544 }, ctxFor(s.id)).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(Panel.refuse({ action: "dataset", bloq: 544, schema: "a b/../c" }, undefined)).toContain("schema")
+      expect(Panel.refuse({ action: "dataset", bloq: 0, schema: "rental-candidates" }, undefined)).toContain("bloq")
     }),
   )
 

@@ -68,7 +68,7 @@ import {
   visibleNavItems,
   type NavLayout,
 } from "./iris-nav-layout"
-import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard, setIrisOpenDataset } from "./iris-nav"
 import {
   heldPayload,
   holdPayload,
@@ -955,10 +955,10 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
     { id: "json", label: "JSON" },
   ],
   schemas: [
-    { id: "info", label: "Info" },
-    // The database table. This is the one that turns a schema from a description of data into
-    // the data.
+    // The database table, FIRST: it turns a schema from a description of data into the data, and
+    // a dataset opened is a dataset someone wants to see (#193285). Fields are one tab away.
     { id: "records", label: "Records" },
+    { id: "info", label: "Info" },
     { id: "json", label: "JSON" },
   ],
   pages: [
@@ -2934,12 +2934,32 @@ export function SessionIrisTab() {
   createEffect(on([pane, () => activeBloq()], () => setAgentEditor(null), { defer: true }))
   const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
 
-  // A record always opens on Info. Carrying the previous record's tab over lands you on
-  // "Records" for a page that has none, which renders as a broken detail rather than a choice.
+  // A record opens on its FIRST tab: Records for a dataset (#193285), Info for everything else.
+  // Carrying the previous record's tab over lands you on "Records" for a page that has none,
+  // which renders as a broken detail rather than a choice.
   createEffect(() => {
-    openRow()
-    setDetailTab("info")
+    const r = openRow()
+    setDetailTab(detailTabsFor(r?.pane ?? "")[0]?.id ?? "info")
   })
+
+  // A dataset asked for by the agent (side_panel action=dataset), opened once the Schemas list has it.
+  const [wantDataset, setWantDataset] = createSignal<string | undefined>()
+  createEffect(() => {
+    const slug = wantDataset()
+    if (!slug || pane() !== "schemas") return
+    const row = rows().find((r) => r?.slug === slug)
+    if (!row) return
+    setWantDataset(undefined)
+    setOpenRow(describeRow("schemas", row))
+  })
+
+  // Tell the agent which dataset's Records are on screen, so it says what the person sees.
+  createEffect(() => {
+    const r = openRow()
+    const slug = r?.pane === "schemas" && detailTab() === "records" ? r.raw?.slug : undefined
+    setIrisOpenDataset(slug ? { slug: String(slug), bloq: activeBloq() } : undefined)
+  })
+  onCleanup(() => setIrisOpenDataset(undefined))
 
   /**
    * The records table for the open schema.
@@ -3304,6 +3324,7 @@ export function SessionIrisTab() {
         const id = req.itemId
         queueMicrotask(() => openCard(id))
       }
+      if (req.schema) setWantDataset(req.schema)
     })
     clearIrisNav()
   })
