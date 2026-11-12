@@ -2119,6 +2119,7 @@ export const IrisPaths = {
   pagePin: `${root}/page-pin`,
   campaignBoards: `${root}/campaigns/boards`,
   campaignSetup: `${root}/campaigns/setup`,
+  marketingPins: `${root}/marketing/pins`,
   marketingBrand: `${root}/marketing/brand`,
   marketingLanding: `${root}/marketing/landing-page`,
   panel: `${root}/panel`,
@@ -2203,6 +2204,14 @@ const MarketingMakeResult = Schema.Struct({
   slug: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
 })
+
+// Desktop › Marketing's pins on the ACCOUNT (#193357): fl-api /api/v1/me/settings/marketing.pins.
+const MarketingPinsValue = Schema.Struct({
+  pins: Schema.Array(
+    Schema.Struct({ slug: Schema.String, label: Schema.String, signIn: Schema.optional(Schema.Boolean) }).annotate({ identifier: "IrisMarketingPin" }),
+  ),
+  selected: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisMarketingPinsValue" })
 
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
@@ -3739,6 +3748,43 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.marketingLanding",
           summary: "Make a draft landing page on a board",
           description: "#193233. Desktop › Marketing › + › Landing page: iris-api POST /api/v1/pages, owned by the board, draft (the CLI's `iris pages create --template landing`). A taken slug is retried once with a suffix.",
+        }),
+      ),
+      HttpApiEndpoint.get("marketingPins", IrisPaths.marketingPins, {
+        success: described(
+          Schema.Struct({
+            measured: Schema.Boolean,
+            available: described(Schema.Boolean, "False while fl-api has no account settings yet; the panel then keeps its localStorage pins."),
+            reason: Schema.optional(Schema.String),
+            value: Schema.optional(MarketingPinsValue),
+            version: Schema.optional(described(Schema.Finite, "0 = never saved on the account.")),
+          }).annotate({ identifier: "IrisMarketingPinsRead" }),
+          "The account's Marketing pins",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.marketingPins",
+          summary: "The account's Marketing pins",
+          description: "#193357. fl-api GET /api/v1/me/settings/marketing.pins — the same pins `iris marketing pins` reads, on every machine.",
+        }),
+      ),
+      HttpApiEndpoint.put("marketingPinsSave", IrisPaths.marketingPins, {
+        payload: Schema.Struct({ value: MarketingPinsValue, version: described(Schema.Finite, "The version read; 0 if none.") }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            conflict: Schema.optional(described(Schema.Boolean, "Saved elsewhere since it was read; value/version are the server's current.")),
+            reason: Schema.optional(Schema.String),
+            value: Schema.optional(MarketingPinsValue),
+            version: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisMarketingPinsWrite" }),
+          "The pins as saved, or why not",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.marketingPinsSave",
+          summary: "Save the account's Marketing pins",
+          description: "#193357. fl-api PUT /api/v1/me/settings/marketing.pins with the version read; a stale version comes back as conflict with the current value.",
         }),
       ),
       HttpApiEndpoint.get("panel", IrisPaths.panel, {

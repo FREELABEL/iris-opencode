@@ -9,6 +9,7 @@ import {
   openPin,
   parsePins,
   PIN_MAX,
+  pinsSource,
   pinsKey,
   removePin,
   renamePin,
@@ -29,7 +30,9 @@ import "./iris-marketing.css"
  * open tab's menu renames, moves and unpins it. The page itself is the pinned-page frame (#192480),
  * signed in where the page needs it (#192482).
  *
- * Storage: see iris-marketing-pins.ts — per account, in this machine's localStorage.
+ * Storage: on the ACCOUNT (#193357, fl-api account settings via /iris/marketing/pins), shared with
+ * `iris marketing pins` and every machine; this machine's localStorage is the cache, and the only
+ * store while the server can't hold pins. See pinsSource in iris-marketing-pins.ts.
  */
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
@@ -109,14 +112,76 @@ export function IrisMarketing(props: {
     return a.at === "in" ? pinsKey(a.id) : null
   })
   const [state, setState] = createSignal<MarketingPins>(EMPTY_PINS)
-  createEffect(on(key, (k) => setState(read(k))))
-  const save = (next: MarketingPins) => {
-    setState(next)
-    const k = key()
+  const writeLocal = (k: string | null, v: MarketingPins) => {
     if (!k) return
     try {
-      localStorage.setItem(k, serializePins(next))
+      localStorage.setItem(k, serializePins(v))
     } catch {}
+  }
+
+  // #193357: the pins live on the ACCOUNT when the server can hold them (fl-api account settings,
+  // through /iris/marketing/pins) — the same pins `iris marketing pins` and every other machine see.
+  // localStorage stays as this machine's cache, and is the only store while the server can't.
+  // `serverVersion` null = not on the server (yet); saves then stay local, exactly as before.
+  let serverVersion: number | null = null
+  let pushTimer: ReturnType<typeof setTimeout> | undefined
+  let pushing: Promise<void> = Promise.resolve()
+  onCleanup(() => clearTimeout(pushTimer))
+  const pushNow = async () => {
+    const k = key()
+    if (serverVersion === null || !k) return
+    const r = (await props
+      .doFetch("/iris/marketing/pins", {
+        method: "PUT",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ value: state(), version: serverVersion }),
+      })
+      .then((x) => x.json())
+      .catch(() => null)) as { ok?: boolean; conflict?: boolean; value?: unknown; version?: number } | null
+    if (key() !== k) return
+    if (r?.ok && typeof r.version === "number") serverVersion = r.version
+    else if (r?.conflict && r.value && typeof r.version === "number") {
+      // Saved from another machine since we read it: show what is really saved there.
+      serverVersion = r.version
+      const cur = parsePins(JSON.stringify(r.value))
+      setState(cur)
+      writeLocal(k, cur)
+    }
+  }
+  // Coalesce bursts (a rename, then a move) and send one at a time, always the latest pins with the latest version.
+  const push = () => {
+    clearTimeout(pushTimer)
+    pushTimer = setTimeout(() => (pushing = pushing.then(pushNow)), 300)
+  }
+
+  createEffect(
+    on(key, (k) => {
+      const local = read(k)
+      setState(local)
+      serverVersion = null
+      if (!k) return
+      void props
+        .doFetch("/iris/marketing/pins", { headers: { Accept: "application/json" } })
+        .then((x) => x.json() as Promise<{ available?: boolean; value?: unknown; version?: number }>)
+        .then((srv) => {
+          if (key() !== k) return
+          const src = pinsSource(
+            { available: srv?.available === true, value: srv?.value as MarketingPins | undefined, version: srv?.version },
+            local,
+          )
+          if (!src.onServer) return
+          serverVersion = srv.version ?? 0
+          setState(src.use)
+          writeLocal(k, src.use)
+          if (src.copyUp) push()
+        })
+        .catch(() => {})
+    }),
+  )
+  const save = (next: MarketingPins) => {
+    setState(next)
+    writeLocal(key(), next)
+    push()
   }
 
   const [picking, setPicking] = createSignal(false)
