@@ -2151,6 +2151,7 @@ export const PanelStatePayload = Schema.Struct({
   browser: Schema.optional(Schema.Boolean),
   url: Schema.optional(Schema.String),
   card: Schema.optional(Schema.Struct({ id: Schema.Finite, bloq: Schema.optional(Schema.Finite) })),
+  dataset: Schema.optional(Schema.Struct({ slug: Schema.String, bloq: Schema.optional(Schema.Finite) })),
   catalog: Schema.optional(PanelCatalog),
   ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
   error: Schema.optional(Schema.String),

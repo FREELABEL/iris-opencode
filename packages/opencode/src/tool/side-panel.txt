@@ -12,6 +12,7 @@ Actions:
 - show: surface (product id or label, e.g. "atlas", "Genesis", "agents", "integrations"), optional sub (view id or label, e.g. "schemas", "heartbeats", "add"), optional bloq (board id).
 - artifact: id — Genesis › Artifacts with that genesis_artifact selected.
 - card: bloq (board id) and item (card id), optional list — Atlas on that board with that card open, the same as the app's link https://heyiris.io/atlas?project=<bloq>&row=<list>&card=<item>. Use this to show a card you just saved; sub only takes view ids.
+- dataset: bloq (board id) and schema (the dataset's slug) — Atlas › Schemas with that dataset open on its Records tab: its ROWS, the table the person asked to see. Use this, not show sub=schemas, when the user asks to see a dataset, its records or its rows: show sub=schemas only lists the schemas and their fields.
 - tab: tab = "review" (Files & changes) or "context".
 - browse: url — an http(s) address in the panel's Browser tab.
 

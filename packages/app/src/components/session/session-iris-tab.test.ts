@@ -140,11 +140,18 @@ describe("a held payload from another pane", () => {
 })
 
 describe("detailTabsFor", () => {
-  test("info is always present and always first", () => {
+  test("info is always present, and first everywhere but a dataset", () => {
     // A detail that opens on a tab with nothing in it reads as broken.
-    for (const pane of ["schemas", "pages", "agents", "leads", "hive", "nonsense"]) {
+    for (const pane of ["pages", "agents", "leads", "hive", "nonsense"]) {
       expect(detailTabsFor(pane)[0].id).toBe("info")
     }
+    for (const pane of ["schemas", "pages", "agents", "leads", "hive", "nonsense"]) {
+      expect(detailTabsFor(pane).map((t) => t.id)).toContain("info")
+    }
+  })
+
+  test("a dataset opens on its records, not its fields (#193285)", () => {
+    expect(detailTabsFor("schemas")[0].id).toBe("records")
   })
 
   test("a schema offers its records and a page offers its preview", () => {

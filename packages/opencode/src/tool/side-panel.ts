@@ -18,12 +18,15 @@ import type { SessionID } from "../session/schema"
  * says "it's showing Atlas › Schemas" because the panel said so — never because it asked.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "tab", "browse"]).annotate({
+  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "dataset", "tab", "browse"]).annotate({
     description: "What to do",
   }),
   surface: Schema.optional(Schema.String).annotate({ description: "show: product id or label (atlas, Genesis, agents, …)" }),
   sub: Schema.optional(Schema.String).annotate({ description: "show: view id or label within the product (lists, schemas, …)" }),
-  bloq: Schema.optional(Schema.Number).annotate({ description: "show: board id to switch the panel to. card: the card's board (?project=)" }),
+  bloq: Schema.optional(Schema.Number).annotate({
+    description: "show: board id to switch the panel to. card: the card's board (?project=). dataset: the dataset's board",
+  }),
+  schema: Schema.optional(Schema.String).annotate({ description: "dataset: the dataset's schema slug (e.g. rental-candidates)" }),
   item: Schema.optional(Schema.Number).annotate({ description: "card: the Atlas card id to open (?card=)" }),
   list: Schema.optional(Schema.Number).annotate({ description: "card: optional list id the card is in (?row=)" }),
   id: Schema.optional(Schema.String).annotate({ description: "artifact: the genesis_artifact id" }),
@@ -72,6 +75,9 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
           if (p.bloq === undefined || p.item === undefined)
             return "card needs bloq (the board, ?project=) and item (the card, ?card=)"
           return { action: "card", bloq: p.bloq, item: p.item, ...(p.list !== undefined ? { list: p.list } : {}) }
+        case "dataset":
+          if (p.bloq === undefined || !p.schema) return "dataset needs bloq (the board) and schema (the dataset's slug)"
+          return { action: "dataset", bloq: p.bloq, schema: p.schema }
         case "tab":
           if (!p.tab) return "tab needs tab: review or context"
           return { action: "tab", tab: p.tab }
