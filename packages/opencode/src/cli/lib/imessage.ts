@@ -745,3 +745,93 @@ export function listAttachments(
     })
     .filter((a): a is Attachment => a !== null)
 }
+
+// ── Send confirmation (#193288) ──
+
+/**
+ * What chat.db says about a message we just handed to Messages.
+ *
+ * `osascript … send` returning without error only means Messages ACCEPTED the command. It says
+ * nothing about whether the message went out: an unregistered handle, a signed-out account or a
+ * network failure all return cleanly and leave a red "Not Delivered" row — or no row at all. The
+ * CLI used to print "Sent" on that return alone (#193288). These are the only honest outcomes:
+ */
+export type SendConfirmation =
+  | { state: "sent"; rowid: string; delivered: boolean }
+  | { state: "failed"; rowid: string; error: number }
+  | { state: "pending"; rowid: string }
+  | { state: "missing" }
+  | { state: "unknown"; reason: string }
+
+export interface OutgoingRow {
+  rowid: string
+  text: string
+  is_sent: boolean
+  is_delivered: boolean
+  error: number
+}
+
+/** Pure: decide from the candidate rows. Exported for tests. */
+export function classifyOutgoing(rows: OutgoingRow[], text: string): SendConfirmation | null {
+  const want = text.replace(/\s+/g, " ").trim()
+  // Prefer an exact text match; a row with unreadable text (attributedBody only) still counts,
+  // since it is from us, to this handle, inside the window.
+  const row = rows.find((r) => r.text.replace(/\s+/g, " ").trim() === want) ?? rows.find((r) => !r.text)
+  if (!row) return null
+  if (row.error !== 0) return { state: "failed", rowid: row.rowid, error: row.error }
+  if (row.is_sent || row.is_delivered) return { state: "sent", rowid: row.rowid, delivered: row.is_delivered }
+  return { state: "pending", rowid: row.rowid }
+}
+
+function outgoingRows(handle: string, sinceUnixSeconds: number): OutgoingRow[] {
+  const esc = (s: string) => s.replace(/'/g, "''")
+  const digits = handle.includes("@") ? "" : handle.replace(/\D/g, "")
+  const handleMatch = digits.length >= 7
+    ? `(h.id LIKE '%${digits.slice(-10)}' OR c.chat_identifier LIKE '%${digits.slice(-10)}')`
+    : `(lower(h.id) = lower('${esc(handle)}') OR lower(c.chat_identifier) = lower('${esc(handle)}'))`
+  const sql = `SELECT m.rowid, COALESCE(REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' '), ''),
+      COALESCE(m.is_sent, 0), COALESCE(m.is_delivered, 0), COALESCE(m.error, 0)
+    FROM message m
+    JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+    JOIN chat c ON cmj.chat_id = c.rowid
+    LEFT JOIN handle h ON m.handle_id = h.rowid
+    WHERE m.is_from_me = 1
+      AND m.date/1000000000 + 978307200 >= ${Math.floor(sinceUnixSeconds) - 5}
+      AND ${handleMatch}
+    ORDER BY m.date DESC LIMIT 10;`.replace(/\n/g, " ")
+  const raw = query(sql)
+  if (!raw) return []
+  return raw.split("\n").map((line) => {
+    const [rowid, text, isSent, isDelivered, error] = line.split("|")
+    return { rowid, text: text ?? "", is_sent: isSent === "1", is_delivered: isDelivered === "1", error: Number(error) || 0 }
+  })
+}
+
+/**
+ * Poll chat.db until Messages records the outgoing message as sent or failed, or time runs out.
+ * A row that appears but is neither sent nor failed by the deadline is "pending" — NOT sent.
+ */
+export async function confirmOutgoing(
+  handle: string,
+  text: string,
+  sinceUnixSeconds: number,
+  opts: { timeoutMs?: number; intervalMs?: number; canRead?: () => boolean } = {},
+): Promise<SendConfirmation> {
+  const timeoutMs = opts.timeoutMs ?? 15000
+  const intervalMs = opts.intervalMs ?? 500
+  const canRead = opts.canRead ?? (() => queryOverride !== null || isAvailable())
+  if (!canRead()) return { state: "unknown", reason: "chat.db is not readable (Full Disk Access not granted)" }
+
+  const deadline = Date.now() + timeoutMs
+  let last: SendConfirmation | null = null
+  while (true) {
+    try {
+      last = classifyOutgoing(outgoingRows(handle, sinceUnixSeconds), text)
+    } catch (err: any) {
+      return { state: "unknown", reason: String(err?.message ?? err) }
+    }
+    if (last && last.state !== "pending") return last
+    if (Date.now() >= deadline) return last ?? { state: "missing" }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+}
