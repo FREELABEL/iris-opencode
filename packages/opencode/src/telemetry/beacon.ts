@@ -28,7 +28,30 @@ export namespace Beacon {
    * Usage events (#186171) — what gets used, for product analytics. Names only: at most the
    * command word rides along. The server forwards these to Mixpanel; the app holds no token.
    */
-  export type UsageType = "app_open" | "playbook_run" | "sign_in"
+  export type UsageType =
+    | "app_open"
+    | "playbook_run"
+    | "sign_in"
+    // `iris drives` (#193356). Counts, sizes and enums only — see cli/cmd/drives-telemetry.ts.
+    | "drives_scan"
+    | "drives_find"
+    | "drives_path"
+    | "drives_list"
+    | "drives_copies"
+    | "drives_get"
+    | "drives_usage"
+
+  /**
+   * What a usage event may carry beyond its name. `context` holds numbers, booleans and
+   * enum words ONLY — never a path, label, file name or anything a person typed. Callers
+   * sanitise before calling (drives: drivesUsageContext); the server strips again.
+   */
+  export interface Usage {
+    command?: string
+    outcome?: Outcome
+    duration_ms?: number
+    context?: Record<string, number | boolean | string>
+  }
 
   export interface Event {
     message?: string
@@ -258,10 +281,18 @@ export namespace Beacon {
   }
 
   /** Queue one usage event. Same buffer, same exit flush, same opt-outs as spans. */
-  export function usage(type: UsageType, event: { command?: string } = {}): void {
+  export function usage(type: UsageType, event: Usage = {}): void {
     if (disabled()) return
     try {
-      buffer.push({ source: source(), event_type: type, severity: "info", command: clip(event.command, 128) })
+      buffer.push({
+        source: source(),
+        event_type: type,
+        severity: "info",
+        command: clip(event.command, 128),
+        outcome: event.outcome,
+        duration_ms: event.duration_ms,
+        context: event.context,
+      })
       if (!flushTimer) {
         flushTimer = setTimeout(() => void flush(), 2000)
         ;(flushTimer as { unref?: () => void }).unref?.()
