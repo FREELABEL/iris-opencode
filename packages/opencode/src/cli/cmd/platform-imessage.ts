@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle, confirmOutgoing } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
 import { routerSend, describeSend } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
@@ -383,7 +383,7 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage (routed through the comms router so it is logged)",
+  describe: "send an iMessage (routed through the comms router so it is logged). Exit 0 = confirmed sent, 1 = not sent, 2 = handed to Messages but not confirmed",
   builder: (yargs) =>
     yargs
       .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
@@ -394,9 +394,7 @@ const ImessageSendCommand = cmd({
     prompts.intro(`◈  iMessage Send → ${args.handle}`)
 
     if (process.platform !== "darwin") {
-      prompts.log.error("iMessage is only available on macOS")
-      prompts.outro("Done")
-      return
+      return notSent("iMessage is only available on macOS")
     }
 
     // Resolve handle: could be phone, lead ID, contact name, or "me"/"self"
@@ -406,13 +404,11 @@ const ImessageSendCommand = cmd({
     if (isSelfAlias(handle)) {
       const self = resolveSelfHandle(args.phone ? "phone" : "email")
       if (!self) {
-        prompts.log.error(
+        return notSent(
           "Couldn't resolve your own handle. Set it with:\n" +
             "  iris imessage me --set-email you@icloud.com\n" +
             "  iris imessage me --set-phone +15551234567",
         )
-        prompts.outro("Done")
-        return
       }
       prompts.log.info(`Resolved "${args.handle}" → you (${self})`)
       handle = self
@@ -453,14 +449,10 @@ const ImessageSendCommand = cmd({
               resolvedLeadId = Number(lead.id ?? handle)
               handle = lead.phone
             } else {
-              prompts.log.error(`Lead #${handle} has no phone number`)
-              prompts.outro("Done")
-              return
+              return notSent(`Lead #${handle} has no phone number`)
             }
           } else {
-            prompts.log.error(`Lead #${handle} not found`)
-            prompts.outro("Done")
-            return
+            return notSent(`Lead #${handle} not found`)
           }
         } else {
           // Search by name
@@ -475,13 +467,17 @@ const ImessageSendCommand = cmd({
               resolvedLeadId = Number(withPhone.id) || undefined
               handle = withPhone.phone
             } else {
-              prompts.log.error(`No lead with phone found for "${handle}"`)
-              prompts.outro("Done")
-              return
+              return notSent(`No lead with phone found for "${handle}"`)
             }
           }
         }
       } catch {}
+    }
+
+    // Still a bare name (no contact, no lead, CRM unreachable)? Messages would be told to send to
+    // a participant literally called e.g. "Mom" — which it accepts and never delivers (#193288).
+    if (!handle.includes("@") && handle.replace(/\D/g, "").length < 7) {
+      return notSent(`Couldn't resolve "${args.handle}" to a phone number or email — nothing was sent`)
     }
 
     // Normalize phone — prepend +1 if 10 digits
@@ -533,23 +529,61 @@ tell application "Messages"
 end tell`
 
     const sp = prompts.spinner()
-    sp.start(`Sending to ${handle}…`)
+    sp.start(`Handing to Messages for ${handle}…`)
+    const startedAt = Date.now() / 1000
 
     try {
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
         encoding: "utf-8",
         timeout: 15000,
+        stdio: ["ignore", "pipe", "pipe"],
       })
-      sp.stop(success(`Sent to ${handle}`))
-      console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
-      prompts.outro("Done")
     } catch (err: any) {
       sp.stop("Failed", 1)
-      prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
-      prompts.outro("Done")
+      const why = String(err?.stderr || err?.message || "").split("\n").find((l: string) => l.trim()) ?? "unknown error"
+      return notSent(`Messages rejected the send: ${why.slice(0, 200)}`)
+    }
+
+    // #193288: osascript returning only means Messages ACCEPTED the command. Read chat.db and
+    // only say "Sent" when Messages itself marks the outgoing row sent.
+    sp.message?.(`Confirming in Messages…`)
+    const c = await confirmOutgoing(handle, cleanMessage, startedAt)
+    const preview = dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)
+    switch (c.state) {
+      case "sent":
+        sp.stop(success(`Sent to ${handle}${c.delivered ? " — delivered" : ""} (confirmed in Messages)`))
+        console.log(`  ${preview}`)
+        prompts.outro("Done")
+        return
+      case "failed":
+        sp.stop("Failed", 1)
+        return notSent(`Messages marked the message to ${handle} as NOT DELIVERED (error ${c.error}). Check the conversation in Messages.`)
+      case "pending":
+        sp.stop("Not confirmed", 1)
+        return notConfirmed(`The message to ${handle} is in Messages but still not sent after 15s — it may be stuck. Check the conversation before retrying.`)
+      case "missing":
+        sp.stop("Failed", 1)
+        return notSent(`Messages accepted the command but no message to ${handle} appeared in the conversation — it was NOT sent. Is ${handle} reachable on iMessage, and is Messages signed in?`)
+      case "unknown":
+        sp.stop("Not confirmed", 1)
+        return notConfirmed(`Handed to Messages for ${handle}, but delivery could NOT be confirmed: ${c.reason}. Check the conversation before telling anyone it was sent.`)
     }
   },
 })
+
+/** #193288: a send that did not happen exits 1 — never 0 with a "Sent"-shaped message. */
+function notSent(message: string): void {
+  prompts.log.error(message)
+  process.exitCode = 1
+  prompts.outro("Done") // renders as "Failed (exit 1)"
+}
+
+/** Handed off but unverified: exit 2, so a script or agent cannot read it as success. */
+function notConfirmed(message: string): void {
+  prompts.log.warn(message)
+  process.exitCode = 2
+  prompts.outro("Done")
+}
 
 const ImessageContactsCommand = cmd({
   command: "contacts",
