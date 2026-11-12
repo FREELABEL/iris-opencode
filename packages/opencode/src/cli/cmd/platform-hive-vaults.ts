@@ -88,9 +88,11 @@ function hidden(question: string): Promise<string> {
 
 export async function readPassphrase(confirm: boolean, fromStdin: boolean): Promise<string> {
   if (fromStdin) {
-    const chunks: Buffer[] = []
-    for await (const c of process.stdin) chunks.push(c as Buffer)
-    return Buffer.concat(chunks).toString("utf8").split("\n")[0]
+    // Bun.stdin, not `for await (process.stdin)`: once anything has touched process.stdin (an
+    // isTTY check does), Bun's stream reads a redirected FILE as empty, and a passphrase vault
+    // then said "needs its passphrase" to `--passphrase-stdin < pass.txt` (#192912).
+    const text = await Bun.stdin.text()
+    return text.split("\n")[0].replace(/\r$/, "")
   }
   const p = await hidden("Vault passphrase: ")
   if (confirm && (await hidden("Again: ")) !== p) throw new Error("passphrases did not match")
