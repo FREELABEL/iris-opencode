@@ -45,6 +45,12 @@ iris app-config apply mixxx --bloq 569 --dry-run   # what would change, and whic
 iris app-config apply mixxx --bloq 569             # asks before quitting Mixxx; --quit-app to skip
 ```
 
+Or run it as a playbook. The playbook checks the Mac first, has a person approve before anything
+is written to the board or Mixxx is quit, and checks `mixxx.log` afterwards:
+`iris playbook run mixxx-rig --action apply --bloq 569`. It pauses at each approval; continue
+with `iris playbook resume <runId>`. Other actions are `preflight`, `export`, `export-remote`
+(`--node <hive node>`) and `verify`.
+
 Apply installs the mappings and checks their sha256. It takes a backup first. It merges only the
 controller lines into mixxx.cfg, and only for a controller that is plugged in. Each audio route
 gets *this* Mac's index for its device. Then it restarts Mixxx and reads `mixxx.log` until the

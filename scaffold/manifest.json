@@ -537,6 +537,12 @@
       "purpose": "Runnable SOP for the Hive + Tailscale secure mesh — onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
     },
     {
+      "src": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "dest": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Runnable SOP for moving a Mixxx DJ rig (#193298): preflight (profile, CoreMIDI ports, CoreAudio devices) → a person approves → `iris app-config export|apply mixxx --bloq <id>` → verify from mixxx.log (controller opened, engine and audio stream started, no controller-script errors). Companion to the move-a-mixxx-rig how-to, which shows the by-hand Atlas commands."
+    },
+    {
       "src": "how-to/article-evals.md",
       "dest": "how-to/article-evals.md",
       "managed": true,
