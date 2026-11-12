@@ -5,13 +5,15 @@
  */
 
 import { execFileSync } from "child_process"
-import { mkdtempSync, readFileSync, rmSync, statSync } from "fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs"
+import { createInterface } from "readline/promises"
 import os from "os"
 import { join } from "path"
 import { cmd } from "./cmd"
-import { bold, dim, requireAuth, requireUserId, success, writeJson } from "./iris-api"
+import { bold, dim, isNonInteractive, requireAuth, requireUserId, success, writeJson } from "./iris-api"
 import {
   applyBundle,
+  EXIT_PROBLEMS,
   EXIT_REFUSED,
   exportBundle,
   parseBundle,
@@ -22,10 +24,12 @@ import {
   type Dropped,
   type Host,
 } from "./app-config-engine"
+import { mixxxAdapter } from "./app-config-mixxx"
+import { coreAudioDevices, coreMidiDevices, mixxxRuntime } from "./app-config-mixxx-runtime"
 import { obsAdapter } from "./app-config-obs"
 import { listBloqFiles, uploadFileVerified } from "./platform-atlas-files"
 
-const ADAPTERS: Record<string, AppConfigAdapter> = { obs: obsAdapter }
+const ADAPTERS: Record<string, AppConfigAdapter> = { obs: obsAdapter, mixxx: { ...mixxxAdapter, runtime: mixxxRuntime } }
 const BUNDLE_SUFFIX = ".iris-config.json"
 
 function listProcesses(): string[] | null {
@@ -48,6 +52,8 @@ function realHost(): Host {
     home: os.homedir(),
     env: process.env,
     processNames: listProcesses,
+    midiDevices: coreMidiDevices,
+    audioDevices: coreAudioDevices,
   }
 }
 
@@ -72,7 +78,7 @@ function printDropped(dropped: Dropped[]): void {
     for (const d of secrets) console.log(`    ${d.file}: ${d.path}`)
   }
   if (machine.length) {
-    console.log(`  ${bold("Machine-bound fields dropped")} ${dim("(this machine's own values or OBS defaults apply)")}`)
+    console.log(`  ${bold("Machine-bound fields dropped")} ${dim("(this machine's own values or the app's defaults apply)")}`)
     for (const d of machine) console.log(`    ${d.file}: ${d.path}`)
   }
   if (other.length) {
@@ -86,8 +92,9 @@ const ExportCmd = cmd({
   describe: "save an app's setup to a file or bloq, with secrets and machine-bound fields removed",
   builder: (y) =>
     y
-      .positional("app", { type: "string", demandOption: true, describe: "app to export (obs)" })
+      .positional("app", { type: "string", demandOption: true, describe: "app to export (obs, mixxx)" })
       .option("to", { type: "string", describe: "bloq ID, or a new bundle file path (default: a new file here)" })
+      .option("bloq", { type: "number", describe: "attach the bundle to this bloq (same as --to <id>)" })
       .option("redact-secrets", { type: "boolean", describe: "remove credentials (always on unless --include-secrets)" })
       .option("include-secrets", { type: "boolean", default: false, describe: "keep credentials in the bundle; local files only" })
       .option("config-dir", { type: "string", describe: "the app's config directory, if not the default" })
@@ -99,7 +106,8 @@ const ExportCmd = cmd({
       const adapter = adapterFor(String(args.app))
       if (args.redactSecrets === false && !args.includeSecrets) return fail(args.json, "to keep credentials, ask with --include-secrets")
       if (args.redactSecrets === true && args.includeSecrets) return fail(args.json, "--redact-secrets and --include-secrets contradict each other")
-      const toBloq = args.to && /^\d+$/.test(args.to) ? Number(args.to) : null
+      if (args.bloq !== undefined && args.to !== undefined) return fail(args.json, "pass --to or --bloq, not both")
+      const toBloq = args.bloq !== undefined ? Number(args.bloq) : args.to && /^\d+$/.test(args.to) ? Number(args.to) : null
       // Bloq attachments are served from a URL and bloqs can be shared.
       if (toBloq && args.includeSecrets) return fail(args.json, "--include-secrets cannot go to a bloq; write to a local file instead", EXIT_REFUSED)
 
@@ -186,8 +194,12 @@ const ApplyCmd = cmd({
   describe: "restore my setup on this machine from a bundle or bloq — rewrites paths, backs up, then checks the result",
   builder: (y) =>
     y
-      .positional("app", { type: "string", demandOption: true, describe: "app to restore (obs)" })
-      .option("from", { type: "string", demandOption: true, describe: "bundle file, or a bloq ID (newest bundle attached)" })
+      .positional("app", { type: "string", demandOption: true, describe: "app to restore (obs, mixxx)" })
+      .option("from", { type: "string", describe: "bundle file, or a bloq ID (newest bundle attached)" })
+      .option("bloq", { type: "number", describe: "restore the newest bundle attached to this bloq (same as --from <id>)" })
+      .option("quit-app", { type: "boolean", default: false, describe: "quit the app if it is running, without asking (it rewrites its config on quit)" })
+      .option("launch", { type: "boolean", default: true, describe: "start the app afterwards and check its log (--no-launch to skip)" })
+      .option("check-timeout", { type: "number", default: 360, describe: "seconds to wait for the app's log to confirm the setup" })
       .option("force", { type: "boolean", default: false, describe: "replace an existing setup, after a backup" })
       .option("map-media", { type: "array", string: true, describe: "rewrite a path prefix: <old>=<new> (repeatable)" })
       .option("dry-run", { type: "boolean", default: false, describe: "report what would change and what is missing; write nothing" })
@@ -198,10 +210,51 @@ const ApplyCmd = cmd({
     try {
       const adapter = adapterFor(String(args.app))
       const maps = parseMapMedia(((args.mapMedia as string[] | undefined) ?? []).map(String))
-      const { bundle, origin } = await loadBundle(adapter, String(args.from), args.userId)
+      if (args.from !== undefined && args.bloq !== undefined) return fail(args.json, "pass --from or --bloq, not both")
+      const from = args.bloq !== undefined ? String(args.bloq) : args.from
+      if (!from) return fail(args.json, "say where the setup comes from: --bloq <id> or --from <bundle file | bloq id>")
+      const { bundle, origin } = await loadBundle(adapter, String(from), args.userId)
       const host = realHost()
       const configDir = args.configDir ?? adapter.defaultConfigDir(host)
-      const result = applyBundle(adapter, bundle, { configDir, host, force: !!args.force, maps, dryRun: !!args.dryRun })
+      const say = (line: string) => !args.json && console.log(`  ${dim(line)}`)
+
+      const runtime = adapter.runtime
+      if (runtime && !existsSync(configDir)) {
+        return fail(args.json, `no ${adapter.label} profile at ${configDir}. Open ${adapter.label} once so it creates one, quit it, then run this again; nothing was written.`, EXIT_REFUSED)
+      }
+      const opts = { configDir, host, force: !!args.force, maps, dryRun: !!args.dryRun }
+      let quitForApply = false
+      if (runtime && !args.dryRun) {
+        // Only an apply that will write anything is worth quitting the app for.
+        const preview = applyBundle(adapter, bundle, { ...opts, dryRun: true })
+        const names = host.processNames()
+        const running = names && adapter.runningProcess(names)
+        if (preview.written.length && running) {
+          let yes = !!args.quitApp
+          if (!yes && !args.json && !isNonInteractive()) {
+            const rl = createInterface({ input: process.stdin, output: process.stdout })
+            const answer = await rl.question(`\n  ${adapter.label} is running, and ${adapter.runningReason.charAt(0).toLowerCase()}${adapter.runningReason.slice(1)}\n  Quit ${adapter.label} now to apply ${preview.written.length} change(s)? [y/N] `)
+            rl.close()
+            yes = /^y(es)?$/i.test(answer.trim())
+          }
+          if (!yes) {
+            return fail(args.json, `${adapter.label} is running; nothing was written. Quit it, or pass --quit-app to let iris quit it.`, EXIT_REFUSED)
+          }
+          say(`Quitting ${adapter.label}…`)
+          if (!(await runtime.quit(host))) return fail(args.json, `${adapter.label} did not quit within a minute (is a dialog open?); nothing was written.`, EXIT_REFUSED)
+          quitForApply = true
+        }
+      }
+
+      const result = applyBundle(adapter, bundle, opts)
+      if (runtime && result.status === "applied" && args.launch !== false) {
+        const checked = await runtime.launchAndCheck(bundle, { configDir, host, maps }, { timeoutMs: Math.max(10, Number(args.checkTimeout)) * 1000, onProgress: say })
+        result.notes.push(...checked.notes)
+        result.problems.push(...checked.problems)
+        if (checked.problems.length) result.exitCode = EXIT_PROBLEMS
+      } else if (quitForApply && args.launch !== false) {
+        say(`${adapter.label} was quit but nothing was written; start it again yourself.`)
+      }
       process.exitCode = result.exitCode
 
       if (args.json) {
@@ -219,6 +272,11 @@ const ApplyCmd = cmd({
       const missing = result.problems.filter((p) => p.kind === "missing-path")
       const plugins = result.problems.filter((p) => p.kind === "missing-plugin")
       const readBack = result.problems.filter((p) => p.kind === "read-back")
+      const devices = result.problems.filter((p) => p.kind === "missing-device")
+      if (devices.length) {
+        console.log(`  ${bold(`${devices.length} device(s) not connected here`)}`)
+        for (const p of devices) console.log(`    ${p.message}`)
+      }
       if (missing.length) {
         console.log(`  ${bold(`${missing.length} source path(s) do not exist here`)} ${dim("(copy the media, or use --map-media <old>=<new>)")}`)
         for (const p of missing) console.log(`    ${p.message}`)
@@ -228,7 +286,10 @@ const ApplyCmd = cmd({
         for (const p of plugins) console.log(`    ${p.message}`)
       }
       for (const p of readBack) console.log(`  ${bold("READ-BACK FAILED")}  ${p.message}`)
-      if (result.status !== "refused" && result.problems.length === 0) console.log(`  ${success("✓")} read back: no source points at a missing path`)
+      for (const p of result.problems.filter((p) => p.kind === "app-check")) console.log(`  ${bold("CHECK")}  ${p.message}`)
+      if (result.status !== "refused" && result.problems.length === 0) {
+        console.log(`  ${success("✓")} read back: ${adapter.runtime ? "every file matches and every device is here" : "no source points at a missing path"}`)
+      }
       console.log()
     } catch (e: any) {
       fail(args.json, String(e?.message ?? e))
@@ -238,7 +299,7 @@ const ApplyCmd = cmd({
 
 export const PlatformAppConfigCommand = cmd({
   command: "app-config",
-  describe: "save an app's setup and restore it on a new machine (OBS profiles, scene collections)",
+  describe: "save an app's setup and restore it on a new machine (OBS profiles and scenes; Mixxx controller mappings and audio routing)",
   builder: (y) => y.command(ExportCmd).command(ApplyCmd).demandCommand(1, "specify: export, apply"),
   async handler() {},
 })

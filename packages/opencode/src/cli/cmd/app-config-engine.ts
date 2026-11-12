@@ -50,10 +50,21 @@ export interface Host {
   env: Record<string, string | undefined>
   /** Names of running processes, or null when they could not be listed. */
   processNames(): string[] | null
+  /** MIDI port names as the OS lists them (CoreMIDI on macOS), or null when they could not be listed. */
+  midiDevices?(): string[] | null
+  /** Audio devices in the OS's own order (CoreAudio on macOS), or null when they could not be listed. */
+  audioDevices?(): AudioDevice[] | null
+}
+
+/** One audio device. Its position in the list is what PortAudio calls its index on macOS. */
+export interface AudioDevice {
+  name: string
+  outputChannels: number
+  inputChannels: number
 }
 
 export interface Problem {
-  kind: "missing-path" | "missing-plugin" | "read-back"
+  kind: "missing-path" | "missing-plugin" | "missing-device" | "read-back" | "app-check"
   message: string
 }
 
@@ -88,6 +99,22 @@ export interface AppConfigAdapter {
   plan(bundle: Bundle, ctx: PlanContext): { files: Record<string, string>; dropped: Dropped[]; notes: string[] }
   /** Objective checks that do not need the app running. `read` sees the resulting bytes. */
   verify(read: (rel: string) => string | null, bundle: Bundle, ctx: PlanContext): Problem[]
+  /**
+   * For an app whose setup only proves itself once the app runs (Mixxx: does the controller
+   * open, does the audio stream start). The terminal asks before quitting and launches after.
+   */
+  runtime?: AppRuntime
+}
+
+export interface AppRuntime {
+  /** Quit the running app gracefully; true once its process is gone. */
+  quit(host: Host): Promise<boolean>
+  /** Start the app and wait until it shows the applied setup working, or the timeout passes. */
+  launchAndCheck(
+    bundle: Bundle,
+    ctx: PlanContext,
+    opts: { timeoutMs: number; onProgress?: (line: string) => void },
+  ): Promise<{ notes: string[]; problems: Problem[] }>
 }
 
 export function sha256(data: string | Uint8Array): string {
