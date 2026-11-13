@@ -856,6 +856,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} περισσότερα)",
   "common.requestFailed": "Το αίτημα απέτυχε",
   "common.moreOptions": "Περισσότερες επιλογές",
+  "session.pinned.title": "Καρφιτσωμένα μηνύματα",
+  "session.pinned.empty": "Δεν υπάρχουν καρφιτσωμένα μηνύματα",
   "common.learnMore": "Μάθετε περισσότερα",
   "common.rename": "Μετονομασία",
   "common.export": "Εξαγωγή",

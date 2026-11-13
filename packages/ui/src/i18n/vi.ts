@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Hoàn nguyên tin nhắn",
   "ui.message.copyResponse": "Sao chép phản hồi",
   "ui.message.copied": "Đã sao chép",
+  "ui.message.pin": "Ghim tin nhắn",
+  "ui.message.unpin": "Bỏ ghim tin nhắn",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Bị gián đoạn",

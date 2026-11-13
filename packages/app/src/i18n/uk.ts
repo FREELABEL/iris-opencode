@@ -934,6 +934,8 @@ export const dict = {
   "common.moreCountSuffix": " (ще {{count}})",
   "common.requestFailed": "Запит не виконано",
   "common.moreOptions": "Більше параметрів",
+  "session.pinned.title": "Закріплені повідомлення",
+  "session.pinned.empty": "Немає закріплених повідомлень",
   "common.learnMore": "Дізнатися більше",
   "common.rename": "Перейменувати",
   "common.export": "Експортувати",

@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Վերադարձնել հաղորդագրությունը",
   "ui.message.copyResponse": "Պատճենել պատասխանը",
   "ui.message.copied": "Պատճենված",
+  "ui.message.pin": "Ամրացնել հաղորդագրությունը",
+  "ui.message.unpin": "Ապամրացնել հաղորդագրությունը",
   "ui.message.duration.seconds": "{{count}} վ",
   "ui.message.duration.minutesSeconds": "{{minutes}}ր {{seconds}}վ",
   "ui.message.interrupted": "Ընդհատված",

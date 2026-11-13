@@ -220,6 +220,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Reverteix el missatge",
   "ui.message.copyResponse": "Copia la resposta",
   "ui.message.copied": "Copiat",
+  "ui.message.pin": "Fixa el missatge",
+  "ui.message.unpin": "Deixa de fixar el missatge",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Interromput",

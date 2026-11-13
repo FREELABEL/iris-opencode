@@ -846,6 +846,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} lagi)",
   "common.requestFailed": "Permintaan gagal",
   "common.moreOptions": "Pilihan lanjut",
+  "session.pinned.title": "Mesej yang disemat",
+  "session.pinned.empty": "Tiada mesej yang disemat",
   "common.learnMore": "Ketahui lebih lanjut",
   "common.rename": "Tukar nama",
   "common.export": "Eksport",

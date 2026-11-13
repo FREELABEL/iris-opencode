@@ -216,6 +216,8 @@ export const dict = {
   "ui.message.revertMessage": "မက်ဆေ့ဂျ်ကို ပြန်ပြောင်းပါ။",
   "ui.message.copyResponse": "တုံ့ပြန်မှုကို ကူးယူပါ။",
   "ui.message.copied": "ကူးယူထားသည်။",
+  "ui.message.pin": "မက်ဆေ့ချ် ပင်ထိုးရန်",
+  "ui.message.unpin": "ပင်ဖြုတ်ရန်",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "ပြတ်တောက်သွားသည်။",

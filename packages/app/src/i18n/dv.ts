@@ -860,6 +860,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} އިތުރަށް)",
   "common.requestFailed": "ރިކުއެސްޓް ފެއިލްވިއެވެ",
   "common.moreOptions": "އިތުރު އިޚްތިޔާރުތަކެކެވެ",
+  "session.pinned.title": "ޕިން ކުރެވިފައިވާ މެސެޖުތައް",
+  "session.pinned.empty": "ޕިން ކުރެވިފައިވާ މެސެޖެއް ނެތް",
   "common.learnMore": "އިތުރަށް ދަސްކުރައްވާށެވެ",
   "common.rename": "ނަން ބަދަލުކޮށްލާށެވެ",
   "common.export": "އެކްސްޕޯޓް",

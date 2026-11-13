@@ -746,6 +746,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} muuta)",
   "common.requestFailed": "Pyyntö epäonnistui",
   "common.moreOptions": "Lisää vaihtoehtoja",
+  "session.pinned.title": "Kiinnitetyt viestit",
+  "session.pinned.empty": "Ei kiinnitettyjä viestejä",
   "common.learnMore": "Lue lisää",
   "common.rename": "Nimeä uudelleen",
   "common.export": "Vie",

@@ -856,6 +856,8 @@ export const dict = {
   "common.moreCountSuffix": "(još još {{count}})",
   "common.requestFailed": "Zahtjev nije uspio",
   "common.moreOptions": "Više opcija",
+  "session.pinned.title": "Prikvačene poruke",
+  "session.pinned.empty": "Nema prikvačenih poruka",
   "common.learnMore": "Saznajte više",
   "common.rename": "Preimenovati",
   "common.export": "Izvoz",

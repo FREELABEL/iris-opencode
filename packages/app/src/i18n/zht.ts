@@ -858,6 +858,8 @@ export const dict = {
   "common.dismiss": "忽略",
   "common.requestFailed": "要求失敗",
   "common.moreOptions": "更多選項",
+  "session.pinned.title": "已釘選的訊息",
+  "session.pinned.empty": "沒有釘選的訊息",
   "common.learnMore": "深入了解",
   "common.rename": "重新命名",
   "common.export": "匯出",

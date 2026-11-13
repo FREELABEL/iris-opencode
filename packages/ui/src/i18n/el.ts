@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Επαναφορά μηνύματος",
   "ui.message.copyResponse": "Απάντηση αντιγραφής",
   "ui.message.copied": "Αντιγράφηκε",
+  "ui.message.pin": "Καρφίτσωμα μηνύματος",
+  "ui.message.unpin": "Ξεκαρφίτσωμα μηνύματος",
   "ui.message.duration.seconds": "{{count}}δ",
   "ui.message.duration.minutesSeconds": "{{minutes}}λ {{seconds}}δ",
   "ui.message.interrupted": "Διακοπή",

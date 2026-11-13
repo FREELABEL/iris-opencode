@@ -221,6 +221,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Vrati poruku",
   "ui.message.copyResponse": "Kopiraj odgovor",
   "ui.message.copied": "Kopirano",
+  "ui.message.pin": "Prikvači poruku",
+  "ui.message.unpin": "Otkvači poruku",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Prekinut",

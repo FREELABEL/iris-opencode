@@ -853,6 +853,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} ko'proq)",
   "common.requestFailed": "Soʻrov bajarilmadi",
   "common.moreOptions": "Boshqa variantlar",
+  "session.pinned.title": "Qadalgan xabarlar",
+  "session.pinned.empty": "Qadalgan xabarlar yo‘q",
   "common.learnMore": "Batafsil maʼlumot",
   "common.rename": "Nomini o'zgartirish",
   "common.export": "Eksport",

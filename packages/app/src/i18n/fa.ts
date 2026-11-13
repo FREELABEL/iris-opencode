@@ -845,6 +845,8 @@ export const dict = {
   "common.moreCountSuffix": " (+ {{count}} بیشتر)",
   "common.requestFailed": "درخواست ناموفق بود",
   "common.moreOptions": "گزینه های بیشتر",
+  "session.pinned.title": "پیام‌های سنجاق‌شده",
+  "session.pinned.empty": "پیام سنجاق‌شده‌ای نیست",
   "common.learnMore": "بیشتر بدانید",
   "common.rename": "تغییر نام دهید",
   "common.export": "صادرات",

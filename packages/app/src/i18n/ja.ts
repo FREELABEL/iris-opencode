@@ -803,6 +803,8 @@ export const dict = {
   "common.dismiss": "閉じる",
   "common.requestFailed": "リクエストに失敗しました",
   "common.moreOptions": "その他のオプション",
+  "session.pinned.title": "ピン留めしたメッセージ",
+  "session.pinned.empty": "ピン留めしたメッセージはありません",
   "common.learnMore": "詳細",
   "common.rename": "名前を変更",
   "common.export": "エクスポート",

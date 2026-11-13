@@ -850,6 +850,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} meira)",
   "common.requestFailed": "Beiðni mistókst",
   "common.moreOptions": "Fleiri valkostir",
+  "session.pinned.title": "Fest skilaboð",
+  "session.pinned.empty": "Engin fest skilaboð",
   "common.learnMore": "Lærðu meira",
   "common.rename": "Endurnefna",
   "common.export": "Útflutningur",

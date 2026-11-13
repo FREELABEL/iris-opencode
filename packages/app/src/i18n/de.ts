@@ -709,6 +709,8 @@ export const dict = {
   "common.dismiss": "Verwerfen",
   "common.requestFailed": "Anfrage fehlgeschlagen",
   "common.moreOptions": "Weitere Optionen",
+  "session.pinned.title": "Angeheftete Nachrichten",
+  "session.pinned.empty": "Keine angehefteten Nachrichten",
   "common.learnMore": "Mehr erfahren",
   "common.rename": "Umbenennen",
   "common.export": "Exportieren",

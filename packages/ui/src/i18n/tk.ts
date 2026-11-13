@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Habary yzyna öwürmek",
   "ui.message.copyResponse": "Jogap göçüriň",
   "ui.message.copied": "Göçürildi",
+  "ui.message.pin": "Habary berkit",
+  "ui.message.unpin": "Habaryň berkidilmesini aýyr",
   "ui.message.duration.seconds": "{{count}}",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Arakesdi",
