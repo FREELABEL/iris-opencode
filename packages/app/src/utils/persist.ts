@@ -116,12 +116,10 @@ function forgetWrites(key: string) {
   for (const id of lastWrite.keys()) if (id.endsWith(`\n${key}`)) lastWrite.delete(id)
 }
 
-function skipUnchangedWrites(storage: SyncStorage, scope: string): SyncStorage
-function skipUnchangedWrites(storage: AsyncStorage, scope: string): AsyncStorage
-function skipUnchangedWrites(storage: SyncStorage | AsyncStorage, scope: string) {
+function skipUnchangedWrites(storage: AsyncStorage, scope: string): AsyncStorage {
   return {
     getItem: (key: string) => storage.getItem(key),
-    setItem: (key: string, value: string) => {
+    setItem: async (key: string, value: string) => {
       const id = lastWriteId(scope, key)
       if (sameAsLastWrite(id, value)) return
       rememberWrite(id, value)
@@ -757,9 +755,9 @@ export function persisted<T>(
   const writeScope = `${draft ? "draft:" : ""}${isDesktop ? "desktop:" : ""}${config.storage ?? ""}`
   const [state, setState, init] = makePersisted(store, {
     name: config.key,
-    storage: !isDesktop && !draft
-      ? skipUnchangedWrites(storage as SyncStorage, writeScope)
-      : skipUnchangedWrites(storage as AsyncStorage, writeScope),
+    // Desktop only: there every write rewrites a whole store file. On the web a localStorage write
+    // is cheap, and a remembered write could hide a value cleared outside persist (site data).
+    storage: isDesktop ? skipUnchangedWrites(storage as AsyncStorage, writeScope) : storage,
   })
 
   const isAsync = init instanceof Promise

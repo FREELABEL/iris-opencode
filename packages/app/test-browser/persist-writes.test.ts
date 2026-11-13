@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { AsyncStorage } from "@solid-primitives/storage"
@@ -56,6 +56,11 @@ function desktopFiles() {
 }
 
 const local = new CountingStorage()
+// The real (happy-dom) localStorage, put back when this file is done so later files see theirs.
+const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+afterAll(() => {
+  if (original) Object.defineProperty(globalThis, "localStorage", original)
+})
 
 beforeAll(async () => {
   mock.module("@/context/platform", () => ({ usePlatform: () => ({ platform: "web" }) }))
@@ -71,21 +76,32 @@ beforeEach(() => {
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
 describe("persisted writes (#193410)", () => {
-  test("an unchanged value is not written again", () => {
-    createRoot((dispose) => {
-      const [, set] = mod.persisted(
+  test("desktop: an unchanged value is not written again", async () => {
+    const d = desktopFiles()
+    const desktop = { platform: "desktop", storage: d.storage } as never
+    let set!: (v: Record<string, { title: string }>) => void
+    let ready!: Promise<unknown> | undefined
+    const dispose = createRoot((dispose) => {
+      const [, s, , r] = mod.persisted(
         mod.Persist.global("catalog.test"),
         createStore<Record<string, { title: string }>>({}),
-        { platform: "web" } as never,
+        desktop,
       )
-      set({ a: { title: "A" } })
-      set({ a: { title: "A" } })
-      set({ a: { title: "A" } })
-      expect(local.sets.filter((k) => k.endsWith("catalog.test"))).toHaveLength(1)
-      set({ b: { title: "B" } })
-      expect(local.sets.filter((k) => k.endsWith("catalog.test"))).toHaveLength(2)
-      dispose()
+      set = s as never
+      ready = r.promise
+      return dispose
     })
+    await ready
+    d.sets.length = 0
+    set({ a: { title: "A" } })
+    set({ a: { title: "A" } })
+    set({ a: { title: "A" } })
+    await flush()
+    expect(d.sets.filter((k) => k.endsWith("catalog.test"))).toHaveLength(1)
+    set({ b: { title: "B" } })
+    await flush()
+    expect(d.sets.filter((k) => k.endsWith("catalog.test"))).toHaveLength(2)
+    dispose()
   })
 
   test("two persisted() of one key never skip a write the other made stale", () => {
@@ -109,6 +125,22 @@ describe("persisted writes (#193410)", () => {
       mod.removePersisted(mod.Persist.global("gone.test"), web)
       set("v", 1)
       expect(local.getItem("opencode.global.dat:gone.test")).toBe('{"v":1}')
+      dispose()
+    })
+  })
+
+  test("web: a value cleared outside persist (site data cleared) is written again", () => {
+    createRoot((dispose) => {
+      const web = { platform: "web" } as never
+      const [, set] = mod.persisted(mod.Persist.global("cleared.test"), createStore({ v: 0 }), web)
+      set("v", 1)
+      local.clear()
+      set("v", 2)
+      set("v", 1)
+      expect(local.getItem("opencode.global.dat:cleared.test")).toBe('{"v":1}')
+      local.clear()
+      set("v", 1)
+      expect(local.getItem("opencode.global.dat:cleared.test")).toBe('{"v":1}')
       dispose()
     })
   })
