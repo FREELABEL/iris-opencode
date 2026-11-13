@@ -392,9 +392,43 @@ export abstract class ScriptedPage {
         rank[a.zone] - rank[b.zone] ||
         (a.zone === 'view' ? 0 : a.zone === 'above' ? b.rect.bottom - a.rect.bottom : a.rect.top - b.rect.top))
 
+      // 3b. A strip of look-alike controls (a 148-day date bar, a seat map, page numbers) is one
+      // thing to a person: keep a few, say what the rest are, so it cannot fill the list and push
+      // the rest of the page off it (Southwest, #193443). Only when the list would overflow, and
+      // never for a query: a query is how the agent reaches one of them.
+      const collapsed = []
+      const stripOf = (el) => {
+        for (let x = el, i = 0; x && x.parentElement && i < 5; x = x.parentElement, i++) {
+          if (x.parentElement.children.length >= 12) return x.parentElement
+        }
+        return null
+      }
+      const squeeze = (list) => {
+        if (QUERY || list.length <= LIMIT) return list
+        const groups = new Map()
+        for (const f of list) {
+          const c = stripOf(f.el)
+          if (!c) continue
+          const k = roleOf(f.el)
+          if (!groups.has(c)) groups.set(c, new Map())
+          const byRole = groups.get(c)
+          if (!byRole.has(k)) byRole.set(k, [])
+          byRole.get(k).push(f)
+        }
+        const drop = new Set()
+        for (const byRole of groups.values()) for (const [role, fs] of byRole) {
+          if (fs.length <= 24) continue
+          const keep = new Set([...fs.filter((f) => f.zone === 'view'), ...fs].slice(0, 12))
+          const gone = fs.filter((f) => !keep.has(f))
+          gone.forEach((f) => drop.add(f))
+          const names = fs.map((f) => nameOf(f.el, f.label)).filter(Boolean)
+          collapsed.push({ role, count: gone.length, first: (names[0] || '').slice(0, 40), last: (names[names.length - 1] || '').slice(0, 40) })
+        }
+        return list.filter((f) => !drop.has(f))
+      }
       const matches = QUERY
         ? ordered.filter((f) => (nameOf(f.el, f.label) + ' ' + clean(f.box.innerText).slice(0, 200)).toLowerCase().includes(QUERY))
-        : ordered
+        : squeeze(ordered)
       const picked = matches.slice(0, LIMIT)
       if (INCLUDE > 0 && !picked.some((f) => f.ref === INCLUDE)) {
         const extra = found.find((f) => f.ref === INCLUDE)
@@ -493,6 +527,7 @@ export abstract class ScriptedPage {
         above: left.filter((f) => f.zone === 'above').length,
         below: left.filter((f) => f.zone !== 'above').length,
         behind: root ? behind : undefined,
+        collapsed: collapsed.length ? collapsed : undefined,
         signals: ${SIGNALS},
       }
     })()`
@@ -504,6 +539,7 @@ export abstract class ScriptedPage {
       above: number
       below: number
       behind?: number
+      collapsed?: ElementListing["collapsed"]
       signals?: PageSignals
     } | null>(js)
     this.lastListing = got
@@ -513,6 +549,7 @@ export abstract class ScriptedPage {
           above: got.above,
           below: got.below,
           behind: got.behind,
+          collapsed: got.collapsed,
           query: opts.query?.trim() || undefined,
           signals: got.signals,
         }

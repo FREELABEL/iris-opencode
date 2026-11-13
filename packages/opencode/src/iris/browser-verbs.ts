@@ -272,6 +272,8 @@ export type ElementListing = {
   below: number
   /** A blocking pop-up is open and only its controls were listed: how many are behind it. */
   behind?: number
+  /** Long strips of look-alike controls that were shortened to a few (a date bar, a seat map). */
+  collapsed?: { role: string; count: number; first: string; last: string }[]
   query?: string
   /** What the page looked like, for the bot-check test (humanCheckReason). */
   signals?: PageSignals
@@ -299,8 +301,12 @@ export function listingFooter(listed: number, l: ElementListing | null): string 
   const behind = l.behind
     ? `${l.behind} more control${l.behind === 1 ? " is" : "s are"} BEHIND the pop-up on the page. To reach them, close it first (its close or accept button, or {"action":"press","key":"Escape"}).`
     : ""
+  const strips = (l.collapsed ?? [])
+    .map((c) => `${c.count} more ${c.role}s in one strip ("${c.first}" … "${c.last}") are left out`)
+    .join("; ")
+  const squeezed = strips ? `${strips}. To reach one, ask for it by its words: {"action":"elements","query":"Dec 10"}.` : ""
   const rest = cutFooter(listed, l)
-  return [rest, behind].filter(Boolean).join(" ")
+  return [squeezed, rest, behind].filter(Boolean).join(" ")
 }
 
 function cutFooter(listed: number, l: ElementListing): string {
