@@ -193,6 +193,26 @@ struct Tabs {
 }
 static TABS: std::sync::LazyLock<std::sync::Mutex<Tabs>> = std::sync::LazyLock::new(Default::default);
 
+/// Per page: the newest bounds call applied (#193405). Each `invoke` is its own IPC request and
+/// nothing promises they land in the order sent, so a mid-resize rect could land after the
+/// final one and stay. The app numbers every placement; an older one than the newest applied is
+/// dropped. `show` always applies and resets the count: a reloaded app starts again from 1.
+static PLACED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Whether a placement numbered `seq` should apply. No number (an older app): always.
+fn admit(newest: &mut std::collections::HashMap<String, u64>, label: &str, seq: Option<u64>, show: bool) -> bool {
+    let Some(seq) = seq else { return true };
+    if !show && newest.get(label).is_some_and(|&n| seq <= n) {
+        return false;
+    }
+    newest.insert(label.to_string(), seq);
+    true
+}
+fn admit_placement(label: &str, seq: Option<u64>, show: bool) -> bool {
+    PLACED.lock().map(|mut m| admit(&mut m, label, seq, show)).unwrap_or(true)
+}
+
 fn with_tabs<T>(f: impl FnOnce(&mut Tabs) -> T) -> Option<T> {
     TABS.lock().ok().map(|mut t| f(&mut t))
 }
@@ -391,7 +411,7 @@ pub fn ensure_browser(app: &AppHandle) -> Result<Webview, String> {
 /// Show this chat's Browser over its panel, creating it on first use. Other chats' pages are
 /// left alone: a chat hides its own when it leaves (and two chats in split panes each show theirs). `url` navigates when given; a new page with no `url` reopens where this chat last was.
 #[tauri::command]
-pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: Bounds) -> Result<(), String> {
+pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
     let label = label_for(&chat)?;
     let target = match url.as_deref() {
         Some(u) => Some(address_to_url(u).ok_or_else(|| format!("not a web address: {u}"))?),
@@ -403,6 +423,7 @@ pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: B
         }
     }
     touch(&label);
+    admit_placement(&label, seq, true);
     let pos = LogicalPosition::new(bounds.x, bounds.y);
     let size = LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0));
     if let Some(w) = app.get_webview(&label) {
@@ -434,10 +455,14 @@ pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: B
     Ok(())
 }
 
-/// Follow the panel: called on resize, on a rAF, while the Browser tab is visible.
+/// Follow the panel: called on resize, on a rAF, while the Browser tab is visible. A call older
+/// than the newest applied is dropped (`admit`).
 #[tauri::command]
-pub fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds) -> Result<(), String> {
+pub fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
     let Some(w) = browser(&app, &chat)? else { return Ok(()) };
+    if !admit_placement(w.label(), seq, false) {
+        return Ok(());
+    }
     w.set_position(LogicalPosition::new(bounds.x, bounds.y)).map_err(|e| e.to_string())?;
     w.set_size(LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0))).map_err(|e| e.to_string())
 }
@@ -474,6 +499,9 @@ pub fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
         t.titles.remove(&label);
         t.recent.retain(|l| l != &label);
     });
+    if let Ok(mut m) = PLACED.lock() {
+        m.remove(&label);
+    }
     match app.get_webview(&label) {
         Some(w) => w.close().map_err(|e| e.to_string()),
         None => Ok(()),
@@ -598,6 +626,23 @@ mod tests {
         ] {
             assert!(!opens_in_same_tab(&u(tab)), "{tab}");
         }
+    }
+
+    #[test]
+    fn a_bounds_call_older_than_the_newest_applied_is_dropped() {
+        let mut m = std::collections::HashMap::new();
+        assert!(admit(&mut m, "browser-a", Some(1), true)); // show
+        assert!(admit(&mut m, "browser-a", Some(3), false));
+        assert!(!admit(&mut m, "browser-a", Some(2), false), "a mid-drag rect landing late");
+        assert!(!admit(&mut m, "browser-a", Some(3), false));
+        assert!(admit(&mut m, "browser-a", Some(4), false));
+        // pages are counted apart
+        assert!(admit(&mut m, "browser-b", Some(2), false));
+        // a reloaded app starts again from 1 with a show
+        assert!(admit(&mut m, "browser-a", Some(1), true));
+        assert!(admit(&mut m, "browser-a", Some(2), false));
+        // an older app sends no number
+        assert!(admit(&mut m, "browser-a", None, false));
     }
 
     #[test]

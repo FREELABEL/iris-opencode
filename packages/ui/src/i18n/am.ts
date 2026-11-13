@@ -214,6 +214,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "መልዕክት ቀይር",
   "ui.message.copyResponse": "መልስ ቅጂ",
   "ui.message.copied": "የተገለበጠ",
+  "ui.message.pin": "መልእክት ሰካ",
+  "ui.message.unpin": "መልእክት ንቀል",
   "ui.message.duration.seconds": "{{count}} ሰ",
   "ui.message.duration.minutesSeconds": "{{minutes}} ደ {{seconds}} ሰ",
   "ui.message.interrupted": "የተቋረጠ",

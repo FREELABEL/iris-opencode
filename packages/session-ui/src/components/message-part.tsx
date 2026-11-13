@@ -17,6 +17,7 @@ import { ToolMark } from "./tool-mark"
 import { panelStep } from "./browser-step"
 import { browserStep } from "./browser-step"
 import { readAloudAvailable, readAloudOptions, readingId, toggleReading } from "./read-aloud"
+import { messagePins, type MessagePinTarget } from "./message-pins"
 import { createStore } from "solid-js/store"
 import stripAnsi from "strip-ansi"
 import { Dynamic } from "solid-js/web"
@@ -248,7 +249,7 @@ export interface MessagePartProps {
 
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset" | "speaker" | "speaker-stop"
+    icon: "check" | "copy" | "reset" | "speaker" | "speaker-stop" | "pushpin" | "pushpin-filled"
     label: JSX.Element
     useV2?: boolean
   },
@@ -282,6 +283,33 @@ function MessageActionButton(
           aria-label={props["aria-label"]}
         />
       </TooltipV2>
+    </Show>
+  )
+}
+
+/** Pin / unpin a message (#193406). Hidden until the app configures pins. */
+function MessagePinButton(props: { target: () => MessagePinTarget; useV2?: boolean }) {
+  const i18n = useI18n()
+  const pinned = () => {
+    const t = props.target()
+    return messagePins()?.isPinned(t.sessionID, t.messageID) ?? false
+  }
+  const label = () => (pinned() ? i18n.t("ui.message.unpin") : i18n.t("ui.message.pin"))
+  return (
+    <Show when={messagePins()}>
+      {(pins) => (
+        <MessageActionButton
+          icon={pinned() ? "pushpin-filled" : "pushpin"}
+          label={label()}
+          useV2={props.useV2}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation()
+            pins().toggle(props.target())
+          }}
+          aria-label={label()}
+        />
+      )}
     </Show>
   )
 }
@@ -1467,6 +1495,18 @@ export function UserMessageDisplay(props: {
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyMessage")}
             />
           </Show>
+          <Show when={text()}>
+            <MessagePinButton
+              useV2={props.useV2Actions}
+              target={() => ({
+                sessionID: props.message.sessionID,
+                messageID: props.message.id,
+                turnID: props.message.id,
+                text: text(),
+                time: props.message.time?.created,
+              })}
+            />
+          </Show>
         </div>
       </Show>
     </div>
@@ -1837,6 +1877,17 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
                 aria-label={readingId() === part().id ? "Stop reading" : "Read aloud"}
               />
             </Show>
+            <MessagePinButton
+              useV2={props.useV2Actions}
+              target={() => ({
+                sessionID: props.message.sessionID,
+                messageID: props.message.id,
+                turnID:
+                  props.message.role === "assistant" ? (props.message as AssistantMessage).parentID : props.message.id,
+                text: text() ?? "",
+                time: props.message.time?.created,
+              })}
+            />
             <Show when={meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}

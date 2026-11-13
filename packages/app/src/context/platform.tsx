@@ -38,8 +38,9 @@ export type NativeBrowserState = { url: string; title?: string | null; loading: 
  * draw under our menus. So the app hides it whenever something must draw on top.
  */
 export type NativeBrowser = {
-  show(url: string | undefined, bounds: NativeBrowserBounds): Promise<void>
-  bounds(bounds: NativeBrowserBounds): Promise<void>
+  /** `seq` numbers placements (#193405): the native side drops one older than the newest applied. */
+  show(url: string | undefined, bounds: NativeBrowserBounds, seq?: number): Promise<void>
+  bounds(bounds: NativeBrowserBounds, seq?: number): Promise<void>
   hide(): Promise<void>
   /** Close this tab's page for good (#193328). Absent on an older desktop. */
   close?(): Promise<void>

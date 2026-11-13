@@ -221,6 +221,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Annulla messaggio",
   "ui.message.copyResponse": "Copia la risposta",
   "ui.message.copied": "Copiato",
+  "ui.message.pin": "Fissa messaggio",
+  "ui.message.unpin": "Sblocca messaggio",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Interrotto",

@@ -141,6 +141,14 @@ const icons = {
     viewBox: "0 0 16 16",
     body: `<rect x="4.5" y="4.5" width="7" height="7" rx="1.25" fill="currentColor"/>`,
   },
+  pushpin: {
+    viewBox: "0 0 16 16",
+    body: `<path d="M5.5 2.5H10.5M6.5 2.5V6.5L4.5 9.5H11.5L9.5 6.5V2.5M8 9.5V14" stroke="currentColor" stroke-linejoin="round"/>`,
+  },
+  "pushpin-filled": {
+    viewBox: "0 0 16 16",
+    body: `<path d="M6.5 2.5V6.5L4.5 9.5H11.5L9.5 6.5V2.5H6.5Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/><path d="M5.5 2.5H10.5M8 9.5V14" stroke="currentColor"/>`,
+  },
   "outline-copy": {
     viewBox: "0 0 16 16",
     body: `<path d="M4.14908 11.0081H1.76282V1.51758H9.1038V2.55588M14.2225 4.99681H6.75397V14.4873H14.2225V4.99681Z" stroke="currentColor"/>`,

@@ -566,6 +566,8 @@ export const dict = {
   "common.dismiss": "닫기",
   "common.requestFailed": "요청 실패",
   "common.moreOptions": "더 많은 옵션",
+  "session.pinned.title": "고정된 메시지",
+  "session.pinned.empty": "고정된 메시지가 없습니다",
   "common.learnMore": "더 알아보기",
   "common.rename": "이름 바꾸기",
   "common.export": "내보내기",

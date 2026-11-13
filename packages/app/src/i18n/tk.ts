@@ -847,6 +847,8 @@ export const dict = {
   "common.moreCountSuffix": " (+ {{count}} has köp)",
   "common.requestFailed": "Talap başa barmady",
   "common.moreOptions": "Has köp wariant",
+  "session.pinned.title": "Berkidilen habarlar",
+  "session.pinned.empty": "Berkidilen habar ýok",
   "common.learnMore": "Has giňişleýin öwreniň",
   "common.rename": "Adyny üýtgetmek",
   "common.export": "Eksport",

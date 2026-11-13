@@ -232,6 +232,8 @@ export const dict = {
   "ui.message.revertMessage": "Vrati na ovu poruku",
   "ui.message.copyResponse": "Kopiraj odgovor",
   "ui.message.copied": "Kopirano!",
+  "ui.message.pin": "Prikači poruku",
+  "ui.message.unpin": "Otkači poruku",
   "ui.message.interrupted": "Prekinuto",
   "ui.message.queued": "Na čekanju",
   "ui.message.attachment.alt": "prilog",

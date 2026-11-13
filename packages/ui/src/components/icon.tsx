@@ -83,6 +83,8 @@ const icons = {
   copy: `<path d="M6.2513 6.24935V2.91602H17.0846V13.7493H13.7513M13.7513 6.24935V17.0827H2.91797V6.24935H13.7513Z" stroke="currentColor" stroke-linecap="round"/>`,
   check: `<path d="M5 11.9657L8.37838 14.7529L15 5.83398" stroke="currentColor" stroke-linecap="square"/>`,
   "speaker-stop": `<rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor"/>`,
+  pushpin: `<path d="M6.9 3.1H13.1M8.1 3.1V8.1L5.6 11.9H14.4L11.9 8.1V3.1M10 11.9V17.5" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round" fill="none"/>`,
+  "pushpin-filled": `<path d="M8.1 3.1V8.1L5.6 11.9H14.4L11.9 8.1V3.1Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/><path d="M6.9 3.1H13.1M10 11.9V17.5" stroke="currentColor" stroke-linecap="square"/>`,
   photo: `<path d="M16.6665 16.6666L11.6665 11.6666L9.99984 13.3333L6.6665 9.99996L3.08317 13.5833M2.9165 2.91663H17.0832V17.0833H2.9165V2.91663ZM13.3332 7.49996C13.3332 8.30537 12.6803 8.95829 11.8748 8.95829C11.0694 8.95829 10.4165 8.30537 10.4165 7.49996C10.4165 6.69454 11.0694 6.04163 11.8748 6.04163C12.6803 6.04163 13.3332 6.69454 13.3332 7.49996Z" stroke="currentColor" stroke-linecap="square"/>`,
   share: `<path d="M10.0013 12.0846L10.0013 3.33464M13.7513 6.66797L10.0013 2.91797L6.2513 6.66797M17.0846 10.418V17.0846H2.91797V10.418" stroke="currentColor" stroke-linecap="square"/>`,
   shield: `<path d="M7.49935 9.3737L9.16602 11.0404L12.4994 7.70703M9.99935 2.08203L17.0827 4.3737V9.92565C17.0827 14.0694 13.3327 16.2487 9.99935 18.047C6.66602 16.2487 2.91602 14.0694 2.91602 9.92565V4.3737L9.99935 2.08203Z" stroke="currentColor" stroke-linecap="square"/>`,

@@ -861,6 +861,8 @@ export const dict = {
   "common.dismiss": "忽略",
   "common.requestFailed": "请求失败",
   "common.moreOptions": "更多选项",
+  "session.pinned.title": "已置顶的消息",
+  "session.pinned.empty": "没有置顶的消息",
   "common.learnMore": "了解更多",
   "common.rename": "重命名",
   "common.export": "导出",

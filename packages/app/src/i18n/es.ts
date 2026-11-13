@@ -884,6 +884,8 @@ export const dict = {
   "common.dismiss": "Descartar",
   "common.requestFailed": "Solicitud fallida",
   "common.moreOptions": "Más opciones",
+  "session.pinned.title": "Mensajes fijados",
+  "session.pinned.empty": "No hay mensajes fijados",
   "common.learnMore": "Más información",
   "common.rename": "Renombrar",
   "common.export": "Exportar",

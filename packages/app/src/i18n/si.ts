@@ -844,6 +844,8 @@ export const dict: Record<string, string> = {
   "common.moreCountSuffix": "(+{{count}} තව)",
   "common.requestFailed": "ඉල්ලීම අසාර්ථක විය",
   "common.moreOptions": "තවත් විකල්ප",
+  "session.pinned.title": "අමුණා ඇති පණිවිඩ",
+  "session.pinned.empty": "අමුණා ඇති පණිවිඩ නැත",
   "common.learnMore": "තවත් හදාරන්න",
   "common.rename": "නැවත නම් කරන්න",
   "common.export": "අපනයනය කරන්න",

@@ -854,6 +854,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} további)",
   "common.requestFailed": "A kérés sikertelen",
   "common.moreOptions": "További lehetőségek",
+  "session.pinned.title": "Kitűzött üzenetek",
+  "session.pinned.empty": "Nincsenek kitűzött üzenetek",
   "common.learnMore": "További információ",
   "common.rename": "Átnevezés",
   "common.export": "Exportálás",

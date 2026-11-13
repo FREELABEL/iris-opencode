@@ -225,6 +225,8 @@ export const dict = {
   "ui.message.revertMessage": "重設至此點",
   "ui.message.copyResponse": "複製回覆",
   "ui.message.copied": "已複製！",
+  "ui.message.pin": "釘選訊息",
+  "ui.message.unpin": "取消釘選",
   "ui.message.interrupted": "已中斷",
   "ui.message.queued": "已加入佇列",
   "ui.message.attachment.alt": "附件",

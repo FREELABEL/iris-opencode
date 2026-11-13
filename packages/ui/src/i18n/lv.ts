@@ -220,6 +220,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Atjaunot ziņu",
   "ui.message.copyResponse": "Kopēt atbildi",
   "ui.message.copied": "Nokopēts",
+  "ui.message.pin": "Piespraust ziņu",
+  "ui.message.unpin": "Atspraust ziņu",
   "ui.message.duration.seconds": "{{count}} s",
   "ui.message.duration.minutesSeconds": "{{minutes}} m {{seconds}} s",
   "ui.message.interrupted": "Pārtraukts",

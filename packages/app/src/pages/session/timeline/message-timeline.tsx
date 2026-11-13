@@ -81,6 +81,7 @@ import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
+import { type MessagePin, useMessagePins } from "@/context/message-pins"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -269,6 +270,8 @@ export function MessageTimeline(props: {
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
   setHistoryAnchor?: (handlers: { capture: () => void; restore: (done: boolean) => void }) => void
+  /** Scroll to a turn by its user message id, loading older history if needed (pinned messages). */
+  onJumpToMessage?: (userMessageID: string) => void
 }) {
   let touchGesture: number | undefined
 
@@ -290,6 +293,26 @@ export function MessageTimeline(props: {
   const initialMeasurements = cached?.measurements
   const coldBottomMount = !initialMeasurements?.length && props.shouldAnchorBottom()
   const platform = usePlatform()
+  const messagePins = useMessagePins()
+  // Today's pins show just the time; older ones add the date.
+  const pinFormats = createMemo(() => ({
+    time: new Intl.DateTimeFormat(language.intl(), { timeStyle: "short" }),
+    date: new Intl.DateTimeFormat(language.intl(), {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+  }))
+  const pinTime = (time: number) =>
+    new Date(time).toDateString() === new Date().toDateString()
+      ? pinFormats().time.format(time)
+      : pinFormats().date.format(time)
+  const pinsFor = (id: string) => messagePins.list(id)
+  const jumpToPin = (pin: MessagePin) => {
+    setTitle("menuOpen", false)
+    props.onJumpToMessage?.(pin.turn)
+  }
 
   const [listRoot, setListRoot] = createSignal<HTMLDivElement>()
   const sessionID = createMemo(() => params.id)
@@ -1594,6 +1617,38 @@ export function MessageTimeline(props: {
                                 <DropdownMenu.Item onSelect={() => exportSession(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.export")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
+                                <DropdownMenu.Sub>
+                                  <DropdownMenu.SubTrigger data-action="pinned-messages">
+                                    <DropdownMenu.ItemLabel>
+                                      {language.t("session.pinned.title")}
+                                    </DropdownMenu.ItemLabel>
+                                  </DropdownMenu.SubTrigger>
+                                  <DropdownMenu.Portal>
+                                    <DropdownMenu.SubContent class="max-w-[320px]">
+                                      <For
+                                        each={pinsFor(id)}
+                                        fallback={
+                                          <DropdownMenu.Item disabled>
+                                            <DropdownMenu.ItemLabel>
+                                              {language.t("session.pinned.empty")}
+                                            </DropdownMenu.ItemLabel>
+                                          </DropdownMenu.Item>
+                                        }
+                                      >
+                                        {(pin) => (
+                                          <DropdownMenu.Item data-pin-id={pin.id} onSelect={() => jumpToPin(pin)}>
+                                            <div class="flex flex-col min-w-0">
+                                              <span class="truncate text-12-regular text-text-strong">{pin.text}</span>
+                                              <Show when={pin.time}>
+                                                <span class="text-11-regular text-text-weak">{pinTime(pin.time)}</span>
+                                              </Show>
+                                            </div>
+                                          </DropdownMenu.Item>
+                                        )}
+                                      </For>
+                                    </DropdownMenu.SubContent>
+                                  </DropdownMenu.Portal>
+                                </DropdownMenu.Sub>
                                 <DropdownMenu.Item onSelect={() => void sessionArchive.archive(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
@@ -1682,6 +1737,31 @@ export function MessageTimeline(props: {
                               <MenuV2.Item onSelect={() => exportSession(id)}>
                                 {language.t("common.export")}...
                               </MenuV2.Item>
+                              <MenuV2.Sub gutter={0} overlap overflowPadding={8}>
+                                <MenuV2.SubTrigger data-action="pinned-messages">
+                                  {language.t("session.pinned.title")}
+                                </MenuV2.SubTrigger>
+                                <MenuV2.Portal>
+                                  <MenuV2.SubContent style={{ width: "280px", "max-width": "320px" }}>
+                                    <For
+                                      each={pinsFor(id)}
+                                      fallback={
+                                        <MenuV2.Item disabled>{language.t("session.pinned.empty")}</MenuV2.Item>
+                                      }
+                                    >
+                                      {(pin) => (
+                                        <MenuV2.Item
+                                          data-pin-id={pin.id}
+                                          shortcut={pin.time ? pinTime(pin.time) : undefined}
+                                          onSelect={() => jumpToPin(pin)}
+                                        >
+                                          <span class="block truncate min-w-0">{pin.text}</span>
+                                        </MenuV2.Item>
+                                      )}
+                                    </For>
+                                  </MenuV2.SubContent>
+                                </MenuV2.Portal>
+                              </MenuV2.Sub>
                               <MenuV2.Item onSelect={() => void sessionArchive.archive(id)}>
                                 {language.t("common.archive")}
                               </MenuV2.Item>

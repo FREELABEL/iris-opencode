@@ -2102,6 +2102,15 @@ export default function Page() {
     consumePendingMessage: layout.pendingMessage.consume,
   })
 
+  // Pinned messages (#193406): scroll to a turn; if it isn't loaded yet, the hash-scroll effect
+  // pages older history in until it is, then scrolls.
+  const jumpToMessage = (id: string) => {
+    autoScroll.pause()
+    const msg = visibleUserMessages().find((m) => m.id === id)
+    if (msg) return scrollToMessage(msg)
+    setUi("pendingMessage", id)
+  }
+
   createEffect(
     on(
       () => params.id,
@@ -2235,6 +2244,7 @@ export default function Page() {
                   setScrollToEnd={(fn) => {
                     scrollToEnd = fn
                   }}
+                  onJumpToMessage={jumpToMessage}
                 />
               )}
             </Show>

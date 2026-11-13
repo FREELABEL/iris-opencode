@@ -858,6 +858,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} مزید)",
   "common.requestFailed": "درخواست ناکام ہوگئی",
   "common.moreOptions": "مزید اختیارات",
+  "session.pinned.title": "پن کیے گئے پیغامات",
+  "session.pinned.empty": "کوئی پن کیا گیا پیغام نہیں",
   "common.learnMore": "مزید جانیں",
   "common.rename": "نام تبدیل کریں۔",
   "common.export": "برآمد کریں",

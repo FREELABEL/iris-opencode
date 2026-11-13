@@ -229,6 +229,8 @@ export const dict = {
   "ui.message.revertMessage": "Bu noktaya sıfırla",
   "ui.message.copyResponse": "Yanıtı kopyala",
   "ui.message.copied": "Kopyalandı",
+  "ui.message.pin": "Mesajı sabitle",
+  "ui.message.unpin": "Mesajın sabitlemesini kaldır",
   "ui.message.interrupted": "Kesildi",
   "ui.message.queued": "Sırada",
   "ui.message.attachment.alt": "ek",

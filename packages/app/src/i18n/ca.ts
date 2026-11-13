@@ -857,6 +857,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} més)",
   "common.requestFailed": "La sol·licitud ha fallat",
   "common.moreOptions": "Més opcions",
+  "session.pinned.title": "Missatges fixats",
+  "session.pinned.empty": "No hi ha missatges fixats",
   "common.learnMore": "Més informació",
   "common.rename": "Canvia el nom",
   "common.export": "Exporta",

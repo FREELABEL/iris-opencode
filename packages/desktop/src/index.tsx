@@ -69,8 +69,9 @@ const platform: Platform = {
   // #193062: the side panel's native Browser (src-tauri/src/browser.rs).
   // One page per chat (2026-11-11): every call names the chat whose page it is.
   nativeBrowser: (chat) => ({
-    show: (url, bounds) => invoke("browser_show", { chat, url: url ?? null, bounds }),
-    bounds: (bounds) => invoke("browser_bounds", { chat, bounds }),
+    // seq (#193405): the native side drops a placement older than the newest it applied.
+    show: (url, bounds, seq) => invoke("browser_show", { chat, url: url ?? null, bounds, seq: seq ?? null }),
+    bounds: (bounds, seq) => invoke("browser_bounds", { chat, bounds, seq: seq ?? null }),
     hide: () => invoke("browser_hide", { chat }),
     close: () => invoke("browser_close", { chat }),
     navigate: (url) => invoke<string>("browser_navigate", { chat, url }),

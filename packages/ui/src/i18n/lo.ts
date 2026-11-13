@@ -215,6 +215,8 @@ export const dict = {
   "ui.message.revertMessage": "ກັບຄືນຂໍ້ຄວາມ",
   "ui.message.copyResponse": "ສຳເນົາຄຳຕອບ",
   "ui.message.copied": "ສຳເນົາແລ້ວ",
+  "ui.message.pin": "ປັກໝຸດຂໍ້ຄວາມ",
+  "ui.message.unpin": "ຖອນໝຸດຂໍ້ຄວາມ",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "ຂັດຂວາງ",

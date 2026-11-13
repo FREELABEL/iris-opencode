@@ -857,6 +857,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} thêm)",
   "common.requestFailed": "Không thực hiện được yêu cầu",
   "common.moreOptions": "Nhiều lựa chọn hơn",
+  "session.pinned.title": "Tin nhắn đã ghim",
+  "session.pinned.empty": "Không có tin nhắn đã ghim",
   "common.learnMore": "Tìm hiểu thêm",
   "common.rename": "Đổi tên",
   "common.export": "Xuất",

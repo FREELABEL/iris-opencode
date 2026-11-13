@@ -161,6 +161,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Palauta viesti",
   "ui.message.copyResponse": "Kopioi vastaus",
   "ui.message.copied": "Kopioitu",
+  "ui.message.pin": "Kiinnitä viesti",
+  "ui.message.unpin": "Irrota viesti",
   "ui.message.duration.seconds": "{{count}} s",
   "ui.message.duration.minutesSeconds": "{{minutes}} min {{seconds}} s",
   "ui.message.interrupted": "Keskeytetty",

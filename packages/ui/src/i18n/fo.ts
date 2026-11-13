@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "Send boðum aftur",
   "ui.message.copyResponse": "Avrita svar",
   "ui.message.copied": "Avritað",
+  "ui.message.pin": "Fest boð",
+  "ui.message.unpin": "Loys boð",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Avbrotið",

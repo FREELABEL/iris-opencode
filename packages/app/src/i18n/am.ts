@@ -830,6 +830,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} ተጨማሪ)",
   "common.requestFailed": "ጥያቄው አልተሳካም",
   "common.moreOptions": "ተጨማሪ አማራጮች",
+  "session.pinned.title": "የተሰኩ መልእክቶች",
+  "session.pinned.empty": "የተሰኩ መልእክቶች የሉም",
   "common.learnMore": "ተጨማሪ ለመረዳት",
   "common.rename": "ዳግም ስም",
   "common.export": "ላክ",
