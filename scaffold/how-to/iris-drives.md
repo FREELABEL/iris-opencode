@@ -376,17 +376,22 @@ Sensitive files are found by **name and type**, not by reading them. A scanned m
 
 ## Windows drive letters
 
-- Type the letter with its backslash and no quotes: `iris drives scan E:\`. In Command Prompt,
-  `"E:\"` in quotes can arrive as `E:"` and fail with `Cannot see … is the drive plugged in?`.
-- On Windows a drive is remembered by **this PC plus its letter**. If Windows gives the drive a
-  different letter next time (it often does when another drive is plugged in first), `path` and
-  `get` say it is not connected (exit 2). Give it back its old letter (Disk Management → right-click
-  the drive → Change Drive Letter and Paths), or scan it again under the new letter.
-- `path` and `get` for a Windows drive work on the PC that scanned it. `find`, `list` and `copies`
-  work from any computer.
-- IRIS cannot yet tell that a Windows drive is BitLocker-encrypted, so a BitLocker drive is listed as
-  **NOT encrypted**. Check it in File Explorer (a padlock on the drive icon) or with
-  `manage-bde -status E:`.
+Windows support has been built and tested against sample Windows output, but **not yet on a real
+PC**. If something below does not match what you see, tell us.
+
+- Type the letter with its backslash and no quotes: `iris drives scan E:\`. (Quotes work too: in
+  Command Prompt `"E:\"` arrives as `E:"`, and IRIS now reads that as `E:\`.)
+- A Windows drive is remembered by its **volume serial number**, which is stored on the drive
+  itself, not by its letter. If Windows gives the drive a different letter next time, `path` and
+  `get` find it under the new one, and a rescan updates the same drive card.
+- A flash drive or exFAT/NTFS drive you already cataloged on a Linux computer keeps its card when you
+  scan it on Windows. A drive cataloged on a **Mac** that you then scan on Windows may get a second
+  card; scan each drive from the same kind of computer for now.
+- BitLocker is checked without administrator rights. If Windows does not say (some editions and
+  locked-down PCs), the drive is listed as **encryption ?**, never as NOT encrypted, and its
+  sensitive files are not marked exposed. Opening the terminal with **Run as administrator** lets
+  IRIS ask BitLocker directly. Check it yourself in File Explorer (a padlock on the drive icon) or
+  with `manage-bde -status E:` in an administrator terminal.
 
 ## Common problems
 
@@ -406,8 +411,9 @@ the drive, then `find` the file again.
 
 **`⚠ INCOMPLETE: N folder(s) could not be read`** On a Mac your terminal app (Terminal, iTerm,
 VS Code or IRIS) needs Full Disk Access: System Settings → Privacy & Security → Full Disk Access,
-switch it on for that app, quit and reopen the app, then scan again. On Linux, a drive formatted on a
-Mac may need `sudo`.
+switch it on for that app, quit and reopen the app, then scan again. On Windows, open the terminal
+with **Run as administrator**, or give your account Read access to those folders (right-click the
+folder → Properties → Security). On Linux, a drive formatted on a Mac may need `sudo`.
 
 **`… sensitive files (drive NOT encrypted — run: iris drives list to review)`** Not an error: the scan
 worked and found database dumps or password/key files on a drive anyone could read. Encrypt the
@@ -423,7 +429,7 @@ check out. Scan again; your previous catalog of the drive is untouched.
 from an old version. Plug it in and scan it again.
 
 **`path` says the drive is not connected, but it is plugged in.** A drive that was reformatted is a
-new drive to IRIS, and on Windows the letter may have changed. Scan it again.
+new drive to IRIS. Scan it again.
 
 **`--why is required`** `get` keeps a record of every read. Say why in a few words:
 `--why "send to client"`.
