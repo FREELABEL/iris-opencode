@@ -35,8 +35,8 @@
     max-width: 100%;
     font-family: var(--v2-font-family-sans, "Inter", sans-serif);
     font-style: normal;
-    font-size: 11px;
-    line-height: 12px;
+    font-size: calc(11px * var(--chat-text-scale, 1));
+    line-height: calc(12px * var(--chat-text-scale, 1));
     letter-spacing: 0.05px;
     font-variation-settings: "slnt" 0;
   }

@@ -32,7 +32,7 @@
 
   /* Headings: Sized by level, distinguished by color and spacing */
   h1 {
-    font-size: 17px;
+    font-size: calc(17px * var(--chat-text-scale, 1));
     color: var(--v2-text-text-base);
     font-weight: 600;
     margin-top: 28px;
@@ -41,7 +41,7 @@
   }
 
   h2 {
-    font-size: 15px;
+    font-size: calc(15px * var(--chat-text-scale, 1));
     color: var(--v2-text-text-base);
     font-weight: 600;
     margin-top: 24px;
@@ -50,7 +50,7 @@
   }
 
   h3 {
-    font-size: 13px;
+    font-size: calc(13px * var(--chat-text-scale, 1));
     color: var(--v2-text-text-base);
     font-weight: var(--font-weight-medium);
     margin-top: 20px;
@@ -61,7 +61,7 @@
   h4,
   h5,
   h6 {
-    font-size: 13px;
+    font-size: calc(13px * var(--chat-text-scale, 1));
     color: var(--v2-text-text-muted);
     font-weight: var(--font-weight-medium);
     margin-top: 20px;
@@ -175,7 +175,7 @@
   .shiki {
     background: var(--color-background-stronger);
     color: var(--text-base);
-    font-size: 13px;
+    font-size: calc(13px * var(--chat-text-scale, 1));
     padding: 12px;
     border-radius: 6px;
     border: 0.5px solid var(--v2-border-border-base);
@@ -320,9 +320,9 @@ body[data-new-layout] [data-component="markdown"] {
     box-shadow: var(--v2-elevation-floating);
     color: var(--v2-text-text-base);
     user-select: none;
-    font-size: 11px;
+    font-size: calc(11px * var(--chat-text-scale, 1));
     font-weight: 530;
-    line-height: 12px;
+    line-height: calc(12px * var(--chat-text-scale, 1));
     letter-spacing: 0.05px;
     font-variant-numeric: tabular-nums;
     font-variation-settings: "slnt" 0;
@@ -338,7 +338,7 @@ body:not([data-new-layout]) [data-component="markdown"] {
   h4,
   h5,
   h6 {
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
     color: var(--text-strong);
     font-weight: var(--font-weight-medium);
   }

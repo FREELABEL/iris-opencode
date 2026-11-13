@@ -29,6 +29,7 @@ import { getFilename } from "@opencode-ai/core/util/path"
 import { Session } from "@opencode-ai/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
+import { CHAT_TEXT_DEFAULT, stepChatTextSize } from "@/utils/chat-text-size"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
@@ -919,6 +920,28 @@ export default function LegacyLayout(props: ParentProps) {
         category: language.t("command.category.project"),
         keybind: "mod+o",
         onSelect: () => chooseProject(),
+      },
+      // Chat text size (#193464): only the conversation and its message box. Cmd +/- stays whole-app zoom.
+      {
+        id: "chat.text.bigger",
+        title: language.t("command.chat.text.bigger"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+=",
+        onSelect: () => settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1)),
+      },
+      {
+        id: "chat.text.smaller",
+        title: language.t("command.chat.text.smaller"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+-",
+        onSelect: () => settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1)),
+      },
+      {
+        id: "chat.text.reset",
+        title: language.t("command.chat.text.reset"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+0",
+        onSelect: () => settings.appearance.setFontSize(CHAT_TEXT_DEFAULT),
       },
       {
         id: "project.previous",

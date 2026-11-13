@@ -59,7 +59,7 @@
     flex: 0 1 auto;
     min-width: 0;
     max-width: 100%;
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
   }
 
   [data-slot="basic-tool-tool-info-structured"] {
@@ -84,7 +84,7 @@
   [data-slot="basic-tool-tool-title"] {
     flex-shrink: 0;
     font-family: var(--font-family-sans);
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
     font-style: normal;
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-large);
@@ -109,7 +109,7 @@
     white-space: nowrap;
     font-family: var(--font-family-sans);
     font-variant-numeric: tabular-nums;
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
     font-style: normal;
     font-weight: var(--font-weight-regular);
     line-height: var(--line-height-large);
@@ -155,7 +155,7 @@
     white-space: nowrap;
     font-family: var(--font-family-sans);
     font-variant-numeric: tabular-nums;
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
     font-style: normal;
     font-weight: var(--font-weight-regular);
     line-height: var(--line-height-large);
@@ -232,7 +232,7 @@
   [data-component="task-tool-title"] {
     flex-shrink: 0;
     font-family: var(--font-family-sans);
-    font-size: 14px;
+    font-size: calc(14px * var(--chat-text-scale, 1));
     font-style: normal;
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-large);
@@ -289,8 +289,8 @@ body[data-new-layout] {
       font-family: var(--v2-font-family-sans, "Inter", sans-serif);
       font-style: normal;
       font-weight: 530;
-      font-size: 13px;
-      line-height: 20px;
+      font-size: calc(13px * var(--chat-text-scale, 1));
+      line-height: calc(20px * var(--chat-text-scale, 1));
       letter-spacing: -0.04px;
       color: var(--v2-text-text-base);
       flex: none;
@@ -301,8 +301,8 @@ body[data-new-layout] {
       font-family: var(--v2-font-family-sans, "Inter", sans-serif);
       font-style: normal;
       font-weight: 440;
-      font-size: 13px;
-      line-height: 20px;
+      font-size: calc(13px * var(--chat-text-scale, 1));
+      line-height: calc(20px * var(--chat-text-scale, 1));
       letter-spacing: -0.04px;
       color: var(--v2-text-text-base);
       font-variation-settings: "slnt" 0;

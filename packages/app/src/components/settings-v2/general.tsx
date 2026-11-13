@@ -27,6 +27,7 @@ import {
   type ShellSettingsController,
   type SoundSettingsController,
 } from "./general-controllers"
+import { CHAT_TEXT_SIZES, chatTextSize } from "@/utils/chat-text-size"
 import "./settings-v2.css"
 
 const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark"]
@@ -123,6 +124,7 @@ const ShellSetting: Component<{ controller: ShellSettingsController }> = (props)
 
 const AppearanceSection: Component<{ controller: AppearanceSettingsController }> = (props) => {
   const language = useLanguage()
+  const settings = useSettings()
   return (
     <div class="settings-v2-section">
       <h3 class="settings-v2-section-title">{language.t("settings.general.section.appearance")}</h3>
@@ -161,6 +163,23 @@ const AppearanceSection: Component<{ controller: AppearanceSettingsController }>
             value={(option) => option.id}
             label={(option) => option.name}
             onSelect={props.controller.theme.select}
+          />
+        </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.row.chatTextSize.title")}
+          description={language.t("settings.general.row.chatTextSize.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-chat-text-size"
+            options={[...CHAT_TEXT_SIZES]}
+            current={chatTextSize(settings.appearance.fontSize())}
+            placement="bottom-end"
+            gutter={6}
+            value={(size) => String(size)}
+            label={(size) => language.t(`settings.general.row.chatTextSize.option.${size}` as "settings.general.row.chatTextSize.option.14")}
+            onSelect={(size) => size && settings.appearance.setFontSize(size)}
           />
         </SettingsRowV2>
 
