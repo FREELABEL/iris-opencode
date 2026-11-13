@@ -32,7 +32,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: x86_64-apple-darwin
 
       # Only main SAVES the Rust cache; every other branch reads it. A run can restore caches from
       # its own branch or the default branch (main) -- never from iris/1.18.23 or a sibling branch --
@@ -43,14 +43,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/desktop/src-tauri -> target
-          key: desktop-test-aarch64
+          key: desktop-test-x86_64
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
 
       - name: Build the iris CLI (sidecar binary)
         run: |
           cd packages/opencode
-          bun run script/build.ts --single
+          bun run script/build.ts --single --target=darwin-x64
         env:
           OPENCODE_VERSION: 0.0.0-test
           OPENCODE_CHANNEL: latest
@@ -58,38 +58,38 @@ jobs:
       - name: Stage sidecar binary
         run: |
           set -euo pipefail
-          BIN=$(ls packages/opencode/dist/opencode-darwin-arm64/bin/iris)
+          BIN=$(ls packages/opencode/dist/opencode-darwin-x64/bin/iris)
           mkdir -p packages/desktop/src-tauri/sidecars
-          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
-          chmod +x packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-x86_64-apple-darwin
+          chmod +x packages/desktop/src-tauri/sidecars/iris-cli-x86_64-apple-darwin
 
       - name: Build and stage the microphone helper (#189828)
-        run: sh packages/opencode/native/macos-mic/build-sidecar.sh aarch64-apple-darwin packages/desktop/src-tauri/sidecars
+        run: sh packages/opencode/native/macos-mic/build-sidecar.sh x86_64-apple-darwin packages/desktop/src-tauri/sidecars
 
       - name: Build IRIS desktop app
         run: |
           cd packages/desktop
-          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"identifier":"io.heyiris.desktop.test","bundle":{"createUpdaterArtifacts":false}}' --target aarch64-apple-darwin --bundles app,dmg
+          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"identifier":"io.heyiris.desktop.test","bundle":{"createUpdaterArtifacts":false}}' --target x86_64-apple-darwin --bundles app,dmg
 
       # Test builds get their own identifier (io.heyiris.desktop.test). With the production one they
       # shared WebKit storage, app data and the single-instance lock with the real IRIS install:
       # test runs wrote into the real app's state, and wiping a test profile never reset it.
       - name: Zip the .app bundle
         run: |
-          cd packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/macos
-          ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-darwin-arm64.zip
+          cd packages/desktop/src-tauri/target/x86_64-apple-darwin/debug/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-darwin-x64.zip
 
       - name: Upload .app
         uses: actions/upload-artifact@v4
         with:
-          name: IRIS-darwin-arm64-app
-          path: packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/macos/IRIS-darwin-arm64.zip
+          name: IRIS-darwin-x64-app
+          path: packages/desktop/src-tauri/target/x86_64-apple-darwin/debug/bundle/macos/IRIS-darwin-x64.zip
 
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
         with:
-          name: IRIS-darwin-arm64-dmg
-          path: packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/dmg/*.dmg
+          name: IRIS-darwin-x64-dmg
+          path: packages/desktop/src-tauri/target/x86_64-apple-darwin/debug/bundle/dmg/*.dmg
           if-no-files-found: ignore
 
   build-windows:
