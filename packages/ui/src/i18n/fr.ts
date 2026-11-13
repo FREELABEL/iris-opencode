@@ -230,6 +230,8 @@ export const dict = {
   "ui.message.revertMessage": "Réinitialiser à ce point",
   "ui.message.copyResponse": "Copier la réponse",
   "ui.message.copied": "Copié !",
+  "ui.message.pin": "Épingler le message",
+  "ui.message.unpin": "Désépingler le message",
   "ui.message.interrupted": "Interrompu",
   "ui.message.queued": "En file d'attente",
   "ui.message.attachment.alt": "pièce jointe",

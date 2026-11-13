@@ -216,6 +216,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "پیغام کی تبدیلیاں واپس لیں",
   "ui.message.copyResponse": "جواب کاپی کریں۔",
   "ui.message.copied": "کاپی ہو گیا",
+  "ui.message.pin": "پیغام پن کریں",
+  "ui.message.unpin": "پیغام ان پن کریں",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "روک دیا گیا",

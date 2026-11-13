@@ -846,6 +846,8 @@ export const dict: Record<string, string> = {
   "common.moreCountSuffix": "(+{{count}} আরো)",
   "common.requestFailed": "অনুরোধ ব্যর্থ হয়েছে",
   "common.moreOptions": "আরও বিকল্প",
+  "session.pinned.title": "পিন করা বার্তা",
+  "session.pinned.empty": "কোনো পিন করা বার্তা নেই",
   "common.learnMore": "আরও জানুন",
   "common.rename": "নাম পরিবর্তন করুন",
   "common.export": "রপ্তানি",

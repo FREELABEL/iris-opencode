@@ -243,6 +243,8 @@ export const dict = {
   "ui.message.revertMessage": "التراجع عن الرسالة",
   "ui.message.copyResponse": "نسخ الرد",
   "ui.message.copied": "تم النسخ!",
+  "ui.message.pin": "تثبيت الرسالة",
+  "ui.message.unpin": "إلغاء تثبيت الرسالة",
   "ui.message.interrupted": "تمت المقاطعة",
   "ui.message.queued": "في قائمة الانتظار",
   "ui.message.attachment.alt": "مرفق",

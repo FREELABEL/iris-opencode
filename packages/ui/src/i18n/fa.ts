@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "پیام را برگردانید",
   "ui.message.copyResponse": "پاسخ را کپی کنید",
   "ui.message.copied": "کپی شد",
+  "ui.message.pin": "سنجاق کردن پیام",
+  "ui.message.unpin": "برداشتن سنجاق پیام",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "قطع شد",

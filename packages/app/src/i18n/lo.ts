@@ -841,6 +841,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} ເພີ່ມເຕີມ)",
   "common.requestFailed": "ການຮ້ອງຂໍລົ້ມເຫລວ",
   "common.moreOptions": "ທາງເລືອກເພີ່ມເຕີມ",
+  "session.pinned.title": "ຂໍ້ຄວາມທີ່ປັກໝຸດ",
+  "session.pinned.empty": "ບໍ່ມີຂໍ້ຄວາມທີ່ປັກໝຸດ",
   "common.learnMore": "ສຶກສາເພີ່ມເຕີມ",
   "common.rename": "ປ່ຽນຊື່",
   "common.export": "ສົ່ງອອກ",

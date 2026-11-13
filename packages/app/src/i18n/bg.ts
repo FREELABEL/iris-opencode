@@ -853,6 +853,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} още)",
   "common.requestFailed": "Неуспешна заявка",
   "common.moreOptions": "Още опции",
+  "session.pinned.title": "Закачени съобщения",
+  "session.pinned.empty": "Няма закачени съобщения",
   "common.learnMore": "Научете повече",
   "common.rename": "Преименуване",
   "common.export": "Експортиране",

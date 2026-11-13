@@ -865,6 +865,8 @@ export const dict = {
   "common.dismiss": "ปิด",
   "common.requestFailed": "คำขอล้มเหลว",
   "common.moreOptions": "ตัวเลือกเพิ่มเติม",
+  "session.pinned.title": "ข้อความที่ปักหมุด",
+  "session.pinned.empty": "ไม่มีข้อความที่ปักหมุด",
   "common.learnMore": "เรียนรู้เพิ่มเติม",
   "common.rename": "เปลี่ยนชื่อ",
   "common.export": "ส่งออก",

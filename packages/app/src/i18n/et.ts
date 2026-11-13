@@ -843,6 +843,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} veel)",
   "common.requestFailed": "Taotlus ebaõnnestus",
   "common.moreOptions": "Rohkem valikuid",
+  "session.pinned.title": "Kinnitatud sõnumid",
+  "session.pinned.empty": "Kinnitatud sõnumeid pole",
   "common.learnMore": "Lisateavet",
   "common.rename": "Nimeta ümber",
   "common.export": "Ekspordi",

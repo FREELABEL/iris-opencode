@@ -215,6 +215,8 @@ export const dict = {
   "ui.message.revertMessage": "Баргардонидани паём",
   "ui.message.copyResponse": "Ҷавобро нусхабардорӣ кунед",
   "ui.message.copied": "Нусхабардорӣ",
+  "ui.message.pin": "Паёмро часпонед",
+  "ui.message.unpin": "Паёмро ҷудо кунед",
   "ui.message.duration.seconds": "{{count}}с",
   "ui.message.duration.minutesSeconds": "{{minutes}}м {{seconds}}с",
   "ui.message.interrupted": "Қатъ карда шуд",

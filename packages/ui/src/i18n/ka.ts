@@ -215,6 +215,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "წერილის დაბრუნება",
   "ui.message.copyResponse": "პასუხის კოპირება",
   "ui.message.copied": "კოპირებულია",
+  "ui.message.pin": "შეტყობინების მიმაგრება",
+  "ui.message.unpin": "შეტყობინების მოხსნა",
   "ui.message.duration.seconds": "{{count}} წმ",
   "ui.message.duration.minutesSeconds": "{{minutes}} წთ {{seconds}}წმ",
   "ui.message.interrupted": "შეწყვეტილია",

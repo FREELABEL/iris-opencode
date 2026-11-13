@@ -216,6 +216,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "ރިވަރޓް މެސެޖް",
   "ui.message.copyResponse": "ކޮޕީ ޖަވާބު",
   "ui.message.copied": "ކޮޕީކޮށްފައި",
+  "ui.message.pin": "މެސެޖު ޕިން ކުރޭ",
+  "ui.message.unpin": "މެސެޖު ޕިން ނައްތާ",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "މެދުކަނޑާލިއެވެ",

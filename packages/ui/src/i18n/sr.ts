@@ -221,6 +221,8 @@ export const dict = {
   "ui.message.revertMessage": "Врати поруку",
   "ui.message.copyResponse": "Копирај одговор",
   "ui.message.copied": "Копирано",
+  "ui.message.pin": "Закачи поруку",
+  "ui.message.unpin": "Откачи поруку",
   "ui.message.duration.seconds": "{{count}}с",
   "ui.message.duration.minutesSeconds": "{{minutes}}м {{seconds}}с",
   "ui.message.interrupted": "прекинут",

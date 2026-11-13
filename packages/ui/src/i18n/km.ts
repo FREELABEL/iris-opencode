@@ -216,6 +216,8 @@ export const dict = {
   "ui.message.revertMessage": "ត្រឡប់សារ",
   "ui.message.copyResponse": "ចម្លងការឆ្លើយតប",
   "ui.message.copied": "ចម្លង",
+  "ui.message.pin": "ខ្ទាស់សារ",
+  "ui.message.unpin": "ឈប់ខ្ទាស់សារ",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "រំខាន",

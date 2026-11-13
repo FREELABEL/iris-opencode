@@ -217,6 +217,8 @@ export const dict: Record<string, string> = {
   "ui.message.revertMessage": "বার্তা প্রত্যাবর্তন করুন",
   "ui.message.copyResponse": "কপি প্রতিক্রিয়া",
   "ui.message.copied": "কপি করা হয়েছে",
+  "ui.message.pin": "বার্তা পিন করুন",
+  "ui.message.unpin": "বার্তা আনপিন করুন",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}মি {{seconds}}সেকেন্ড",
   "ui.message.interrupted": "বাধাপ্রাপ্ত",
