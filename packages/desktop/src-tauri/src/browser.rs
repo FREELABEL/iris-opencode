@@ -446,12 +446,26 @@ pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: B
         .or_else(|| with_tabs(|t| t.urls.get(&label).cloned()).flatten())
         .unwrap_or_else(|| Url::parse("about:blank").expect("static url"));
     let window = app.get_window("main").ok_or("no main window")?;
-    let w = window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
-    if let Ok(cookies) = IMPORTED.lock() {
-        for c in cookies.iter() {
-            let _ = w.set_cookie(c.clone());
-        }
+    let cookies = IMPORTED.lock().map(|c| c.clone()).unwrap_or_default();
+    if cookies.is_empty() {
+        window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
+        return Ok(());
     }
+    // macOS 13: this page has its own cookie jar, so it gets the Chrome sign-ins here. NEVER from
+    // this thread (#193453): this command runs on the main thread inside WebKit's message
+    // dispatch, and set_cookie there waits for WebKit in a nested run loop that cannot run
+    // WebKit's messages. The chat's page then asked the app a synchronous question (spell check)
+    // that could never be answered: the whole app froze at 0% CPU (iMac, 2026-11-13). From
+    // another thread each call is only queued for the main loop, where it runs at top level; the
+    // navigation is queued after them, so the page loads signed in.
+    let blank = Url::parse("about:blank").expect("static url");
+    let w = window.add_child(builder(&app, &label, blank), pos, size).map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        for c in cookies {
+            let _ = w.set_cookie(c);
+        }
+        let _ = w.navigate(start);
+    });
     Ok(())
 }
 
@@ -567,8 +581,10 @@ pub async fn browser_screenshot(app: AppHandle, chat: String) -> Result<String, 
 
 /// The sites this browser holds cookies for: the start of Settings › Browser (S3). Names and
 /// domains only, never values: values are credentials and never cross into the app's JS.
+// async: off the main thread. cookies() waits for WebKit, and on the main thread that wait can
+// deadlock the app (#193453); from a worker it is a message to the main loop and a reply.
 #[tauri::command]
-pub fn browser_cookie_domains(app: AppHandle) -> Result<Vec<String>, String> {
+pub async fn browser_cookie_domains(app: AppHandle) -> Result<Vec<String>, String> {
     let w = browser_pages(&app).into_iter().next().ok_or("the browser is not open")?;
     let mut domains: Vec<String> = w
         .cookies()
