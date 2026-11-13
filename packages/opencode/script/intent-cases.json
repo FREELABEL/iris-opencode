@@ -25,7 +25,7 @@
   ],
   ["make a landing page for my bakery", ["playbook run genesis-bespoke", "genesis create", "genesis compose"]],
   ["transcribe this video and build a website from it", ["transcribe"]],
-  ["find places to eat in austin texas", ["geo nearby", "web-search"]],
+  ["find places to eat in austin texas", ["terra nearby", "web-search"]],
   ["go get a client", [], [601, 603, 692, 676, 691, 609]],
   ["write this week's newsroom article for AIAI", [], [702]],
   ["program a DJ mix for The Function", [], [695]],
