@@ -418,6 +418,7 @@ async function listReplicated(argv: any) {
     for (const v of out) {
       console.log(`  ${bold(v.name)}  ${dim(v.id)}`)
       console.log(`     ${dim(`${v.files} file(s) · manifest seq ${v.seq} · target ${v.replicas} replicas`)}${v.has_key ? "" : bold("  · NO KEY ON THIS MACHINE")}`)
+      if (v.targets?.length) console.log(`     ${dim("copies on: " + allTargets(v).map(targetLabel).join(", "))}`)
     }
     console.log()
   }

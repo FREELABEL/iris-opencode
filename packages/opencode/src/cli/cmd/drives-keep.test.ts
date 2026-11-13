@@ -124,6 +124,11 @@ describe("refusals: nothing read, nothing recorded, nothing put", () => {
     expect(x.r.err[0]).toMatch(/sensitive files are in Album: Album\/stems\/db.sql \(db-dump\)|Album\/stems\/db.sql is a sensitive file/)
     expect(x.puts.length).toBe(0)
   })
+  test("a vault that cannot take the files (no key here) is a plain refusal, not a crash", async () => {
+    const x = await keep("Studio:Album/master.wav", {}, { put: async () => { throw new Error("no key for vault v-1 on this machine") } })
+    expect(x.r.code).toBe(1)
+    expect(x.r.err[0]).toMatch(/Could not put Album\/master.wav into vault masters: no key/)
+  })
   test("if the read cannot be recorded, nothing is kept", async () => {
     const x = await keep("Studio:Album/master.wav", {}, { writeAudit: async () => { throw new Error("offline") } })
     expect(x.r.code).toBe(1)

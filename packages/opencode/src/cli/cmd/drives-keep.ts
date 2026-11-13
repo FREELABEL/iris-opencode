@@ -191,7 +191,12 @@ export async function runKeep(a: KeepArgs, deps: KeepDeps): Promise<KeepResult> 
     }
 
     // ── into the vault ──
-    const report = await deps.put(vault, files.map((f) => ({ src: f.src, as: vaultPath(f.rel) })))
+    let report: KeepPutReport
+    try {
+      report = await deps.put(vault, files.map((f) => ({ src: f.src, as: vaultPath(f.rel) })))
+    } catch (e: any) {
+      return fail(1, `Could not put ${isFolder ? "the files" : rel} into vault ${vault.name}: ${e?.message ?? e}`)
+    }
     const failed = report.results.filter((r) => !r.ok)
     const at = utcIso(deps.now())
     const account = await deps.account().catch(() => "unknown")
