@@ -4252,7 +4252,7 @@
       "describe": "upload a file to cloud storage and get CDN + share URLs",
       "aliases": [],
       "run": "iris cloud:upload [file]",
-      "haystack": "cloud:upload upload a file to cloud storage and get cdn + share urls url download from url instead title custom title description description expires expiration (e.g. 1d, 12h, 90, never) bloq bloq id to associate json json output"
+      "haystack": "cloud:upload upload a file to cloud storage and get cdn + share urls url download from url instead title custom title description description expires expiration: 90, 12h, 2w, 6mo, 1y or never. default: never for images, html/css, pdf, video, audio and fonts; 180 days for anything else bloq bloq id to associate json json output"
     },
     {
       "kind": "command",
