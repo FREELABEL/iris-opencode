@@ -223,7 +223,11 @@ export async function runKeep(a: KeepArgs, deps: KeepDeps): Promise<KeepResult> 
     const total = rows.reduce((n, r) => n + Number(r.bytes ?? 0), 0)
     const below = rows.filter((r) => r.status === "below")
     out.push(`Kept ${isFolder ? `${rows.length} file(s) from ${rel}` : rel} from ${name} in vault ${vault.name} · ${formatSize(total)}`)
-    out.push(`  ${below.length ? `${below.length} below ${vault.replicas} copies (the rest at ${vault.replicas}+)` : `every file at ${vault.replicas}+ copies`}: ` +
+    const copiesNow = [...new Set(rows.map((r) => r.copies))].sort().join("–")
+    const state = !below.length ? `every file at ${vault.replicas}+ copies`
+      : below.length === rows.length ? `${copiesNow} of ${vault.replicas} copies so far`
+      : `${below.length} of ${rows.length} file(s) below ${vault.replicas} copies`
+    out.push(`  ${state}: ` +
       report.checks.map((c) => `${c.target?.label ?? c.target?.name ?? c.key} ${c.status === "ok" ? "✓" : c.status}`).join(" · "))
     if (report.checks.some((c) => c.status === "pending")) out.push("  A copy on a drive that is not plugged in catches up when it is: iris vault sync on the machine it is plugged into")
     for (const f of failed) err.push(`${f.path}: ${f.error}`)

@@ -10,6 +10,7 @@
 
 import fs from "fs"
 import path from "path"
+import { spawnSync } from "child_process"
 import {
   type VaultTarget, type ReplicaIndex, type ReplicaMeta, type SealedManifest, type BlobSource, type ReplicaRow, type KeptRow,
   targetKey, targetLabel, replicaDir, ensureReplica, writeReplicaIndex, heldBlobs, fillReplica, verifyReplica, blobFile,
@@ -22,13 +23,43 @@ export type DriveEnv = {
   statfs(p: string): { free: number; size: number } | null
 }
 
-export function statfsOf(p: string): { free: number; size: number } | null {
+/**
+ * Free and total bytes of the filesystem holding `p`. `df -kP` first wherever there is one: Bun's
+ * fs.statfsSync returns shifted fields on macOS (bsize 0, blocks = the block size), which read as
+ * "0 bytes free" for every Mac drive. statfsSync is the fallback (Windows), and only when sane.
+ */
+export function statfsOf(p: string, run: (cmd: string, args: string[]) => string | null = dfRun): { free: number; size: number } | null {
+  if (process.platform !== "win32") {
+    const parsed = parseDfKP(run("df", ["-kP", p]) ?? "")
+    if (parsed) return parsed
+  }
   try {
     const st = fs.statfsSync(p)
-    return { free: Number(st.bavail) * Number(st.bsize), size: Number(st.blocks) * Number(st.bsize) }
+    const bs = Number(st.bsize)
+    if (!(bs > 0)) return null
+    return { free: Number(st.bavail) * bs, size: Number(st.blocks) * bs }
   } catch {
     return null
   }
+}
+
+function dfRun(cmd: string, args: string[]): string | null {
+  try {
+    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 15_000 })
+    return r.status === 0 ? String(r.stdout ?? "") : null
+  } catch {
+    return null
+  }
+}
+
+/** POSIX `df -kP` output → bytes. Columns: filesystem, 1024-blocks, used, available, capacity, mount. */
+export function parseDfKP(out: string): { free: number; size: number } | null {
+  const line = out.trim().split("\n").filter(Boolean).pop() ?? ""
+  const m = line.match(/\s(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s/)
+  if (!m) return null
+  const size = Number(m[1]) * 1024
+  const free = Number(m[3]) * 1024
+  return Number.isFinite(size) && Number.isFinite(free) && size > 0 ? { free, size } : null
 }
 
 export type CheckStatus = "ok" | "partial" | "pending" | "no-room" | "failing"

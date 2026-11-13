@@ -141,7 +141,7 @@ describe("kept from a drive plugged in here", () => {
     expect(puts[0]).toEqual([{ src: join(mount, "Album", "master.wav"), as: "Studio/Album/master.wav" }])
     const row = kept.get("v-1|fs:studio:Album/master.wav")
     expect(row).toMatchObject({ vault_name: "masters", sha256: sha("master"), content_id: expect.stringMatching(/^cid-/), copies: 2, target_copies: 3, status: "below", held_by: "drive:fs:a\nmachine:laptop", kept_from: "" })
-    expect(r.out.join("\n")).toMatch(/1 below 3 copies/)
+    expect(r.out.join("\n")).toMatch(/2 of 3 copies so far: Backup A ✓ · Backup B pending · laptop ✓/)
     expect(r.out.join("\n")).toMatch(/catches up when it is: iris vault sync/)
     // its drive's record gets the alert
     expect(driveRows[0]).toMatchObject({ external_id: "fs:studio", kept_files: 1, kept_below_target: 1 })

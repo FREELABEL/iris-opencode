@@ -44,7 +44,7 @@ import { nameMatches } from "./hive-tailscale"
 import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
 import { Installation } from "../../installation"
-import { type VaultCatalog, driveAlertRows } from "./vault-replicas"
+import { type VaultCatalog, driveAlertRows, statfsOf } from "./vault-replicas"
 import { runKeep, vaultCopiesBySha, type KeepDeps } from "./drives-keep"
 import { keepVault, putToTargets } from "./platform-vault"
 import { keptAlerts, missingDays, type ReplicaRow } from "./vault-drives"
@@ -276,7 +276,8 @@ export function identify(p: string, label?: string): [string, Facts] {
     }
   }
   if (mount) {
-    const st = fs.statfsSync(p)
+    // df, not fs.statfsSync: Bun's statfs is wrong on macOS (#193363, see statfsOf).
+    const st = statfsCompat(p)
     facts.size_gb = round((st.blocks * st.bsize) / 1e9, 1)
     facts.used_gb = round(((st.blocks - st.bfree) * st.bsize) / 1e9, 1)
   }
@@ -308,6 +309,15 @@ export function resolveMount(driveId: string): string | null {
     return mp[0] ?? null
   }
   return null
+}
+
+/** statfs numbers; where Bun's statfs is broken (macOS: bsize 0), df's, so a Mac drive does not read as full. */
+export function statfsCompat(p: string, statfs: (p: string) => fs.StatsFs = (x) => fs.statfsSync(x), df = statfsOf): { bavail: number; bsize: number; blocks: number; bfree: number } {
+  const st = statfs(p)
+  if (Number(st.bsize) > 0) return { bavail: Number(st.bavail), bsize: Number(st.bsize), blocks: Number(st.blocks), bfree: Number(st.bfree) }
+  const s = df(p)
+  if (s) return { bavail: s.free, bsize: 1, blocks: s.size, bfree: s.free }
+  return { bavail: 0, bsize: 0, blocks: 0, bfree: 0 }
 }
 
 const online = (d: any) => resolveMount(String(d.external_id)) != null
@@ -563,7 +573,7 @@ const ScanCommand = cmd({
       filesystem: facts.filesystem, encrypted: facts.encrypted, size_gb: facts.size_gb,
       used_gb: facts.used_gb, files: rollup.files, folders: rollup.folders.size, sensitive_files: rollup.findings.length,
       last_scanned: today, manifest: "", private_excluded: exclude.join("\n"),
-      ...liveDriveFields(fs.statfsSync(root), facts.node, new Date()),
+      ...liveDriveFields(statfsCompat(root), facts.node, new Date()),
     }
     const folderRows = rollup.folderRows(driveId, facts.label)
     const findingRows = rollup.findingRows(driveId, facts.label, facts.encrypted, today)
