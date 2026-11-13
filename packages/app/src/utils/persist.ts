@@ -27,6 +27,9 @@ type PersistTarget = {
 const LEGACY_STORAGE = "default.dat"
 const GLOBAL_STORAGE = "opencode.global.dat"
 const WINDOW_STORAGE = "opencode.window"
+/** Desktop's main window when it has no window id: the hot keys (tabs, tabs.recent, split) that
+ * change on every tab switch live here, not in opencode.global.dat (#193410). */
+const DESKTOP_WINDOW_ID = "main"
 const LOCAL_PREFIX = "opencode."
 const fallback = new Map<string, boolean>()
 
@@ -74,6 +77,65 @@ function cacheGet(key: string) {
   cache.delete(key)
   cache.set(key, entry)
   return entry.value
+}
+
+/**
+ * The last value each persisted key was written with (#193410). makePersisted writes the whole
+ * value on every setter call, changed or not, and on desktop every write rewrites the whole
+ * store file (tauri-plugin-store saves the full file 100 ms after any set). The command catalog
+ * was re-set, unchanged, on every tab switch. A write equal to the last one is skipped.
+ *
+ * Module level, keyed by storage + key, so two persisted() of the same key never skip a write
+ * the other one made stale. Only written values are remembered (never read ones: an async read
+ * can land after a write). Small LRU; large values are not remembered (they always write).
+ */
+const LAST_WRITE_MAX_ENTRIES = 256
+const LAST_WRITE_MAX_CHARS = 256 * 1024
+const lastWrite = new Map<string, string>()
+
+function lastWriteId(scope: string, key: string) {
+  return `${scope}\n${key}`
+}
+
+function sameAsLastWrite(id: string, value: string) {
+  return lastWrite.get(id) === value
+}
+
+function rememberWrite(id: string, value: string) {
+  lastWrite.delete(id)
+  if (value.length > LAST_WRITE_MAX_CHARS) return
+  lastWrite.set(id, value)
+  while (lastWrite.size > LAST_WRITE_MAX_ENTRIES) {
+    const oldest = lastWrite.keys().next().value as string | undefined
+    if (oldest === undefined) return
+    lastWrite.delete(oldest)
+  }
+}
+
+function forgetWrites(key: string) {
+  for (const id of lastWrite.keys()) if (id.endsWith(`\n${key}`)) lastWrite.delete(id)
+}
+
+function skipUnchangedWrites(storage: AsyncStorage, scope: string): AsyncStorage {
+  return {
+    getItem: (key: string) => storage.getItem(key),
+    setItem: async (key: string, value: string) => {
+      const id = lastWriteId(scope, key)
+      if (sameAsLastWrite(id, value)) return
+      rememberWrite(id, value)
+      const result = storage.setItem(key, value)
+      if (result instanceof Promise)
+        return result.catch((error: unknown) => {
+          lastWrite.delete(id)
+          throw error
+        })
+      return result
+    },
+    removeItem: (key: string) => {
+      lastWrite.delete(lastWriteId(scope, key))
+      return storage.removeItem(key)
+    },
+  }
 }
 
 function fallbackDisabled(scope: string) {
@@ -529,7 +591,15 @@ export const Persist = {
 
 function resolveTarget(target: PersistTarget, platform: Platform): PersistTarget {
   if (target.scope !== "window") return target
-  if (platform.platform === "desktop" && !platform.windowID) return { ...target, storage: GLOBAL_STORAGE }
+  // #193410: these keys used to share opencode.global.dat (121 KB on a long-used Mac), which was
+  // rewritten whole on every tab switch. They get their own small file; the first read moves a
+  // value still in the global file over (and deletes it there), so nobody loses their tabs.
+  if (platform.platform === "desktop" && !platform.windowID)
+    return {
+      ...target,
+      storage: windowStorage(DESKTOP_WINDOW_ID),
+      legacyStorageNames: [GLOBAL_STORAGE, ...(target.legacyStorageNames ?? [])],
+    }
   const windowID = platform.platform === "desktop" ? (platform.windowID ?? "browser") : "browser"
   return {
     ...target,
@@ -541,6 +611,7 @@ export function removePersisted(
   target: { draft?: boolean; storage?: string; legacyStorageNames?: string[]; key: string },
   platform?: Platform,
 ) {
+  forgetWrites(target.key)
   if (target.draft && platform?.draftStore) {
     void platform.draftStore.removeItem(`${target.storage ?? "default"}:${target.key}`)
   }
@@ -681,7 +752,13 @@ export function persisted<T>(
     return api
   })()
 
-  const [state, setState, init] = makePersisted(store, { name: config.key, storage })
+  const writeScope = `${draft ? "draft:" : ""}${isDesktop ? "desktop:" : ""}${config.storage ?? ""}`
+  const [state, setState, init] = makePersisted(store, {
+    name: config.key,
+    // Desktop only: there every write rewrites a whole store file. On the web a localStorage write
+    // is cheap, and a remembered write could hide a value cleared outside persist (site data).
+    storage: isDesktop ? skipUnchangedWrites(storage as AsyncStorage, writeScope) : storage,
+  })
 
   const isAsync = init instanceof Promise
   const [ready] = createResource(
