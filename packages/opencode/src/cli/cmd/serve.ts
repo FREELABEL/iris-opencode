@@ -28,6 +28,9 @@ export const ServeCommand = effectCmd({
       console.log(`Password: username ${LocalAuth.USERNAME}, in ${LocalAuth.recordPath(server.port)}`)
     }
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
+    // #193427: an engine the desktop app started exits when that app is gone (crash, force quit).
+    const { exitWithParent } = yield* Effect.promise(() => import("../../iris/parent-watch"))
+    exitWithParent()
     // The signed-in account's IRIS agents into the picker (#189448 S1). In the background, AFTER
     // listen: lib.rs exits the app if the engine is not up within 7s. Never fatal — see
     // iris/desktop-agent-sync.ts. If files changed, reload config so this launch already shows them.

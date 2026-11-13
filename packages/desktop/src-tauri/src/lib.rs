@@ -818,6 +818,10 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         cmd = cmd.env("XDG_DATA_HOME", &data_home).env("IRIS_PARENT_XDG_DATA_HOME", parent);
     }
 
+    // #193427: the engine exits on its own once this app is gone. A crash or force quit runs none
+    // of our cleanup, and each one used to leave a 400-850 MB engine behind.
+    cmd = cmd.env("IRIS_APP_PID", std::process::id().to_string());
+
     let (mut rx, child) = cmd.spawn().expect("Failed to spawn opencode");
     let generation = engine_supervisor::note_spawn(port);
     let app_for_events = app.clone();
