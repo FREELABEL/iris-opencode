@@ -81,3 +81,29 @@ describe("Marketing pins (#192624)", () => {
     expect(parsePins(tampered)).toEqual({ pins: [a, { slug: "ok-one", label: "ok-one" }] })
   })
 })
+
+import { pinsSource } from "./iris-marketing-pins"
+
+describe("pins on the account (#193357)", () => {
+  const here = { pins: [{ slug: "this-mac", label: "This Mac" }] }
+  const there = { pins: [{ slug: "other-mac", label: "Other Mac" }] }
+  test("server can't hold pins yet: this machine's, exactly as before", () => {
+    expect(pinsSource({ available: false }, here)).toEqual({ use: here, copyUp: false, onServer: false })
+  })
+  test("server never saved and this machine has pins: copy them up once", () => {
+    expect(pinsSource({ available: true, value: { pins: [] }, version: 0 }, here)).toEqual({ use: here, copyUp: true, onServer: true })
+  })
+  test("server never saved and nothing here: nothing to copy", () => {
+    expect(pinsSource({ available: true, value: { pins: [] }, version: 0 }, { pins: [] })).toEqual({ use: { pins: [] }, copyUp: false, onServer: true })
+  })
+  test("server has saved: the server's, and a stale machine never overwrites it", () => {
+    expect(pinsSource({ available: true, value: there, version: 3 }, here)).toEqual({ use: there, copyUp: false, onServer: true })
+  })
+  test("server emptied on purpose (version > 0, no pins): stays empty, local is not copied back", () => {
+    expect(pinsSource({ available: true, value: { pins: [] }, version: 4 }, here)).toMatchObject({ use: { pins: [] }, copyUp: false })
+  })
+  test("a server value is cleaned like a stored one", () => {
+    const r = pinsSource({ available: true, value: { pins: [{ slug: "OK", label: "" }, { slug: "../x", label: "x" }] } as any, version: 1 }, here)
+    expect(r.use).toEqual({ pins: [{ slug: "ok", label: "ok" }] })
+  })
+})
