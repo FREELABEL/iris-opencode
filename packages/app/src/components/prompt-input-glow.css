@@ -41,7 +41,12 @@
     transparent 230deg,
     transparent 360deg
   );
-  animation: iris-glow-spin var(--iris-glow-ring, 3.84s) linear infinite; /* pace from Settings; 3.84s = "Normal" */
+}
+/* #193428: spin only while the ring shows. An invisible ring that kept spinning cost ~3-4% of a
+   core in every idle composer, all day. Pace from Settings; 3.84s = "Normal". */
+.iris-glow[data-busy]::before,
+.iris-glow[data-wait]::before {
+  animation: iris-glow-spin var(--iris-glow-ring, 3.84s) linear infinite;
 }
 .iris-glow::before {
   inset: -2px;
@@ -53,28 +58,30 @@
    a blurred border hugs the outline. border-image paints the border band only, never the middle.
    It must also fade out within ~9px: the session column clips at the side panel and the message
    list paints over the dock, so any wider light ends in straight, hard edges — a box again. */
+/* #193428: the halo and the underglow do NOT spin. Spinning them animated --iris-glow-a, which
+   the compositor cannot do: every frame the main thread re-painted the gradient and re-ran the blur
+   (measured on an Intel iMac: vImage box blur was the top of the window's stack, the UI froze while
+   IRIS replied). They use no filter at all now (a soft box-shadow, a masked gradient), are painted
+   once on their own layer, and breathe by opacity, which the GPU does alone. The sharp ring above
+   still sweeps: a 2px unblurred ring is cheap to repaint. */
 .iris-glow::after {
-  inset: -2px;
+  inset: 0;
   z-index: -1;
+  border-radius: 12px;
   background: none;
-  border: 3px solid transparent;
-  border-image: conic-gradient(
-      from var(--iris-glow-a),
-      transparent 0deg,
-      var(--g1) 60deg,
-      var(--g2) 120deg,
-      var(--g3) 170deg,
-      transparent 230deg,
-      transparent 360deg
-    )
-    1;
-  filter: blur(4px);
+  box-shadow:
+    -5px 0 10px -3px var(--g1),
+    0 0 9px 0 color-mix(in srgb, var(--g2) 70%, transparent),
+    5px 0 10px -3px var(--g3);
+  animation: none;
+  will-change: opacity;
 }
 .iris-glow[data-busy]::before {
   opacity: 1;
 }
 .iris-glow[data-busy][data-halo]::after {
   opacity: 0.95;
+  animation: iris-glow-halo 3.2s ease-in-out infinite;
 }
 
 /* WAITING ON YOU — an approval or a question is open. Gold, white and soft yellow instead of the
@@ -105,13 +112,15 @@
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.6s ease;
-  filter: blur(5px);
   border-radius: 50%;
-  background: conic-gradient(from var(--iris-glow-a) at 50% 50%, var(--g1), var(--g2), var(--g3), var(--g1));
-  animation: iris-glow-spin var(--iris-glow-under, 6s) linear infinite;
+  background: linear-gradient(90deg, var(--g1), var(--g2), var(--g3));
+  -webkit-mask-image: radial-gradient(closest-side, #000 20%, transparent);
+  mask-image: radial-gradient(closest-side, #000 20%, transparent);
+  will-change: opacity;
 }
 .iris-glow[data-bg] .iris-glow__under {
   opacity: 1;
+  animation: iris-glow-halo var(--iris-glow-under, 6s) ease-in-out infinite;
 }
 
 .iris-glow__chip {
@@ -140,6 +149,16 @@
 @keyframes iris-glow-spin {
   to {
     --iris-glow-a: 360deg;
+  }
+}
+/* Opacity only, so the compositor runs it without repainting or re-blurring. */
+@keyframes iris-glow-halo {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.95;
   }
 }
 @keyframes iris-glow-breathe {
@@ -308,9 +327,11 @@ button.iris-glow__chip[data-inline] {
   border-radius: 13px;
 }
 .iris-glow[data-thin]::after {
-  inset: -1px;
-  border-width: 2px;
-  filter: blur(2px);
+  inset: 0;
+  box-shadow:
+    -3px 0 6px -2px var(--g1),
+    0 0 5px 0 color-mix(in srgb, var(--g2) 70%, transparent),
+    3px 0 6px -2px var(--g3);
 }
 /* A TAB tucked behind the composer: square bottom, so the ring traces only the visible tab. */
 .iris-glow[data-tab]::before,
