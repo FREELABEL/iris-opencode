@@ -69,7 +69,7 @@ export const Parameters = Schema.Struct({
   ]).annotate({ description: "What to do" }),
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
-      "Which browser. Leave it out to use the one the person can see: in IRIS Desktop that is panel (the Browser pane, signed in as them, only on sites they allowed); elsewhere agent. agent: your own separate Chrome, invisible and logged out unless you pass profile/visible",
+      "Which browser. Leave it out (the default, and preferred): in IRIS Desktop that is panel, the Browser pane the person can see, signed in as them — use it for anything they would want to look at or act on (flights, tickets, shopping, comparing, their accounts). agent: your own invisible Chrome, only for background facts, checking your own work, or wide research before you open the best result in the pane",
   }),
   profile: Schema.optional(Schema.Literals(["fresh", "saved"])).annotate({
     description:
