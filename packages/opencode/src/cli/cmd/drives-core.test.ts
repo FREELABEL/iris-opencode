@@ -5,7 +5,7 @@ import path from "path"
 import { spawnSync } from "child_process"
 import {
   kindOf, walk, realFs, folderOf, Rollup, seal, unseal, manifestFileText, parseManifestFile, parsePlist,
-  diskFactsFromPlist, driveIdFromDisk, tsvRow, parseTsv, manifestTitle, splitRef, type WalkFs,
+  diskFactsFromPlist, driveIdFromDisk, tsvRow, parseTsv, manifestTitle, splitRef, movedRows, SENSITIVE, type WalkFs,
 } from "./drives-core"
 
 /**
@@ -46,6 +46,47 @@ describe("kindOf — the classification table drive_scan.py uses", () => {
     ["notes/README", "other"],
   ]
   for (const [rel, kind] of cases) test(`${rel} → ${kind}`, () => expect(kindOf(rel)).toBe(kind))
+})
+
+// #193365: credential files under another name (config.envr.php was copied without --confirm), and the
+// framework, library and template files that must NOT be flagged. The cases and their kinds are RECORDED
+// from drive_scan.py kind_of() (drives-kinds.fixture.json), so both tools classify them identically.
+describe("kindOf — credential variants and the false-positive guard (recorded from drive_scan.py)", () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "drives-kinds.fixture.json"), "utf8"))
+  const cases: Array<[string, string]> = fx.cases
+  for (const [rel, kind] of cases) test(`${rel} → ${kind}`, () => expect(kindOf(rel)).toBe(kind))
+
+  test("the guard is real: framework and template files stay out of the sensitive list", () => {
+    const flagged = (rel: string) => SENSITIVE.has(kindOf(rel))
+    for (const rel of [
+      "phpmyadmin/config.sample.inc.php", "laravel/vendor/laravel/framework/src/Illuminate/Support/Env.php",
+      "laravel/config/app.php", "wordpress/wp-config-sample.php", "drupal/sites/default/default.settings.php",
+      "drupal/sites/example.settings.local.php", "django/mysite/settings.py", "app/src/utils/secrets.ts",
+      "app/.claude/settings.local.json", "app/.vscode/settings.json",
+    ]) expect([rel, flagged(rel)]).toEqual([rel, false])
+    expect(flagged("Old Site/app/config.envr.php")).toBe(true)
+  })
+
+  const PY = process.env.DRIVE_SCAN_PY ?? ""
+  test.skipIf(!fs.existsSync(PY))("drive_scan.py kind_of agrees on every case (live)", () => {
+    const r = spawnSync(
+      "python3",
+      ["-c", `import sys, json; sys.path.insert(0, ${JSON.stringify(path.dirname(PY))}); import drive_scan\n` +
+        `print(json.dumps([[p, drive_scan.kind_of(p)] for p in json.load(sys.stdin)]))`],
+      { encoding: "utf8", input: JSON.stringify(cases.map(([p]) => p)) },
+    )
+    expect(r.stderr).toBe("")
+    expect(JSON.parse(r.stdout)).toEqual(cases.map(([p]) => [p, kindOf(p)]))
+  })
+})
+
+// #193368: stale findings close through the import (upsert), so each keeps its row and only the status moves.
+describe("movedRows", () => {
+  test("keeps the stored row and sets status moved", () => {
+    const old = { external_id: "fs:abc:Old/a.sql", data: { path: "Old/a.sql", kind: "db-dump", status: "exposed", found: "2026-11-01" } }
+    expect(movedRows([old])).toEqual([{ external_id: "fs:abc:Old/a.sql", path: "Old/a.sql", kind: "db-dump", status: "moved", found: "2026-11-01" }])
+    expect(movedRows([{ external_id: "x" }])).toEqual([{ external_id: "x", status: "moved" }])
+  })
 })
 
 let tmp: string
