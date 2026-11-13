@@ -1,7 +1,7 @@
 ---
 category: Data & Atlas
 level: beginner
-tags: [drives, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access]
+tags: [drives, keep, vault, keep it safe, backup copies, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access]
 duration_min: 15
 ---
 # How to: Know what is on every drive you own, and find any file without plugging it in
@@ -27,7 +27,7 @@ Two rules explain everything else in this guide:
 Product page: [heyiris.io/p/drives](https://heyiris.io/p/drives) · Guided playbook:
 [heyiris.io/playbooks/iris-drives](https://heyiris.io/playbooks/iris-drives)
 
-## The six commands at a glance
+## The commands at a glance
 
 | Command | What it answers | Needs the drive plugged in? |
 |---|---|---|
@@ -37,12 +37,13 @@ Product page: [heyiris.io/p/drives](https://heyiris.io/p/drives) · Guided playb
 | `iris drives copies <words>` | How many identical copies of this file exist, and where? | No |
 | `iris drives path <drive>:<path>` | Where is that file on this computer right now? | Yes, here |
 | `iris drives get <drive>:<path>` | Copy one file off the drive, with a recorded reason | Yes: here, or at another of your machines |
+| `iris drives keep <drive>:<path> --vault <v>` | Keep this file or folder safe: encrypted copies on your own drives and machines | Yes: here, or at another of your machines |
 
 Every command has examples in its own help: `iris drives scan --help`, `iris drives get --help`.
 
 ## Your first 10 minutes
 
-1. `iris update`, then `iris drives --help`. You should see all six commands above.
+1. `iris update`, then `iris drives --help`. You should see the commands above.
 2. Plug the drive in. On a Mac, `ls /Volumes` shows its name; on Windows, note its letter in File
    Explorer (for example `E:`).
 3. Decide which folders on it are private (family photos, your own medical or tax papers).
@@ -326,6 +327,74 @@ turn on Remote Login). The other machine needs an IRIS version that includes thi
 | 5 | The copy that arrived did not match the original. It was deleted and nothing was recorded. | Try again |
 | 1 | Refused (private folder, sensitive file without `--confirm`), or IRIS on the other machine needs updating | Read the message |
 
+## Keep it safe: encrypted copies on your own drives (`keep`)
+
+A file that exists on one drive is one dropped drive from gone. `keep` puts encrypted copies of a
+file or a whole project folder on drives and machines you choose, counts them, and flags the file
+when too few are left.
+
+**1. Make a vault that says where the copies go** (once). Name drives as `iris drives list` shows
+them, and `this-machine`:
+
+```bash
+iris vault create masters --on "Backup A,Backup B,this-machine"
+```
+
+**2. Keep a folder or a file in it:**
+
+```bash
+iris drives keep "Studio:Album 2026" --vault masters --why "the only copy of the album"
+```
+
+```
+Kept 4 file(s) from Album 2026 from Studio in vault masters · 9 MB
+  2 of 3 copies so far: laptop ✓ · Backup A ✓ · Backup B pending
+  A copy on a drive that is not plugged in catches up when it is: iris vault sync on the machine it is plugged into
+```
+
+**3. Plug Backup B into any of your machines and run `iris vault sync` there.** It fills in the
+missing chunks, checks them, and records the copy. `iris drives list` then says every kept file
+is at its minimum.
+
+**The rules are the same as `get`:**
+
+- `--why` is required. One row goes into **Drive reads** (`kept in vault masters: <why>`).
+- Private folders are never opened, whether you name one, a link points into one, or it sits inside
+  the folder you keep. Installed apps are skipped.
+- A sensitive file needs `--confirm`. In a folder, one sensitive file is enough to ask.
+- The drive can be plugged in here or at another of your machines; then the files come over your
+  Hive one by one, exactly as with `get` (up to 200 files; for a bigger folder, run `keep` on the
+  machine the drive is plugged into). `--from <machine>` picks the machine.
+- If the read cannot be recorded, nothing is kept.
+
+**How the copies are counted.** Each kept file gets a row in **Kept files** on your Drives board:
+where it came from, which vault, a content ID, which copies hold it, and how many count. A content
+ID is a keyed fingerprint (HMAC-SHA256 under a key derived from the vault key), so copies can be
+counted without decrypting anything, and the ID says nothing about the file to anyone without the
+key. `iris drives copies` adds the vault's copies to the plain ones:
+
+```
+mix.wav — only 1 copy, on: Studio
+  Studio: Album 2026/mix.wav
+  + 3 encrypted copies in vault masters (minimum 3): Backup A, Backup B, laptop
+```
+
+**When a copy goes missing.** A copy counts while it was verified in the last 14 days
+(`IRIS_VAULT_MISSING_DAYS`). A drive nobody plugs in for longer, or a chunk that fails a check
+(`iris vault status <vault> --deep` re-hashes them), drops the count. When a kept file falls below
+its vault's minimum, `iris drives list` shows it under its drive and the drive's card in Atlas
+gets a **Copies alert**:
+
+```
+Studio   6 files ...
+  ⚠ kept: 4 of 4 file(s) BELOW their minimum copies
+     Album 2026/mix.wav — 1/3 in vault masters (Backup B not verified for 14+ days)
+     Plug the missing drive in and run: iris vault sync · or check: iris vault status <vault>
+```
+
+`iris vault sync` also replaces a chunk that failed its check, from a good copy. Reading a kept
+file on another machine: see "Copies on your own drives" in `iris how-to view vaults`.
+
 ## Step 6: Encrypt a drive that holds sensitive files
 
 A sensitive file on an unencrypted drive can be read by whoever picks the drive up. Encrypt the
@@ -369,6 +438,8 @@ If the search does not show the footage in two places, the card is not ready to 
 | The full list of every file (path, size, date, kind, fingerprint) | One file per drive, **encrypted on your computer with AES-256-GCM** (a fresh key every scan) before upload | Only through your account: the key is kept in a private field on the drive's card |
 | Private folders | Only the folder names you passed to `--exclude`, on the drive's card, so other computers skip them too | Nothing inside is ever opened, listed, counted or fingerprinted |
 | Each `get` | A row in **Drive reads**: who, which computer, when, why, fingerprint | Your Drives board |
+| Each kept file (`keep`) | A row in **Kept files**: path, vault, content ID, fingerprint, which copies hold it; one row per copy in **Drive vault copies**: where, verified when | Your Drives board |
+| Kept files' copies | Encrypted on your computer (AES-256-GCM, the vault's key) and stored only on the drives and machines you named; `_IRIS_VAULT` folders are never cataloged as files | Only machines you imported the vault key to |
 | The files themselves | Stay on the drive | Never uploaded |
 
 Sensitive files are found by **name and type**, not by reading them. A scanned medical form named
