@@ -16,7 +16,8 @@
  * ── PHI / SOVEREIGNTY POSTURE, STATED SO IT CAN BE AUDITED ──────────────────────────────
  *
  *   - Plaintext NEVER leaves the machine that created it. Chunks are encrypted locally with a
- *     key that lives only in ~/.iris/vault-keys.json (0600) on devices the operator owns.
+ *     key that lives only on devices the operator owns, wrapped at rest by the OS keychain, a
+ *     node key outside the home directory, or a passphrase (#193396, replicated-vault-keys.ts).
  *   - No third party is in the byte path. No CDN, no S3, no Drive. Device to device only.
  *   - A replica node stores ciphertext addressed by its own hash, so it can prove its copy is
  *     intact without being able to read it. Replication does not imply clearance.
@@ -42,6 +43,7 @@ import {
   choosePlacement, replicationHealth, generateVaultKey, sha256,
   type VaultManifest, type PlacementNode,
 } from "./vault-core"
+import { ReplicatedKeyStore, defaultOptions, sealExport, openExport, createNodeKeyWithSudo, defaultNodeKeyFile, BACKENDS, type KekBackend } from "./replicated-vault-keys"
 import { readFile, writeFile, mkdir, readdir } from "fs/promises"
 import { existsSync, statSync } from "fs"
 import { homedir } from "os"
@@ -60,22 +62,22 @@ const remoteBlobPath = (id: string, blobId: string) => `~/.iris/vault/${id}/blob
 
 interface VaultMeta { id: string; name: string; created_at: string; replicas: number }
 
-async function loadKeys(): Promise<Record<string, string>> {
-  try { return JSON.parse(await readFile(KEYS_FILE, "utf-8")) } catch { return {} }
+/**
+ * Replicated-vault keys are wrapped at rest (#193396): sealed under a key held by the OS keychain,
+ * a node key outside the home directory, or a passphrase — never plaintext in ~/.iris. A plaintext
+ * ~/.iris/vault-keys.json from an older CLI is migrated on first use. See replicated-vault-keys.ts.
+ */
+function keyStore(argv: any = {}): ReplicatedKeyStore {
+  const fromStdin = !!argv["passphrase-stdin"]
+  return new ReplicatedKeyStore(defaultOptions({
+    passphrase: fromStdin || process.stdin.isTTY ? (confirm) => readPassphrase(confirm && !fromStdin, fromStdin) : undefined,
+  }))
 }
 
-async function saveKey(vaultId: string, key: Buffer): Promise<void> {
-  const keys = await loadKeys()
-  keys[vaultId] = key.toString("base64")
-  await mkdir(dirname(KEYS_FILE), { recursive: true })
-  // 0600. The whole sovereignty claim reduces to this file staying on this machine.
-  await writeFile(KEYS_FILE, JSON.stringify(keys, null, 2), { encoding: "utf-8", mode: 0o600 })
-}
-
-async function requireKey(vaultId: string): Promise<Buffer> {
-  const k = (await loadKeys())[vaultId]
-  if (!k) throw new VaultUserError(`no key for vault ${vaultId} on this machine. Keys never sync — copy ~/.iris/vault-keys.json to a device you own, by hand.`)
-  return Buffer.from(k, "base64")
+async function requireKey(vaultId: string, argv: any = {}): Promise<Buffer> {
+  const k = await keyStore(argv).getKey(vaultId)
+  if (!k) throw new VaultUserError(`no key for vault ${vaultId} on this machine. Keys never sync — on the machine that has it run: iris vault key export <vault> --out <file>, then here: iris vault key import <file>`)
+  return k
 }
 
 async function loadMeta(id: string): Promise<VaultMeta> {
@@ -227,16 +229,24 @@ const CreateCommand = cmd({
     }
     const id = randomUUID()
     const meta: VaultMeta = { id, name: String(argv.name), created_at: new Date().toISOString(), replicas: Number(argv.replicas) || 2 }
+    // Key first: a vault with no safe place for its key is refused before anything is written.
+    const store = keyStore(argv)
+    let where: ReturnType<ReplicatedKeyStore["status"]>
+    try {
+      await store.saveKey(id, generateVaultKey())
+      where = store.status()
+    } catch (e) {
+      return vaultFail(e, !!argv.json)
+    }
     await mkdir(join(vaultDir(id), "blobs"), { recursive: true })
     await writeFile(join(vaultDir(id), "vault.json"), JSON.stringify(meta, null, 2), "utf-8")
-    await saveKey(id, generateVaultKey())
 
-    if (argv.json) { await writeJson({ ok: true, vault: meta }); return }
+    if (argv.json) { await writeJson({ ok: true, vault: meta, key_backend: where.backend }); return }
     console.log()
     console.log(`  ${success("✓")} vault ${bold(meta.name)}  ${dim(id)}`)
     console.log(`     ${dim(`target replicas: ${meta.replicas}`)}`)
-    console.log(`     ${dim("key written to ~/.iris/vault-keys.json (0600) — it NEVER syncs.")}`)
-    console.log(`     ${dim("Back it up by hand to a device you own. Lose it and the data is unreadable, by design.")}`)
+    console.log(`     ${dim(`key wrapped by ${where.backend} in ~/.iris/vault-keys.wrapped.json — it NEVER syncs.`)}`)
+    console.log(`     ${dim(`Back it up: iris vault key export ${meta.name} --out <file> (passphrase-sealed). Lose it and the data is unreadable, by design.`)}`)
     console.log()
   },
 })
@@ -250,7 +260,7 @@ const ListCommand = cmd({
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     if (argv.all || argv.node) return (NodeVaultCommands.list as any).handler(argv)
-    await listReplicated(argv)
+    try { await listReplicated(argv) } catch (e) { return vaultFail(e, !!argv.json) }
     // Encrypted PHI vaults live in the local daemon. If it isn't running there is nothing to
     // show for that kind; the replicated listing above still stands.
     if (!argv.json) {
@@ -265,13 +275,13 @@ async function listReplicated(argv: any) {
   {
     let ids: string[] = []
     try { ids = await readdir(VAULT_ROOT) } catch { /* none */ }
-    const keys = await loadKeys()
+    const keys = keyStore(argv).ids()
     const out: any[] = []
     for (const id of ids) {
       try {
         const m = await loadMeta(id)
         const man = await latestManifest(id)
-        out.push({ ...m, files: man ? Object.keys(man.entries).length : 0, seq: man?.seq ?? 0, has_key: !!keys[id] })
+        out.push({ ...m, files: man ? Object.keys(man.entries).length : 0, seq: man?.seq ?? 0, has_key: keys.has(id) })
       } catch { /* skip */ }
     }
     if (argv.json) { await writeJson({ ok: true, vaults: out }); return }
@@ -293,6 +303,7 @@ const PutCommand = cmd({
     .positional("path", { describe: "local file(s)", type: "string", demandOption: true })
     .option("as", { describe: "path inside the vault (single file only)", type: "string" })
     .option("replicas", { describe: "override target replica count", type: "number" })
+    .option("to", { describe: "place copies only on these nodes (name or id; repeatable)", type: "string", array: true })
     .option("user", { describe: "ssh user on nodes", type: "string" })
     .option("user-id", { type: "number" })
     .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
@@ -342,7 +353,7 @@ async function putReplicated(meta: VaultMeta, argv: any) {
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const key = await requireKey(meta.id)
+    const key = await requireKey(meta.id, argv)
     const replicas = Number(argv.replicas ?? meta.replicas)
     const paths = ([] as string[]).concat(argv.path as any)
 
@@ -351,7 +362,9 @@ async function putReplicated(meta: VaultMeta, argv: any) {
     // This machine is already copy one. Dialling it as a peer fails and then reads as
     // "could not reach", for a node that is right here.
     const selfId = await detectLocalNodeId(allNodes)
-    const nodes = allNodes.filter((n) => String(n.id) !== selfId)
+    const only = ([] as string[]).concat((argv.to as any) ?? []).map(String)
+    const nodes = allNodes.filter((n) => String(n.id) !== selfId && (only.length === 0 || only.includes(String(n.name)) || only.includes(String(n.id))))
+    if (only.length && nodes.length === 0) throw new VaultUserError(`--to matched no other node: ${only.join(", ")}`)
     const cand: Array<PlacementNode & { node: any; t: SshTarget }> = []
     for (const n of nodes) {
       const t = await targetFor(n, argv)
@@ -444,6 +457,7 @@ const GetCommand = cmd({
     .positional("vault", { type: "string", demandOption: true })
     .positional("path", { describe: "path inside the vault", type: "string", demandOption: true })
     .option("out", { describe: "output directory", type: "string", default: "." })
+    .option("from", { describe: "fetch missing chunks only from these nodes (name or id; repeatable)", type: "string", array: true })
     .option("user", { type: "string" })
     .option("user-id", { type: "number" })
     .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
@@ -475,7 +489,7 @@ async function getReplicated(meta: VaultMeta, argv: any) {
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const key = await requireKey(meta.id)
+    const key = await requireKey(meta.id, argv)
     const man = await latestManifest(meta.id)
     const vpath = normalizePath(String(argv.path))
     const entry = man?.entries?.[vpath]
@@ -495,7 +509,8 @@ async function getReplicated(meta: VaultMeta, argv: any) {
     if (missing.length > 0) {
       const allNodes = (await fetchNodes(userId)) as any[]
       const selfId = await detectLocalNodeId(allNodes)
-      const nodes = allNodes.filter((n) => String(n.id) !== selfId)
+      const only = ([] as string[]).concat((argv.from as any) ?? []).map(String)
+      const nodes = allNodes.filter((n) => String(n.id) !== selfId && (only.length === 0 || only.includes(String(n.name)) || only.includes(String(n.id))))
       for (const n of nodes) {
         if (missing.length === 0) break
         const t = await targetFor(n, argv)
@@ -664,6 +679,136 @@ async function statusReplicated(meta: VaultMeta, argv: any) {
   }
 }
 
+// ── keys (#193396) ───────────────────────────────────────────────────────────
+
+const KeyStatusCommand = cmd({
+  command: "status",
+  describe: "where this machine keeps replicated-vault keys (never prints a key)",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(argv) {
+    try {
+      const st = keyStore(argv).status()
+      if (argv.json) { await writeJson({ ok: true, ...st }); return }
+      console.log()
+      console.log(`  ${bold("Replicated vault keys")}  ${dim(st.wrapped_file)}`)
+      console.log(`     ${dim(`wrapped by: ${st.backend ?? "(not set up yet — chosen on first use)"}${st.node_key_file ? ` · ${st.node_key_file}` : ""}${st.kdf ? ` · scrypt N=${st.kdf.N} r=${st.kdf.r} p=${st.kdf.p}` : ""}`)}`)
+      console.log(`     ${dim(`${st.wrapped_keys} wrapped key(s)`)}`)
+      if (st.plaintext_file_present) console.log(`     ${bold(`plaintext ~/.iris/vault-keys.json present (${st.plaintext_keys} key(s)) — run: iris vault key setup`)}`)
+      console.log()
+    } catch (e) { await vaultFail(e, !!argv.json) }
+  },
+})
+
+const KeySetupCommand = cmd({
+  command: "setup",
+  describe: "wrap replicated-vault keys now (migrates a plaintext ~/.iris/vault-keys.json); --node-key for headless Linux",
+  builder: (y) => y
+    .option("node-key", { type: "boolean", default: false, describe: "create this machine's node key (/etc/iris/vault-kek/<uid>.key, outside $HOME; asks for sudo once)" })
+    .option("backend", { type: "string", choices: BACKENDS as unknown as string[], describe: "force where the wrapping key lives (only before first use)" })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase backend) read the passphrase from stdin" })
+    .option("json", { type: "boolean", default: false }),
+  async handler(argv) {
+    try {
+      if (argv["node-key"]) {
+        const file = defaultNodeKeyFile()
+        const { existsSync: ex } = await import("fs")
+        if (!ex(file)) {
+          const { randomBytes } = await import("crypto")
+          if (!createNodeKeyWithSudo(file, randomBytes(32), true)) throw new VaultUserError(`could not create ${file} — this needs sudo once`)
+        }
+      }
+      const fromStdin = !!argv["passphrase-stdin"]
+      const store = new ReplicatedKeyStore(defaultOptions({
+        ...(argv.backend ? { forceBackend: argv.backend as KekBackend } : argv["node-key"] ? { forceBackend: "node-key" as KekBackend } : {}),
+        passphrase: fromStdin || process.stdin.isTTY ? (confirm) => readPassphrase(confirm && !fromStdin, fromStdin) : undefined,
+      }))
+      const r = await store.ensure()
+      const st = store.status()
+      if (argv.json) { await writeJson({ ok: true, migrated: r.migrated, ...st }); return }
+      console.log()
+      console.log(`  ${success("✓")} replicated-vault keys wrapped by ${bold(String(st.backend))}${st.node_key_file ? dim(` (${st.node_key_file})`) : ""}`)
+      console.log(`     ${dim(`${st.wrapped_keys} key(s) in ~/.iris/vault-keys.wrapped.json`)}`)
+      if (r.migrated) console.log(`     ${dim(`migrated ${r.migrated} key(s) from plaintext ~/.iris/vault-keys.json — verified, then that file was shredded`)}`)
+      console.log()
+    } catch (e) { await vaultFail(e, !!argv.json) }
+  },
+})
+
+const KeyExportCommand = cmd({
+  command: "export <vault>",
+  describe: "seal one replicated vault's key (plus its manifest) under a passphrase, to restore it on another machine you own",
+  builder: (y) => y
+    .positional("vault", { type: "string", demandOption: true })
+    .option("out", { type: "string", demandOption: true, describe: "file to write (mode 0600)" })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "read the export passphrase (line 1) — and the key passphrase, if this machine uses one (line 2) — from stdin" })
+    .option("json", { type: "boolean", default: false }),
+  async handler(argv) {
+    try {
+      const meta = await findReplicated(String(argv.vault))
+      if (!meta) throw new VaultUserError(`no replicated vault named "${argv.vault}" on this machine`)
+      const fromStdin = !!argv["passphrase-stdin"]
+      // One stdin, possibly two passphrases: read it once, hand out lines.
+      const lines = fromStdin ? (await Bun.stdin.text()).split("\n").map((l) => l.replace(/\r$/, "")) : []
+      const store = new ReplicatedKeyStore(defaultOptions({
+        passphrase: fromStdin ? async () => lines[1] ?? "" : process.stdin.isTTY ? (c) => readPassphrase(c, false) : undefined,
+      }))
+      const key = await store.getKey(meta.id)
+      if (!key) throw new VaultUserError(`no key for vault ${meta.name} on this machine`)
+      if (!fromStdin) process.stderr.write("Choose a passphrase for this export (asked again on import).\n")
+      const pass = fromStdin ? lines[0] : await readPassphrase(true, false)
+      const bundle = sealExport({ vault_id: meta.id, key: key.toString("base64"), meta, manifest: await latestManifest(meta.id) }, pass)
+      await writeFile(String(argv.out), JSON.stringify(bundle, null, 2) + "\n", { mode: 0o600 })
+      if (argv.json) { await writeJson({ ok: true, vault: meta.name, id: meta.id, out: String(argv.out) }); return }
+      console.log(`\n  ${success("✓")} ${bold(String(argv.out))}  ${dim(`key for ${meta.name}, sealed with scrypt + AES-256-GCM`)}\n     ${dim(`on the other machine: iris vault key import ${basename(String(argv.out))}`)}\n`)
+    } catch (e) { await vaultFail(e, !!argv.json) }
+  },
+})
+
+const KeyImportCommand = cmd({
+  command: "import <file>",
+  describe: "restore a replicated vault from a key export: its key (wrapped on this machine) and manifest",
+  builder: (y) => y
+    .positional("file", { type: "string", demandOption: true })
+    .option("passphrase-stdin", { type: "boolean", default: false, describe: "read the export passphrase (line 1) — and this machine's key passphrase, if it uses one (line 2) — from stdin" })
+    .option("json", { type: "boolean", default: false }),
+  async handler(argv) {
+    try {
+      let bundle: any
+      try { bundle = JSON.parse(await readFile(String(argv.file), "utf-8")) } catch { throw new VaultUserError(`cannot read ${argv.file} as a key export`) }
+      const fromStdin = !!argv["passphrase-stdin"]
+      const lines = fromStdin ? (await Bun.stdin.text()).split("\n").map((l) => l.replace(/\r$/, "")) : []
+      const pass = fromStdin ? lines[0] : await readPassphrase(false, false)
+      const p = openExport(bundle, pass)
+      const store = new ReplicatedKeyStore(defaultOptions({
+        passphrase: fromStdin ? async () => lines[1] ?? "" : process.stdin.isTTY ? (c) => readPassphrase(c, false) : undefined,
+      }))
+      const existing = await store.getKey(p.vault_id)
+      const key = Buffer.from(p.key, "base64")
+      if (existing && !existing.equals(key)) throw new VaultUserError(`this machine already holds a DIFFERENT key for vault ${p.vault_id} — not overwriting it`)
+      if (!existing) await store.saveKey(p.vault_id, key)
+      if (p.meta && !existsSync(join(vaultDir(p.vault_id), "vault.json"))) {
+        await mkdir(join(vaultDir(p.vault_id), "blobs"), { recursive: true })
+        await writeFile(join(vaultDir(p.vault_id), "vault.json"), JSON.stringify(p.meta, null, 2), "utf-8")
+      }
+      if (p.manifest) {
+        const cur = await latestManifest(p.vault_id)
+        if (!cur || cur.seq < p.manifest.seq) await writeManifest(p.vault_id, p.manifest)
+      }
+      const st = store.status()
+      if (argv.json) { await writeJson({ ok: true, id: p.vault_id, name: p.meta?.name, backend: st.backend, files: Object.keys(p.manifest?.entries ?? {}).length }); return }
+      console.log(`\n  ${success("✓")} vault ${bold(p.meta?.name ?? p.vault_id)}  ${dim(`key wrapped by ${st.backend} on this machine`)}\n     ${dim("missing chunks are fetched from your nodes on: iris vault get")}\n`)
+    } catch (e) { await vaultFail(e, !!argv.json) }
+  },
+})
+
+const KeyCommand = cmd({
+  command: "key",
+  aliases: ["keys"],
+  describe: "replicated-vault keys: where they live (status), wrap/migrate (setup), move one to another machine (export/import)",
+  builder: (y) => y.command(KeyStatusCommand).command(KeySetupCommand).command(KeyExportCommand).command(KeyImportCommand).demandCommand(1),
+  async handler() {},
+})
+
 const VaultCommand = cmd({
   command: "vault",
   aliases: ["vaults"],
@@ -672,6 +817,7 @@ const VaultCommand = cmd({
     .command(CreateCommand).command(ListCommand).command(PutCommand)
     .command(GetCommand).command(LsCommand).command(StatusCommand)
     .command(NodeVaultCommands.lock).command(NodeVaultCommands.unlock).command(NodeVaultCommands.destroy)
+    .command(KeyCommand)
     .option("json", { type: "boolean", default: false }),
   // `iris vault` / `iris vaults` with no subcommand lists them.
   async handler(argv) {
