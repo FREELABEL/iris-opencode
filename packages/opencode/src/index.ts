@@ -132,6 +132,7 @@ import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformMeetingsCommand } from "./cli/cmd/platform-meetings"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformAdCampaignsCommand } from "./cli/cmd/platform-ad-campaigns"
+import { PlatformMarketingCommand } from "./cli/cmd/platform-marketing"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
@@ -525,6 +526,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMeetingsCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformAdCampaignsCommand))
+  .command(reg(PlatformMarketingCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDiscordCommand))
