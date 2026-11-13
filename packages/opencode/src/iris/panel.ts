@@ -59,9 +59,14 @@ export namespace Panel {
     error?: string
     /** A `page` command's answer: the JSON envelope {ok,value|error} (#193145). Never stored. */
     result?: string
+    /** The chat's Browser tabs, sent with every page answer (#193328): which one is showing. */
+    browserTabs?: BrowserTab[]
   }
 
   export type Stored = State & { received: number }
+
+  /** One of a chat's Browser tabs as the desktop describes it (#193328). */
+  export type BrowserTab = { n: number; id: string; label?: string; title?: string; url?: string; active: boolean }
 
   export type Command =
     | { action: "open" }
@@ -85,19 +90,29 @@ export namespace Panel {
      * open an address. `mode` says whether the script only reads; the desktop refuses `act`
      * until acting ships, and refuses everything on a site the person has not granted.
      */
-    | {
-        action: "page"
-        op: "eval"
-        script: string
-        mode: "read" | "act"
-        /** An irreversible click's label (#193186): the person allows it once in the app, or not. */
-        confirm?: string
-        /** What the strip shows the agent doing. */
-        doing?: string
-      }
-    | { action: "page"; op: "open"; url: string }
-    /** A picture of the page (a JPEG, base64, in `result`): reading by eye, same Allow as read. */
-    | { action: "page"; op: "screenshot" }
+    | ({
+        /** Which of the chat's tabs (#193328): number, id or label. Absent: the one showing. */
+        tab?: string
+      } & (
+        | {
+            action: "page"
+            op: "eval"
+            script: string
+            mode: "read" | "act"
+            /** An irreversible click's label (#193186): the person allows it once in the app, or not. */
+            confirm?: string
+            /** What the strip shows the agent doing. */
+            doing?: string
+          }
+        /** `newTab`: in a new tab of the chat, called `label` (#193328). */
+        | { action: "page"; op: "open"; url: string; newTab?: boolean; label?: string }
+        /** A picture of the page (a JPEG, base64, in `result`): reading by eye, same Allow as read. */
+        | { action: "page"; op: "screenshot" }
+        /** The chat's tabs, changing nothing. */
+        | { action: "page"; op: "tabs" }
+        /** Close one of the chat's tabs (never its last). */
+        | { action: "page"; op: "close-tab" }
+      ))
 
   const states = new Map<string, Stored>()
   const waiters = new Map<string, (s: Stored) => void>()

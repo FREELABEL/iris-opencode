@@ -284,3 +284,70 @@
   color: var(--text-base);
   font-size: 12px;
 }
+
+/* Browser tabs (#193328): a chat's pages, one row. The active tab is a tint, not an edge bar. */
+.session-web--tabs > .session-web {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+.session-web__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.session-web__tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 160px;
+  flex: 0 1 160px;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: 6px;
+  color: var(--text-weak);
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+}
+.session-web__tab:hover {
+  background: var(--background-element);
+}
+.session-web__tab[data-active="true"] {
+  background: var(--background-element);
+  color: var(--text-strong);
+}
+.session-web__tab-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.session-web__tab-close,
+.session-web__tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-weaker);
+  font-size: 14px;
+  line-height: 1;
+}
+.session-web__tab-close:hover,
+.session-web__tab-new:hover {
+  background: var(--border-weak-base);
+  color: var(--text-strong);
+}
+.session-web__tab-new {
+  flex: none;
+  margin-left: 2px;
+}

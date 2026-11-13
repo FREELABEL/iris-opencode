@@ -21,6 +21,7 @@ import {
 } from "./browser-grants"
 import { webReloadKey, webUrl } from "./web-nav"
 import { loadSignedIn, shouldRedo, signInWithChrome, type SignedIn } from "./browser-import"
+import { noteTabPage, takePendingOpen } from "./browser-tabs"
 
 /** The last chat link opened, across remounts AND chats: a link opens once, in the chat that was
  * on screen when it was clicked, never again in the next chat shown. */
@@ -46,6 +47,9 @@ export function NativeWebTab(props: {
   browser: NativeBrowser
   zoom: () => number
   openExternal: (url: string) => void
+  /** This tab's page key (#193328): its title goes to the tab strip, and an address waiting
+   * for this tab (a new tab the agent or a link opened) opens when it first shows. */
+  pageKey?: string
 }) {
   const [address, setAddress] = createSignal("")
   const [page, setPage] = createSignal<NativeBrowserState | null>(null)
@@ -96,6 +100,7 @@ export function NativeWebTab(props: {
 
   const report = (s: NativeBrowserState) => {
     setPage(s)
+    if (props.pageKey) noteTabPage(props.pageKey, s)
     if (document.activeElement !== input) setAddress(s.url === "about:blank" ? "" : s.url)
   }
 
@@ -192,6 +197,10 @@ export function NativeWebTab(props: {
         schedule()
       })
       .catch(() => undefined)
+    // A new tab opened with an address (the agent's open with new_tab, or a page's link): open it
+    // now that the body has a place on screen.
+    const waiting = props.pageKey ? takePendingOpen(props.pageKey) : undefined
+    if (waiting) requestAnimationFrame(() => open(waiting))
     // pushState (single-page apps) fires no load event: ask where it really is, once a second,
     // only while the view is on screen.
     const poll = setInterval(() => {

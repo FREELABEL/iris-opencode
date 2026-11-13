@@ -205,4 +205,51 @@ describe("PanelPage.screenshot (the agent's eyes on maps and charts)", () => {
     setTimeout(() => (allowed = true), 25)
     expect((await page.screenshot()).length).toBe(7)
   })
+
+})
+
+describe("PanelPage tabs (#193328)", () => {
+  const desktop = (answer: (c: Panel.Command) => Partial<Panel.Stored>) => {
+    const sent: Panel.Command[] = []
+    const send = async (c: Panel.Command) => {
+      sent.push(c)
+      return outcome(answer(c))
+    }
+    return { sent, page: new PanelPage(send, silence) }
+  }
+  // #193328: tabs. Every command names the tab the tool set; answers carry the chat's tabs.
+  test("a tab rides every command, and the chat's tabs come back with the answer", async () => {
+    const tabs: Panel.BrowserTab[] = [
+      { n: 1, id: "1", label: "Car rental", url: "https://www.hertz.com/", active: false },
+      { n: 2, id: "t2", label: "Map", active: true },
+    ]
+    const { sent, page } = desktop(() => ({ result: env("hertz text"), browserTabs: tabs }))
+    page.tab = "Car rental"
+    expect(await page.text()).toBe("hertz text")
+    expect(sent[0]).toMatchObject({ action: "page", op: "eval", tab: "Car rental", mode: "read" })
+    expect(page.tabs).toEqual(tabs)
+    page.tab = undefined
+    await page.text()
+    expect("tab" in sent[1]!).toBe(false)
+  })
+
+  test("open in a new tab asks for one, with its label, and later calls mean the new tab", async () => {
+    const { sent, page } = desktop(() => ({ result: env({ url: "https://maps.google.com/", title: "Maps" }) }))
+    page.tab = "1"
+    const r = await page.open("https://maps.google.com/", { newTab: true, label: "Map" })
+    expect(r.url).toBe("https://maps.google.com/")
+    expect(sent[0]).toEqual({ action: "page", op: "open", url: "https://maps.google.com/", newTab: true, label: "Map" })
+    expect(page.tab).toBeUndefined()
+  })
+
+  test("tabs and close-tab are their own commands", async () => {
+    const list: Panel.BrowserTab[] = [{ n: 1, id: "1", active: true }]
+    const { sent, page } = desktop(() => ({ result: env(list) }))
+    expect(await page.listTabs()).toEqual(list)
+    expect(await page.closeTab("2")).toEqual(list)
+    expect(sent).toEqual([
+      { action: "page", op: "tabs" },
+      { action: "page", op: "close-tab", tab: "2" },
+    ])
+  })
 })
