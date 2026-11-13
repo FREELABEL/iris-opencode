@@ -56,6 +56,9 @@ export function IrisArtifacts(props: {
   sessionId?: string
   projectParam: string
   project?: string
+  /** The project chosen in the IRIS panel (#193407) — what "Save to Genesis" opens on. */
+  selectedBloqId?: number
+  /** The fallback when nothing is chosen (the panel's default board). */
   bloqId?: number
   bloqName?: string
   /** Projects the publish modal can send an artifact to (#187131). */
@@ -288,6 +291,7 @@ export function IrisArtifacts(props: {
                     doFetch={props.doFetch}
                     sessionId={props.sessionId!}
                     project={props.project}
+                    selectedBloqId={props.selectedBloqId}
                     bloqId={props.bloqId}
                     bloqName={props.bloqName}
                     boards={props.boards}
