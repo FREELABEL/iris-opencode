@@ -272,6 +272,8 @@ export type ElementListing = {
   below: number
   /** A blocking pop-up is open and only its controls were listed: how many are behind it. */
   behind?: number
+  /** Long strips of look-alike controls that were shortened to a few (a date bar, a seat map). */
+  collapsed?: { role: string; count: number; first: string; last: string }[]
   query?: string
   /** What the page looked like, for the bot-check test (humanCheckReason). */
   signals?: PageSignals
@@ -299,8 +301,12 @@ export function listingFooter(listed: number, l: ElementListing | null): string 
   const behind = l.behind
     ? `${l.behind} more control${l.behind === 1 ? " is" : "s are"} BEHIND the pop-up on the page. To reach them, close it first (its close or accept button, or {"action":"press","key":"Escape"}).`
     : ""
+  const strips = (l.collapsed ?? [])
+    .map((c) => `${c.count} more ${c.role}s in one strip ("${c.first}" … "${c.last}") are left out`)
+    .join("; ")
+  const squeezed = strips ? `${strips}. To reach one, ask for it by its words: {"action":"elements","query":"Dec 10"}.` : ""
   const rest = cutFooter(listed, l)
-  return [rest, behind].filter(Boolean).join(" ")
+  return [squeezed, rest, behind].filter(Boolean).join(" ")
 }
 
 function cutFooter(listed: number, l: ElementListing): string {
@@ -509,7 +515,34 @@ export type PageState = {
   textLength: number
   textHash: string
   values: Record<string, string>
+  /** The first few hundred characters of the page's text: enough to know an error page. */
+  head?: string
 }
+
+/**
+ * The page an action LANDED on is an error, not the site (#193442). On 2026-11-13 a booking click
+ * landed on Google's "404. That's an error." twice, and each time the result read like progress.
+ * Only when the action moved the page: an article that mentions "404" is not an error page.
+ */
+export function errorPageReason(after: PageState): string | undefined {
+  const head = (after.head ?? "").slice(0, 400)
+  const short = after.textLength < 1500
+  // An error page LEADS with its code ("404 Not Found", "Error 404 (Not Found)!!1", "503 Service
+  // Unavailable", Google's "404. That’s an error."); an article ABOUT one ("How to fix a 404
+  // error") or a fare of $404 does not.
+  const lead = /^\W*(?:error\W*)?([45]\d\d)\b/i
+  const code = after.title.match(lead) ?? (short ? head.match(lead) : null)
+  if (code) return `an error page (${code[1]})`
+  const said = `${after.title} ${short ? head : ""}`
+  if (/\b(page|file) (was )?not found\b|this page (isn’t|isn't|is not) available|can(’|')?t be reached|access denied|something went wrong/i.test(said))
+    return "an error page"
+  if (after.textLength === 0 && !after.title) return "a blank page"
+  return undefined
+}
+
+/** Said with a failed landing: what to do instead of trying the same thing again. */
+export const RECOVER =
+  "Do not repeat the same step: it will fail the same way. Try another route — go back to the page before ({\"action\":\"open\",\"url\":\"<that address>\"}) and pick a different control, search the page ({\"action\":\"elements\",\"query\":\"…\"}), or open the site's own address directly. If two routes fail, stop and tell the person in one line what you got done and what step they need to take."
 
 /**
  * What actually changed, in the page's own terms.
@@ -518,6 +551,9 @@ export type PageState = {
  * is the sentence this returns plainly rather than an empty summary.
  */
 export function describeChange(before: PageState, after: PageState): string {
+  const moved = before.url !== after.url || before.title !== after.title
+  const failed = moved ? errorPageReason(after) : undefined
+  if (failed) return `FAILED: that landed on ${failed} at ${after.url}${after.title ? ` ("${after.title.slice(0, 80)}")` : ""}, not the site. ${RECOVER}`
   const parts: string[] = []
   if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
   if (before.title !== after.title) parts.push(`title is now "${after.title}"`)

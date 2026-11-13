@@ -96,6 +96,14 @@ const server = Bun.serve({
       return html(`<title>Select flights</title><body><nav>${nav}</nav><div style="height:3000px"></div>
         <section id="grid">${fare("WN404", "170")}${fare("WN1050", "155")}${fare("WN409", "170")}</section><div style="height:2000px"></div></body>`)
     }
+    // Southwest's date bar (#193443): 160 day tabs all reporting as on screen (a carousel that
+    // stacks them), fares just below. The tabs alone filled the 150-entry list.
+    if (new URL(req.url).pathname === "/dates") {
+      const days = Array.from({ length: 160 }, (_, i) => `<li><button role="tab" style="position:absolute;left:0;top:0">Day ${i + 1}</button></li>`).join("")
+      const fare = (id: string, price: string) => `<button onclick="document.title='picked ${id}'">${id} $${price}</button>`
+      return html(`<title>Depart</title><body><ul style="position:relative;height:40px;overflow:hidden">${days}</ul><div style="height:1200px"></div>
+        <section>${fare("WN300", "104")}${fare("WN485", "159")}${fare("WN271", "149")}</section></body>`)
+    }
     if (new URL(req.url).pathname === "/second") {
       return new Response("<!doctype html><title>Second</title><body><h1>Second page</h1></body>", {
         headers: { "content-type": "text/html" },
@@ -277,10 +285,12 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
   test("a fare cell that is only a clickable <div>, past 200 header links, is listed and clicked (#193331)", async () => {
     await session.open(`${url}fares`)
     const top = await session.elements()
-    expect(top.length).toBe(150)
+    // the 200-link header is one strip: a few kept, the rest summed up, so the fares fit (#193443)
     expect(session.lastListing?.total).toBe(203)
-    // the cut is reported, not silent
-    expect(listingFooter(top.length, session.lastListing)).toContain("Not listed: 53 below")
+    expect(top.filter((e) => e.area).length).toBe(3)
+    expect(top.length).toBe(15)
+    // the shortening is reported, not silent
+    expect(listingFooter(top.length, session.lastListing)).toContain("188 more links in one strip")
     const navRef = top.find((e) => e.name === "Menu link 0")!.ref
 
     // asked for by its words: found at once, from anywhere on the page
@@ -304,6 +314,19 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(refuseTargetReason(there, hit[0].ref, "click")).toBeNull()
     expect(await session.clickRef(hit[0].ref)).toBe(true)
     expect((await session.where()).title).toBe("picked WN1050 155")
+    await session.open(url)
+  }, 60_000)
+
+  test("a 160-day date bar cannot push the fares off the list (#193443)", async () => {
+    await session.open(`${url}dates`)
+    const els = await session.elements()
+    expect(els.filter((e) => e.role === "tab").length).toBe(12)
+    expect(els.filter((e) => e.role === "button").map((e) => e.name)).toEqual(["WN300 $104", "WN485 $159", "WN271 $149"])
+    const footer = listingFooter(els.length, session.lastListing)
+    expect(footer).toContain('148 more tabs in one strip ("Day 1" … "Day 160")')
+    // any one day is still reachable by its words
+    const day = await session.elements(150, { query: "day 97" })
+    expect(day.map((e) => e.name)).toEqual(["Day 97"])
     await session.open(url)
   }, 60_000)
 
