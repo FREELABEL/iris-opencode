@@ -4,7 +4,11 @@ import {
   clampPageText,
   describeChange,
   findInPage,
+  humanCheckAdvice,
+  humanCheckReason,
+  listingFooter,
   looksIrreversible,
+  normalizeDate,
   refuseNavigationReason,
   refuseOptionReason,
   refuseScrollReason,
@@ -20,7 +24,7 @@ describe("VERBS", () => {
   test("S3 adds the acting verbs, in one place", () => {
     // Read-only through S1.1; click and type arrive here with compatibility, a gate on
     // irreversible labels, and a change verified in code.
-    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "select", "scroll", "screenshot", "close"])
+    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "select", "press", "scroll", "screenshot", "close"])
   })
 })
 
@@ -249,6 +253,91 @@ describe("S3 — irreversible clicks are gated", () => {
     expect(looksIrreversible("Home")).toBe(false)
     expect(looksIrreversible("Next page")).toBe(false)
     expect(looksIrreversible("Search")).toBe(false)
+  })
+
+  // The stress test's list (#193355): booking words went through free, list/field words asked.
+  // Every real pay / submit / send-message gate stays.
+  const ASK = [
+    "Book now", "Book", "Book flight", "Reserve", "Reserve now", "Complete booking", "Confirm booking",
+    "Complete reservation", "Make a reservation", "Cancel booking",
+    "Purchase", "Place order", "Pay now", "Pay $420 now", "Buy now", "Checkout", "Submit", "Submit order",
+    "Send message", "Send", "Send money", "Confirm", "Confirm and pay", "Confirm transfer", "Delete account",
+    "Remove", "Archive", "Publish", "Post", "Unsubscribe", "Sign out", "Order now",
+    // a harmless phrase does not launder a real commit word next to it
+    "Confirm dates and pay", "Send code and book",
+  ]
+  const FREE = [
+    "Sort order", "Order history", "Order status", "Track your order", "View orders", "Confirm dates", "Confirm selection",
+    "Send code", "Send verification code", "Resend code", "Post code", "Postcode", "Postal code",
+    "Continue to payment", "Cancel", "Home", "Search flights", "Booking details", "Bookings", "Reservations",
+    "Address book", "Facebook", "Reserved seating",
+  ]
+  test.each(ASK)("asks before %p", (label) => expect(looksIrreversible(label)).toBe(true))
+  test.each(FREE)("does not ask before %p", (label) => expect(looksIrreversible(label)).toBe(false))
+})
+
+describe("a date as a date field takes it (#193355)", () => {
+  test.each([
+    ["12/10/2026", "2026-12-10"],
+    ["1/5/26", "2026-01-05"],
+    ["2026-12-10", "2026-12-10"],
+    ["2026/12/10", "2026-12-10"],
+    ["25/12/2026", "2026-12-25"],
+    ["12.10.2026", "2026-12-10"],
+    ["December 10, 2026", "2026-12-10"],
+    ["Dec 10 2026", "2026-12-10"],
+    ["10 December 2026", "2026-12-10"],
+    ["Thu, Dec 10th, 2026", "2026-12-10"],
+  ])("%p → %p", (text, iso) => expect(normalizeDate(text)).toBe(iso))
+  test.each(["next friday", "13/13/2026", "2/30/2026", "", "Phoenix"])("%p is not a date", (text) => expect(normalizeDate(text)).toBeNull())
+})
+
+describe("bot checks and block pages are named, and handed to the person (#193355)", () => {
+  const page = { url: "https://site.test/", title: "Flights", heading: "Flights", text: "Find cheap flights", textLength: 5000, frames: [], cfChallenge: false, blockWidget: false }
+  test.each([
+    [{ title: "Just a moment..." }, "a Cloudflare check"],
+    [{ cfChallenge: true }, "a Cloudflare check"],
+    [{ frames: ["https://geo.captcha-delivery.com/captcha/?x=1"] }, "a DataDome check"],
+    [{ text: "Press & Hold to confirm you are a human", textLength: 200 }, "a PerimeterX check"],
+    [{ url: "https://www.kayak.com/help/bots.html" }, "the site's bot page"],
+    [{ title: "Bot or Not?", heading: "Bot or Not?" }, "a block page"],
+    [{ title: "Access Denied" }, "a block page"],
+    [{ heading: "Sorry, you have been blocked", textLength: 400 }, "a block page"],
+    [{ text: "", textLength: 0, frames: ["https://www.google.com/recaptcha/api2/anchor"] }, "a captcha"],
+    [{ blockWidget: true }, "a human check"],
+  ])("%p is %p", (over, kind) => expect(humanCheckReason({ ...page, ...over })).toBe(kind))
+
+  test("a real page is not one, even one that mentions captchas or blocking", () => {
+    expect(humanCheckReason(page)).toBeNull()
+    expect(humanCheckReason({ ...page, heading: "Blocked dates", text: "These dates are blocked" })).toBeNull()
+    expect(humanCheckReason({ ...page, title: "Blocked dates | Calendar", textLength: 100 })).toBeNull()
+    expect(humanCheckReason({ ...page, title: "Attention Required! | Cloudflare" })).toBe("a Cloudflare check")
+    expect(humanCheckReason({ ...page, title: "Access Denied - Hertz" })).toBe("a block page")
+    expect(humanCheckReason({ ...page, frames: ["https://www.google.com/recaptcha/api2/anchor"] })).toBeNull()
+    expect(humanCheckReason(null)).toBeNull()
+  })
+
+  test("the advice hands it to the person and never to a workaround", () => {
+    for (const target of ["agent", "panel"] as const) {
+      const a = humanCheckAdvice("a Cloudflare check", target)
+      expect(a).toContain("for a PERSON")
+      expect(a).toContain("do not click, solve")
+      expect(a).toContain("do not switch browsers")
+    }
+    expect(humanCheckAdvice("x", "panel")).toContain("finish the check in the Browser")
+  })
+})
+
+describe("a pop-up's listing says what is behind it, and a covered control says what covers it (#193355)", () => {
+  test("footer counts what is behind a blocking pop-up", () => {
+    const l = { total: 3, matched: 3, above: 0, below: 0, behind: 220 }
+    expect(listingFooter(3, l)).toContain("220 more controls are BEHIND the pop-up")
+    expect(listingFooter(3, { ...l, behind: undefined })).toBe("")
+  })
+
+  test("a covered row names the cover", () => {
+    const t = renderElements([{ ref: 1, role: "button", name: "Search flights", tag: "button", enabled: true, inViewport: true, covered: "Accept cookies" }])
+    expect(t).toContain('covered by "Accept cookies"')
   })
 })
 

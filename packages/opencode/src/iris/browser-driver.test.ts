@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { PageSession, findChrome } from "./browser-driver"
-import { clampPageText, describeChange, findInPage, listingFooter, refuseOptionReason, refuseTargetReason } from "./browser-verbs"
+import {
+  clampPageText,
+  describeChange,
+  findInPage,
+  humanCheckReason,
+  listingFooter,
+  refuseOptionReason,
+  refuseTargetReason,
+  renderElements,
+} from "./browser-verbs"
 
 /**
  * The driver, against a REAL Chrome and a real page.
@@ -13,10 +22,53 @@ import { clampPageText, describeChange, findInPage, listingFooter, refuseOptionR
  * without a browser is the false green this repo keeps finding.
  */
 const chrome = await findChrome()
+
+/**
+ * The stress-test fixtures (#193355): each one a pattern real booking sites use, that the driver
+ * got wrong before. Built from the harness that found them, one page per finding.
+ */
+const STRESS: Record<string, string> = {
+  // A OneTrust cookie banner: role=dialog, NOT modal, along the bottom. The page is still the page.
+  "/banner": `<title>Book</title><body><h1>Find flights</h1><input aria-label="From"><input aria-label="To"><button>Search flights</button>
+    <div id="onetrust-consent-sdk"><div class="ot-sdk-container" role="dialog" aria-label="Privacy" style="position:fixed;left:0;right:0;bottom:0;height:80px;background:#eee">
+    <button>Accept all cookies</button><button>Cookie settings</button></div></div></body>`,
+  // Radix/MUI: opens on pointerdown and ignores click. react-select: mousedown only.
+  "/pointerdown": `<title>pd</title><button onpointerdown="document.title='opened'">Open menu</button>
+    <div role="button" tabindex="0" onmousedown="this.textContent='airport open'">Choose airport</div>
+    <button id="n" onclick="this.dataset.n=(+this.dataset.n||0)+1;document.title='clicks '+this.dataset.n">Count</button>
+    <label><input type="checkbox" onchange="document.title='checked '+this.checked">Window seat</label>`,
+  // An airport box that searches on keyup; a search that only submits on Enter; a beforeinput editor.
+  "/keys": `<title>keys</title><input aria-label="From" onkeyup="document.getElementById('s').innerHTML=this.value?'<li role=option>Austin, TX - AUS</li>':''"><ul id="s" role="listbox"></ul>
+    <form onsubmit="document.title='searched '+this.q.value;return false"><input name="q" aria-label="Search"></form>
+    <div id="e" contenteditable="true" aria-label="Message"></div>
+    <script>const e=document.getElementById('e');let model='';e.addEventListener('beforeinput',ev=>{ev.preventDefault();model+=ev.data||'';e.textContent=model});window.model=()=>model</script>
+    <input type="date" aria-label="Pick-up date" onchange="document.title='date '+this.value">`,
+  // An async router: the click navigates 900 ms later.
+  "/slownav": `<title>sn</title><button onclick="setTimeout(()=>location.assign('/second'),900)">Continue</button>`,
+  // A new tab, two ways.
+  "/blank": `<title>blank</title><a href="/second" target="_blank">Open the map</a><button onclick="window.open('/second')">View itinerary</button>`,
+  // A web component and an embedded same-origin checkout.
+  "/deep": `<title>deep</title><x-btn></x-btn><iframe src="/inner" style="width:600px;height:200px"></iframe>
+    <script>customElements.define('x-btn',class extends HTMLElement{connectedCallback(){const r=this.attachShadow({mode:'open'});r.innerHTML='<button>Select fare $155</button><input aria-label="Promo code">';r.querySelector('button').onclick=()=>document.title='shadow clicked'}})</script>`,
+  "/inner": `<title>inner</title><button onclick="parent.document.title='iframe clicked'">Reserve car</button><input aria-label="Driver age">`,
+  // Repeated words: two months of day buttons, five Select buttons, icon-only buttons.
+  "/names": `<title>names</title>${["November", "December"].map((m) => `<table><caption>${m} 2026</caption><tr>${Array.from({ length: 12 }, (_, i) => `<td><button>${i + 1}</button></td>`).join("")}</tr></table>`).join("")}
+    ${Array.from({ length: 3 }, (_, i) => `<div><span>Flight WN${100 + i}</span><button>Select</button></div>`).join("")}
+    <span id="lbl">Swap origin and destination</span><button aria-labelledby="lbl"><svg width="16" height="16"></svg></button>
+    <button><svg width="16" height="16"><title>Close dialog</title></svg></button>`,
+  // A control under a full-page overlay.
+  "/overlay": `<title>ov</title><button style="margin:100px">Search flights</button><div style="position:fixed;inset:0;background:rgba(0,0,0,.5)"><button style="position:absolute;bottom:20px;right:20px" onclick="this.parentElement.remove()">Accept cookies</button></div>`,
+  // Expedia's block page, and Kayak's.
+  "/botornot": `<title>Bot or Not?</title><body><h1>Bot or Not?</h1><p>We can't tell if you're a human or a bot.</p></body>`,
+  "/help/bots.html": `<title>KAYAK</title><body><h1>What is happening?</h1><p>Please confirm you are not a robot.</p></body>`,
+}
+
 const server = Bun.serve({
   port: 0,
   fetch(req) {
     const html = (body: string) => new Response(`<!doctype html>${body}`, { headers: { "content-type": "text/html" } })
+    const stress = STRESS[new URL(req.url).pathname]
+    if (stress) return html(stress)
     // Indeed's results (#193242): the visible control is a button; the job's link and id sit around it.
     if (new URL(req.url).pathname === "/jobs") {
       return html(`<title>Jobs</title><link rel="canonical" href="https://jobs.example/q"><body><ul>
@@ -241,7 +293,8 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     await session.evaluate("document.getElementById('grid').scrollIntoView({block:'center'})")
     const there = await session.elements()
     expect(there[0].area).toBe(true)
-    expect(there.slice(0, 3).map((e) => e.name.replace(/\s+/g, " "))).toEqual(["$170 4 left", "$155 4 left", "$170 4 left"])
+    // two cells that say the same thing carry their flight (#193355)
+    expect(there.slice(0, 3).map((e) => e.name.replace(/\s+/g, " "))).toEqual(["$170 4 left (WN404)", "$155 4 left", "$170 4 left (WN409)"])
     expect(there.find((e) => e.ref === hit[0].ref)?.name).toContain("$155")
 
     // a ref beyond the cut still resolves for the action that names it
@@ -252,6 +305,136 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(await session.clickRef(hit[0].ref)).toBe(true)
     expect((await session.where()).title).toBe("picked WN1050 155")
     await session.open(url)
+  }, 60_000)
+
+  test("a cookie banner (role=dialog, not modal) does not hide the page; a real modal does, and says what is behind it (#193355)", async () => {
+    await session.open(`${url}banner`)
+    const els = await session.elements()
+    expect(els.some((e) => e.inDialog)).toBe(false)
+    expect(els.map((e) => e.name)).toEqual(expect.arrayContaining(["From", "To", "Search flights", "Accept all cookies"]))
+    expect(session.lastListing?.behind).toBeUndefined()
+
+    await session.open(`${url}menu`)
+    const modal = await session.elements()
+    expect(modal.every((e) => e.inDialog)).toBe(true)
+    expect(session.lastListing?.behind).toBe(220)
+    expect(listingFooter(modal.length, session.lastListing)).toContain("220 more controls are BEHIND the pop-up")
+  }, 60_000)
+
+  test("a click is a mouse: pointerdown/mousedown widgets open, and the click fires exactly once (#193355)", async () => {
+    await session.open(`${url}pointerdown`)
+    let els = await session.elements()
+    const by = (n: string) => els.find((e) => e.name.startsWith(n))!
+    await session.clickRef(by("Open menu").ref)
+    expect((await session.where()).title).toBe("opened")
+    await session.clickRef(by("Choose airport").ref)
+    els = await session.elements()
+    expect(els.some((e) => e.name === "airport open")).toBe(true)
+    await session.clickRef(by("Count").ref)
+    expect((await session.where()).title).toBe("clicks 1")
+    await session.clickRef(by("Window seat").ref)
+    expect((await session.where()).title).toBe("checked true")
+  }, 60_000)
+
+  test("typing is keystrokes: keyup autocompletes suggest, beforeinput editors fill, Enter submits a form with no button (#193355)", async () => {
+    await session.open(`${url}keys`)
+    let els = await session.elements()
+    const by = (n: string) => els.find((e) => e.name.startsWith(n))!
+    await session.typeRef(by("From").ref, "Aus")
+    els = await session.elements()
+    expect(els.some((e) => e.name.includes("Austin"))).toBe(true)
+
+    await session.typeRef(by("Message").ref, "hello")
+    expect(await session.evaluate<string>("window.model()")).toBe("hello")
+
+    const search = by("Search").ref
+    await session.typeRef(search, "phoenix")
+    expect(await session.enterEffect(search)).toEqual({ found: true, kind: "submit", label: "Search" })
+    expect(await session.pressKey(search, "Enter")).toBe(true)
+    expect((await session.where()).title).toBe("searched phoenix")
+    // Backspace and Enter on whatever has focus
+    await session.pressKey(undefined, "Backspace")
+    expect(await session.evaluate<string>("document.querySelector('[name=q]').value")).toBe("phoeni")
+    expect((await session.enterEffect(by("Message").ref)).kind).toBe("newline")
+  }, 60_000)
+
+  test("a date field takes 12/10/2026 as 2026-12-10, and says so when it stays empty (#193355)", async () => {
+    await session.open(`${url}keys`)
+    const els = await session.elements()
+    const d = els.find((e) => e.name === "Pick-up date")!
+    expect(await session.typeRef(d.ref, "12/10/2026")).toBe(true)
+    expect((await session.where()).title).toBe("date 2026-12-10")
+    expect(session.takeNotes()).toEqual([])
+    await session.typeRef(d.ref, "next friday")
+    expect(session.takeNotes().join(" ")).toContain("date field is still EMPTY")
+  }, 60_000)
+
+  test("a click that navigates 900 ms later is waited for, not read as nothing changed (#193355)", async () => {
+    await session.open(`${url}slownav`)
+    const els = await session.elements()
+    const before = await session.state()
+    await session.clickRef(els[0]!.ref)
+    expect(describeChange(before, await session.state())).toContain("navigated to")
+  }, 60_000)
+
+  test("a new-tab link and window.open open in this tab, and the session says so (#193355)", async () => {
+    for (const name of ["Open the map", "View itinerary"]) {
+      await session.open(`${url}blank`)
+      const els = await session.elements()
+      session.takeNotes()
+      await session.clickRef(els.find((e) => e.name === name)!.ref)
+      expect((await session.where()).url).toBe(`${url}second`)
+      expect(session.takeNotes().join(" ")).toContain("NEW TAB")
+    }
+  }, 60_000)
+
+  test("controls in an open shadow root and a same-origin iframe are listed, and their refs act (#193355)", async () => {
+    await session.open(`${url}deep`)
+    await Bun.sleep(300)
+    let els = await session.elements()
+    const by = (n: string) => els.find((e) => e.name === n)!
+    expect(els.map((e) => e.name)).toEqual(expect.arrayContaining(["Select fare $155", "Promo code", "Reserve car", "Driver age"]))
+    await session.clickRef(by("Select fare $155").ref)
+    expect((await session.where()).title).toBe("shadow clicked")
+    await session.clickRef(by("Reserve car").ref)
+    expect((await session.where()).title).toBe("iframe clicked")
+    await session.typeRef(by("Driver age").ref, "30")
+    const st = await session.state()
+    expect(st.values[String(by("Driver age").ref)]).toBe("30")
+    expect((await session.inspect(by("Promo code").ref))?.tag).toBe("input")
+    els = await session.elements()
+    expect(by("Promo code").value).toBe("")
+  }, 60_000)
+
+  test("same words, different things: a day carries its month, Select its flight; icon buttons have names (#193355)", async () => {
+    await session.open(`${url}names`)
+    const names = (await session.elements()).map((e) => e.name)
+    expect(names).toContain("10 (November 2026)")
+    expect(names).toContain("10 (December 2026)")
+    expect(names).toContain("Select (Flight WN101)")
+    expect(names).not.toContain("Select")
+    expect(names).toContain("Swap origin and destination")
+    expect(names).toContain("Close dialog")
+  }, 60_000)
+
+  test("a control under an overlay is flagged as covered (#193355)", async () => {
+    await session.open(`${url}overlay`)
+    const els = await session.elements()
+    const b = els.find((e) => e.name === "Search flights")!
+    expect(b.covered).toBeTruthy()
+    expect(renderElements([b])).toContain("covered by")
+    expect(els.find((e) => e.name === "Accept cookies")!.covered).toBeUndefined()
+  }, 60_000)
+
+  test("a bot-check page is recognised, not read as an empty page (#193355)", async () => {
+    await session.open(`${url}botornot`)
+    expect(humanCheckReason(await session.signals())).toBe("a block page")
+    await session.elements()
+    expect(humanCheckReason(session.lastListing?.signals)).toBe("a block page")
+    await session.open(`${url}help/bots.html`)
+    expect(humanCheckReason(await session.signals())).toBe("the site's bot page")
+    await session.open(url)
+    expect(humanCheckReason(await session.signals())).toBeNull()
   }, 60_000)
 
   test("closing twice is not an error — the session may end after the user already closed it", async () => {
