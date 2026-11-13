@@ -1,6 +1,6 @@
 import { batch, createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, startTransition, Suspense, Switch, untrack } from "solid-js"
 import type { Component } from "solid-js"
-import { useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
+import { LAST_BLOQ_KEY, useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
 import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
@@ -618,7 +618,6 @@ const ChevronDown = () => (
 
 /** One page of dataset records — the request and the "N of M" count must use the same number. */
 const RECORDS_PER_PAGE = 25
-const LAST_BLOQ_KEY = "iris.panel.bloq"
 const LAST_SURFACE_KEY = "iris.panel.surface"
 /**
  * A MAP of surface -> sub-view, not a single value.
@@ -1539,17 +1538,11 @@ export function SessionIrisTab() {
   })
 
   // Remembered per viewer, not per session: which project you were looking at is a preference,
-  // and re-picking it on every launch is how a panel stops being opened.
-  const [selected, setSelected] = createSignal<number | undefined>(
-    (() => {
-      try {
-        const v = Number(localStorage.getItem(LAST_BLOQ_KEY))
-        return Number.isFinite(v) && v > 0 ? v : undefined
-      } catch {
-        return undefined
-      }
-    })(),
-  )
+  // and re-picking it on every launch is how a panel stops being opened. Held by the panel scope
+  // (#193407), so every IRIS tab in this panel — the chat's and Home's — is on the same project.
+  const chipScope = useIrisPanelScope()
+  const selected = chipScope.bloq
+  const setSelected = chipScope.setBloq
 
   const activeBloq = createMemo(() => selected() ?? settled(bloqs)?.bloqs?.[0]?.id)
 
@@ -3408,7 +3401,6 @@ export function SessionIrisTab() {
 
   // What the scope chip in the product row says (#187130 C). Project views NAME the project and
   // open the picker; session and account views state the scope and have nothing to pick.
-  const chipScope = useIrisPanelScope()
   createEffect(() => {
     const scope = rowScope()
     const hasBoards = (settled(bloqs)?.bloqs?.length ?? 0) > 0
@@ -4570,6 +4562,7 @@ export function SessionIrisTab() {
                 sessionId={navParams.id}
                 projectParam={projectParam()}
                 project={projectDir()}
+                selectedBloqId={selected()}
                 bloqId={activeBloq()}
                 bloqName={activeBloqName()}
                 boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}

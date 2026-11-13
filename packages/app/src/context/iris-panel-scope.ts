@@ -26,9 +26,31 @@ export type IrisScopeChip = {
  */
 export type IrisSurfaceRequest = { surface: string; sub?: string }
 
-function createIrisPanelScope(initialSurface?: string) {
+/** Where the panel's chosen project is remembered between launches (per viewer, not per session). */
+export const LAST_BLOQ_KEY = "iris.panel.bloq"
+
+/** The remembered project id, or undefined when none (or storage is unavailable). */
+export function readLastBloq(): number | undefined {
+  try {
+    const v = Number(localStorage.getItem(LAST_BLOQ_KEY))
+    return Number.isFinite(v) && v > 0 ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function createIrisPanelScope(initialSurface?: string, initialBloq?: number) {
   const [chip, setChip] = createSignal<IrisScopeChip | undefined>()
   const [surface, setSurfaceSig] = createSignal<string | undefined>(initialSurface)
+  /**
+   * THE PROJECT THE PERSON CHOSE (#193407), held by the panel scope rather than by each IRIS tab.
+   * It used to be a signal inside SessionIrisTab, and there can be more than one of those per
+   * scope (the chat's side panel and Home's panel both mount one, both under the window scope).
+   * The chip showed whichever wrote last; picking a project there updated THAT instance only, so
+   * the other kept its old board — and "Save to Genesis" in it opened on a project the person had
+   * not chosen. One signal per scope: every IRIS tab in it agrees on the project.
+   */
+  const [bloq, setBloq] = createSignal<number | undefined>(initialBloq)
   const [requested, setRequested] = createSignal<IrisSurfaceRequest | undefined>()
   let changedAt = 0
   return {
@@ -36,6 +58,9 @@ function createIrisPanelScope(initialSurface?: string) {
     setChip,
     /** The product this panel shows; undefined until its IRIS tab first says. */
     surface,
+    /** The project chosen in this panel, or undefined when none has been. */
+    bloq,
+    setBloq,
     setSurface(id: string) {
       if (id !== surface()) changedAt = performance.now()
       setSurfaceSig(id)
@@ -51,12 +76,13 @@ function createIrisPanelScope(initialSurface?: string) {
 
 type IrisPanelScope = ReturnType<typeof createIrisPanelScope>
 
-const windowScope = createRoot(() => createIrisPanelScope())
+const windowScope = createRoot(() => createIrisPanelScope(undefined, readLastBloq()))
 const Ctx = createContext<IrisPanelScope>()
 
 export function IrisPanelScopeProvider(props: ParentProps) {
   // A new column opens on the product the window was showing.
-  const value = createIrisPanelScope(windowScope.surface())
+  // …and on the project the window had chosen (#193407).
+  const value = createIrisPanelScope(windowScope.surface(), windowScope.bloq())
   return createComponent(Ctx.Provider, {
     value,
     get children() {

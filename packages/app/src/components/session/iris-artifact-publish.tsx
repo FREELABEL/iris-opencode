@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
@@ -6,6 +6,7 @@ import "./iris-artifact-publish.css"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { renderMarkdown } from "./iris-item"
 import {
+  initialPublishBoard,
   markdownDocument,
   publishState,
   publishSummary,
@@ -53,6 +54,9 @@ export function IrisArtifactPublish(props: {
   doFetch: Fetch
   sessionId: string
   project?: string
+  /** The project chosen in the IRIS panel (#193407). The modal opens on it. */
+  selectedBloqId?: number
+  /** The fallback when nothing is chosen — the panel's default board. */
   bloqId?: number
   bloqName?: string
   /** Every project (board) the person can publish into, for the destination control. */
@@ -151,173 +155,201 @@ export function IrisArtifactPublish(props: {
     // the user pressed "Save to Genesis", which is the Private choice by name.
     setScope(preset ?? p?.visibility)
     setAuth(p?.requiresAuth ?? false)
-    // Pre-filled with the session's project, so the common case is one glance and a confirm.
-    // With none resolved, the picker is open: the modal asks rather than defaulting.
-    setBoard(props.bloqId)
-    setPicking(!props.bloqId)
+    // Pre-filled with the project chosen in the IRIS panel (#193407) — read NOW, at the press, not
+    // when this component mounted — so the common case is one glance and a confirm. Only with
+    // nothing chosen does it fall back to the panel's default board; with neither, the picker
+    // is open: the modal asks rather than defaulting.
+    const initial = () => initialPublishBoard({ selected: props.selectedBloqId, fallback: props.bloqId })
+    let touched = false
+    setBoard(initial())
+    setPicking(initial() === undefined)
     setFilter("")
     setError(null)
     setNote(null)
-    dialog.show(() => (
-      <Dialog
-        title={props.meta.published ? "Update the page" : "Publish"}
-        description={props.meta.title}
-        class="iris-pubm"
-      >
-        <form
-          class="iris-pubm__form"
-          data-testid="artifact-publish-modal"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submit()
-          }}
+    dialog.show(() => {
+      // A project list that lands after the press only fills an EMPTY destination — it never
+      // replaces the chosen project, nor one the person picked in the modal.
+      createEffect(() => {
+        const next = initial()
+        if (touched || board() !== undefined || next === undefined) return
+        setBoard(next)
+        setPicking(false)
+      })
+      return (
+        <Dialog
+          title={props.meta.published ? "Update the page" : "Publish"}
+          description={props.meta.title}
+          class="iris-pubm"
         >
-          <div class="iris-pubm__body">
-            {/* 1 · WHERE, before who. The destination is the decision; visibility qualifies it. */}
-            <section class="iris-pubm__sec" aria-labelledby="pubm-where">
-              <h3 class="iris-pubm__lbl" id="pubm-where">
-                <span class="iris-pubm__n">1</span>Where it lives
-              </h3>
-              <Show
-                when={!picking()}
-                fallback={
-                  <div class="iris-pubm__picker">
-                    <div class="iris-pubm__search">
-                      <Icon name="magnifying-glass" size="small" />
-                      <input
-                        placeholder="Search projects or #id"
-                        value={filter()}
-                        onInput={(e) => setFilter(e.currentTarget.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault()
-                            const first = matches()[0]
-                            if (first) {
-                              setBoard(first.id)
-                              setPicking(false)
-                            }
-                          }
-                        }}
-                        aria-label="Search projects"
-                        autofocus
-                      />
-                    </div>
-                    <ul class="iris-publish__boards iris-pubm__boards" aria-label="Projects">
-                      <For each={matches()} fallback={<li class="iris-pubm__empty">No projects match.</li>}>
-                        {(b) => (
-                          <li>
-                            <button
-                              type="button"
-                              class="iris-pubm__board"
-                              aria-pressed={b.id === board()}
-                              onClick={() => {
-                                setBoard(b.id)
+          <form
+            class="iris-pubm__form"
+            data-testid="artifact-publish-modal"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+          >
+            <div class="iris-pubm__body">
+              {/* 1 · WHERE, before who. The destination is the decision; visibility qualifies it. */}
+              <section class="iris-pubm__sec" aria-labelledby="pubm-where">
+                <h3 class="iris-pubm__lbl" id="pubm-where">
+                  <span class="iris-pubm__n">1</span>Where it lives
+                </h3>
+                <Show
+                  when={!picking()}
+                  fallback={
+                    <div class="iris-pubm__picker">
+                      <div class="iris-pubm__search">
+                        <Icon name="magnifying-glass" size="small" />
+                        <input
+                          placeholder="Search projects or #id"
+                          value={filter()}
+                          onInput={(e) => setFilter(e.currentTarget.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault()
+                              const first = matches()[0]
+                              if (first) {
+                                touched = true
+                                setBoard(first.id)
                                 setPicking(false)
-                              }}
-                            >
-                              <Icon name="folder" size="small" />
-                              <span class="iris-pubm__boardname">{b.name}</span>
-                              <span class="iris-pubm__id">#{b.id}</span>
-                              <Show when={b.id === board()}>
-                                <Icon name="check-small" size="small" />
-                              </Show>
-                            </button>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </div>
-                }
-              >
-                <button
-                  type="button"
-                  class="iris-pubm__dest"
-                  disabled={boards().length <= 1}
-                  onClick={() => setPicking(true)}
-                  title={boards().length > 1 ? "Choose another project" : undefined}
+                              }
+                            }
+                          }}
+                          aria-label="Search projects"
+                          autofocus
+                        />
+                      </div>
+                      <ul class="iris-publish__boards iris-pubm__boards" aria-label="Projects">
+                        <For each={matches()} fallback={<li class="iris-pubm__empty">No projects match.</li>}>
+                          {(b) => (
+                            <li>
+                              <button
+                                type="button"
+                                class="iris-pubm__board"
+                                aria-pressed={b.id === board()}
+                                onClick={() => {
+                                  touched = true
+                                  setBoard(b.id)
+                                  setPicking(false)
+                                }}
+                              >
+                                <Icon name="folder" size="small" />
+                                <span class="iris-pubm__boardname">{b.name}</span>
+                                <span class="iris-pubm__id">#{b.id}</span>
+                                <Show when={b.id === board()}>
+                                  <Icon name="check-small" size="small" />
+                                </Show>
+                              </button>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  }
                 >
-                  <Icon name="folder" size="small" />
-                  <strong class="iris-publish__destname">{boardName()}</strong>
-                  <span class="iris-pubm__id">#{board()}</span>
-                  <Show when={boards().length > 1}>
-                    <span class="iris-pubm__change">Change</span>
-                  </Show>
-                </button>
-              </Show>
-            </section>
+                  <button
+                    type="button"
+                    class="iris-pubm__dest"
+                    disabled={boards().length <= 1}
+                    onClick={() => {
+                      touched = true
+                      setPicking(true)
+                    }}
+                    title={boards().length > 1 ? "Choose another project" : undefined}
+                  >
+                    <Icon name="folder" size="small" />
+                    <strong class="iris-publish__destname">{boardName()}</strong>
+                    <span class="iris-pubm__id">#{board()}</span>
+                    <Show when={boards().length > 1}>
+                      <span class="iris-pubm__change">Change</span>
+                    </Show>
+                  </button>
+                </Show>
+              </section>
 
-            {/* 2 · the address, with the part you cannot change shown as part of it */}
-            <section class="iris-pubm__sec" aria-labelledby="pubm-addr">
-              <h3 class="iris-pubm__lbl" id="pubm-addr">
-                <span class="iris-pubm__n">2</span>Address
-              </h3>
-              <label class="iris-pubm__addr">
-                <span class="iris-pubm__prefix">heyiris.io/p/</span>
-                <input
-                  value={slug()}
-                  onInput={(e) => setSlug(e.currentTarget.value.toLowerCase())}
-                  aria-label="Page address"
-                  spellcheck={false}
-                />
-              </label>
-            </section>
+              {/* 2 · the address, with the part you cannot change shown as part of it */}
+              <section class="iris-pubm__sec" aria-labelledby="pubm-addr">
+                <h3 class="iris-pubm__lbl" id="pubm-addr">
+                  <span class="iris-pubm__n">2</span>Address
+                </h3>
+                <label class="iris-pubm__addr">
+                  <span class="iris-pubm__prefix">heyiris.io/p/</span>
+                  <input
+                    value={slug()}
+                    onInput={(e) => setSlug(e.currentTarget.value.toLowerCase())}
+                    aria-label="Page address"
+                    spellcheck={false}
+                  />
+                </label>
+              </section>
 
-            {/* 3 · who. Nothing pre-selected — a default would make "public" the answer to not reading. */}
-            <section class="iris-pubm__sec" aria-labelledby="pubm-who">
-              <h3 class="iris-pubm__lbl" id="pubm-who">
-                <span class="iris-pubm__n">3</span>Who can see it
-              </h3>
-              <div class="iris-pubm__scopes" role="radiogroup" aria-labelledby="pubm-who">
-                <For each={SCOPES}>
-                  {(sc) => (
-                    <label class="iris-pubm__scope" data-on={scope() === sc.id ? "1" : undefined}>
-                      <input type="radio" name="scope" checked={scope() === sc.id} onChange={() => setScope(sc.id)} />
-                      <Icon name={sc.icon} size="small" />
-                      <span class="iris-pubm__scopename">{sc.label}</span>
-                      <span class="iris-pubm__scopehint">{sc.short}</span>
-                    </label>
-                  )}
-                </For>
-              </div>
-              <label class="iris-pubm__switch">
-                <input type="checkbox" role="switch" checked={auth()} onChange={(e) => setAuth(e.currentTarget.checked)} />
-                <span class="iris-pubm__track" aria-hidden="true" />
-                <span>
-                  Require sign-in
-                  <span class="iris-pubm__scopehint"> — visitors get an email code</span>
-                </span>
-              </label>
-            </section>
-          </div>
-
-          <footer class="iris-pubm__foot">
-            {/* The consequence, in one sentence, where the decision is made. */}
-            <p class="iris-pubm__summary" data-testid="artifact-publish-summary" data-ready={scope() && board() ? "1" : undefined}>
-              <Show when={scope()} keyed fallback={<Icon name="help" size="small" />}>
-                {(chosen) => <Icon name={SCOPES.find((x) => x.id === chosen)!.icon} size="small" />}
-              </Show>
-              <span>
-                {publishSummary(scope(), slug(), boardName())}
-                {props.meta.published ? " · updates the same page" : ""}
-              </span>
-            </p>
-            <Show when={error()}>
-              <p class="iris-pubm__error" role="alert">
-                {error()}
-              </p>
-            </Show>
-            <div class="iris-pubm__actions">
-              <Button type="button" variant="ghost" onClick={() => dialog.close()}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" disabled={!board() || !scope() || !slug().trim() || busy()}>
-                {submitLabel()}
-              </Button>
+              {/* 3 · who. Nothing pre-selected — a default would make "public" the answer to not reading. */}
+              <section class="iris-pubm__sec" aria-labelledby="pubm-who">
+                <h3 class="iris-pubm__lbl" id="pubm-who">
+                  <span class="iris-pubm__n">3</span>Who can see it
+                </h3>
+                <div class="iris-pubm__scopes" role="radiogroup" aria-labelledby="pubm-who">
+                  <For each={SCOPES}>
+                    {(sc) => (
+                      <label class="iris-pubm__scope" data-on={scope() === sc.id ? "1" : undefined}>
+                        <input type="radio" name="scope" checked={scope() === sc.id} onChange={() => setScope(sc.id)} />
+                        <Icon name={sc.icon} size="small" />
+                        <span class="iris-pubm__scopename">{sc.label}</span>
+                        <span class="iris-pubm__scopehint">{sc.short}</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+                <label class="iris-pubm__switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={auth()}
+                    onChange={(e) => setAuth(e.currentTarget.checked)}
+                  />
+                  <span class="iris-pubm__track" aria-hidden="true" />
+                  <span>
+                    Require sign-in
+                    <span class="iris-pubm__scopehint"> — visitors get an email code</span>
+                  </span>
+                </label>
+              </section>
             </div>
-          </footer>
-        </form>
-      </Dialog>
-    ))
+
+            <footer class="iris-pubm__foot">
+              {/* The consequence, in one sentence, where the decision is made. */}
+              <p
+                class="iris-pubm__summary"
+                data-testid="artifact-publish-summary"
+                data-ready={scope() && board() ? "1" : undefined}
+              >
+                <Show when={scope()} keyed fallback={<Icon name="help" size="small" />}>
+                  {(chosen) => <Icon name={SCOPES.find((x) => x.id === chosen)!.icon} size="small" />}
+                </Show>
+                <span>
+                  {publishSummary(scope(), slug(), boardName())}
+                  {props.meta.published ? " · updates the same page" : ""}
+                </span>
+              </p>
+              <Show when={error()}>
+                <p class="iris-pubm__error" role="alert">
+                  {error()}
+                </p>
+              </Show>
+              <div class="iris-pubm__actions">
+                <Button type="button" variant="ghost" onClick={() => dialog.close()}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" disabled={!board() || !scope() || !slug().trim() || busy()}>
+                  {submitLabel()}
+                </Button>
+              </div>
+            </footer>
+          </form>
+        </Dialog>
+      )
+    })
   }
 
   return (
