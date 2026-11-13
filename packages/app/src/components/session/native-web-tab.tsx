@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
-import type { NativeBrowser, NativeBrowserBounds, NativeBrowserState } from "@/context/platform"
-import { boundsOf, OVERLAY_SELECTOR, QUICK_SITES, sameBounds } from "./native-browser-model"
+import type { NativeBrowser, NativeBrowserState } from "@/context/platform"
+import { boundsFollower, boundsOf, nextPlacement, OVERLAY_SELECTOR, QUICK_SITES } from "./native-browser-model"
 import {
   answerConfirm,
   askedSite,
@@ -76,7 +76,6 @@ export function NativeWebTab(props: {
   }
   let body!: HTMLDivElement
   let input!: HTMLInputElement
-  let last: NativeBrowserBounds | undefined
   let shown = false
 
   const origin = () => originOf(page()?.url)
@@ -104,12 +103,14 @@ export function NativeWebTab(props: {
     if (document.activeElement !== input) setAddress(s.url === "about:blank" ? "" : s.url)
   }
 
-  /** Put the view where the body is, or hide it. Called at most once per frame. */
-  const sync = () => {
+  /** Put the view where the body is, or hide it. Called at most once per frame, and once more
+   * (`settled`) when resizing has been quiet for a moment: see boundsFollower (#193405). */
+  const sync = (settled = false) => {
     if (!opened()) return
     const b = boundsOf(body.getBoundingClientRect(), props.zoom())
     const covered = !!document.querySelector(OVERLAY_SELECTOR)
     if (!b || covered || document.hidden) {
+      follower.stop()
       if (shown) {
         shown = false
         void props.browser.hide()
@@ -118,18 +119,23 @@ export function NativeWebTab(props: {
     }
     if (!shown) {
       shown = true
-      last = b
-      void props.browser.show(undefined, b)
+      follower.placed(b)
+      void props.browser.show(undefined, b, nextPlacement())
       return
     }
-    if (!sameBounds(b, last)) {
-      last = b
-      void props.browser.bounds(b)
-    }
+    follower.follow(b, settled)
   }
+  const follower = boundsFollower({
+    send: (b, seq) => void props.browser.bounds(b, seq),
+    settle: () => sync(true),
+  })
   let raf = 0
   const schedule = () => {
     if (!raf) raf = requestAnimationFrame(() => ((raf = 0), sync()))
+  }
+  const resized = () => {
+    follower.arm()
+    schedule()
   }
 
   const open = (url: string) => {
@@ -137,10 +143,10 @@ export function NativeWebTab(props: {
     const b = boundsOf(body.getBoundingClientRect(), props.zoom())
     if (!b) return
     props.browser
-      .show(url, b)
+      .show(url, b, nextPlacement())
       .then(() => {
         shown = true
-        last = b
+        follower.placed(b)
         setOpened(true)
         schedule() // an overlay may have opened while it was being created
       })
@@ -172,7 +178,7 @@ export function NativeWebTab(props: {
     // both with one observer that only schedules a frame (the work is one rect + one query).
     const mo = new MutationObserver(schedule)
     mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] })
-    window.addEventListener("resize", schedule)
+    window.addEventListener("resize", resized)
     document.addEventListener("visibilitychange", schedule)
     const off = props.browser.onState(report)
     if (props.browser.importSources) {
@@ -209,11 +215,12 @@ export function NativeWebTab(props: {
     onCleanup(() => {
       ro.disconnect()
       mo.disconnect()
-      window.removeEventListener("resize", schedule)
+      window.removeEventListener("resize", resized)
       document.removeEventListener("visibilitychange", schedule)
       off()
       clearInterval(poll)
       cancelAnimationFrame(raf)
+      follower.stop()
       if (shown) void props.browser.hide()
     })
   })
