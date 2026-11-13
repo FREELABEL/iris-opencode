@@ -210,3 +210,19 @@ describe("the catalog: rows per copy, kept files' holders and copies, drive aler
     expect(driveAlertRows(drives, kept, rows, new Date("2026-12-31T00:00:00Z"))[0]).toMatchObject({ external_id: "fs:src", kept_below_target: 1 })
   })
 })
+
+describe("free space on a Mac drive (Bun's statfs is wrong on macOS)", () => {
+  test("df -kP is parsed, mount points with spaces included", () => {
+    const { parseDfKP } = require("./vault-replicas")
+    const out = "Filesystem 1024-blocks Used Available Capacity  Mounted on\n/dev/disk2      98304 2316     95988     3%    /Volumes/Backup B\n"
+    expect(parseDfKP(out)).toEqual({ size: 98304 * 1024, free: 95988 * 1024 })
+    expect(parseDfKP("garbage")).toBeNull()
+  })
+  test("a broken statfs (bsize 0) falls back to df; a sane one is used as is", async () => {
+    const { statfsCompat } = await import("./platform-drives")
+    const broken = { type: 0, bsize: 0, blocks: 4096, bfree: 2097152, bavail: 24576, files: 1, ffree: 1 } as any
+    expect(statfsCompat("/x", () => broken, () => ({ free: 500, size: 1000 }))).toEqual({ bavail: 500, bsize: 1, blocks: 1000, bfree: 500 })
+    const sane = { type: 0, bsize: 4096, blocks: 10, bfree: 5, bavail: 4, files: 1, ffree: 1 } as any
+    expect(statfsCompat("/x", () => sane, () => null)).toEqual({ bavail: 4, bsize: 4096, blocks: 10, bfree: 5 })
+  })
+})

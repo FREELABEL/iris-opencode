@@ -370,7 +370,7 @@ const CreateCommand = cmd({
     console.log(`  ${success("✓")} vault ${bold(meta.name)}  ${dim(id)}`)
     if (meta.targets) {
       console.log(`     copies on: ${allTargets(meta).map(targetLabel).join(", ")}  ${dim(`(minimum ${meta.replicas})`)}`)
-      console.log(`     ${dim("A drive that is not plugged in when you put files catches up later: plug it into any of your machines and run iris vault sync.")}`)
+      if (meta.targets.some((t) => t.kind === "drive")) console.log(`     ${dim("A drive that is not plugged in when you put files catches up later: plug it into any of your machines and run iris vault sync.")}`)
       for (const p of problems) console.log(`     ${bold("not saved to your Drives catalog:")} ${dim(p)}`)
     } else console.log(`     ${dim(`target replicas: ${meta.replicas}`)}`)
     console.log(`     ${dim(`key wrapped by ${where.backend} in ~/.iris/vault-keys.wrapped.json — it NEVER syncs.`)}`)
@@ -1334,7 +1334,7 @@ const KeyImportCommand = cmd({
       }
       const st = store.status()
       if (argv.json) { await writeJson({ ok: true, id: p.vault_id, name: p.meta?.name, backend: st.backend, files: Object.keys(p.manifest?.entries ?? {}).length }); return }
-      console.log(`\n  ${success("✓")} vault ${bold(p.meta?.name ?? p.vault_id)}  ${dim(`key wrapped by ${st.backend} on this machine`)}\n     ${dim("missing chunks are fetched from your nodes on: iris vault get")}\n`)
+      console.log(`\n  ${success("✓")} vault ${bold(p.meta?.name ?? p.vault_id)}  ${dim(`key wrapped by ${st.backend} on this machine`)}\n     ${dim("iris vault get reads chunks from this machine, a copy on a drive plugged in here, then your other machines")}\n`)
     } catch (e) { await vaultFail(e, !!argv.json) }
   },
 })

@@ -247,7 +247,7 @@ export function vaultCopiesBySha(kept: any[], replicaRows: ReplicaRow[], now: Da
     const e = effectiveCopies(splitList(k.held_by), replicaRows, String(k.vault_id), now)
     const list = out.get(k.sha256) ?? []
     if (list.some((x) => x.vault === (k.vault_name ?? k.vault_id))) continue // one content, one count per vault
-    list.push({ vault: String(k.vault_name ?? k.vault_id), copies: e.copies, target: Number(k.target_copies || 1), held: e.counted.map(label), stale: [...e.stale, ...e.failing].map(label) })
+    list.push({ vault: String(k.vault_name ?? k.vault_id), copies: e.copies, target: Number(k.target_copies || 1), held: e.counted.map(label), stale: e.stale.map(label) })
     out.set(k.sha256, list)
   }
   return out

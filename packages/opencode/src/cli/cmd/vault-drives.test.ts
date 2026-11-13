@@ -222,11 +222,10 @@ describe("copies, counted by content, and the alert", () => {
     expect(mergeHeldBy(["drive:fs:A", "drive:fs:B"], new Set(["drive:fs:A"]), [])).toEqual(["drive:fs:B"])
     expect(mergeHeldBy(["drive:fs:B"], new Set(["drive:fs:A"]), ["drive:fs:A"])).toEqual(["drive:fs:A", "drive:fs:B"])
   })
-  test("a drive missing past the threshold, and a failing replica, do not count", () => {
-    const e = effectiveCopies(["drive:fs:A", "drive:fs:B", "machine:laptop", "machine:studio"], rows, "v-1", now, 14)
+  test("a drive missing past the threshold does not count; never-verified does not count", () => {
+    const e = effectiveCopies(["drive:fs:A", "drive:fs:B", "machine:laptop", "machine:nowhere"], rows, "v-1", now, 14)
     expect(e.copies).toBe(2)
-    expect(e.stale).toEqual(["drive:fs:B"])
-    expect(e.failing).toEqual(["machine:studio"])
+    expect(e.stale).toEqual(["drive:fs:B", "machine:nowhere"])
     expect(effectiveCopies(["drive:fs:B"], rows, "v-1", now, 60).copies).toBe(1) // a longer threshold counts it
   })
   test("kept files below their minimum are flagged per source drive, with a sentence for its record", () => {
@@ -237,7 +236,7 @@ describe("copies, counted by content, and the alert", () => {
     ]
     const a = keptAlerts(kept, rows, now, 14).get("fs:SRC")!
     expect(a.kept).toBe(2)
-    expect(a.below).toEqual([{ path: "a.wav", vault: "studio", copies: 2, target: 3, stale: ["drive:fs:B"], failing: [] }])
+    expect(a.below).toEqual([{ path: "a.wav", vault: "studio", copies: 2, target: 3, stale: ["drive:fs:B"] }])
     expect(alertText(a)).toBe("1 of 2 kept file(s) below their minimum copies (vault studio) — run: iris vault status")
     expect(alertText({ kept: 2, below: [] })).toBe("")
   })

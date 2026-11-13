@@ -469,9 +469,11 @@ export function missingDays(env: Record<string, string | undefined> = process.en
 }
 
 /**
- * How many copies of a kept file count right now. A holder counts when its replica was last
- * verified within `days` and was not failing. A drive nobody has plugged in for longer than that
- * is reported missing and its copy is not counted — so the file is flagged before the gap is real.
+ * How many copies of a kept file count right now. `heldBy` is already exact per file: a check that
+ * finds a chunk missing or failing verification takes that holder off the files the chunk belongs
+ * to (recordChecks). What is left is time: a holder counts while its copy was verified within
+ * `days`. A drive nobody has plugged in for longer is reported missing and stops counting — so the
+ * file is flagged before the gap is real.
  */
 export function effectiveCopies(
   heldBy: readonly string[],
@@ -479,18 +481,16 @@ export function effectiveCopies(
   vaultId: string,
   now: Date,
   days = missingDays(),
-): { copies: number; counted: string[]; stale: string[]; failing: string[] } {
+): { copies: number; counted: string[]; stale: string[] } {
   const counted: string[] = []
   const stale: string[] = []
-  const failing: string[] = []
   for (const k of heldBy) {
     const r = rows.find((x) => x.vault_id === vaultId && x.target === k)
     const at = r?.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
-    if (r?.status === "failing") { failing.push(k); continue }
     if (!Number.isFinite(at) || now.getTime() - at > days * 86_400_000) { stale.push(k); continue }
     counted.push(k)
   }
-  return { copies: counted.length, counted, stale, failing }
+  return { copies: counted.length, counted, stale }
 }
 
 export type KeptRow = {
@@ -510,14 +510,14 @@ export const splitList = (s: unknown) => String(s ?? "").split("\n").map((x) => 
 
 /** Per source drive: how many kept files, and which are below their vault's minimum right now. */
 export function keptAlerts(kept: readonly KeptRow[], rows: readonly ReplicaRow[], now: Date, days = missingDays()) {
-  const out = new Map<string, { kept: number; below: Array<{ path: string; vault: string; copies: number; target: number; stale: string[]; failing: string[] }> }>()
+  const out = new Map<string, { kept: number; below: Array<{ path: string; vault: string; copies: number; target: number; stale: string[] }> }>()
   for (const k of kept) {
     if (k.status === "removed") continue
     const e = effectiveCopies(splitList(k.held_by), rows, k.vault_id, now, days)
     const d = out.get(k.drive_id) ?? { kept: 0, below: [] }
     d.kept++
     if (e.copies < Number(k.target_copies || 1)) {
-      d.below.push({ path: k.path, vault: k.vault_name ?? k.vault_id, copies: e.copies, target: Number(k.target_copies || 1), stale: e.stale, failing: e.failing })
+      d.below.push({ path: k.path, vault: k.vault_name ?? k.vault_id, copies: e.copies, target: Number(k.target_copies || 1), stale: e.stale })
     }
     out.set(k.drive_id, d)
   }

@@ -177,7 +177,8 @@ export const keptRowId = (vaultId: string, driveId: string, rel: string) => `${v
 export function replicaRow(meta: VaultLike, c: TargetCheck, seq: number, host: string, at: string) {
   return {
     external_id: replicaRowId(meta.id, c.key),
-    vault_id: meta.id, vault_name: meta.name, target: c.key, target_kind: c.target.kind, target_label: targetLabel(c.target),
+    // The plain name: this row is read from every machine, so "(this machine)" would be wrong elsewhere.
+    vault_id: meta.id, vault_name: meta.name, target: c.key, target_kind: c.target.kind, target_label: c.target.kind === "drive" ? c.target.label : c.target.name,
     drive_id: c.target.kind === "drive" ? c.target.id : "",
     status: c.status, blobs_held: c.held ? c.held.size : undefined, blobs_wanted: c.wanted, manifest_seq: seq,
     replicas: meta.replicas, source_node: meta.source_node ?? "",
@@ -229,9 +230,8 @@ export async function recordChecks(
   }
   // Holders checked now, with what they hold. A pending target was not checked.
   const checked = new Set(checks.filter((c) => c.held).map((c) => c.key))
-  const holders = new Map(checks.filter((c) => c.held && c.status !== "failing").map((c) => [c.key, c.held!]))
-  // A failing replica: its intact chunks still count. Corrupt ones were excluded from `held`.
-  for (const c of checks) if (c.held && c.status === "failing") holders.set(c.key, c.held)
+  // A failing replica's intact chunks still count; the ones that failed are not in `held`.
+  const holders = new Map(checks.filter((c) => c.held).map((c) => [c.key, c.held!]))
   const byCid = new Map((index?.content ?? []).map((x) => [x.cid, x.chunks]))
   const keptUpdates: any[] = []
   for (const k of kept) {

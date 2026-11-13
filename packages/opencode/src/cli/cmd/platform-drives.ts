@@ -861,7 +861,7 @@ export function keptLines(d: any, a: ReturnType<typeof keptAlerts> extends Map<s
     else {
       out.push(warn(`  ⚠ kept: ${a.below.length} of ${a.kept} file(s) BELOW their minimum copies`))
       for (const b of a.below.slice(0, 5)) {
-        const why = [...b.stale.map((k) => `${label(reps, k)} not verified recently`), ...b.failing.map((k) => `${label(reps, k)} failing`)]
+        const why = b.stale.map((k) => `${label(reps, k)} not verified for ${missingDays()}+ days`)
         out.push(`     ${b.path} — ${b.copies}/${b.target} in vault ${b.vault}${why.length ? ` (${why.join(", ")})` : ""}`)
       }
       if (a.below.length > 5) out.push(`     … and ${a.below.length - 5} more`)
