@@ -33,7 +33,7 @@ import {
   round, todayIso, splitRef, DRIVES_BOARD_NAMES, DRIVES_BOARD_DESCRIPTION, DRIVES_DATASETS,
   TSV_HEADER_SHA, CHECKSUM_CHOICES, type Checksums, liveDriveFields, copyIndex, copiesReport, copiesLine,
   type ManifestRow, normalizeExcludes, kindOf, SENSITIVE, BUNDLES, APP_BUNDLES, sha256File, bundleMembers,
-  bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport,
+  bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport, movedRows,
 } from "./drives-core"
 import { runRemoteGet, liveRemoteDeps, SERVE_MARK, type ServeReply } from "./drives-remote"
 import { nameMatches } from "./hive-tailscale"
@@ -571,14 +571,20 @@ const ScanCommand = cmd({
       return
     }
     // Findings no longer on the drive are CLOSED (status moved), not left saying "exposed".
+    // One import (upsert by external_id) per chunk, not one PATCH per row (#193368).
     try {
       const cur = new Set(findingRows.map((r) => r.external_id))
       const old = await atlasRecords("drive-findings", bloq, { drive_id: driveId })
       const gone = old.filter((r) => !cur.has(r.external_id) && r?.data?.status !== "moved")
-      for (const r of gone) {
-        await irisFetch(`/api/v1/atlas/datasets/drive-findings/${r.id}`, { method: "PATCH", body: JSON.stringify({ data: { status: "moved" } }) })
+      if (gone.length) {
+        const r = await importRows("drive-findings", bloq, movedRows(gone))
+        if (r.failed) {
+          console.log(warn(`  ${plural(r.failed, "sensitive file")} no longer on this drive could not be marked moved`))
+          process.exitCode = 1
+        }
+        const closed = gone.length - r.failed
+        if (closed) console.log(`  ${plural(closed, "sensitive file")} from the last scan ${closed === 1 ? "is" : "are"} no longer on this drive — marked moved`)
       }
-      if (gone.length) console.log(`  ${plural(gone.length, "sensitive file")} from the last scan ${gone.length === 1 ? "is" : "are"} no longer on this drive — marked moved`)
     } catch (e: any) {
       console.log(warn(`  Could not update the sensitive files found by the last scan: ${e?.message ?? e}`))
       process.exitCode = 1
