@@ -44,7 +44,8 @@ import { nameMatches } from "./hive-tailscale"
 import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
 import { Installation } from "../../installation"
-import { type VaultCatalog, driveAlertRows, statfsOf } from "./vault-replicas"
+import { type VaultCatalog, driveAlertRows, statfsOf, copyWord, catchupLine } from "./vault-replicas"
+import { fmtDays } from "./vault-auto"
 import { runKeep, vaultCopiesBySha, type KeepDeps } from "./drives-keep"
 import { keepVault, putToTargets } from "./platform-vault"
 import { keptAlerts, missingDays, type ReplicaRow } from "./vault-drives"
@@ -847,14 +848,16 @@ const ListCommand = cmd({
 export function keptLines(d: any, a: ReturnType<typeof keptAlerts> extends Map<string, infer V> ? V | undefined : never, reps: any[], now: Date): string[] {
   const out: string[] = []
   const id = String(d.external_id)
-  const mine = reps.filter((r) => r.drive_id === id || r.target === `drive:${id}`)
+  const mine = reps.filter((r) => (r.drive_id === id || r.target === `drive:${id}`) && r.role !== "spare-retired")
   if (mine.length) {
     out.push(`  vault copies on it: ` + mine.map((r) => {
-      const at = r.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
-      const fresh = Number.isFinite(at) && now.getTime() - at <= missingDays() * 86_400_000
-      const word = r.status === "ok" && !fresh ? `missing — not verified for ${missingDays()}+ days` : r.status
-      return `${r.vault_name ?? r.vault_id} ${word}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}`
+      const w = copyWord(r, now)
+      const word = w === "missing" ? `missing — not verified for ${missingDays()}+ days` : w === "lost" ? `LOST — not verified for ${fmtDays(Number(r.lost_after_days) > 0 ? Number(r.lost_after_days) : 14)}+` : w
+      const c = catchupLine(r, now)
+      return `${r.vault_name ?? r.vault_id} ${word}${r.role === "spare" ? " (spare copy)" : ""}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}${c ? ` · ${c}` : ""}`
     }).join(" · "))
+    // #193363 follow-up: a lost copy here that could not be rebuilt says so, on the drive's own line.
+    for (const r of mine) if (r.heal_alert) out.push(warn(`  ⚠ ${r.vault_name ?? r.vault_id}: ${r.heal_alert}`))
   }
   if (a) {
     if (!a.below.length) out.push(`  kept: ${a.kept} file(s), every one at its minimum copies`)

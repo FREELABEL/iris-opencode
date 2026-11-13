@@ -1,7 +1,7 @@
 ---
 category: Infrastructure
 level: intermediate
-tags: [vault, vaults, encryption, phi, hive, node, keychain, passphrase, retention, crypto-shred, storage, external drive, backup drive, replicas, sync]
+tags: [vault, vaults, encryption, phi, hive, node, keychain, passphrase, retention, crypto-shred, storage, external drive, backup drive, replicas, sync, auto sync, heal, spare, lost copy, self-healing]
 duration_min: 8
 ---
 # How to: Use vaults
@@ -63,7 +63,7 @@ iris vault create studio --on "Backup A,Backup B,this-machine"        # three co
 iris vault create studio --on "Backup A,studio-mac" --replicas 2     # flagged when fewer than 2
 iris vault put studio mix.wav
 iris vault status studio            # each copy checked now; --deep re-hashes every chunk on a drive
-iris vault sync                     # a drive just plugged in here catches up
+iris vault sync                     # a drive just plugged in here catches up (the daemon also does it on its own)
 ```
 
 - **Where it goes.** On a drive: `<drive>/_IRIS_VAULT/<vault>/`, holding encrypted chunks named
@@ -72,8 +72,8 @@ iris vault sync                     # a drive just plugged in here catches up
 - **Free space first.** Before anything is written, each place is checked for room: a machine
   keeps 1 GiB free; a drive keeps 2% of its size (at least 16 MiB, at most 1 GiB). A place
   without room is skipped and named.
-- **A drive that is not plugged in is pending, not failed.** Plug it into any of your machines and
-  run `iris vault sync` there. It copies the missing chunks from that machine, from another copy
+- **A drive that is not plugged in is pending, not failed.** Plug it into any of your machines:
+  the IRIS daemon there catches it up (see below), or run `iris vault sync` there yourself. It copies the missing chunks from that machine, from another copy
   plugged in next to it, or from the machine the vault was created on (`--from <machine>` to pick
   one) over your Hive (ssh on Tailscale). The machine doing the sync needs no key: it moves
   encrypted chunks and checks each one's sha256 before storing it.
@@ -85,6 +85,75 @@ iris vault sync                     # a drive just plugged in here catches up
   (`IRIS_VAULT_MISSING_DAYS`). After that it is reported missing and stops counting.
 - **Bytes never pass through IRIS servers.** Your Drives board records where each copy is and when
   it was last verified; the chunks move only between your own drives and machines.
+
+### Catching up on its own when a drive is plugged in
+
+You do not have to run `iris vault sync` yourself. The IRIS daemon on each of your machines
+notices when a drive is connected. If the drive holds a copy that is pending or behind, the daemon
+brings it up to date about 20 seconds later. It does the same work as `iris vault sync`: only
+encrypted chunks move, and each one's sha256 is checked.
+
+- **One at a time.** Each vault has a lock, so two catch-ups of the same vault never run together.
+  A second drive plugged in during a catch-up gets its own run afterwards.
+- **It never asks.** If a step needs the vault key and the key is behind a passphrase, that vault
+  is skipped and the daemon log says why. Run `iris vault sync` in a terminal to finish it.
+- **Battery.** On a Mac in Low Power Mode, or on a laptop running on battery below 30%, the
+  catch-up waits and tries again 10 minutes later.
+- **What it records.** Each catch-up adds a line to the daemon log, sets the copy's "Last
+  catch-up" in your Drives catalog, and updates the drive's card ("caught up 3 files"). `iris vault
+  status <vault>` shows it as `Backup B: caught up 3 files, 2 min ago`.
+
+```bash
+iris vault auto status            # on or off on this machine, and each vault's last catch-up
+iris vault auto off               # this machine stops catching up and healing on its own
+iris vault auto on
+iris vault auto off studio        # this vault is never caught up or healed on its own, on any machine
+```
+
+How the daemon notices a drive: on a Mac it watches `/Volumes`. On Linux it checks the mount
+table every 5 seconds. On Windows it checks the drive letters every 15 seconds; this is best
+effort. Whatever the system, `iris vault sync` still works by hand.
+
+### When a copy is lost: spares
+
+A copy nobody has verified for **14 days** counts as **lost**. IRIS then rebuilds it on a
+**spare**: a drive or machine you named for that vault. It never uses any other drive or machine.
+The rebuild copies encrypted chunks from the copies that are still there, checks each one, and
+needs no key.
+
+```bash
+iris vault create studio --on "Backup A,Backup B,this-machine" --spare "Spare A,studio-mac"
+iris vault spare add studio "Spare B"        # or add spares later
+iris vault spare list studio                 # tried in this order
+iris vault heal --dry-run                    # what is lost, and which spare would take it
+iris vault heal studio                       # rebuild now (the daemon also runs this once a day)
+iris vault policy studio                     # show the settings below
+```
+
+| Setting | Default | Change it |
+|---|---|---|
+| A copy counts as lost after | 14 days unseen | `iris vault policy studio --lost-after 7d` (`m`, `h`, `d`, `w`) |
+| Where a lost copy is rebuilt | only the vault's spares, in the order you listed them | `iris vault spare add` / `remove` |
+| No spare can take it | an alert only: in `iris vault status`, `iris drives list` and the drive's card in Atlas | add a spare, or plug the drive back in |
+| The lost copy comes back | both copies are kept, and both count | `--on-return retire` deletes the spare's copy |
+| Automatic catch-up and heal | on | `iris vault auto off [<vault>]` |
+
+- **A spare must be reachable and have room.** A spare drive must be plugged into the machine
+  running the heal. A spare machine must answer over your Hive. Free space is checked first, as
+  above. If no spare can take the copy, nothing is written. The alert names each spare and the
+  reason it was passed over.
+- **Why both copies are kept by default.** When a lost copy comes back, removing the spare's copy
+  would delete a verified copy. It would also leave you relying on a drive that just went missing
+  for two weeks. Keeping both costs only space you already set aside for the vault. With
+  `--on-return retire`, the spare's copy is deleted only after the returned copy is verified
+  complete and up to date, and only where IRIS can reach the spare.
+- **Settings travel with the copies.** Each copy's `vault.json` holds the vault's places, spares
+  and lost-after, and so does its row in your Drives catalog. A machine with only the drive plugged
+  in can still catch it up and heal it, without the vault or its key. Change a vault's settings on
+  the machine it was made on, or on one that imported its key.
+- **Missing and lost.** A copy that has not been checked for 14 days (`IRIS_VAULT_MISSING_DAYS`)
+  stops counting toward the minimum. It is lost when it passes the vault's lost-after. With both at
+  the default of 14 days, the two happen together.
 
 ### Reading a drive's copy on another of your machines
 

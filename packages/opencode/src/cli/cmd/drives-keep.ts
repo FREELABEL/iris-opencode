@@ -234,7 +234,7 @@ export async function runKeep(a: KeepArgs, deps: KeepDeps): Promise<KeepResult> 
       : `${below.length} of ${rows.length} file(s) below ${vault.replicas} copies`
     out.push(`  ${state}: ` +
       report.checks.map((c) => `${c.target?.label ?? c.target?.name ?? c.key} ${c.status === "ok" ? "✓" : c.status}`).join(" · "))
-    if (report.checks.some((c) => c.status === "pending")) out.push("  A copy on a drive that is not plugged in catches up when it is: iris vault sync on the machine it is plugged into")
+    if (report.checks.some((c) => c.status === "pending")) out.push("  A copy on a drive that is not plugged in catches up when it is plugged into any of your machines (the IRIS daemon does it; or run iris vault sync there)")
     for (const f of failed) err.push(`${f.path}: ${f.error}`)
     for (const p of problems) err.push(`not recorded: ${p}`)
     return { code: failed.length || problems.length ? 1 : 0, out, err, kept: rows, problems }

@@ -39,6 +39,7 @@ import path from "path"
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "crypto"
 import { VaultUserError } from "./encrypted-vault-files"
 import type { VaultManifest } from "./vault-core"
+import type { PolicyFields } from "./vault-auto"
 
 export const REPLICA_DIR = "_IRIS_VAULT"
 export const REPLICA_FORMAT = "iris-vault-replica"
@@ -264,7 +265,7 @@ export type ReplicaMeta = {
   targets: VaultTarget[]
   /** the machine the vault was created on — where a catch-up fetches missing chunks by default */
   source_node?: string | null
-}
+} & PolicyFields
 
 export function replicaDir(mount: string, vaultName: string): string {
   return path.join(mount, REPLICA_DIR, vaultName)
@@ -319,8 +320,13 @@ export function ensureReplica(dir: string, meta: ReplicaMeta) {
     throw new VaultUserError(`${dir} already holds a different vault named "${meta.name}" (${cur.id}) — not mixing them. Rename one vault.`)
   }
   fs.mkdirSync(path.join(dir, "blobs"), { recursive: true })
+  // A machine holding an older copy of the vault's settings (spares, lost-after) never rolls a newer one back.
+  if (cur && metaStamp(cur) > metaStamp(meta)) return
   if (!cur || JSON.stringify(cur) !== JSON.stringify(meta)) writeAtomic(path.join(dir, "vault.json"), JSON.stringify(meta, null, 2) + "\n")
 }
+
+/** When a vault's settings last changed: updated_at, else created_at. Newest wins everywhere. */
+export const metaStamp = (m: { updated_at?: string; created_at?: string } | null | undefined) => String(m?.updated_at ?? m?.created_at ?? "")
 
 /** Index + sealed manifest, newest wins: an older writer never rolls a replica back. */
 export function writeReplicaIndex(dir: string, index: ReplicaIndex, sealed: SealedManifest | null): boolean {
@@ -487,7 +493,10 @@ export function effectiveCopies(
   for (const k of heldBy) {
     const r = rows.find((x) => x.vault_id === vaultId && x.target === k)
     const at = r?.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
-    if (!Number.isFinite(at) || now.getTime() - at > days * 86_400_000) { stale.push(k); continue }
+    // A copy also stops counting once it is past its vault's lost-after, if that is sooner (#193363).
+    const lost = Number((r as any)?.lost_after_days)
+    const limit = lost > 0 ? Math.min(days, lost) : days
+    if (!Number.isFinite(at) || now.getTime() - at > limit * 86_400_000) { stale.push(k); continue }
     counted.push(k)
   }
   return { copies: counted.length, counted, stale }

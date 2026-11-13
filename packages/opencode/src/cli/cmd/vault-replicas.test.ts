@@ -187,7 +187,8 @@ describe("the catalog: rows per copy, kept files' holders and copies, drive aler
     await recordChecks(cat, META, v.index, [full(SELF, "machine:laptop"), full(A, "drive:fs:aaaa"), { target: B, key: "drive:fs:bbbb", status: "pending", held: null, wanted: all.size, note: "" }], "laptop", t1)
     expect(cat.tables["drive-kept"].get("k1")).toMatchObject({ copies: 2, status: "below" })
     expect(cat.tables.drives.get("fs:src").copies_alert).toBe("1 of 1 kept file(s) below their minimum copies (vault studio) — run: iris vault status")
-    expect(cat.tables.drives.get("fs:bbbb").vault_replicas).toBe("studio: missing (verified 2026-11-13)")
+    // 20 days unseen is past both thresholds (missing 14d, lost-after 14d): the drive record says lost.
+    expect(cat.tables.drives.get("fs:bbbb").vault_replicas).toBe("studio: lost (verified 2026-11-13)")
 
     // A replica that fails verification loses the content it can no longer prove.
     const t2 = new Date("2026-12-03T01:00:00Z")
