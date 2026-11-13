@@ -49,11 +49,24 @@ export const KINDS: Array<[string, RegExp]> = [
 export const SENSITIVE = new Set(["credential", "db-dump"])
 export const LIBRARY = /(^|\/)(vendor|node_modules|tests?|testdata|spec|system\/core|libs?)\//i
 /** Framework classes; the real credentials were config.php / database.php (case matters). */
-export const CLASSFILE = new Set(["Config.php", "Database.php"])
+export const CLASSFILE = new Set(["Config.php", "Database.php", "Env.php", "Configuration.php"])
+/**
+ * #193365: the credential files that hide under another name (config.envr.php was copied without
+ * --confirm). Same pattern as CREDENTIAL_VARIANTS in drive_scan.py; change one, change both.
+ */
+export const CREDENTIAL_VARIANTS = new RegExp(
+  String.raw`(^|/)(config\.[^/]+\.php|([^/]*\.)?env\.php|configuration\.php|\.envrc` +
+    String.raw`|settings\.local\.(php|py|ya?ml|toml|ini|conf|cfg|env)|local_settings\.py|settings_local\.py` +
+    String.raw`|secrets\.(json|ya?ml|toml|env|ini|conf|cfg|properties|xml|txt)|[^/]+\.credentials|\.git-credentials` +
+    String.raw`|\.aws/credentials|\.netrc|\.pgpass|\.htpasswd|local\.settings\.json)$`,
+  "i",
+)
+/** A variant shipped as a template (phpMyAdmin's config.sample.inc.php, config.default.php) is not a secret. */
+export const SAMPLE = /(^|[._-])(example|sample|dist|default|template|tpl|stub)([._-]|$)/i
 
 export function kindOf(rel: string): string {
   for (const [k, rx] of KINDS) {
-    if (rx.test(rel)) {
+    if (rx.test(rel) || (k === "credential" && CREDENTIAL_VARIANTS.test(rel) && !SAMPLE.test(path.posix.basename(rel)))) {
       if (k === "credential" && (LIBRARY.test(rel) || CLASSFILE.has(path.posix.basename(rel)))) return "code"
       return k
     }
@@ -509,6 +522,11 @@ export class Rollup {
       status, found: today,
     }))
   }
+}
+
+/** Stale findings as import rows: the stored row, status moved. Same rows drive_scan.py sends (moved_rows). */
+export function movedRows(gone: ReadonlyArray<{ external_id: string; data?: Record<string, any> }>): Array<Record<string, any>> {
+  return gone.map((r) => ({ ...(r.data ?? {}), external_id: String(r.external_id), status: "moved" }))
 }
 
 export function todayIso(): string {
