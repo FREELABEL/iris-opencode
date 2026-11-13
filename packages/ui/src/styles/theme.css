@@ -629,3 +629,14 @@
     --text-stronger: rgba(255, 255, 255, 0.936);
   }
 }
+
+/* Chat text size (#193464). The conversation and its message box carry data-chat-text; inside them every
+   size scales by the person's choice, while the sidebar, tabs and menus keep theirs. --chat-text-size is set on
+   the page from Settings; components that size text in px multiply by --chat-text-scale (1 elsewhere). */
+[data-chat-text] {
+  --chat-text-scale: var(--chat-text-size, 1);
+  --font-size-small: calc(13px * var(--chat-text-scale));
+  --font-size-base: calc(14px * var(--chat-text-scale));
+  --font-size-large: calc(16px * var(--chat-text-scale));
+  --font-size-x-large: calc(20px * var(--chat-text-scale));
+}

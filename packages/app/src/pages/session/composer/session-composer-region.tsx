@@ -41,6 +41,7 @@ export function SessionComposerRegion(props: {
     <div
       ref={controller.setDockRef}
       data-component="session-prompt-dock"
+      data-chat-text
       classList={{
         "w-full shrink-0 flex flex-col justify-center items-center pb-3 pointer-events-none": true,
         "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),

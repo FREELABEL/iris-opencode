@@ -4,6 +4,7 @@ import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
 import { configureReadAloud } from "@opencode-ai/session-ui/read-aloud"
 import { usePlatform } from "@/context/platform"
+import { chatTextScale, chatTextSize } from "@/utils/chat-text-size"
 
 export interface NotificationSettings {
   agent: boolean
@@ -418,6 +419,8 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       const root = document.documentElement
       root.style.setProperty("--font-family-mono", monoFontFamily(store.appearance?.mono))
       root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
+      // Read only inside [data-chat-text] (the conversation and its message box), #193464.
+      root.style.setProperty("--chat-text-size", String(chatTextScale(store.appearance?.fontSize)))
     })
 
     createEffect(() => {
@@ -531,7 +534,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       appearance: {
         fontSize: withFallback(() => store.appearance?.fontSize, defaultSettings.appearance.fontSize),
         setFontSize(value: number) {
-          setStore("appearance", "fontSize", value)
+          setStore("appearance", "fontSize", chatTextSize(value))
         },
         font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
         setFont(value: string) {

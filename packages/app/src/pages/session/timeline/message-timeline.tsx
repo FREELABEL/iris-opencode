@@ -81,6 +81,7 @@ import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
+import { CHAT_TEXT_SIZES, chatTextSize, stepChatTextSize } from "@/utils/chat-text-size"
 import { type MessagePin, useMessagePins } from "@/context/message-pins"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useSDK } from "@/context/sdk"
@@ -1352,7 +1353,7 @@ export function MessageTimeline(props: {
   }
 
   return (
-    <div class="relative w-full h-full min-w-0">
+    <div data-chat-text class="relative w-full h-full min-w-0">
       <div
         class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{
@@ -1686,7 +1687,7 @@ export function MessageTimeline(props: {
                           />
                           <MenuV2.Portal>
                             <MenuV2.Content
-                              style={{ width: "120px", "min-width": "120px" }}
+                              style={{ width: "180px", "min-width": "180px" }}
                               onCloseAutoFocus={(event) => {
                                 if (title.pendingRename) {
                                   event.preventDefault()
@@ -1717,6 +1718,29 @@ export function MessageTimeline(props: {
                                   </>
                                 )}
                               </Show>
+                              <div data-slot="menu-v2-stepper" data-action="chat-text-size">
+                                <span data-slot="menu-v2-stepper-label">{language.t("session.textSize.title")}</span>
+                                <MenuV2.Item
+                                  closeOnSelect={false}
+                                  aria-label={language.t("session.textSize.smaller")}
+                                  disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES[0]}
+                                  onSelect={() =>
+                                    settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1))
+                                  }
+                                >
+                                  A−
+                                </MenuV2.Item>
+                                <MenuV2.Item
+                                  closeOnSelect={false}
+                                  aria-label={language.t("session.textSize.bigger")}
+                                  disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES.at(-1)}
+                                  onSelect={() =>
+                                    settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1))
+                                  }
+                                >
+                                  A+
+                                </MenuV2.Item>
+                              </div>
                               <MenuV2.Item
                                 onSelect={() => {
                                   setTitle("pendingRename", true)
