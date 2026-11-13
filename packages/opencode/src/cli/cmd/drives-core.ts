@@ -514,8 +514,9 @@ export class Rollup {
         sensitive_files: f.sensitive,
       }))
   }
-  findingRows(driveId: string, label: string, encrypted: boolean, today: string) {
-    const status = encrypted ? "contained" : "exposed"
+  /** encrypted null = could not tell (#193360): status left empty, never "exposed" on a guess */
+  findingRows(driveId: string, label: string, encrypted: boolean | null, today: string) {
+    const status = encrypted === true ? "contained" : encrypted === false ? "exposed" : null
     return this.findings.map((x) => ({
       external_id: `${driveId}:${x.path}`, drive_id: driveId, drive_label: label,
       path: x.path, kind: x.kind, size_kb: x.size_kb, drive_encrypted: encrypted,

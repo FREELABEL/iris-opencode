@@ -36,6 +36,10 @@ import {
   bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport, movedRows,
 } from "./drives-core"
 import { runRemoteGet, liveRemoteDeps, SERVE_MARK, type ServeReply } from "./drives-remote"
+import {
+  driveLetterOf, isDriveRoot, normalizeScanArg, windowsDisk, windowsMountOf, findDriveRecord, encryptionState,
+  encryptionWord, unreadableHint, serialKey, lsblkMountsFor,
+} from "./drives-windows"
 import { nameMatches } from "./hive-tailscale"
 import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
@@ -178,13 +182,15 @@ async function signedIn(): Promise<number> {
 export type Facts = {
   node: string
   filesystem: string
-  encrypted: boolean
+  /** null = could not tell (Windows without a BitLocker answer); never reported as "not encrypted" */
+  encrypted: boolean | null
   label: string
   size_gb: number | null
   used_gb: number | null
 }
 
 function isMountPoint(p: string): boolean {
+  if (process.platform === "win32") return isDriveRoot(p)
   if (process.platform === "linux") return sh("findmnt", "-no", "TARGET", "--target", p) === p
   if (p === "/") return true
   try {
@@ -212,14 +218,27 @@ function macMountOf(p: string): string | null {
   return m ? m[1] : null
 }
 
-/** (drive id, facts) — UUID for a real filesystem, dir:<host>:<path> for a plain folder. */
+/** (drive id, facts) — UUID (Windows: volume serial) for a real filesystem, dir:<host>:<path> for a plain folder. */
 export function identify(p: string, label?: string): [string, Facts] {
   const host = os.hostname()
   const mount = isMountPoint(p)
   let driveId: string
   const facts: Facts = { node: host, filesystem: "?", encrypted: false, label: "", size_gb: null, used_gb: null }
 
-  if (process.platform === "darwin") {
+  if (process.platform === "win32") {
+    // #193360: id = the volume serial, so a new drive letter is still the same drive (drives-windows.ts).
+    const letter = driveLetterOf(p)
+    const d = letter ? windowsDisk(letter, sh) : null
+    facts.filesystem = d?.filesystem ?? "?"
+    facts.encrypted = d?.bitlocker ?? null // a folder inherits its volume's BitLocker state
+    if (mount && d?.serial) {
+      driveId = `fs:${d.serial}`
+      facts.label = label || d.label || p
+    } else {
+      driveId = `dir:${host}:${p}`
+      facts.label = label || path.basename(p) || p
+    }
+  } else if (process.platform === "darwin") {
     if (mount) {
       const d = diskFactsFromPlist(diskutilPlist(p) ?? {})
       driveId = driveIdFromDisk(d)
@@ -269,6 +288,7 @@ export function resolveMount(driveId: string): string | null {
   }
   if (driveId.startsWith("fs:")) {
     const uuid = driveId.slice(3)
+    if (process.platform === "win32") return windowsMountOf(driveId, sh)
     if (process.platform === "darwin") {
       // diskutil prints UUIDs uppercase; Atlas holds them lowercase (see diskFactsFromPlist).
       const d = diskFactsFromPlist(diskutilPlist(uuid.toUpperCase()) ?? diskutilPlist(uuid) ?? {})
@@ -277,6 +297,7 @@ export function resolveMount(driveId: string): string | null {
     const dev = sh("blkid", "-U", uuid)
     let mp = sh("findmnt", "-no", "TARGET", "-S", `UUID=${uuid}`).split("\n").filter(Boolean)
     if (!mp.length && dev) mp = sh("findmnt", "-no", "TARGET", dev).split("\n").filter(Boolean)
+    if (!mp.length && serialKey(driveId)) mp = lsblkMountsFor(driveId, sh("lsblk", "-rno", "UUID,MOUNTPOINT"))
     return mp[0] ?? null
   }
   return null
@@ -404,13 +425,6 @@ async function cachedManifest(userId: number, bloq: number, drive: any): Promise
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-function unreadableHint(): string {
-  return process.platform === "darwin"
-    ? "macOS refused access. The usual cause: the app running this command (Terminal, iTerm, VS Code or IRIS) does not have Full Disk Access.\n" +
-        "     Open System Settings → Privacy & Security → Full Disk Access, switch it on for that app, quit and reopen the app, then scan again."
-    : "re-run as a user that can read them (sudo for a drive formatted on a Mac)"
-}
-
 /** "3.0 TB" / "512.4 GB" — decimal units, as the drive's own box says. */
 export function formatSize(bytes: number): string {
   if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
@@ -421,11 +435,13 @@ export function formatSize(bytes: number): string {
 const plural = (n: number, one: string, many = one + "s") => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
 
 /** The one line a client reads after a scan (#192974). Developer detail is behind --verbose. */
-export function scanSummary(s: { label: string; files: number; bytes: number; folders: number; sensitive: number; encrypted: boolean }): string {
+export function scanSummary(s: { label: string; files: number; bytes: number; folders: number; sensitive: number; encrypted: boolean | null }): string {
   const head = `Cataloged '${s.label}': ${plural(s.files, "file")} · ${formatSize(s.bytes)} · ${plural(s.folders, "project folder")}`
   if (!s.sensitive) return `${head} · no sensitive files`
   return `${head} · ${plural(s.sensitive, "sensitive file")} ` +
-    (s.encrypted ? "(drive encrypted — contained)" : "(drive NOT encrypted — run: iris drives list to review)")
+    (s.encrypted === true ? "(drive encrypted — contained)"
+      : s.encrypted === false ? "(drive NOT encrypted — run: iris drives list to review)"
+      : "(could not tell whether the drive is encrypted — run: iris drives list to review)")
 }
 
 const HOWTO = "Step by step, including how to encrypt a drive: iris how-to view iris-drives"
@@ -451,7 +467,7 @@ const ScanCommand = cmd({
       .option("dry-run", { type: "boolean", default: false, describe: "scan and show the result, send nothing to your account" })
       .option("verbose", { type: "boolean", default: false, describe: "also print the drive id, the local file list's path and each Atlas write" })
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac (see your drives with: ls /Volumes)")
-      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example("$0 drives scan E:\\", "catalog a drive on Windows (type it without quotes)")
       .example('$0 drives scan ~/Projects --label "Client projects" --kind archive-folder', "catalog a folder on this computer")
       .example('$0 drives scan /Volumes/Backup --exclude Personal/Family --exclude Taxes', "keep private folders out — never opened, remembered next time")
       .example("$0 drives scan /Volumes/Backup --checksums all", "hash every file, so every copy is counted by content (slow on big drives)")
@@ -461,7 +477,8 @@ const ScanCommand = cmd({
     const verbose = args.verbose === true
     const detail = (line: string) => { if (verbose) console.log(line) }
     const dryRun = args["dry-run"] === true
-    const root = fs.existsSync(String(args.path)) ? fs.realpathSync(String(args.path)) : path.resolve(String(args.path))
+    const arg = normalizeScanArg(String(args.path)) // #193360: `"E:\"` reaches us as `E:"` from Command Prompt
+    const root = fs.existsSync(arg) ? fs.realpathSync(arg) : path.resolve(arg)
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       console.error(`  Cannot see ${root} — is the drive plugged in?` + (process.platform === "darwin" ? " Your drives are listed by: ls /Volumes" : ""))
       return exitDrives(1)
@@ -479,20 +496,22 @@ const ScanCommand = cmd({
       userId = await signedIn()
       bloq = (await resolveDrivesBoard(liveBoardApi(userId), { override, create: false }).catch(() => null))?.id ?? null
     }
-    const [driveId, facts] = identify(root, args.label as string | undefined)
-    const out = path.join(STORE(), storeDirName(driveId))
-    fs.mkdirSync(out, { recursive: true })
+    let [driveId, facts] = identify(root, args.label as string | undefined)
     const today = todayIso()
 
     let remembered: string[] = []
     let previous: Record<string, any> | undefined
     if (bloq) {
       try {
-        for (const d of await atlasDrives(bloq)) {
-          if (d.external_id === driveId) {
-            previous = d
-            remembered = String(d.private_excluded ?? "").split("\n").filter((x) => x.trim())
-          }
+        // #193360: the same serial written by another OS (NTFS: 64-bit on Linux, 32-bit on Windows)
+        // is the same drive — keep its record and id rather than open a second card.
+        const records = await atlasDrives(bloq)
+        previous = findDriveRecord(records, driveId)
+        if (previous) driveId = String(previous.external_id)
+        // A drive scanned on Windows before #193360 was keyed by PC + letter: keep its private folders.
+        const legacy = records.find((d) => d.external_id === `dir:${facts.node}:${root}` && d.external_id !== driveId)
+        for (const d of [previous, legacy]) {
+          if (d) remembered.push(...String(d.private_excluded ?? "").split("\n").filter((x) => x.trim()))
         }
       } catch (e: any) {
         console.error(`  Could not read this drive's private-folder list from your account (${e?.message ?? e}).`)
@@ -502,9 +521,11 @@ const ScanCommand = cmd({
     } else if (dryRun) {
       console.log(warn("  Not checked against your account: folders made private from another computer are not applied to this dry run."))
     }
+    const out = path.join(STORE(), storeDirName(driveId))
+    fs.mkdirSync(out, { recursive: true })
     const exclude = [...new Set([...(args.exclude as string[]), ...remembered])].sort()
     console.log(`Scanning ${facts.label} (${root})`)
-    detail(`  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted ? "True" : "False"}`)
+    detail(`  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted == null ? "Unknown" : facts.encrypted ? "True" : "False"}`)
     if (exclude.length) console.log(`  Private folders skipped, never opened: ${exclude.length}`)
 
     const rollup = new Rollup(Number(args.depth))
@@ -529,7 +550,7 @@ const ScanCommand = cmd({
     if (facts.size_gb == null) facts.size_gb = facts.used_gb = round(rollup.total / 1e9, 1)
     detail(`  checksums (${checksums}): ${hashed.toLocaleString("en-US")} file(s) hashed`)
 
-    const status = facts.encrypted ? "contained" : "exposed"
+    const status = facts.encrypted === true ? "contained" : facts.encrypted === false ? "exposed" : "unknown"
     const driveRow: Record<string, any> = {
       external_id: driveId, label: facts.label, kind: args.kind, node: facts.node,
       filesystem: facts.filesystem, encrypted: facts.encrypted, size_gb: facts.size_gb,
@@ -558,7 +579,7 @@ const ScanCommand = cmd({
     detail(`  manifest: ${tsvPath}`)
     run.set({
       files_count: rollup.files, bytes_cataloged: rollup.total, folders_rows: folderRows.length,
-      findings_count: findingRows.length, sensitive_count: rollup.findings.length, encrypted: facts.encrypted,
+      findings_count: findingRows.length, sensitive_count: rollup.findings.length, encrypted: facts.encrypted ?? undefined,
       unreadable_folders_count: unreadable.length, dry_run: dryRun, checksums, kind: String(args.kind),
     })
     const summary = scanSummary({
@@ -781,7 +802,7 @@ const ListCommand = cmd({
       unreadableFolders += Number(d.unreadable_folders) > 0 ? Number(d.unreadable_folders) : 0
       console.log(
         `${String(d.label).padEnd(24)} ${Number(d.files ?? 0).toLocaleString("en-US").padStart(9)} files  ${String(d.used_gb).padStart(8)} GB  ` +
-          `${(d.encrypted ? "encrypted" : "NOT encrypted").padEnd(13)} ${String(d.sensitive_files ?? 0).padStart(4)} sensitive  ` +
+          `${encryptionWord(d.encrypted).padEnd(13)} ${String(d.sensitive_files ?? 0).padStart(4)} sensitive  ` +
           `${(d.free_gb != null && d.free_gb !== "" ? `${d.free_gb} GB free` : "free ?").padStart(13)}  ` +
           `${isOnline ? "online" : "offline"}  scanned ${d.last_scanned}` +
           (d.last_seen_on ? ` · last seen on ${d.last_seen_on}` : "") +
@@ -975,7 +996,7 @@ export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
   if (sensitiveKind && !a.confirm)
     return fail(
       1,
-      `${rel} is a sensitive file (${sensitiveKind}) on ${name}${drive.encrypted ? "" : ", and that drive is NOT encrypted"}.\n` +
+      `${rel} is a sensitive file (${sensitiveKind}) on ${name}${encryptionState(drive.encrypted) === true ? "" : encryptionState(drive.encrypted) === false ? ", and that drive is NOT encrypted" : ", and it is not known whether that drive is encrypted"}.\n` +
         `Copying it puts a second copy on this computer. If you mean to, add --confirm. The read is recorded either way.`,
     )
   if (a.serve && !isBundle) {
@@ -1235,7 +1256,7 @@ export const PlatformDrivesCommand = cmd({
       .command(UsageCommand)
       .demandCommand(1, "Specify: scan, find, path, list, copies, get, usage")
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
-      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example("$0 drives scan E:\\", "catalog a drive on Windows")
       .example("$0 drives scan ~/Projects --label \"Client projects\"", "catalog a folder")
       .example("$0 drives scan /Volumes/Backup --exclude Personal", "a private folder: never opened, remembered next time")
       .example("$0 drives find mix stems", "which drive has it — plugged in or not")
