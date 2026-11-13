@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { boundsOf, nativeBrowserEnabled, OVERLAY_SELECTOR, QUICK_SITES, sameBounds } from "./native-browser-model"
+import {
+  boundsFollower,
+  boundsOf,
+  nativeBrowserEnabled,
+  nextPlacement,
+  OVERLAY_SELECTOR,
+  QUICK_SITES,
+  sameBounds,
+} from "./native-browser-model"
 
 describe("boundsOf", () => {
   test("a visible panel body becomes rounded logical pixels", () => {
@@ -64,5 +72,88 @@ describe("nativeBrowserEnabled", () => {
         true,
       ),
     ).toBe(true)
+  })
+})
+
+describe("boundsFollower (#193405)", () => {
+  const rect = (x: number, width = 600) => ({ x, y: 40, width, height: 800 })
+  const setup = () => {
+    const sent: { b: ReturnType<typeof rect>; seq: number }[] = []
+    const pending: (() => void)[] = []
+    let seq = 0
+    let current = rect(800)
+    const f = boundsFollower({
+      send: (b, s) => sent.push({ b, seq: s }),
+      settle: () => f.follow(current, true),
+      next: () => ++seq,
+      timers: {
+        set: (fn) => pending.push(fn) - 1,
+        clear: (h) => (pending[h as number] = () => {}),
+      },
+    })
+    /** Let the quiet time pass: run the one live timer. */
+    const quiet = () => {
+      const live = pending.splice(0)
+      for (const fn of live) fn()
+    }
+    return { f, sent, quiet, setRect: (b: ReturnType<typeof rect>) => (current = b) }
+  }
+
+  test("sends only changes, numbered upward", () => {
+    const { f, sent } = setup()
+    f.placed(rect(800))
+    f.follow(rect(800))
+    f.follow(rect(780))
+    f.follow(rect(780))
+    f.follow(rect(760))
+    expect(sent.map((s) => [s.b.x, s.seq])).toEqual([
+      [780, 1],
+      [760, 2],
+    ])
+  })
+
+  test("once resizing goes quiet, the current rect is sent again even though it equals the last sent", () => {
+    // The ticket's case: the final rect was sent, but a stale mid-drag one landed after it.
+    const { f, sent, quiet, setRect } = setup()
+    f.placed(rect(800))
+    f.follow(rect(700))
+    f.follow(rect(640))
+    setRect(rect(640))
+    quiet()
+    expect(sent.map((s) => s.b.x)).toEqual([700, 640, 640])
+    expect(sent.at(-1)!.seq).toBeGreaterThan(sent[1].seq)
+  })
+
+  test("the settle resend does not arm another one (no loop)", () => {
+    const { f, sent, quiet } = setup()
+    f.placed(rect(800))
+    f.follow(rect(700))
+    quiet()
+    quiet()
+    quiet()
+    expect(sent.length).toBe(2)
+  })
+
+  test("a window resize with no rect change still re-places once it settles", () => {
+    // macOS live resize: the rect was read before layout moved, so nothing looked changed.
+    const { f, sent, quiet } = setup()
+    f.placed(rect(800))
+    f.arm()
+    quiet()
+    expect(sent.map((s) => s.b.x)).toEqual([800])
+  })
+
+  test("stop cancels a pending settle (hidden, covered, unmounted)", () => {
+    const { f, sent, quiet } = setup()
+    f.placed(rect(800))
+    f.follow(rect(700))
+    f.stop()
+    quiet()
+    expect(sent.length).toBe(1)
+  })
+
+  test("placement numbers only go up across panes", () => {
+    const a = nextPlacement()
+    expect(nextPlacement()).toBe(a + 1)
   })
 })
