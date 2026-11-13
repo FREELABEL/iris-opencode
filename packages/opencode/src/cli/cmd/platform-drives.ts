@@ -44,6 +44,10 @@ import { nameMatches } from "./hive-tailscale"
 import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
 import { Installation } from "../../installation"
+import { type VaultCatalog, driveAlertRows } from "./vault-replicas"
+import { runKeep, vaultCopiesBySha, type KeepDeps } from "./drives-keep"
+import { keepVault, putToTargets } from "./platform-vault"
+import { keptAlerts, missingDays, type ReplicaRow } from "./vault-drives"
 
 const KIND_CHOICES = ["backup-drive", "media-drive", "archive-folder", "other"] as const
 const IMPORT_CHUNK = 500
@@ -133,6 +137,8 @@ export function pickDrivesBoard(boards: Array<{ id: number; name: string; is_own
  * The board this account's drives live on. `create` (scan only): make the board if there is none,
  * and make sure its three datasets exist — "already exists" counts as done.
  */
+export const VAULT_DATASETS = new Set(["drive-vaults", "drive-kept"])
+
 export async function resolveDrivesBoard(
   api: BoardApi,
   opts: { override?: number; create: boolean },
@@ -145,7 +151,8 @@ export async function resolveDrivesBoard(
     id = await api.createBoard(DRIVES_BOARD_NAMES[0], DRIVES_BOARD_DESCRIPTION)
     created = true
   }
-  if (opts.create) for (const d of DRIVES_DATASETS) await api.createDataset(d.slug, d.name, d.fields, id)
+  // The vault datasets (#193363) are made the first time a vault records a copy, not by a scan.
+  if (opts.create) for (const d of DRIVES_DATASETS) if (!VAULT_DATASETS.has(d.slug)) await api.createDataset(d.slug, d.name, d.fields, id)
   return { id, created }
 }
 
@@ -796,6 +803,14 @@ const ListCommand = cmd({
       return exitDrives(1)
     }
     let connected = 0, unreadableFolders = 0
+    // #193363: kept files and vault copies, from the catalog. A board with neither has no such rows.
+    const cat = liveVaultCatalog(userId, bloq)
+    const [kept, reps] = await Promise.all([
+      cat.keptRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+      cat.replicaRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+    ])
+    const now = new Date()
+    const alerts = keptAlerts(kept, reps as ReplicaRow[], now)
     for (const d of drives) {
       const isOnline = online(d)
       if (isOnline) connected++
@@ -808,10 +823,45 @@ const ListCommand = cmd({
           (d.last_seen_on ? ` · last seen on ${d.last_seen_on}` : "") +
           (Number(d.unreadable_folders) > 0 ? `  ${warn(`(${d.unreadable_folders} unreadable folder(s))`)}` : ""),
       )
+      for (const l of keptLines(d, alerts.get(String(d.external_id)), reps, now)) console.log(l)
     }
+    // The alert lives on the drive's own record too; written here only when it changed (a copy goes
+    // stale with time alone, so looking is when it is noticed).
+    const changed = driveAlertRows(drives, kept, reps as ReplicaRow[], now)
+    if (changed.length) await importRows("drives", bloq, changed).catch(() => {})
     run.set({ drives_count: drives.length, connected_count: connected, unreadable_folders_count: unreadableFolders })
   }),
 })
+
+/** Under a drive's line in `list`: its vault copies, and its kept files that are short of copies. */
+export function keptLines(d: any, a: ReturnType<typeof keptAlerts> extends Map<string, infer V> ? V | undefined : never, reps: any[], now: Date): string[] {
+  const out: string[] = []
+  const id = String(d.external_id)
+  const mine = reps.filter((r) => r.drive_id === id || r.target === `drive:${id}`)
+  if (mine.length) {
+    out.push(`  vault copies on it: ` + mine.map((r) => {
+      const at = r.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
+      const fresh = Number.isFinite(at) && now.getTime() - at <= missingDays() * 86_400_000
+      const word = r.status === "ok" && !fresh ? `missing — not verified for ${missingDays()}+ days` : r.status
+      return `${r.vault_name ?? r.vault_id} ${word}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}`
+    }).join(" · "))
+  }
+  if (a) {
+    if (!a.below.length) out.push(`  kept: ${a.kept} file(s), every one at its minimum copies`)
+    else {
+      out.push(warn(`  ⚠ kept: ${a.below.length} of ${a.kept} file(s) BELOW their minimum copies`))
+      for (const b of a.below.slice(0, 5)) {
+        const why = [...b.stale.map((k) => `${label(reps, k)} not verified recently`), ...b.failing.map((k) => `${label(reps, k)} failing`)]
+        out.push(`     ${b.path} — ${b.copies}/${b.target} in vault ${b.vault}${why.length ? ` (${why.join(", ")})` : ""}`)
+      }
+      if (a.below.length > 5) out.push(`     … and ${a.below.length - 5} more`)
+      out.push(`     Plug the missing drive in and run: iris vault sync · or check: iris vault status <vault>`)
+    }
+  }
+  return out
+}
+
+const label = (reps: any[], k: string) => reps.find((r) => r.target === k)?.target_label ?? k.replace(/^(drive|machine):/, "")
 
 // ── copies: counted by content, across every drive (#192914) ──────────────────────
 
@@ -837,23 +887,37 @@ const CopiesCommand = cmd({
       results_count: report.known.length + report.unknown.length, drives_count: loaded.length,
       words_count: (args.words as string[]).length,
     })
-    console.log(formatCopies(report, limit).join("\n"))
+    // #193363: encrypted copies in vaults count too — by content, as the kept files record them.
+    const cat = liveVaultCatalog(userId, bloq)
+    const [kept, reps] = await Promise.all([
+      cat.keptRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+      cat.replicaRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+    ])
+    console.log(formatCopies(report, limit, vaultCopiesBySha(kept, reps as ReplicaRow[], new Date())).join("\n"))
   }),
 })
 
-export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8): string[] {
+export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8, vaults?: ReturnType<typeof vaultCopiesBySha>): string[] {
   const out: string[] = []
   const list = (rows: ManifestRow[], indent: string) => {
     for (const r of rows.slice(0, limit)) out.push(`${indent}${r.drive}: ${r.path}`)
     if (rows.length > limit) out.push(`${indent}… and ${rows.length - limit} more`)
   }
+  const kept = (sha: string, indent: string) => {
+    for (const v of vaults?.get(sha) ?? []) {
+      const flag = v.copies < v.target ? warn(` BELOW its minimum of ${v.target}`) : ` (minimum ${v.target})`
+      out.push(`${indent}+ ${plural(v.copies, "encrypted copy", "encrypted copies")} in vault ${v.vault}${flag}` +
+        (v.held.length ? `: ${v.held.join(", ")}` : "") + (v.stale.length ? ` · not counted: ${v.stale.join(", ")}` : ""))
+    }
+  }
   for (const k of report.known) {
     out.push(`${k.name} — ${copiesLine(k.versions)}`)
-    if (k.versions.length === 1) list(k.versions[0].copies, "  ")
+    if (k.versions.length === 1) { list(k.versions[0].copies, "  "); kept(k.versions[0].sha256, "  ") }
     else
       k.versions.forEach((v, i) => {
         out.push(`  version ${i + 1} (sha256 ${v.sha256.slice(0, 12)}…): ${plural(v.copies.length, "copy", "copies")}`)
         list(v.copies, "    ")
+        kept(v.sha256, "    ")
       })
   }
   if (report.unknown.length) {
@@ -1077,6 +1141,33 @@ function liveGetDeps(userId: number, bloq: number): GetDeps {
   }
 }
 
+/**
+ * The Drives catalog as a vault sees it (#193363): which drives exist, which vault copy is where,
+ * which kept file is held by whom. null when this account has no Drives board yet.
+ */
+export async function openVaultCatalog(userId: number, bloqFlag?: unknown): Promise<{ bloq: number; cat: VaultCatalog } | null> {
+  const board = await resolveDrivesBoard(liveBoardApi(userId), { override: overrideBloq(bloqFlag), create: false })
+  if (!board) return null
+  return { bloq: board.id, cat: liveVaultCatalog(userId, board.id) }
+}
+
+export function liveVaultCatalog(userId: number, bloq: number): VaultCatalog {
+  const ensured = new Set<string>()
+  const optional404 = (e: any) => { if (/HTTP 404/.test(String(e?.message))) return []; throw e }
+  return {
+    drives: () => atlasDrives(bloq),
+    replicaRows: () => atlasRecords("drive-vaults", bloq).catch(optional404),
+    keptRows: () => atlasRecords("drive-kept", bloq).catch(optional404),
+    upsert: (schema, rows) => importRows(schema, bloq, rows),
+    ensure: async (slug) => {
+      if (ensured.has(slug)) return
+      const d = DRIVES_DATASETS.find((x) => x.slug === slug)
+      if (d) await liveBoardApi(userId).createDataset(d.slug, d.name, d.fields, bloq)
+      ensured.add(slug)
+    },
+  }
+}
+
 const GetCommand = cmd({
   command: "get <ref>",
   describe: "copy ONE file (or one project bundle, as .zip) off a drive — plugged into this computer or into another of your machines — checked, and recorded with your reason",
@@ -1127,6 +1218,56 @@ const GetCommand = cmd({
     }
     const remote = liveRemoteDeps(async () => (await fetchNodes(userId)) as any)
     return report(await runRemoteGet({ ...a, from, bloq }, { ...deps, ...remote }))
+  }),
+})
+
+const KeepCommand = cmd({
+  command: "keep <ref>",
+  describe: "keep a cataloged file or project folder safe: encrypted copies in a vault on your own drives and machines — counted, and flagged when too few are left",
+  builder: (y) =>
+    y
+      .positional("ref", { type: "string", demandOption: true, describe: "<drive>:<file or folder>, as iris drives find shows it" })
+      .option("vault", { type: "string", demandOption: true, describe: 'the vault to keep it in (made with: iris vault create <name> --on "<drive>,<drive>,this-machine")' })
+      .option("why", { type: "string", describe: "REQUIRED: why you are keeping it — saved with the record" })
+      .option("confirm", { type: "boolean", default: false, describe: "needed when it is, or a folder holds, a sensitive file (passwords, keys, database dumps)" })
+      .option("from", { type: "string", describe: "the machine the drive is plugged into — default: this one, else found for you" })
+      .option("json", { type: "boolean", default: false, describe: "one JSON result, for scripts and agents" })
+      .option("bloq", BLOQ_OPTION)
+      .example('$0 drives keep "Studio:Masters/Album 2025" --vault masters --why "only copy of the masters"', "a project folder: every file encrypted into the vault's copies")
+      .example('$0 drives keep "Client projects:Acme/contract.pdf" --vault clients --why "signed contract"', "one file")
+      .example('$0 drives keep "Old site:app/.env" --vault clients --why "rotate later" --confirm', "a sensitive file needs --confirm")
+      .epilogue("Exit codes: 0 kept · 1 refused or failed · 2 drive not connected anywhere · 3 moved since the last scan · 4 the machine with the drive is not answering · 5 a copy did not match (sha256). " + HOWTO),
+  handler: metered("keep", async (args: any, run: DrivesRun) => {
+    const json = args.json === true
+    const report = async (r: { code: number; out: string[]; err: string[]; kept?: any[] }) => {
+      run.set({ results_count: r.kept?.length ?? 0, bytes_copied: (r.kept ?? []).reduce((n, k) => n + Number(k.bytes ?? 0), 0) })
+      if (json) console.log(JSON.stringify({ ok: r.code === 0, code: r.code, ...(r.err.length ? { error: r.err.join("\n") } : {}), kept: r.kept ?? [] }, null, 2))
+      else {
+        for (const l of r.out) console.log(l)
+        for (const l of r.err) console.error(`  ${l}`)
+      }
+      if (r.code) return exitDrives(r.code)
+    }
+    if (!String(args.why ?? "").trim())
+      return report({ code: 1, out: [], err: ['--why is required: say why you are keeping this, e.g. --why "the only copy of the master". It goes on the record.'] })
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const get = liveGetDeps(userId, bloq)
+    const remote = liveRemoteDeps(async () => (await fetchNodes(userId)) as any)
+    const deps: KeepDeps = {
+      ...get,
+      resolveMount,
+      vault: async (name) => (await keepVault(name)) as any,
+      put: async (v, files) => putToTargets(v as any, files, { bloq, "user-id": userId }) as any,
+      remoteGet: (a) => runRemoteGet(a, { ...get, ...remote }),
+      catalogFiles: async (driveId) => {
+        const drive = (await atlasDrives(bloq)).find((d) => String(d.external_id) === driveId)
+        const text = drive ? await cachedManifest(userId, bloq, drive) : null
+        return text ? parseTsv(text).map((r) => ({ path: r.path, bytes: Number(r.bytes), sha256: r.sha256 })) : null
+      },
+      catalog: liveVaultCatalog(userId, bloq),
+    }
+    return report(await runKeep({ ref: String(args.ref), vault: String(args.vault), why: args.why, confirm: args.confirm === true, from: args.from ? String(args.from) : undefined, bloq }, deps))
   }),
 })
 
@@ -1252,9 +1393,10 @@ export const PlatformDrivesCommand = cmd({
       .command(ListCommand)
       .command(CopiesCommand)
       .command(GetCommand)
+      .command(KeepCommand)
       .command(ServeCommand)
       .command(UsageCommand)
-      .demandCommand(1, "Specify: scan, find, path, list, copies, get, usage")
+      .demandCommand(1, "Specify: scan, find, path, list, copies, get, keep, usage")
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
       .example("$0 drives scan E:\\", "catalog a drive on Windows")
       .example("$0 drives scan ~/Projects --label \"Client projects\"", "catalog a folder")
@@ -1265,6 +1407,7 @@ export const PlatformDrivesCommand = cmd({
       .example("$0 drives copies final mix", "how many identical copies exist, and on which drives")
       .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "copy one file off a plugged-in drive — recorded in your Drives board")
       .example('$0 drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "mixdown"', "the drive is plugged in at another of your machines: fetched over your Hive")
+      .example('$0 drives keep "Studio:Masters" --vault masters --why "only copy"', "encrypted copies on your own drives and machines, counted and flagged when too few")
       .example("$0 drives usage", "drives, files and TB cataloged, encrypted storage, scans and copies this month")
       .epilogue(HOWTO),
   async handler() {},

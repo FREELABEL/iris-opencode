@@ -37,7 +37,7 @@ import {
 } from "./encrypted-vault-files"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { fetchNodes } from "./platform-hive-nodes"
-import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, detectLocalNodeId, type SshTarget } from "./hive-tailscale"
+import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, shqPath, detectLocalNodeId, type SshTarget } from "./hive-tailscale"
 import {
   buildEntry, reassemble, nextManifest, manifestDigest, normalizePath,
   choosePlacement, replicationHealth, generateVaultKey, sha256,
@@ -45,10 +45,21 @@ import {
 } from "./vault-core"
 import { ReplicatedKeyStore, defaultOptions, sealExport, openExport, createNodeKeyWithSudo, defaultNodeKeyFile, BACKENDS, type KekBackend } from "./replicated-vault-keys"
 import { readFile, writeFile, mkdir, readdir } from "fs/promises"
-import { existsSync, statSync } from "fs"
-import { homedir } from "os"
+import { existsSync, statSync, mkdtempSync, rmSync, readFileSync } from "fs"
+import { homedir, hostname, tmpdir } from "os"
 import { join, dirname, basename } from "path"
 import { randomUUID } from "crypto"
+import {
+  type VaultTarget, type ReplicaIndex, type SealedManifest, type BlobSource,
+  resolveOn, targetKey, targetLabel, buildIndex, sealManifest, openManifest, contentId, writeReplicaIndex, writeAtomic,
+  readReplicaIndex, readReplicaMeta, readSealed, heldBlobs, folderSource, planPlacement, holdersOf, replicasOnMount,
+  replicaDir, parseIndex, effectiveCopies, splitList, fmt, SELF_WORDS,
+} from "./vault-drives"
+import {
+  type DriveEnv, type TargetCheck, type VaultCatalog, syncDriveTargets, recordChecks, replicaMetaFor, statusOf,
+  formatChecks, mountedReplicaDirs, localReplicaDir, statfsOf,
+} from "./vault-replicas"
+import { resolveMount, openVaultCatalog } from "./platform-drives"
 
 const VAULT_ROOT = join(homedir(), ".iris", "vault")
 const KEYS_FILE = join(homedir(), ".iris", "vault-keys.json")
@@ -58,9 +69,27 @@ const KEYS_FILE = join(homedir(), ".iris", "vault-keys.json")
 const vaultDir = (id: string) => join(VAULT_ROOT, id)
 const blobPath = (id: string, blobId: string) => join(vaultDir(id), "blobs", blobId.slice(0, 2), blobId)
 /** Same layout on every node, so a remote path is derivable rather than negotiated. */
-const remoteBlobPath = (id: string, blobId: string) => `~/.iris/vault/${id}/blobs/${blobId.slice(0, 2)}`
+/**
+ * Where vaults live on your OTHER machines — the same layout everywhere. IRIS_VAULT_REMOTE_DIR
+ * (set on the asking machine) names another folder there: a custom install, or a test that must
+ * not touch the real ~/.iris on another machine.
+ */
+const remoteRoot = () => (process.env.IRIS_VAULT_REMOTE_DIR || "~/.iris/vault").replace(/\/+$/, "")
+const remoteVaultPath = (id: string, ...rest: string[]) => [remoteRoot(), id, ...rest].join("/")
+const remoteBlobPath = (id: string, blobId: string) => remoteVaultPath(id, "blobs", blobId.slice(0, 2))
 
-interface VaultMeta { id: string; name: string; created_at: string; replicas: number }
+interface VaultMeta {
+  id: string
+  name: string
+  created_at: string
+  /** the minimum number of copies (TOTAL, this machine included) */
+  replicas: number
+  /** #193363: where copies go — drives and machines named with --on. Absent = the original
+   *  behaviour: copies spread over whichever of your machines have room. */
+  targets?: VaultTarget[]
+  /** the machine the vault was created on (catch-up fetches from it by default) */
+  source_node?: string | null
+}
 
 /**
  * Replicated-vault keys are wrapped at rest (#193396): sealed under a key held by the OS keychain,
@@ -78,6 +107,60 @@ async function requireKey(vaultId: string, argv: any = {}): Promise<Buffer> {
   const k = await keyStore(argv).getKey(vaultId)
   if (!k) throw new VaultUserError(`no key for vault ${vaultId} on this machine. Keys never sync — on the machine that has it run: iris vault key export <vault> --out <file>, then here: iris vault key import <file>`)
   return k
+}
+
+// ── copies on drives and named machines (#193363) ───────────────────────────────────────────
+
+const driveEnv: DriveEnv = { resolveMount: (id) => resolveMount(id), statfs: (p) => statfsOf(p) }
+
+async function openCatalog(userId: number, bloqFlag: unknown): Promise<{ bloq: number; cat: VaultCatalog } | null> {
+  return openVaultCatalog(userId, bloqFlag)
+}
+
+/** This machine as a target: the --on entry that is this machine, or a synthesized one. */
+function selfTarget(meta: VaultMeta): VaultTarget {
+  const me = hostname()
+  const named = (meta.targets ?? []).find((t) => t.kind === "machine" && (t.name.toLowerCase() === me.toLowerCase()))
+  return named ?? { kind: "machine", name: me, self: true }
+}
+
+/** Every place a copy belongs: the --on targets, plus the machine the vault was created on. */
+function allTargets(meta: VaultMeta): VaultTarget[] {
+  const ts = [...(meta.targets ?? [])]
+  const src = meta.source_node ?? null
+  if (src && !ts.some((t) => t.kind === "machine" && t.name.toLowerCase() === src.toLowerCase())) ts.unshift({ kind: "machine", name: src, self: src.toLowerCase() === hostname().toLowerCase() })
+  return ts.map((t) => (t.kind === "machine" ? { ...t, self: t.name.toLowerCase() === hostname().toLowerCase() } : t))
+}
+
+/** The index this machine can build (needs the key) or the one last written next to the vault. */
+function currentIndex(meta: VaultMeta, man: VaultManifest | null, key: Buffer | null): ReplicaIndex | null {
+  if (man && key) return buildIndex(key, man)
+  const i = readReplicaIndex(localReplicaDir(vaultDir(meta.id)))
+  return i && i.vault_id === meta.id ? i : null
+}
+
+/** Write vault.json + index + sealed manifest next to this machine's chunks — the files a replica carries. */
+function writeLocalReplicaFiles(meta: VaultMeta, index: ReplicaIndex, sealed: SealedManifest | null) {
+  const dir = localReplicaDir(vaultDir(meta.id))
+  writeAtomic(join(dir, "vault.json"), JSON.stringify(replicaMetaFor(meta), null, 2) + "\n")
+  writeReplicaIndex(dir, index, sealed)
+}
+
+/**
+ * A drive replica written by a newer put (on another machine) has a newer manifest. With the key,
+ * adopt it — so a machine that imported the vault key reads files put after the export.
+ */
+async function adoptNewerManifest(meta: VaultMeta, key: Buffer, man: VaultManifest | null): Promise<{ man: VaultManifest | null; from?: string }> {
+  let best = man
+  let from: string | undefined
+  for (const { target, dir } of mountedReplicaDirs(meta, driveEnv)) {
+    const sealed = readSealed(dir)
+    if (!sealed || sealed.vault_id !== meta.id || sealed.seq <= (best?.seq ?? 0)) continue
+    best = openManifest(key, sealed)
+    from = targetLabel(target)
+  }
+  if (best && best !== man) await writeManifest(meta.id, best)
+  return { man: best, from }
 }
 
 async function loadMeta(id: string): Promise<VaultMeta> {
@@ -203,7 +286,7 @@ async function freeBytes(t: SshTarget): Promise<number | null> {
  * tried once" — and that distinction is the entire value of the feature.
  */
 async function remoteBlobIds(t: SshTarget, vaultId: string): Promise<Set<string>> {
-  const r = await sshRun(t, `ls ~/.iris/vault/${shq(vaultId).slice(1, -1)}/blobs/*/ 2>/dev/null | grep -E '^[0-9a-f]{64}$' || true`)
+  const r = await sshRun(t, `ls ${shqPath(remoteVaultPath(vaultId, "blobs"))}/*/ 2>/dev/null | grep -E '^[0-9a-f]{64}$' || true`)
   return new Set(String(r.stdout).split("\n").map((s) => s.trim()).filter((s) => /^[0-9a-f]{64}$/.test(s)))
 }
 
@@ -214,21 +297,57 @@ const CreateCommand = cmd({
   describe: "create a vault — replicated across your machines, or with --encrypted a PHI vault on THIS node",
   builder: (y) => y
     .positional("name", { describe: "vault name", type: "string", demandOption: true })
-    .option("replicas", { describe: "target replica count per file (replicated vaults)", type: "number", default: 2 })
+    .option("replicas", { describe: "minimum copies of each file, this machine included (default 2; with --on: every place listed plus this machine)", type: "number" })
+    .option("on", { type: "string", describe: 'put copies on THESE drives and machines, e.g. --on "Backup A,Backup B,this-machine" (drives by their iris drives list name)' })
+    .option("bloq", { type: "number", describe: "advanced: the Drives board to use (default: your board named Drives)" })
     .option("encrypted", { type: "boolean", default: false, describe: "an encrypted PHI vault on this node: per-bloq, key in the OS keychain (or --passphrase)" })
     .option("bloq", { type: "string", describe: "(--encrypted) bind to this bloq: only its tasks can open the vault" })
     .option("node", { type: "string", describe: "(--encrypted) must be this machine — keys never travel" })
     .option("passphrase", { type: "boolean", default: false, describe: "(--encrypted) key from a passphrase; stays locked after restarts until unlocked" })
     .option("passphrase-stdin", { type: "boolean", default: false, describe: "(--encrypted) read the passphrase from stdin" })
-    .option("json", { type: "boolean", default: false }),
+    .option("user-id", { type: "number" })
+    .option("json", { type: "boolean", default: false })
+    .example('$0 vault create studio --on "Backup A,Backup B,this-machine"', "three copies: two drives and this machine")
+    .example('$0 vault create studio --on "Backup A,studio-mac" --replicas 2', "copies on a drive and another of your machines; flagged below 2"),
   async handler(argv) {
     // One noun, two kinds. --encrypted (or any PHI-vault option) means a node-local, per-bloq
     // encrypted vault for patient-data task output; otherwise the replicated sovereign store.
-    if (argv.encrypted || argv.bloq || argv.passphrase || argv["passphrase-stdin"] || argv.node) {
+    if (argv.on && (argv.encrypted || argv.passphrase || argv.node)) {
+      return vaultFail(new VaultUserError("--on is for replicated vaults: an encrypted PHI vault never leaves the node it is on, so it has no copies on drives"), !!argv.json)
+    }
+    // --bloq names the Drives board when --on is given; otherwise it binds a PHI vault to a bloq.
+    if (argv.encrypted || (argv.bloq && !argv.on) || argv.passphrase || argv["passphrase-stdin"] || argv.node) {
       return (NodeVaultCommands.create as any).handler({ ...argv, encrypted: true })
     }
     const id = randomUUID()
     const meta: VaultMeta = { id, name: String(argv.name), created_at: new Date().toISOString(), replicas: Number(argv.replicas) || 2 }
+    let catalog: { bloq: number; cat: VaultCatalog } | null = null
+    if (argv.on) {
+      try {
+        if (await findReplicated(meta.name)) throw new VaultUserError(`a vault named "${meta.name}" already exists on this machine — choose another name`)
+        if (!(await requireAuth())) process.exit(1)
+        const userId = await requireUserId(argv["user-id"] as number | undefined)
+        if (!userId) process.exit(1)
+        catalog = await openCatalog(userId, argv.bloq)
+        const drives = catalog ? await catalog.cat.drives() : []
+        const words = String(argv.on).split(",").map((w) => w.trim().toLowerCase())
+        const needNodes = words.some((w) => w && !SELF_WORDS.includes(w) && w !== hostname().toLowerCase() && !drives.some((d: any) => String(d.label ?? "").toLowerCase() === w || String(d.external_id) === w))
+        // Machines are listed from the account (one API call); none is dialled to create a vault.
+        const nodes = needNodes ? ((await fetchNodes(userId)) as any[]) : []
+        const targets = resolveOn(String(argv.on), { drives, nodes, self: hostname() })
+        if (targets.some((t) => t.kind === "drive") && !catalog) throw new VaultUserError("No drives cataloged yet — run: iris drives scan <drive or folder>")
+        const places = targets.length + (targets.some((t) => t.kind === "machine" && t.self) ? 0 : 1)
+        meta.targets = targets
+        meta.source_node = hostname()
+        meta.replicas = argv.replicas != null ? Number(argv.replicas) : places
+        if (!(meta.replicas >= 1)) throw new VaultUserError("--replicas must be at least 1")
+        if (meta.replicas > places) {
+          throw new VaultUserError(`--replicas ${meta.replicas} can never be reached: --on names ${targets.length} place(s), and with this machine that is ${places} copies at most`)
+        }
+      } catch (e) {
+        return vaultFail(e, !!argv.json)
+      }
+    }
     // Key first: a vault with no safe place for its key is refused before anything is written.
     const store = keyStore(argv)
     let where: ReturnType<ReplicatedKeyStore["status"]>
@@ -240,11 +359,20 @@ const CreateCommand = cmd({
     }
     await mkdir(join(vaultDir(id), "blobs"), { recursive: true })
     await writeFile(join(vaultDir(id), "vault.json"), JSON.stringify(meta, null, 2), "utf-8")
+    // The catalog learns where copies belong now, so a drive plugged into ANOTHER of your machines
+    // is recognised as this vault's (pending) copy before anything is put.
+    const problems = catalog && meta.targets
+      ? await recordChecks(catalog.cat, meta, null, allTargets(meta).map((t) => ({ target: t, key: targetKey(t), status: "pending", held: null, wanted: 0, note: "no files yet" })), hostname(), new Date())
+      : []
 
-    if (argv.json) { await writeJson({ ok: true, vault: meta, key_backend: where.backend }); return }
+    if (argv.json) { await writeJson({ ok: true, vault: meta, key_backend: where.backend, ...(problems.length ? { warnings: problems } : {}) }); return }
     console.log()
     console.log(`  ${success("✓")} vault ${bold(meta.name)}  ${dim(id)}`)
-    console.log(`     ${dim(`target replicas: ${meta.replicas}`)}`)
+    if (meta.targets) {
+      console.log(`     copies on: ${allTargets(meta).map(targetLabel).join(", ")}  ${dim(`(minimum ${meta.replicas})`)}`)
+      console.log(`     ${dim("A drive that is not plugged in when you put files catches up later: plug it into any of your machines and run iris vault sync.")}`)
+      for (const p of problems) console.log(`     ${bold("not saved to your Drives catalog:")} ${dim(p)}`)
+    } else console.log(`     ${dim(`target replicas: ${meta.replicas}`)}`)
     console.log(`     ${dim(`key wrapped by ${where.backend} in ~/.iris/vault-keys.wrapped.json — it NEVER syncs.`)}`)
     console.log(`     ${dim(`Back it up: iris vault key export ${meta.name} --out <file> (passphrase-sealed). Lose it and the data is unreadable, by design.`)}`)
     console.log()
@@ -306,12 +434,14 @@ const PutCommand = cmd({
     .option("to", { describe: "place copies only on these nodes (name or id; repeatable)", type: "string", array: true })
     .option("user", { describe: "ssh user on nodes", type: "string" })
     .option("user-id", { type: "number" })
+    .option("bloq", { type: "number", describe: "advanced: the Drives board copies are recorded on (default: your board named Drives)" })
     .option("passphrase-stdin", { type: "boolean", default: false, describe: "(passphrase PHI vault) read its passphrase from stdin" })
     .option("json", { type: "boolean", default: false }),
   async handler(argv) {
     try {
       const v = await resolveAnyVault(String(argv.vault), kindFromFlags(argv as any))
       if (v.kind === "encrypted") return await putEncrypted(v, argv)
+      if (v.meta.targets?.length) return await putTargetsCli(v.meta, argv)
       await putReplicated(v.meta, argv)
     } catch (e) {
       await vaultFail(e, !!argv.json)
@@ -450,6 +580,187 @@ async function putReplicated(meta: VaultMeta, argv: any) {
   }
 }
 
+// ── put, for a vault whose copies are named (--on) (#193363) ───────────────────────────────
+
+/** The vault `iris drives keep` puts into: a replicated vault with named copies, or why not. */
+export async function keepVault(name: string): Promise<VaultMeta | string> {
+  const meta = await findReplicated(name)
+  if (!meta) {
+    const enc = findEncryptedVault(loadEncryptedVaultModule(), name)
+    return enc
+      ? `"${name}" is an encrypted PHI vault — it never leaves this node, so it cannot hold copies on your drives. Use a vault made with: iris vault create <name> --on "<drive>,<drive>,this-machine"`
+      : `no vault named "${name}" on this machine. Make one: iris vault create ${name} --on "<drive>,<drive>,this-machine"`
+  }
+  if (!meta.targets?.length) return `vault ${meta.name} spreads its copies over whichever machines have room, so its copies cannot be counted per place. Keep into a vault made with --on: iris vault create <name> --on "<drive>,<drive>,this-machine"`
+  return meta
+}
+
+export type KeepFile = { src: string; as?: string }
+export type PutTargetsReport = {
+  vault: string
+  seq: number
+  results: Array<{ ok: boolean; path: string; vault_path?: string; size?: number; plain_sha256?: string; chunks?: number; content_id?: string; held_by?: string[]; copies?: number; error?: string }>
+  checks: TargetCheck[]
+  problems: string[]
+  replicas: number
+}
+
+/** The machine targets other than this one: push (put/sync) or just ask (status). Only these are dialled. */
+async function machineChecks(meta: VaultMeta, index: ReplicaIndex, argv: any, userId: number, push: boolean): Promise<TargetCheck[]> {
+  const remote = allTargets(meta).filter((t): t is Extract<VaultTarget, { kind: "machine" }> => t.kind === "machine" && !t.self)
+  if (!remote.length) return []
+  const wanted = index.blobs.map(([id]) => id)
+  const lens = new Map(index.blobs)
+  const out: TargetCheck[] = []
+  let nodes: any[]
+  try {
+    nodes = (await fetchNodes(userId)) as any[]
+  } catch (e: any) {
+    return remote.map((t) => ({ target: t, key: targetKey(t), status: "pending", held: null, wanted: wanted.length, note: `could not list your machines (${e?.message ?? e})` }))
+  }
+  for (const t of remote) {
+    const key = targetKey(t)
+    const n = nodes.find((x) => (t.id && String(x.id) === String(t.id)) || String(x.name).toLowerCase() === t.name.toLowerCase())
+    const st = n ? await targetFor(n, argv) : null
+    if (!st) { out.push({ target: t, key, status: "pending", held: null, wanted: wanted.length, note: n ? "not reachable now" : "no longer one of your machines" }); continue }
+    let have = await remoteBlobIds(st, meta.id)
+    let note = ""
+    if (push) {
+      const need = wanted.filter((id) => !have.has(id))
+      const needBytes = need.reduce((a, id) => a + (lens.get(id) ?? 0), 0)
+      const plan = need.length ? planPlacement([{ target: t, reachable: true, freeBytes: await freeBytes(st), needBytes }]) : { noRoom: [] as any[] }
+      if (plan.noRoom.length) {
+        const held = new Set(wanted.filter((id) => have.has(id)))
+        out.push({ target: t, key, status: "no-room", held, wanted: wanted.length, note: plan.noRoom[0].why })
+        continue
+      }
+      for (const id of need) {
+        const r = await pushFile(st, blobPath(meta.id, id), remoteBlobPath(meta.id, id))
+        if (!r.ok) { note = `push failed: ${r.error ?? "unknown"}`; break }
+      }
+      for (const f of ["vault.json", "index.json", "manifest.sealed.json"]) {
+        const lf = join(localReplicaDir(vaultDir(meta.id)), f)
+        if (existsSync(lf)) await pushFile(st, lf, remoteVaultPath(meta.id, "replica"))
+      }
+      have = await remoteBlobIds(st, meta.id)
+    }
+    const held = new Set(wanted.filter((id) => have.has(id)))
+    out.push({ target: t, key, status: statusOf(wanted.length, held.size, 0), held, wanted: wanted.length, note: note || (held.size < wanted.length ? `${wanted.length - held.size} chunk(s) missing` : "") })
+  }
+  return out
+}
+
+function selfCheck(meta: VaultMeta, index: ReplicaIndex): TargetCheck | null {
+  const self = allTargets(meta).find((t) => t.kind === "machine" && t.self)
+  if (!self) return null
+  const have = heldBlobs(vaultDir(meta.id))
+  const held = new Set(index.blobs.map(([id]) => id).filter((id) => have.has(id)))
+  return { target: self, key: targetKey(self), status: statusOf(index.blobs.length, held.size, 0), held, wanted: index.blobs.length, note: "" }
+}
+
+/** Sources a drive replica is filled from on this machine: its own chunk store, then other plugged-in copies. */
+function localSources(meta: VaultMeta): BlobSource[] {
+  const out: BlobSource[] = [folderSource("this machine", vaultDir(meta.id))]
+  for (const { target, dir } of mountedReplicaDirs(meta, driveEnv)) out.push(folderSource(targetLabel(target), dir))
+  return out
+}
+
+/**
+ * Encrypt on this machine, then put the chunks on every named place that is reachable: this
+ * machine's store, each drive plugged in here (free space checked first), each named machine over
+ * the mesh. A drive that is not plugged in is pending; nothing is assumed about it. The result is
+ * recorded in the Drives catalog.
+ */
+export async function putToTargets(meta: VaultMeta, files: KeepFile[], argv: any): Promise<PutTargetsReport> {
+  if (!(await requireAuth())) process.exit(1)
+  const userId = await requireUserId(argv["user-id"] as number | undefined)
+  if (!userId) process.exit(1)
+  const key = await requireKey(meta.id, argv)
+  const put: Record<string, any> = {}
+  const results: PutTargetsReport["results"] = []
+  for (const f of files) {
+    if (!existsSync(f.src) || !statSync(f.src).isFile()) { results.push({ ok: false, path: f.src, error: "no such local file" }); continue }
+    const size = statSync(f.src).size
+    if (size > 2 ** 31 - 1) { results.push({ ok: false, path: f.src, error: `${fmt(size)} is over the 2 GiB a vault file can be today` }); continue }
+    const buf = await readFile(f.src)
+    const vpath = normalizePath(f.as ?? basename(f.src))
+    const { entry, blobs } = buildEntry(key, buf, { mtime: statSync(f.src).mtime.toISOString() })
+    for (const b of blobs) {
+      const dest = blobPath(meta.id, b.ref.id)
+      await mkdir(dirname(dest), { recursive: true })
+      await writeFile(dest, b.bytes)
+    }
+    put[vpath] = entry
+    results.push({ ok: true, path: f.src, vault_path: vpath, size: buf.length, plain_sha256: entry.plain_sha256, chunks: blobs.length, content_id: contentId(key, entry.plain_sha256) })
+  }
+  let man = await latestManifest(meta.id)
+  ;({ man } = await adoptNewerManifest(meta, key, man))
+  if (Object.keys(put).length) {
+    man = nextManifest(man, { put }, { vault_id: meta.id, author_node: hostname(), created_at: new Date().toISOString() })
+    await writeManifest(meta.id, man)
+  }
+  const checks: TargetCheck[] = []
+  const problems: string[] = []
+  if (man) {
+    const index = buildIndex(key, man)
+    const sealed = sealManifest(key, man)
+    writeLocalReplicaFiles(meta, index, sealed)
+    const self = selfCheck(meta, index)
+    if (self) checks.push(self)
+    checks.push(...(await machineChecks(meta, index, argv, userId, true)))
+    checks.push(...(await syncDriveTargets({ meta, index, sealed, targets: allTargets(meta), env: driveEnv, sources: localSources(meta) })))
+    const holders = new Map(checks.filter((c) => c.held).map((c) => [c.key, c.held!]))
+    for (const r of results) {
+      if (!r.ok) continue
+      const e = man.entries[r.vault_path!]
+      r.held_by = holdersOf([...e.chunks].sort((a, b) => a.n - b.n).map((c) => c.id), holders)
+      r.copies = r.held_by.length
+    }
+    const cat = await openCatalog(userId, argv.bloq).catch((e) => { problems.push(`could not open your Drives catalog (${e?.message ?? e})`); return null })
+    if (cat) problems.push(...(await recordChecks(cat.cat, meta, index, checks, hostname(), new Date())))
+    else if (!problems.length) problems.push("no Drives board on this account — copies were made but not recorded (run iris drives scan on a drive first)")
+  }
+  return { vault: meta.name, seq: man?.seq ?? 0, results, checks, problems, replicas: meta.replicas }
+}
+
+async function putTargetsCli(meta: VaultMeta, argv: any) {
+  const paths = ([] as string[]).concat(argv.path as any)
+  if (argv.as && paths.length > 1) throw new VaultUserError("--as names one file; pass a single path with it")
+  if (argv.to) throw new VaultUserError(`vault ${meta.name} has its copies named (--on at create); --to does not apply`)
+  const r = await putToTargets(meta, paths.map((p) => ({ src: p, as: paths.length === 1 && argv.as ? String(argv.as) : undefined })), argv)
+  printPutTargets(r, !!argv.json)
+}
+
+function printPutTargets(r: PutTargetsReport, json: boolean) {
+  const ok = r.results.every((x) => x.ok)
+  for (const x of r.results) if (!x.ok) process.stderr.write(`error: ${x.path}: ${x.error}\n`)
+  if (json) {
+    void writeJson({
+      ok, vault: r.vault, seq: r.seq, results: r.results, warnings: r.problems,
+      copies: r.checks.map((c) => ({ target: c.key, label: targetLabel(c.target), status: c.status, held: c.held?.size ?? null, wanted: c.wanted, note: c.note || undefined })),
+    }).then(() => { if (!ok) process.exit(1) })
+    return
+  }
+  console.log()
+  for (const x of r.results) {
+    if (!x.ok) continue
+    const under = (x.copies ?? 0) < r.replicas
+    console.log(`  ${success("✓")} ${bold(x.vault_path!)}  ${dim(`${x.size} bytes · ${x.chunks} chunk(s) · sha256 ${x.plain_sha256!.slice(0, 16)}…`)}`)
+    console.log(`     ${under ? bold(`${x.copies}/${r.replicas} copies`) : dim(`${x.copies}/${r.replicas} copies`)} ${dim("· held by: " + (x.held_by!.map((k) => labelFor(r.checks, k)).join(", ") || "NOBODY"))}`)
+  }
+  console.log(`  ${dim(formatChecks(r.checks))}`)
+  if (r.checks.some((c) => c.status === "pending" && c.target.kind === "drive"))
+    console.log(`  ${dim("Pending drives catch up when plugged into any of your machines: iris vault sync")}`)
+  for (const p of r.problems) console.log(`  ${bold("not recorded:")} ${dim(p)}`)
+  console.log()
+  if (!ok) process.exit(1)
+}
+
+const labelFor = (checks: TargetCheck[], key: string) => {
+  const c = checks.find((x) => x.key === key)
+  return c ? targetLabel(c.target) : key.replace(/^(drive|machine):/, "")
+}
+
 const GetCommand = cmd({
   command: "get <vault> <path>",
   describe: "retrieve a file, fetching missing chunks from your nodes and verifying end to end",
@@ -490,7 +801,8 @@ async function getReplicated(meta: VaultMeta, argv: any) {
     if (!userId) process.exit(1)
 
     const key = await requireKey(meta.id, argv)
-    const man = await latestManifest(meta.id)
+    // A drive replica plugged in here may carry a newer manifest (put from another machine).
+    const { man } = await adoptNewerManifest(meta, key, await latestManifest(meta.id))
     const vpath = normalizePath(String(argv.path))
     const entry = man?.entries?.[vpath]
     if (!entry) throw new VaultUserError(`"${vpath}" is not in vault ${meta.name}. Run: iris hive vault ls ${meta.name}`)
@@ -505,11 +817,24 @@ async function getReplicated(meta: VaultMeta, argv: any) {
       missing.push(c.id)
     }
 
-    // Only reach for the mesh if something is genuinely absent locally.
-    if (missing.length > 0) {
+    // Then a copy on a drive plugged into this machine (#193363) — no network at all.
+    for (const { target, dir } of mountedReplicaDirs(meta, driveEnv)) {
+      for (const id of [...missing]) {
+        const b = await folderSource(targetLabel(target), dir).read(id)
+        if (!b) continue
+        blobs.set(id, b)
+        missing.splice(missing.indexOf(id), 1)
+        if (!fetchedFrom.includes(targetLabel(target))) fetchedFrom.push(targetLabel(target))
+      }
+    }
+
+    // Only reach for the mesh if something is genuinely absent locally. A vault with named copies
+    // asks only its named machines (never probes the rest), unless --from says otherwise.
+    const named = allTargets(meta).filter((t) => t.kind === "machine" && !t.self).map((t) => (t as any).name as string)
+    if (missing.length > 0 && (!meta.targets || argv.from || named.length)) {
       const allNodes = (await fetchNodes(userId)) as any[]
       const selfId = await detectLocalNodeId(allNodes)
-      const only = ([] as string[]).concat((argv.from as any) ?? []).map(String)
+      const only = ([] as string[]).concat((argv.from as any) ?? (meta.targets ? named : [])).map(String)
       const nodes = allNodes.filter((n) => String(n.id) !== selfId && (only.length === 0 || only.includes(String(n.name)) || only.includes(String(n.id))))
       for (const n of nodes) {
         if (missing.length === 0) break
@@ -520,7 +845,7 @@ async function getReplicated(meta: VaultMeta, argv: any) {
           if (!have.has(id)) continue
           const dest = blobPath(meta.id, id)
           await mkdir(dirname(dest), { recursive: true })
-          const r = await pullFile(t, `~/.iris/vault/${meta.id}/blobs/${id.slice(0, 2)}/${id}`, dirname(dest))
+          const r = await pullFile(t, remoteVaultPath(meta.id, "blobs", id.slice(0, 2), id), dirname(dest))
           if (r.ok) {
             blobs.set(id, await readFile(dest))
             missing.splice(missing.indexOf(id), 1)
@@ -596,6 +921,8 @@ const StatusCommand = cmd({
   describe: "replication health — ASKS each node what it holds, never a local ledger",
   builder: (y) => y.options(KIND_OPTIONS)
     .positional("vault", { type: "string", demandOption: true })
+    .option("deep", { type: "boolean", default: false, describe: "re-hash every chunk on the drives plugged in here (slow on big vaults; no key needed)" })
+    .option("bloq", { type: "number", describe: "advanced: the Drives board copies are recorded on" })
     .option("user", { type: "string" })
     .option("user-id", { type: "number" })
     .option("json", { type: "boolean", default: false }),
@@ -615,6 +942,7 @@ const StatusCommand = cmd({
         console.log()
         return
       }
+      if (v.meta.targets?.length) return await statusTargets(v.meta, argv)
       await statusReplicated(v.meta, argv)
     } catch (e) {
       await vaultFail(e, !!argv.json)
@@ -677,6 +1005,216 @@ async function statusReplicated(meta: VaultMeta, argv: any) {
     console.log()
     if (atRisk.length) process.exit(1)
   }
+}
+
+/**
+ * Health of a vault with named copies: this machine and each named machine are ASKED, each drive
+ * plugged in here is read (and with --deep re-hashed). A drive that is not plugged in here counts
+ * only if the catalog says it was verified complete at this manifest, recently.
+ */
+async function statusTargets(meta: VaultMeta, argv: any) {
+  if (!(await requireAuth())) process.exit(1)
+  const userId = await requireUserId(argv["user-id"] as number | undefined)
+  if (!userId) process.exit(1)
+  let man = await latestManifest(meta.id)
+  let index = currentIndex(meta, null, null)
+  if (!man || !index || index.seq < man.seq || mountedReplicaDirs(meta, driveEnv).some(({ dir }) => (readReplicaIndex(dir)?.seq ?? 0) > (man?.seq ?? 0))) {
+    const key = await requireKey(meta.id, argv)
+    ;({ man } = await adoptNewerManifest(meta, key, man))
+    index = man ? buildIndex(key, man) : null
+    if (man && index) writeLocalReplicaFiles(meta, index, sealManifest(key, man))
+  }
+  if (!man || !index) { console.log(`\n  ${dim("vault is empty — nothing to replicate")}\n`); return }
+  const checks: TargetCheck[] = []
+  const self = selfCheck(meta, index)
+  if (self) checks.push(self)
+  checks.push(...(await machineChecks(meta, index, argv, userId, false)))
+  checks.push(...(await syncDriveTargets({ meta, index, sealed: null, targets: allTargets(meta), env: driveEnv, sources: [], deep: !!argv.deep, readOnly: true })))
+  const cat = await openCatalog(userId, argv.bloq).catch(() => null)
+  const rows: any[] = cat ? (await cat.cat.replicaRows().catch(() => [])).map((r: any) => r?.data ?? r) : []
+  const now = new Date()
+  // A target not checked here counts only when the catalog says it held everything at THIS seq, recently.
+  const remembered = (key: string) => {
+    const r = rows.find((x) => x.vault_id === meta.id && x.target === key)
+    if (!r || r.status !== "ok" || Number(r.manifest_seq) < index!.seq) return false
+    return effectiveCopies([key], rows, meta.id, now).copies === 1
+  }
+  const holders = new Map(checks.filter((c) => c.held).map((c) => [c.key, c.held!]))
+  const health = Object.entries(man.entries).map(([p, e]) => {
+    const chunks = [...e.chunks].sort((a, b) => a.n - b.n).map((c) => c.id)
+    const live = holdersOf(chunks, holders)
+    const remote = checks.filter((c) => !c.held && remembered(c.key)).map((c) => c.key)
+    const copies = chunks.length === 0 ? Math.max(1, live.length) : live.length + remote.length
+    return { path: p, size: e.size, verified_now: live, from_catalog: remote, copies, target: meta.replicas, atRisk: copies < meta.replicas }
+  })
+  const problems = cat ? await recordChecks(cat.cat, meta, index, checks, hostname(), now) : ["no Drives board on this account — nothing recorded"]
+  const atRisk = health.filter((h) => h.atRisk)
+  if (argv.json) {
+    await writeJson({
+      ok: atRisk.length === 0, vault: meta.name, target: meta.replicas, seq: man.seq, health, warnings: problems,
+      copies: checks.map((c) => ({ target: c.key, label: targetLabel(c.target), status: c.status, held: c.held?.size ?? null, wanted: c.wanted, note: c.note || undefined })),
+    })
+    if (atRisk.length) process.exit(1)
+    return
+  }
+  const name = (k: string) => labelFor(checks, k)
+  console.log()
+  console.log(`  ${bold(meta.name)}  ${dim(`minimum ${meta.replicas} copies · manifest seq ${man.seq}`)}`)
+  console.log(`  ${dim(formatChecks(checks))}`)
+  console.log()
+  for (const h of health) {
+    console.log(`  ${h.atRisk ? dim("✗") : success("✓")} ${bold(h.path)}  ${dim(`${h.copies}/${h.target} copies`)}`)
+    if (h.verified_now.length) console.log(`     ${dim("verified now: " + h.verified_now.map(name).join(", "))}`)
+    if (h.from_catalog.length) console.log(`     ${dim("not plugged in here, verified complete recently: " + h.from_catalog.map(name).join(", "))}`)
+  }
+  console.log()
+  console.log(`  ${health.length - atRisk.length}/${health.length} file(s) at their minimum copies${argv.deep ? "" : dim(" (drives checked by name and size; --deep re-hashes)")}`)
+  for (const p of problems) console.log(`  ${bold("not recorded:")} ${dim(p)}`)
+  console.log()
+  if (atRisk.length) process.exit(1)
+}
+
+// ── sync: catch up the copies on drives plugged into THIS machine (#193363) ─────────────────
+
+/** A machine of yours as a chunk source, over ssh; each chunk is hash-checked before it is stored. */
+async function remoteSource(name: string, vaultId: string, argv: any, userId: number): Promise<{ src: BlobSource; t: SshTarget } | null> {
+  const nodes = (await fetchNodes(userId)) as any[]
+  const n = nodes.find((x) => String(x.name).toLowerCase() === name.toLowerCase() || String(x.id) === name)
+  if (!n) return null
+  const t = await targetFor(n, argv)
+  if (!t) return null
+  const stage = mkdtempSync(join(tmpdir(), "iris-vault-sync-"))
+  return {
+    t,
+    src: {
+      name: n.name,
+      read: async (id) => {
+        const r = await pullFile(t, remoteVaultPath(vaultId, "blobs", id.slice(0, 2), id), stage)
+        if (!r.ok) return null
+        try { return readFileSync(join(stage, id)) } catch { return null } finally { rmSync(join(stage, id), { force: true }) }
+      },
+    },
+  }
+}
+
+async function remoteJson(t: SshTarget, vaultId: string, file: string): Promise<any | null> {
+  const r = await sshRun(t, `cat ${shqPath(remoteVaultPath(vaultId, "replica", file))} 2>/dev/null`)
+  if (!r.ok) return null
+  try { return JSON.parse(String(r.stdout)) } catch { return null }
+}
+
+const SyncCommand = cmd({
+  command: "sync [vault]",
+  describe: "catch up vault copies on the drives plugged into THIS machine (chunks come from here, another plugged-in copy, or --from one of your machines)",
+  builder: (y) => y
+    .positional("vault", { type: "string", describe: "only this vault (default: every vault with a copy on a drive plugged in here)" })
+    .option("from", { type: "string", describe: "the machine to fetch missing chunks from (default: the machine the vault was created on)" })
+    .option("deep", { type: "boolean", default: false, describe: "re-hash every chunk already on the drive; a bad one is replaced" })
+    .option("bloq", { type: "number", describe: "advanced: the Drives board to use" })
+    .option("user", { type: "string" })
+    .option("user-id", { type: "number" })
+    .option("json", { type: "boolean", default: false })
+    .example("$0 vault sync", "plugged a backup drive in: bring every vault copy on it up to date")
+    .example("$0 vault sync studio --from studio-mac", "fetch what is missing from that machine"),
+  async handler(argv) {
+    try { await syncCli(argv) } catch (e) { await vaultFail(e, !!argv.json) }
+  },
+})
+
+async function syncCli(argv: any) {
+  if (!(await requireAuth())) process.exit(1)
+  const userId = await requireUserId(argv["user-id"] as number | undefined)
+  if (!userId) process.exit(1)
+  const cat = await openCatalog(userId, argv.bloq)
+  if (!cat) throw new VaultUserError("No drives cataloged yet — run: iris drives scan <drive or folder>")
+  const drives = await cat.cat.drives()
+  const mounted = new Map<string, string>()
+  for (const d of drives) {
+    const m = resolveMount(String(d.external_id))
+    if (m) mounted.set(String(d.external_id), m)
+  }
+  const rows: any[] = (await cat.cat.replicaRows()).map((r: any) => r?.data ?? r)
+  // Which vaults have a copy that belongs on a drive plugged in here — from this machine's vaults,
+  // the catalog, and the copies already on the drives.
+  const want = new Map<string, { meta: any | null; drives: Set<string>; source: string | null }>()
+  const add = (id: string, driveId: string, meta: any | null, source: string | null) => {
+    const w = want.get(id) ?? { meta: null, drives: new Set<string>(), source: null }
+    w.drives.add(driveId)
+    if (meta && !w.meta) w.meta = meta
+    if (source && !w.source) w.source = source
+    want.set(id, w)
+  }
+  let ids: string[] = []
+  try { ids = await readdir(VAULT_ROOT) } catch {}
+  for (const id of ids) {
+    const m = await loadMeta(id).catch(() => null)
+    for (const t of m?.targets ?? []) if (t.kind === "drive" && mounted.has(t.id)) add(m!.id, t.id, m, m!.source_node ?? null)
+  }
+  for (const r of rows) if (r.target_kind === "drive" && mounted.has(String(r.drive_id))) add(String(r.vault_id), String(r.drive_id), null, r.source_node || null)
+  for (const [driveId, m] of mounted) for (const rep of replicasOnMount(m)) {
+    if (rep.meta.targets.some((t) => t.kind === "drive" && t.id === driveId)) add(rep.meta.id, driveId, rep.meta, rep.meta.source_node ?? null)
+  }
+  const only = argv.vault ? String(argv.vault) : null
+  const report: any[] = []
+  for (const [id, w] of want) {
+    let meta: any = w.meta ?? (existsSync(join(vaultDir(id), "vault.json")) ? await loadMeta(id) : null)
+    const nameHint = rows.find((r) => r.vault_id === id)?.vault_name
+    if (only && only !== id && only !== (meta?.name ?? nameHint)) continue
+    const from = argv.from ? String(argv.from) : w.source && w.source.toLowerCase() !== hostname().toLowerCase() ? w.source : null
+    let remote: Awaited<ReturnType<typeof remoteSource>> = null
+    const dial = async () => (remote ??= from ? await remoteSource(from, id, argv, userId) : null)
+    // The newest index any reachable copy has: this machine, a plugged-in copy, or the source machine.
+    const cands: Array<{ index: ReplicaIndex; sealed: SealedManifest | null; meta?: any }> = []
+    const li = readReplicaIndex(localReplicaDir(vaultDir(id)))
+    if (li) cands.push({ index: li, sealed: readSealed(localReplicaDir(vaultDir(id))) })
+    for (const [, m] of mounted) for (const rep of replicasOnMount(m)) {
+      if (rep.meta.id !== id) continue
+      const i = readReplicaIndex(rep.dir)
+      if (i) cands.push({ index: i, sealed: readSealed(rep.dir), meta: rep.meta })
+      if (!meta) meta = rep.meta
+    }
+    if (!cands.length || argv.from) {
+      const r = await dial()
+      if (r) {
+        const i = parseIndex(JSON.stringify(await remoteJson(r.t, id, "index.json")))
+        if (i && i.vault_id === id) cands.push({ index: i, sealed: await remoteJson(r.t, id, "manifest.sealed.json"), meta: await remoteJson(r.t, id, "vault.json") })
+        if (!meta) meta = cands[cands.length - 1]?.meta ?? null
+      }
+    }
+    if (!meta || !meta.targets) { report.push({ vault: nameHint ?? id, ok: false, error: `cannot tell what this copy should hold — run on the machine that created it, or pass --from <machine>` }); continue }
+    const best = cands.filter((c) => c.index.vault_id === id).sort((a, b) => b.index.seq - a.index.seq)[0]
+    if (!best) { report.push({ vault: meta.name, ok: false, error: from ? `${from} did not answer with this vault's index` : "no copy of this vault's index is reachable — pass --from <machine>" }); continue }
+    const sources: BlobSource[] = []
+    if (existsSync(join(vaultDir(id), "blobs"))) sources.push(folderSource("this machine", vaultDir(id)))
+    for (const [driveId, m] of mounted) {
+      const dir = replicaDir(m, meta.name)
+      if (readReplicaMeta(dir)?.id === id) sources.push(folderSource(drives.find((d) => String(d.external_id) === driveId)?.label ?? driveId, dir))
+    }
+    // The source machine is asked only for chunks no plugged-in copy has.
+    sources.push({ name: from ?? "source", read: async (cid) => { const r = await dial(); return r ? r.src.read(cid) : null } })
+    const targets = (meta.targets as VaultTarget[]).filter((t) => t.kind === "drive" && w.drives.has(t.id))
+    const checks = await syncDriveTargets({ meta, index: best.index, sealed: best.sealed, targets, env: driveEnv, sources, deep: !!argv.deep })
+    const problems = await recordChecks(cat.cat, meta, best.index, checks, hostname(), new Date())
+    report.push({ vault: meta.name, ok: checks.every((c) => c.status === "ok"), seq: best.index.seq, checks, problems })
+  }
+  if (argv.json) {
+    await writeJson({ ok: report.every((r) => r.ok), drives_here: [...mounted.keys()], vaults: report.map((r) => ({ ...r, checks: r.checks?.map((c: TargetCheck) => ({ target: c.key, label: targetLabel(c.target), status: c.status, held: c.held?.size ?? null, wanted: c.wanted, written: c.written ?? 0, note: c.note || undefined })) })) })
+    if (!report.every((r) => r.ok)) process.exit(1)
+    return
+  }
+  console.log()
+  if (!mounted.size) console.log(`  ${dim("No cataloged drive is plugged into this machine.")}`)
+  else if (!report.length) console.log(`  ${dim(`No vault has a copy on the drive(s) plugged in here (${[...mounted.keys()].map((k) => drives.find((d) => String(d.external_id) === k)?.label ?? k).join(", ")}).`)}`)
+  for (const r of report) {
+    if (r.error) { console.log(`  ${dim("✗")} ${bold(r.vault)}  ${r.error}`); continue }
+    for (const c of r.checks as TargetCheck[]) {
+      const tag = c.status === "ok" ? success("✓") : dim("✗")
+      console.log(`  ${tag} ${bold(r.vault)} on ${targetLabel(c.target)}  ${dim(`${c.held?.size ?? 0}/${c.wanted} chunks · ${c.written ?? 0} copied now · manifest seq ${r.seq}`)}${c.note ? `  ${dim(c.note)}` : ""}`)
+    }
+    for (const p of r.problems) console.log(`     ${bold("not recorded:")} ${dim(p)}`)
+  }
+  console.log()
+  if (!report.every((r) => r.ok)) process.exit(1)
 }
 
 // ── keys (#193396) ───────────────────────────────────────────────────────────
@@ -815,7 +1353,7 @@ const VaultCommand = cmd({
   describe: "your vaults — replicated storage across YOUR nodes, and encrypted per-bloq PHI vaults (iris vaults = list)",
   builder: (y) => y
     .command(CreateCommand).command(ListCommand).command(PutCommand)
-    .command(GetCommand).command(LsCommand).command(StatusCommand)
+    .command(GetCommand).command(LsCommand).command(StatusCommand).command(SyncCommand)
     .command(NodeVaultCommands.lock).command(NodeVaultCommands.unlock).command(NodeVaultCommands.destroy)
     .command(KeyCommand)
     .option("json", { type: "boolean", default: false }),
