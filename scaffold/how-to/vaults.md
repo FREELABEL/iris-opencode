@@ -1,7 +1,7 @@
 ---
 category: Infrastructure
 level: intermediate
-tags: [vault, vaults, encryption, phi, hive, node, keychain, passphrase, retention, crypto-shred, storage]
+tags: [vault, vaults, encryption, phi, hive, node, keychain, passphrase, retention, crypto-shred, storage, external drive, backup drive, replicas, sync]
 duration_min: 8
 ---
 # How to: Use vaults
@@ -50,6 +50,59 @@ iris vault status intake
 - If a replicated vault and an encrypted vault share a name, add `--encrypted` or `--replicated`.
 - `get` writes the file out unencrypted. Delete it when you are done.
 - Errors go to stderr with a non-zero exit. With `--json`, stdout holds only JSON.
+
+## Copies on your own drives (`--on`)
+
+A replicated vault can keep its copies on external drives as well as on your machines. Name the
+places with `--on`: drives by their name in `iris drives list` (catalog a drive first with
+`iris drives scan`), machines by their name in `iris hive nodes list`, and `this-machine` for the
+one you are on.
+
+```bash
+iris vault create studio --on "Backup A,Backup B,this-machine"        # three copies
+iris vault create studio --on "Backup A,studio-mac" --replicas 2     # flagged when fewer than 2
+iris vault put studio mix.wav
+iris vault status studio            # each copy checked now; --deep re-hashes every chunk on a drive
+iris vault sync                     # a drive just plugged in here catches up
+```
+
+- **Where it goes.** On a drive: `<drive>/_IRIS_VAULT/<vault>/`, holding encrypted chunks named
+  by their own sha256, an index of those chunks, and the file list sealed with the vault key. On a
+  machine: its own vault folder. The machine you create the vault on always keeps a copy too.
+- **Free space first.** Before anything is written, each place is checked for room: a machine
+  keeps 1 GiB free; a drive keeps 2% of its size (at least 16 MiB, at most 1 GiB). A place
+  without room is skipped and named.
+- **A drive that is not plugged in is pending, not failed.** Plug it into any of your machines and
+  run `iris vault sync` there. It copies the missing chunks from that machine, from another copy
+  plugged in next to it, or from the machine the vault was created on (`--from <machine>` to pick
+  one) over your Hive (ssh on Tailscale). The machine doing the sync needs no key: it moves
+  encrypted chunks and checks each one's sha256 before storing it.
+- **Only the places you named are contacted.** A vault made with `--on` never asks your other
+  machines.
+- **Copies are counted, not assumed.** `status` asks each machine and reads each drive plugged in
+  here. A drive that is not plugged in counts only if your Drives catalog says it held everything
+  at the current version when last checked, and that check is less than 14 days old
+  (`IRIS_VAULT_MISSING_DAYS`). After that it is reported missing and stops counting.
+- **Bytes never pass through IRIS servers.** Your Drives board records where each copy is and when
+  it was last verified; the chunks move only between your own drives and machines.
+
+### Reading a drive's copy on another of your machines
+
+The key never travels with the drive. To open the copy on another machine, move the key there
+sealed with a passphrase, once:
+
+```bash
+# on the machine that has the vault
+iris vault key export studio --out studio.ivk
+# copy studio.ivk to the other machine (it is sealed), then there:
+iris vault key import studio.ivk
+iris vault get studio mix.wav --out ~/Desktop     # read straight off the drive plugged in there
+```
+
+`get` reads chunks from that machine, then from a copy on a drive plugged in there, then from your
+other machines. If the drive's copy holds files put after the export, `get` picks up the newer file
+list from the drive (it opens only with the key). The imported key is wrapped again by that
+machine's own key-wrapping key: Keychain, Secret Service, node key or passphrase, as below.
 
 ## Where replicated-vault keys live
 

@@ -102,10 +102,10 @@ describe("resolveDrivesBoard", () => {
     const { api, calls } = fakeBoards([{ id: 3, name: "Music", is_owner: true }])
     expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
     expect(calls).toEqual([
-      "list", "board:Drives", "dataset:drives@4242:27", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
+      "list", "board:Drives", "dataset:drives@4242:31", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
       "dataset:drive-reads@4242:10",
     ])
-    expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings", "drive-reads"])
+    expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings", "drive-reads", "drive-vaults", "drive-kept"])
     // the manifest key must never be readable by anyone the board is shared with
     expect(DRIVES_DATASETS[0].fields.find((f: any) => f.key === "manifest_key")).toMatchObject({ visibility: "private" })
   })

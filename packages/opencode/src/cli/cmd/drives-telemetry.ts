@@ -4,7 +4,7 @@
  * Two different things are measured, on purpose in two different places:
  *
  *   1. ANALYTICS (this file): one usage event per drives command — drives_scan, drives_find,
- *      drives_path, drives_list, drives_copies, drives_get, drives_usage. It goes through the
+ *      drives_path, drives_list, drives_copies, drives_get, drives_keep, drives_usage. It goes through the
  *      Beacon, so it obeys every opt-out (IRIS_TELEMETRY=0, DO_NOT_TRACK, `iris telemetry off`)
  *      and is fire-and-forget: it never blocks, never throws.
  *
@@ -21,7 +21,7 @@
 
 import { Beacon } from "../../telemetry/beacon"
 
-export type DrivesOp = "scan" | "find" | "path" | "list" | "copies" | "get" | "usage"
+export type DrivesOp = "scan" | "find" | "path" | "list" | "copies" | "get" | "keep" | "usage"
 
 /** Counts and sizes. Non-negative integers only. */
 export const DRIVES_NUMBER_KEYS = [
