@@ -3,6 +3,7 @@ import {
   VERBS,
   clampPageText,
   describeChange,
+  errorPageReason,
   findInPage,
   humanCheckAdvice,
   humanCheckReason,
@@ -438,5 +439,41 @@ describe("what an element IS (#193242)", () => {
     expect(idOnly).toContain("links: none")
     expect(idOnly).toContain("Don't build a link from an id")
     expect(idOnly).not.toContain("viewjob")
+  })
+})
+
+describe("#193442 — a step that lands on an error page says FAILED, not progress", () => {
+  const before = { url: "https://www.google.com/travel/flights/booking?tfs=x", title: "Google Flights", textLength: 9000, textHash: "a", values: {} }
+
+  test("Google's 404 after 'Continue to book' (2026-11-13, twice) is a failure with a way forward", () => {
+    const after = {
+      url: "https://www.google.com/travel/clk/f?t=1794549600000",
+      title: "Error 404 (Not Found)!!1",
+      textLength: 160,
+      textHash: "b",
+      values: {},
+      head: "404. That’s an error. The requested URL /travel/clk/f was not found on this server. That’s all we know.",
+    }
+    const s = describeChange(before, after)
+    expect(s.startsWith("FAILED")).toBeTrue()
+    expect(s).toContain("404")
+    expect(s).toContain("Do not repeat the same step")
+  })
+
+  test("real pages are not error pages: an article about 404s, a price of $404, a long page", () => {
+    expect(errorPageReason({ ...before, title: "How to fix a 404 error", textLength: 8000, head: "404 errors happen when" })).toBeUndefined()
+    expect(errorPageReason({ ...before, title: "Select flights", textLength: 900, head: "Basic $404 Choice $439" })).toBeUndefined()
+    expect(errorPageReason({ ...before, title: "Southwest Airlines", textLength: 20000, head: "Something went wrong? Contact us" })).toBeUndefined()
+  })
+
+  test("a page that was already showing stays as it was: only a step that MOVED the page is judged", () => {
+    const bad = { ...before, title: "Error 404 (Not Found)", textLength: 100, head: "404 not found" }
+    expect(describeChange(bad, { ...bad, textHash: "c" })).not.toContain("FAILED")
+  })
+
+  test("other error shapes: a 503, 'page not found', a blank page", () => {
+    expect(errorPageReason({ ...before, title: "503 Service Unavailable", textLength: 50, head: "" })).toContain("503")
+    expect(errorPageReason({ ...before, title: "Oops", textLength: 200, head: "Sorry, this page not found." })).toBeDefined()
+    expect(errorPageReason({ ...before, title: "", textLength: 0, head: "" })).toBe("a blank page")
   })
 })

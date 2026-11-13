@@ -579,7 +579,7 @@ export abstract class ScriptedPage {
   }
 
   /** Everything the change check compares, taken before and after an action. */
-  async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string> }> {
+  async state(): Promise<{ url: string; title: string; textLength: number; textHash: string; values: Record<string, string>; head: string }> {
     const js = `(() => {
       ${DEEP}
       const text = document.body ? document.body.innerText : ''
@@ -590,7 +590,7 @@ export abstract class ScriptedPage {
         const n = el.getAttribute('data-iris-ref')
         if (n && el.value !== undefined) values[n] = el.type === 'password' ? (el.value ? '(hidden)' : '') : String(el.value)
       })
-      return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values }
+      return { url: location.href, title: document.title, textLength: text.length, textHash: String(h), values, head: text.slice(0, 400) }
     })()`
 
     return await this.evaluate(js)

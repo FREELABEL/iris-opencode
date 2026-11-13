@@ -11,6 +11,8 @@ import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
+  errorPageReason,
+  RECOVER,
   findInPage,
   humanCheckAdvice,
   humanCheckReason,
@@ -292,11 +294,16 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             // The pane recognises its own checks and waits for the person (app human-check.ts).
             const sig = target === "panel" ? undefined : yield* attempt(() => p.signals())
             const check = sig?.ok ? humanCheckReason(sig.value) : null
+            // An address that answers with an error page did not open the site (#193442).
+            const st = check ? undefined : yield* attempt(() => p.state())
+            const bad = st?.ok ? errorPageReason(st.value) : undefined
             return {
               title: landed.title || landed.url,
               output: check
                 ? `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\n${humanCheckAdvice(check, target === "panel" ? "panel" : "agent")}`
-                : `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
+                : bad
+                  ? `FAILED: ${landed.url} answered with ${bad}${landed.title ? ` ("${landed.title.slice(0, 80)}")` : ""}, not the site.${how}\n\n${RECOVER}`
+                  : `opened ${landed.url}\ntitle: ${landed.title || "(none)"}${how}\n\nRead it with action=read, or search it with action=find.`,
               metadata: { url: landed.url, title: landed.title },
             }
           }

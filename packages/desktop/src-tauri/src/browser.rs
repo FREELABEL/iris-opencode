@@ -318,6 +318,8 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
 
     #[allow(unused_mut)]
     let mut b = WebviewBuilder::new(label, WebviewUrl::External(url))
+        // A form that POSTs into a new window submits in this tab, so its data survives (#193441).
+        .initialization_script(include_str!("browser_page.js"))
         .on_navigation(move |url| {
             let ok = navigation_allowed(url, engine_port);
             if !ok {
@@ -347,6 +349,8 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
         // it carries the same gates; a sign-in pop-up stays in this tab. Never a new webview
         // window: that window would carry no gate of its own. If the app does not open a tab (it
         // is full, or an older app), it navigates this page instead (browser_navigate).
+        // Only the ADDRESS reaches here, never a request body: a POST form aimed at a new window
+        // is kept in its own tab by browser_page.js before it gets this far (#193441).
         //
         // The navigate is posted from another thread so it runs AFTER this handler returns.
         // WebKit calls this from inside its own click handling, on the main thread, and Tauri
