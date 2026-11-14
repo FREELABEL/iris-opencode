@@ -9,21 +9,31 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "I just installed iris", "how do I sign in", "auth not working", "where's my .env" | `iris-login.md` |
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
+| "share a script", "hive script", "iris scripts", "share with my team", "scripts shared with me", "run a teammate's script", "runs-on", "publish a script", "script marketplace", "unshare" | `hive-script-sharing.md` |
+| "model gateway", "openrouter alternative", "ai gateway", "failover", "my ai spend", "ollama", "my own gpu", "local models", "serve my models", "hive/<model>" | `iris-model-gateway.md` |
+| "run claude code from iris", "codex", "gemini cli", "switch agents", "ACP", "agent client protocol", "keep a session open", "steer an agent from my phone", "message a running agent" | `run-other-coding-agents.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
+| "law firm", "legal matter", "legal case", "new case", "new client matter", "conflict check", "engagement letter", "retainer", "demand letter", "chronology", "Lexicon" | `run-a-case-in-lexicon.md` |
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
 | "template", "starter template", "start from a template", "clone a page in my brand", "genesis-ui.com", "use this template", "make it my brand" | `genesis-starter-templates.md` |
 | "make my page a template", "brand tokens", "any brand can use it", "submit a template", "template gallery" | `genesis-make-a-template.md` |
 | "make it private", "don't publish it", "not visible", "share privately", "auth gate", "who can see this page", "unpublish", "lock it down" | `page-privacy.md` |
+| "ad campaign", "campaigns", "ad creatives", "approve an ad", "reject a creative", "content approval", "who approved", "review board for ads", "campaign review" | `run-ad-campaigns.md` |
+| "sign-in link", "skip the code", "without the OTP", "no code", "magic link", "access link", "invite to a gated page", "let staff in", "login link", "send them a link to sign in" | `personal-sign-in-links.md` |
 | "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
 | "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
+| "drives", "hard drive", "external drive", "flash drive", "which drive has", "find a file on a drive", "catalog my drives", "footage drive", "encrypt a drive", "bitlocker", "veracrypt", "sd card", "camera card", "lost a drive", "copies of a file", "duplicates across drives", "copy a file off a drive", "drive not connected", "full disk access", "windows drive letter" | `iris-drives.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
 | "desktop offline", "atlas offline", "boards load slow", "Offline · copy from", "Updating… pill", "sync chip", "Checking…", "Synced · ago", "Couldn't update", "warning dot on tab", "local copy of boards", "turn off the cache", "patient data on disk", "includePhi" | `desktop-atlas-offline-copy.md` |
 | "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
+| "public form", "intake form", "referral form", "form submissions", "collect submissions", "let anyone submit", "write-only", "public submit", "form to dataset", "lead capture form" | `public-form-to-private-dataset.md` |
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
 | "diary", "daily diary", "log my day", "publish my notes", "sync daily-diary", "journal", "what did I do" | `diary.md` |
+| "licence key", "claim my key", "activate", "am I licensed", "my seat", "my licence expired" | `claim-a-licence.md` |
+| "team licence", "issue a licence", "grant seats", "who claimed the key", "revoke a licence" | `team-licences.md` |
 | "meeting", "call notes", "transcript", "wispr", "what did we agree", "action items from the call", "file this meeting" | `meetings.md` |
 | "share a bloq", "invite someone to a board", "give the client access", "scoped invite", "who can see this board", "revoke access", "what did I share", "keep this internal", "permissions" | `bloq-access-control.md` |
 | "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |

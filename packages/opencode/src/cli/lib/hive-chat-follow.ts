@@ -87,3 +87,15 @@ export function followStep(state: FollowState, messages: TranscriptMessage[], se
   state.last = snap
   return { out, changed }
 }
+
+/**
+ * Why the cloud refused a task it just created, or null when it did not. A refusal arrives as a
+ * 201 whose task is already `failed` — e.g. "is busy (CPU at 168%)" for a loaded Mac (#190945) —
+ * so `create.ok` alone said "sent" for a message that never left the cloud.
+ */
+export function refusedAtCreate(created: any): string | null {
+  const t = created?.task
+  if (!t || t.status !== "failed") return null
+  const why = t.result?.metadata?.reason ?? t.result?.error ?? t.error ?? "the task failed"
+  return String(why).slice(0, 200)
+}

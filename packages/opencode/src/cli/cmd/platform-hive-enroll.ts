@@ -1,9 +1,18 @@
 import { cmd } from "./cmd"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { join } from "path"
 import { homedir } from "os"
 import { readFileSync, existsSync } from "fs"
+import { fetchNodes } from "./platform-hive-nodes"
+import {
+  describeSshFailure,
+  isSshUnreachable as isUnreachable,
+  rememberedUserForHost,
+  sshConfigFor,
+  sshKeyFound,
+  type SshAttempt,
+} from "./hive-tailscale"
 
 // ============================================================================
 // iris hive enroll <ip>
@@ -12,12 +21,7 @@ import { readFileSync, existsSync } from "fs"
 // run the install one-liner if needed, then wait for the node to register.
 // ============================================================================
 
-const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 const INSTALL_URL = process.env.IRIS_INSTALL_URL ?? "https://heyiris.io/install-code"
-
-async function hiveFetch(path: string, options: RequestInit = {}) {
-  return irisFetch(path, options, IRIS_API)
-}
 
 // Read SDK env to inject into the remote install for non-interactive auth.
 function readLocalSdkEnv(): { token: string | null; userId: string | null } {
@@ -41,10 +45,12 @@ function readLocalSdkEnv(): { token: string | null; userId: string | null } {
   return { token, userId }
 }
 
-interface DiscoverResult {
+export interface DiscoverResult {
   reachable: boolean
   auth_failed: boolean
   ssh_user: string | null
+  /** Every user an attempt was made as, in order — so a failure names what was and wasn't tried. */
+  ssh_users_tried: string[]
   os_uname: string | null
   iris_path: string | null
   iris_version: string | null
@@ -105,12 +111,6 @@ function sshExec(target: string, remoteCmd: string, timeoutSec = 15): { ok: bool
 
 function isAuthError(stderr: string): boolean {
   return /permission denied|no supported authentication|publickey|keyboard-interactive/i.test(
-    stderr,
-  )
-}
-
-function isUnreachable(stderr: string): boolean {
-  return /connection refused|no route|network is unreachable|operation timed out|host is down/i.test(
     stderr,
   )
 }
@@ -188,11 +188,50 @@ async function runSshSetup(target: string): Promise<boolean> {
   return false
 }
 
-function discover(target: string): DiscoverResult {
+function bareHost(target: string): string {
+  return target.includes("@") ? target.slice(target.indexOf("@") + 1) : target
+}
+
+/** Why enrolling would replace the machine's login, or null when it would not. */
+export function accountMismatch(registered: string | null | undefined, enrolling: number): string | null {
+  if (!registered || registered === "0" || String(registered) === String(enrolling)) return null
+  return `this machine is signed in to IRIS account ${registered}; enrolling would replace that login with account ${enrolling}`
+}
+
+/** The node id the daemon reports on /health, or null when it has not enrolled (or is not up). */
+export function healthNodeId(body: string): string | null {
+  try {
+    const j = JSON.parse(body)
+    const id = j?.node_id ?? j?.daemon?.node_id ?? j?.node?.id
+    return typeof id === "string" && id ? id : null
+  } catch {
+    return /"node_id":"([^"]+)"/.exec(body)?.[1] ?? null
+  }
+}
+
+export function discover(
+  target: string,
+  opts: {
+    /** --user: when given, the ONLY user tried — a probe must not report success as someone else. */
+    user?: string
+    /** From ~/.iris/hive-ssh.json: the user an earlier fs/doctor run logged in as at this address. */
+    rememberedUser?: string | null
+    exec?: (target: string, remoteCmd: string, timeoutSec?: number) => { ok: boolean; stdout: string; stderr: string }
+    sshContext?: (host: string) => { defaultUser: string | null; keyFound: boolean }
+  } = {},
+): DiscoverResult {
+  const explicit = target.includes("@") ? target.slice(0, target.indexOf("@")) : opts.user || null
+  const host = bareHost(target)
+  // Without a user, try the remembered one first, then whatever ssh defaults to (ssh_config User,
+  // else the local login). The old single attempt as the ssh default is what reported "no key
+  // auth" against a host whose key worked fine for a different account (#187954).
+  const candidates: (string | null)[] = explicit ? [explicit] : [...new Set([opts.rememberedUser || null, null])]
+
   const result: DiscoverResult = {
     reachable: false,
     auth_failed: false,
-    ssh_user: target.includes("@") ? target.split("@")[0] : null,
+    ssh_user: explicit,
+    ssh_users_tried: [],
     os_uname: null,
     iris_path: null,
     iris_version: null,
@@ -205,6 +244,7 @@ function discover(target: string): DiscoverResult {
 
   // Single SSH session that emits a parseable report.
   const probe = `
+echo "WHOAMI=$(id -un 2>/dev/null)";
 echo "UNAME=$(uname -srm 2>/dev/null)";
 IRIS_BIN=$(command -v iris 2>/dev/null || ls -1 "$HOME/.iris/bin/iris" 2>/dev/null);
 echo "IRIS_PATH=$IRIS_BIN";
@@ -226,17 +266,31 @@ if [ -f "$HOME/.iris/sdk/.env" ]; then
   echo "USER_ID=$UID_VAL";
 fi;
 `
-  const r = sshExec(target, probe, 15)
-  if (!r.ok) {
-    if (isAuthError(r.stderr)) {
+  const attempts: SshAttempt[] = []
+  let r: { ok: boolean; stdout: string; stderr: string } | null = null
+  for (const user of candidates) {
+    r = (opts.exec ?? sshExec)(user ? `${user}@${host}` : host, probe, 15)
+    if (r.ok) {
+      result.ssh_user = user
+      break
+    }
+    attempts.push({ user, stderr: r.stderr })
+    if (!isAuthError(r.stderr)) break // a route or other failure will not change with the username
+  }
+  const sshContext =
+    opts.sshContext ??
+    ((h: string) => {
+      const config = sshConfigFor(h)
+      return { defaultUser: config.user, keyFound: sshKeyFound(config) }
+    })
+  const ctx = attempts.length ? sshContext(host) : null
+  result.ssh_users_tried = attempts.map((a) => a.user ?? (ctx?.defaultUser ? `${ctx.defaultUser} (ssh default)` : "(ssh default)"))
+  if (!r?.ok) {
+    if (attempts.some((a) => isAuthError(a.stderr)) && !attempts.some((a) => isUnreachable(a.stderr))) {
       result.auth_failed = true
       result.recommendation = "needs-key"
-      result.reason = "SSH reachable but no key auth — run: iris hive ssh-setup " + target
-    } else if (isUnreachable(r.stderr)) {
-      result.reason = "SSH not reachable: " + r.stderr.trim().split("\n")[0].slice(0, 160)
-    } else {
-      result.reason = r.stderr.trim().slice(0, 200) || "ssh failed"
     }
+    result.reason = describeSshFailure(host, attempts, ctx!)
     return result
   }
   result.reachable = true
@@ -251,6 +305,7 @@ fi;
     else if (k === "DAEMON") result.daemon_running = v === "running"
     else if (k === "NODE_KEY") result.has_node_key = !!v
     else if (k === "USER_ID") result.registered_user_id = v || null
+    else if (k === "WHOAMI" && v) result.ssh_user = v
   }
 
   // Decide recommendation
@@ -319,14 +374,19 @@ const HiveDiscoverCommand = cmd({
   describe: "SSH-probe a host to see if iris is installed, current, and registered",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip (or just ip with default user)", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" })
-      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+      .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
+      .option("user", {
+        describe: "login name ON the node, usually not your IRIS account. Omitted: a user remembered for this address, then the ssh default",
+        type: "string",
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .epilog("Read-only. Needs SSH key login to the node — see: iris how-to hive-tailscale (Step 6b)."),
   async handler(argv) {
-    let target = String(argv.target)
-    if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
-
-    const d = discover(target)
+    const target = String(argv.target)
+    const d = discover(target, {
+      user: argv.user as string | undefined,
+      rememberedUser: await rememberedUserForHost(bareHost(target)),
+    })
 
     if (argv.json) {
       await writeJson(d)
@@ -350,13 +410,22 @@ const HiveEnrollCommand = cmd({
   describe: "SSH to a host, install iris if needed, register as a Hive node",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip (or just ip with default user)", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" })
+      .positional("target", { describe: "tailnet ip, or user@ip", type: "string", demandOption: true })
+      .option("user", { describe: "login name ON the node, usually not your IRIS account", type: "string" })
       .option("force", { describe: "reinstall even if already healthy", type: "boolean", default: false })
       .option("dry-run", { describe: "show what would happen without doing it", type: "boolean", default: false })
       .option("user-id", { describe: "iris user id (defaults to your logged-in id)", type: "number" })
       .option("install-version", { describe: "specific iris version to install", type: "string" })
-      .option("auto-key", { describe: "auto-run ssh-setup if key auth is missing", type: "boolean", default: true }),
+      .option("replace-login", {
+        describe: "the machine is signed in to a DIFFERENT IRIS account: replace that login with yours (it is backed up first)",
+        type: "boolean",
+        default: false,
+      })
+      .option("auto-key", {
+        describe: "run ssh-setup when key login is refused — only for a known username (--user, user@ip, or remembered)",
+        type: "boolean",
+        default: true,
+      }),
   async handler(argv) {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
@@ -364,30 +433,44 @@ const HiveEnrollCommand = cmd({
 
     let target = String(argv.target)
     if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
+    const host = bareHost(target)
+    const remembered = await rememberedUserForHost(host)
 
     console.log(`${dim("→")} probing ${bold(target)}...`)
-    let d = discover(target)
+    let d = discover(target, { rememberedUser: remembered })
 
-    // Auto-run ssh-setup if key auth is the only blocker
+    // Auto-run ssh-setup only for an account someone actually named (or one that has worked here
+    // before). ssh-setup wraps ssh-copy-id: against a GUESSED username it asks for a password the
+    // person may not have, to install a key that may already be installed for the right user (#187954).
     if (d.auth_failed && argv["auto-key"]) {
+      const setupUser = target.includes("@") ? target.slice(0, target.indexOf("@")) : remembered
+      if (!setupUser) {
+        console.error(`${dim("✗")} ${d.reason}`)
+        console.error(
+          dim(`  Not running ssh-setup: no remote username was given. Re-run with --user <remote-user> (or user@${host}).`),
+        )
+        process.exit(1)
+      }
+      const setupTarget = `${setupUser}@${host}`
       console.log()
-      console.log(`${highlight("!")} no SSH key auth — setting up now...`)
-      const ok = await runSshSetup(target)
+      console.log(`${highlight("!")} ${setupTarget} refused key login — setting up key auth now...`)
+      const ok = await runSshSetup(setupTarget)
       if (!ok) {
         console.error(`${dim("✗")} could not establish key auth — aborting`)
         process.exit(1)
       }
       // Re-probe with key auth in place
-      console.log(`${dim("→")} re-probing ${bold(target)}...`)
-      d = discover(target)
+      console.log(`${dim("→")} re-probing ${bold(setupTarget)}...`)
+      d = discover(setupTarget)
     }
 
     if (!d.reachable) {
       console.log(`${dim("✗")} cannot reach ${target}: ${d.reason}`)
-      console.log(dim("  Tip: ensure SSH is enabled on the target."))
-      console.log(dim("  If key auth fails: iris hive ssh-setup " + target))
       process.exit(1)
     }
+
+    // Install as the account the probe actually got in as, not the one that was typed or guessed.
+    if (d.ssh_user) target = `${d.ssh_user}@${host}`
 
     printDiscover(d)
 
@@ -395,6 +478,17 @@ const HiveEnrollCommand = cmd({
       console.log(`${success("✓")} nothing to do (use --force to reinstall)`)
       return
     }
+
+    // The install signs the machine in as YOU (your API key is written to its ~/.iris/sdk/.env)
+    // and registers the node under your account. If it is signed in as someone else — another of
+    // your accounts, or a teammate — that login is replaced. It used to happen silently (#191477).
+    const mismatch = accountMismatch(d.registered_user_id, userId)
+    if (mismatch && !argv["replace-login"]) {
+      console.error(`${dim("✗")} ${mismatch}`)
+      console.error(dim(`  Enroll from a machine signed in as ${d.registered_user_id} to keep that account, or pass --replace-login.`))
+      process.exit(1)
+    }
+    console.log(dim(`  The node will belong to account ${userId}${mismatch ? ` (replacing the login for ${d.registered_user_id})` : ""}.`))
 
     // Pull SDK token to seed the remote install
     const { token } = readLocalSdkEnv()
@@ -414,8 +508,8 @@ const HiveEnrollCommand = cmd({
       return
     }
 
-    // Snapshot current node IDs so we can detect the new one after registration
-    const before = await fetchNodeIds(userId)
+    // Keep the machine's current login, whatever it is: the install overwrites it.
+    sshExec(target, `[ -f "$HOME/.iris/sdk/.env" ] && cp -p "$HOME/.iris/sdk/.env" "$HOME/.iris/sdk/.env.bak-$(date +%Y%m%d%H%M%S)" || true`, 10)
 
     console.log()
     console.log(`${dim("→")} running install on ${bold(target)} (this can take a minute)...`)
@@ -444,49 +538,42 @@ const HiveEnrollCommand = cmd({
       process.exit(code)
     }
 
-    // Wait for the new node to register + come online
+    // Ask the machine's OWN daemon whether it enrolled, rather than waiting for a new id to show
+    // up in the registry. That wait said "it may show up in another minute" while the daemon was
+    // crash-looping (#191476), and could never succeed for a machine re-enrolled under its old id.
     console.log()
-    console.log(`${dim("→")} waiting for new node to appear (up to 90s)...`)
-    const newNode = await waitForNewNode(userId, before, 90_000)
-    if (!newNode) {
-      console.log(`${dim("!")} install finished but no new node appeared in your registry yet.`)
-      console.log(dim("  Run: iris hive nodes list — it may show up in another minute."))
-      return
+    console.log(`${dim("→")} waiting for the daemon on ${bold(host)} to enroll (up to 90s)...`)
+    let nodeId: string | null = null
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      const h = sshExec(target, "curl -s --max-time 3 http://127.0.0.1:3200/health", 10)
+      nodeId = healthNodeId(h.stdout)
+      if (nodeId) break
+      await new Promise((r) => setTimeout(r, 5000))
     }
+    if (!nodeId) {
+      const log = sshExec(
+        target,
+        'tail -n 6 "$HOME/.iris/logs/daemon.stderr.log" "$HOME/.iris/bridge/daemon.log" 2>/dev/null | grep -v "^$" | tail -n 8',
+        10,
+      )
+      console.error(`${dim("✗")} the install finished, but the daemon on ${host} has not enrolled — it is not running or not answering.`)
+      if (log.stdout.trim()) {
+        console.error(dim("  Its log ends with:"))
+        for (const line of log.stdout.trim().split("\n")) console.error(dim(`    ${line}`))
+      }
+      console.error(dim(`  On that machine: iris hive connect`))
+      process.exit(1)
+    }
+    const node = (await fetchNodes(userId).catch(() => [])).find((n) => n.id === nodeId)
     console.log()
-    console.log(`${success("✓")} enrolled ${bold(newNode.name)}`)
-    console.log(`  ${dim("id:")}      ${newNode.id}`)
-    console.log(`  ${dim("status:")}  ${newNode.connection_status}`)
+    console.log(`${success("✓")} enrolled ${bold(node?.name ?? host)}`)
+    console.log(`  ${dim("id:")}      ${nodeId}`)
+    console.log(`  ${dim("status:")}  ${node?.connection_status ?? "registering"}`)
     console.log()
-    console.log(dim(`  Try it:  iris hive run "${newNode.name}" "uname -a"`))
+    console.log(dim(`  Try it:  iris hive run ${nodeId} "uname -a"`))
   },
 })
-
-async function fetchNodeIds(userId: number): Promise<Set<string>> {
-  const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-  if (!res.ok) return new Set()
-  const data = (await res.json()) as { nodes: Array<{ id: string }> }
-  return new Set(data.nodes.map((n) => n.id))
-}
-
-async function waitForNewNode(
-  userId: number,
-  before: Set<string>,
-  timeoutMs: number,
-): Promise<{ id: string; name: string; connection_status: string } | null> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000))
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
-    if (!res.ok) continue
-    const data = (await res.json()) as {
-      nodes: Array<{ id: string; name: string; connection_status: string }>
-    }
-    const fresh = data.nodes.find((n) => !before.has(n.id))
-    if (fresh) return fresh
-  }
-  return null
-}
 
 // ============================================================================
 // ssh-setup
@@ -497,8 +584,9 @@ const HiveSshSetupCommand = cmd({
   describe: "set up passwordless SSH key auth to a host (wraps ssh-copy-id)",
   builder: (yargs) =>
     yargs
-      .positional("target", { describe: "user@ip", type: "string", demandOption: true })
-      .option("user", { describe: "ssh user if target is bare ip", type: "string" }),
+      .positional("target", { describe: "user@ip — the node's own login name, usually not your IRIS account", type: "string", demandOption: true })
+      .option("user", { describe: "ssh user if target is a bare ip", type: "string" })
+      .epilog("Creates ~/.ssh/id_ed25519 if this machine has no key, then asks for that account's password once."),
   async handler(argv) {
     let target = String(argv.target)
     if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`

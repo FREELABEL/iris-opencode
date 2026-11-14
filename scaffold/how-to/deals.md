@@ -110,6 +110,13 @@ To review and approve drafts:
 $ iris outreach approve
 ```
 
+Approving records your decision and sends nothing. To send an approved message:
+
+```bash
+$ iris outreach approve approved       # what is waiting
+$ iris outreach approve send <id>
+```
+
 Or approve in the web UI: Board → Outreach → Pending tab.
 
 ## Expected output

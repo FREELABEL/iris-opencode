@@ -3,15 +3,18 @@ import { withAccessFooter } from "./access-guide"
 import { brandContract, brandContractCss, applyBrandBlock } from "./brand-contract"
 import { TEMPLATE_GALLERY_SLUG, briefQuestions, findTemplate, parseTemplateCatalogue, type TemplateRow } from "./genesis-templates"
 import { productCommand } from "./product-command"
-import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, normalizeListResponse, commandWith } from "./pagination-args"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
+import { buildPageComponentsJson, componentPreview } from "./page-components-json"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, emitJsonError } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
 import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd } from "./platform-pages-edge"
+import { AccessLinkCmd, AccessLinkListCmd, AccessLinkRevokeCmd } from "./platform-pages-access-link"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 import { firstArray } from "../../util/array"
 // GLD-01/02. Local file provenance and the three-way merge live in their own dependency-free
@@ -25,6 +28,7 @@ import { absolutizeAssets, injectLiveReload } from "./page-dev"
 // lives apart from this file's yargs/API graph so it can be tested without a server.
 import { readServerRender, type PayloadReading } from "./page-render-read"
 import { mergePageDocs, formatMergeReport, versionDocFromRow, mergePreconditions } from "./page-merge"
+import { pageBrandLine, parseLinkArg } from "./brand-links"
 
 // ============================================================================
 // Helpers
@@ -247,6 +251,30 @@ export function pageGateFlags(page: { requires_auth?: unknown; json_content?: an
   return { gated: requiresAuth || requireOtp, requiresAuth, requireOtp, which }
 }
 
+/**
+ * The gate a page is under, read from what the SERVER holds — never from what a command meant
+ * to send (#192471). fl-api forces requires_auth on whenever json_content.requireOtp is true, so a
+ * command's own flag can be overruled; and requires_auth without requireOtp is half a gate — a
+ * sign-in without a code, which the renderer then refuses, so the visitor loops. Name it.
+ */
+export function gateReport(
+  page: { requires_auth?: unknown; json_content?: any } | null | undefined,
+  slug = "<slug>",
+): { line: string; warning: string | null } {
+  if (!page) return { line: "could not read the page back — check: iris pages view " + slug, warning: null }
+  const g = pageGateFlags(page)
+  if (!g.gated) return { line: "off — public", warning: null }
+  if (g.requireOtp) return { line: "on — visitors sign in with a code", warning: null }
+  return {
+    line: "half — requires_auth without requireOtp",
+    warning:
+      `This page asks for a sign-in WITHOUT a code, and the page gate refuses that session — visitors loop.\n` +
+      `Pick one:\n` +
+      `  iris pages ungate ${slug}                       # public\n` +
+      `  iris pages set ${slug} requireOtp true          # sign in with a code`,
+  }
+}
+
 export function setNestedValue(obj: any, path: string, value: unknown): void {
   const parts = normalizePathIndexes(path).split(".")
   let cur: any = obj
@@ -431,6 +459,9 @@ export async function createPageFromJson(opts: {
 // Subcommands
 // ============================================================================
 
+/** /api/v1/pages clamps per_page at 100 (measured: per_page=500 returns 100 rows, per_page "100"). */
+export const PAGES_LIST_MAX_LIMIT = 100
+
 // Shared list/search renderer. The /api/v1/pages endpoint supports server-side
 // per_page, page and search — previously hardcoded per_page=50 with no way to
 // page or search, so any page past the first 50 was undiscoverable (#147317).
@@ -440,7 +471,10 @@ async function fetchAndRenderPages(args: {
   limit?: number
   page?: number
   json?: boolean
+  /** "pages list" / "pages search <q>" — for links and hints. */
+  command?: string
 }) {
+  if (rejectBadPagination(args, { maxLimit: PAGES_LIST_MAX_LIMIT })) return
   UI.empty()
   prompts.intro(args.search ? `◈  Pages — search "${args.search}"` : "◈  Pages")
   if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -479,22 +513,29 @@ async function fetchAndRenderPages(args: {
     const lastPage = meta?.last_page ?? 1
     sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
+    // The list contract (#191863). --page-type filters this page client-side, so the
+    // server's total no longer describes the result: report it as unknown, not as a guess.
+    const env = listEnvelope<any>(
+      { ...normalizeListResponse<any>(json), rows: pages, ...(args["page-type"] ? { total: null, lastPage: null } : {}) },
+      {
+        resource: "pages",
+        command: args.command ?? commandWith("pages list", { search: args.search, "page-type": args["page-type"] }),
+        page: args.page,
+        limit: args.limit,
+        search: "iris pages search <term>",
+      },
+    )
     if (args.json) {
       // Was a back-compat flat array. That back-compat is what hid truncation: a
       // page of results that looks like the whole set produces confident wrong
       // answers. The envelope names what is withheld and how to get the rest.
-      await writeJson(
-        buildListEnvelope(projectFields(pages, LIST_FIELDS.pages), {
-          total,
-          limit: pages.length,
-          resource: "pages",
-        }),
-      )
+      // meta.limit: deprecated v1.5.25 alias of per_page.
+      await writeJson({ ...env, data: projectFields(pages, LIST_FIELDS.pages), meta: { ...env.meta, limit: env.meta.per_page } })
       prompts.outro("Done")
       return
     }
     if (pages.length === 0) {
-      prompts.log.warn(args.search ? `No pages match "${args.search}"` : "No pages found")
+      prompts.log.warn(args.search && env.meta.current_page === 1 ? `No pages match "${args.search}".` : listFooter(env.meta, "pages"))
       prompts.outro("Done")
       return
     }
@@ -509,8 +550,8 @@ async function fetchAndRenderPages(args: {
       console.log()
     }
     printDivider()
+    console.log(`  ${dim(listFooter(env.meta, "pages"))}`)
     const hints: string[] = ["iris pages view <slug>"]
-    if (currentPage < lastPage) hints.push(`iris pages list --page ${currentPage + 1}`)
     if (!args.search) hints.push("iris pages search <query>")
     prompts.outro(dim(hints.join("  ·  ")))
   } catch (err) {
@@ -528,8 +569,8 @@ const ListCmd = cmd({
     y
       .option("page-type", { describe: "filter by template type", type: "string" })
       .option("search", { describe: "filter by title or slug", type: "string" })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     await fetchAndRenderPages(args as any)
@@ -543,11 +584,11 @@ const SearchCmd = cmd({
   builder: (y) =>
     y
       .positional("query", { describe: "search text (title or slug)", type: "string", demandOption: true })
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${PAGES_LIST_MAX_LIMIT})`, type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
-    await fetchAndRenderPages({ ...(args as any), search: String(args.query) })
+    await fetchAndRenderPages({ ...(args as any), search: String(args.query), command: commandWith(`pages search ${JSON.stringify(String(args.query))}`, {}) })
   },
 })
 
@@ -581,6 +622,13 @@ const ViewCmd = cmd({
       printKV("Status", formatStatus(page.status))
       printKV("Published", page.published_at ?? "Not published")
       printKV("URL", publicUrl(page))
+      // The page's stored brand (#192665). Brands live on fl-api; a miss just prints the id.
+      if (page.brand_id) {
+        const b = await irisFetch(`/api/v1/brands/${page.brand_id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        printKV("Brand", pageBrandLine(page.brand_id, (b as any)?.data))
+      } else {
+        printKV("Brand", dim(`${pageBrandLine(null)} — set: iris pages set ${args.slug} --brand <brand>`))
+      }
       const compCount = page?.json_content?.components?.length ?? 0
       printKV("Components", compCount)
       const access = editAccess(page)
@@ -625,14 +673,35 @@ const GetCmd = cmd({
 })
 
 export const SetCmd = cmd({
-  command: "set <slug> <path> <value>",
-  describe: "set value at dot-notation path (auto-detects JSON values)",
+  command: "set <slug> [path] [value]",
+  describe: "set value at dot-notation path (auto-detects JSON values), or the page's brand with --brand",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
-      .positional("path", { describe: "dot notation path", type: "string", demandOption: true })
-      .positional("value", { describe: "new value (JSON or string)", type: "string", demandOption: true }),
+      .positional("path", { describe: "dot notation path", type: "string" })
+      .positional("value", { describe: "new value (JSON or string)", type: "string" })
+      .option("brand", {
+        describe: "store the brand this page wears (brand id or slug; 'none' clears it)",
+        type: "string",
+      })
+      .example("iris pages set hive --brand 8", "the hive page wears IRIS #8")
+      .example("iris pages set hive --brand none", "clear the stored brand"),
   async handler(args) {
+    if (args.brand !== undefined) {
+      if (args.path !== undefined) {
+        UI.empty()
+        prompts.log.error("Pass a path and value, or --brand — not both.")
+        process.exitCode = 1
+        return
+      }
+      return setPageBrand(String(args.slug), String(args.brand))
+    }
+    if (args.path === undefined || args.value === undefined) {
+      UI.empty()
+      prompts.log.error(`Usage: iris pages set <slug> <path> <value>   or   iris pages set <slug> --brand <brand>`)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     prompts.intro(`◈  Set ${args.slug} → ${args.path}`)
     if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
@@ -671,6 +740,8 @@ export const SetCmd = cmd({
       const PAGE_COLUMNS = new Set([
         "requires_auth", "status", "title", "seo_title", "seo_description", "og_image",
         "visibility", "slug", "owner_type", "owner_id",
+        // The stored brand (#192665). `--brand` is the friendlier spelling (it takes a slug).
+        "brand_id",
       ])
 
       // IMMUTABLE. The API accepts a PUT carrying owner_id, returns 200, and does not apply
@@ -793,9 +864,11 @@ export const SetCmd = cmd({
       // and changed no rendered content. Re-read and compare rather than trusting the 200.
       let landed: unknown = undefined
       let readBack = false
+      let freshPage: any = null
       try {
         const fresh = await getBySlug(args.slug, true)
         if (fresh) {
+          freshPage = fresh
           landed = getNestedValue(fresh.json_content ?? {}, args.path)
           readBack = true
         }
@@ -815,6 +888,12 @@ export const SetCmd = cmd({
       if (!readBack) {
         prompts.log.warn(`Could not read the page back to confirm. Check: iris pages get ${args.slug} ${args.path}`)
       }
+      // Clearing requireOtp does not clear requires_auth — the server only ever forces the column
+      // ON. What is left is half a gate (#192471); say so instead of "Updated".
+      if (freshPage && isGateAffectingPath(String(args.path))) {
+        const gate = gateReport(freshPage, String(args.slug))
+        if (gate.warning) prompts.log.warn(gate.warning)
+      }
       await purgeIfGatePath(String(args.path), String(args.slug))
     } catch (err) {
       sp.stop("Error", 1)
@@ -824,6 +903,52 @@ export const SetCmd = cmd({
     }
   },
 })
+
+/**
+ * `iris pages set <slug> --brand <brand>` (#192665): store the brand a page wears. Takes an id or
+ * a slug; a slug two brands share (#184257) is refused with both ids rather than guessed. The
+ * server checks the page's owner may use the brand; this reads the page back to confirm it landed.
+ */
+async function setPageBrand(slug: string, raw: string) {
+  UI.empty()
+  prompts.intro(`◈  Brand for ${slug}`)
+  if (!(await requireAuth())) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+  const stop = (msg: string) => {
+    prompts.log.error(msg)
+    process.exitCode = 1
+    prompts.outro("Nothing changed")
+  }
+  try {
+    let brandId = parseLinkArg(raw)
+    let label = brandId === null ? "none" : `#${brandId}`
+    if (brandId === "invalid") {
+      const res = await irisFetch(`/api/v1/brands?slug=${encodeURIComponent(raw)}&per_page=10`)
+      if (!res.ok) return stop(`Could not look up brand '${raw}' (HTTP ${res.status}).`)
+      const body = (await res.json()) as { data?: any }
+      const hits: any[] = firstArray(body?.data?.data, body?.data).filter((b: any) => b?.slug === raw)
+      if (hits.length === 0) return stop(`No brand with slug '${raw}' among the brands you can use. See: iris brands list`)
+      if (hits.length > 1) {
+        return stop(`Two or more brands share the slug '${raw}' (${hits.map((b) => `#${b.id}`).join(", ")}). Pass the id: iris pages set ${slug} --brand <id>`)
+      }
+      brandId = Number(hits[0].id)
+      label = `#${brandId} ${hits[0].slug}`
+    }
+    const page = await getBySlug(slug, false)
+    if (!page) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+    const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify({ brand_id: brandId }) })
+    if (!(await handleApiError(res, "Set page brand"))) { process.exitCode = 1; prompts.outro("Nothing changed"); return }
+    const fresh = await getBySlug(slug, false)
+    const landed = fresh ? (fresh.brand_id ?? null) : undefined
+    if (landed !== undefined && (landed === null ? null : Number(landed)) !== brandId) {
+      return stop(`The API accepted the request but the page's brand is ${landed ?? "none"}, not ${brandId ?? "none"}.`)
+    }
+    prompts.log.success(brandId === null ? "Stored brand cleared" : `${slug} wears brand ${label}`)
+    if (landed === undefined) prompts.log.warn(`Could not read the page back to confirm. Check: iris pages view ${slug}`)
+    prompts.outro(dim(`iris pages view ${slug}`))
+  } catch (err) {
+    stop(err instanceof Error ? err.message : String(err))
+  }
+}
 
 export const PullCmd = cmd({
   command: "pull <slug>",
@@ -1591,12 +1716,15 @@ const MergeCmd = cmd({
   },
 })
 
-const PublishCmd = cmd({
+export const PublishCmd = cmd({
   command: "publish <slug>",
   describe:
     "publish a page — WORLD-READABLE and indexable. For a private read use `genesis get`, " +
     "for a private share use `genesis preview` or `genesis share`",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("include-others", { describe: "publish drafts written by other users too", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish ${args.slug}`)
@@ -1606,6 +1734,41 @@ const PublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const versionsRes = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
+      if (!(await handleApiError(versionsRes, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const versionsBody = (await versionsRes.json()) as { data?: any }
+      const versions = extractVersions(versionsBody?.data)
+      const currentVersion = Number(page.current_version)
+      const publishedAt = page.status === "published" && page.published_at ? Date.parse(page.published_at) : 0
+      const pending = versions
+        .filter((version) => {
+          const createdAt = Date.parse(version.created_at ?? "")
+          return !Number.isFinite(createdAt) || !Number.isFinite(publishedAt) || createdAt > publishedAt
+        })
+        .sort((a, b) => Number(a.version_number ?? a.version) - Number(b.version_number ?? b.version))
+      if (pending.length && !args.includeOthers) {
+        sp.stop("Publish refused — unpublished versions need explicit review", 1)
+        for (const version of pending) {
+          const number = version.version_number ?? version.version
+          console.log(`  v${number} by user ${version.changed_by ?? version.created_by ?? "unknown"} — not yet published`)
+        }
+        prompts.log.info(`Review those changes, then publish explicitly: iris pages publish ${args.slug} --include-others`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      if (pending.length && args.includeOthers && !isNonInteractive()) {
+        const summary = pending.map((version) => `v${version.version_number ?? version.version} (user ${version.changed_by ?? version.created_by ?? "unknown"})`).join(", ")
+        const ok = await prompts.confirm({ message: `Publish ${args.slug} through v${currentVersion}? This includes unpublished versions: ${summary}` })
+        if (!ok || prompts.isCancel(ok)) {
+          sp.stop("Cancelled")
+          prompts.outro("Done")
+          return
+        }
+      }
+      if (pending.length && args.includeOthers && isNonInteractive()) {
+        prompts.log.info(`Publishing with unpublished versions included: ${pending.map((version) => `v${version.version_number ?? version.version}`).join(", ")}`)
+      }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       // Explicitly purge iris-api cache — fl-api's fire-and-forget purge may silently fail
@@ -2349,10 +2512,13 @@ const TemplateCmd = cmd({
   async handler() {},
 })
 
-const ComponentsCmd = cmd({
+export const ComponentsCmd = cmd({
   command: "components <slug>",
   describe: "list components on a page",
-  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Components: ${args.slug}`)
@@ -2361,21 +2527,31 @@ const ComponentsCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // getBySlug -> handleApiError has already said why, as JSON under --json, and set exit 1.
+      if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const components: any[] = firstArray(page?.json_content?.components)
       sp.stop(`${components.length} component(s)`)
+      if (args.json) {
+        // #191847 — same { data, meta } envelope as `pages list --json`, plus the page.
+        await writeJson(buildPageComponentsJson(page, args.slug))
+        prompts.outro("Done")
+        return
+      }
       if (components.length === 0) { prompts.outro("None"); return }
       printDivider()
       components.forEach((c, i) => {
-        const preview = c?.props?.title ?? c?.props?.text ?? c?.props?.content ?? ""
+        const preview = componentPreview(c) ?? ""
         console.log(`  ${dim(`[${i}]`)} ${bold(c.type ?? "?")}  ${dim(c.id ?? "")}`)
-        if (preview) console.log(`      ${dim(String(preview).slice(0, 80))}`)
+        if (preview) console.log(`      ${dim(preview.slice(0, 80))}`)
       })
       printDivider()
       prompts.outro(dim(`iris pages set ${args.slug} "components.0.props.title" "..."`))
     } catch (err) {
       sp.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      if (args.json) emitJsonError(message, { action: `Components ${args.slug}` })
+      else prompts.log.error(message)
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -5483,7 +5659,10 @@ export function resolveGate(
   }
   // Both flags, as the live page holds them: requires_auth without requireOtp is the
   // frictionless capture form, and a republish is not the place to change which modal shows.
-  return { requiresAuth: !!live.requires_auth, requireOtp: !!live.json_content?.requireOtp, kept: true }
+  // requireOtp alone still gates: fl-api forces requires_auth on from it, so asking for false
+  // next to it is a request the server overrides (#192471).
+  const requireOtp = !!live.json_content?.requireOtp
+  return { requiresAuth: !!live.requires_auth || requireOtp, requireOtp, kept: true }
 }
 
 /**
@@ -5684,12 +5863,15 @@ const PublishHtmlCmd = cmd({
       // serving. A status line that can be wrong is worse than none — it is the same
       // "cannot tell broken from not-measured" failure these commands were written to kill,
       // reproduced inside the fix for it. Measured on cli-publish-html-selftest.
-      const after = await getBySlug(slug, false)
+      const after = await getBySlug(slug, true)
       const liveNow = after?.status === "published"
       sp.stop(success(liveNow ? "Published" : "Uploaded (draft)"))
       const keptKeys = Object.keys(jsonContent).filter((k) => !PUBLISHER_KEYS.includes(k))
       if (keptKeys.length) printKV("Kept", keptKeys.join(", "))
-      printKV("Gate", requiresAuth ? "on — visitors sign in" : "off — public")
+      // The gate the server now holds, not the flag this command sent (#192471).
+      const gate = gateReport(after, slug)
+      printKV("Gate", gate.line)
+      if (gate.warning) prompts.log.warn(gate.warning)
 
       if (!shouldPublish && liveNow) {
         prompts.log.warn("--no-publish skips publishing; it does NOT unpublish.")
@@ -5784,6 +5966,9 @@ export const PlatformPagesCommand = productCommand({
       .command(withAccessFooter(ShareCmd))
       .command(ShareListCmd)
       .command(ShareRevokeCmd)
+      .command(AccessLinkCmd)
+      .command(AccessLinkListCmd)
+      .command(AccessLinkRevokeCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
       .command(CheckPublicCmd)

@@ -12,6 +12,7 @@ export async function createOpencode(options?: ServerOptions) {
 
   const client = createOpencodeClient({
     baseUrl: server.url,
+    headers: server.headers,
   })
 
   return {

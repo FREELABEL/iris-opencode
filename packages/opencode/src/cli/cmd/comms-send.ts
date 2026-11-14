@@ -34,6 +34,11 @@ export interface RouterSendInput {
    * another. The API rejects that rather than ignoring the flag.
    */
   sender?: string
+  /**
+   * Give up waiting after this long (#193288). The router waits on a bridge on someone's Mac,
+   * which can stall; without a cap the CLI sat on "Resolved …" with no output at all.
+   */
+  timeoutMs?: number
 }
 
 export interface RouterSendResult {
@@ -44,6 +49,11 @@ export interface RouterSendResult {
   externalId?: string | null
   stepAdvanced?: number | null
   error?: string
+  /**
+   * The router did not answer within timeoutMs. The send may still complete server-side, so a
+   * caller must NOT fall back to sending again (#193288).
+   */
+  timedOut?: boolean
   /** Present for --dry-run: which channel would be used and why. */
   plan?: { channel: string | null; reason: string; alternatives: Record<string, string> }
 }
@@ -69,9 +79,18 @@ export async function routerSend(input: RouterSendInput): Promise<RouterSendResu
   body.origin = input.origin ?? "cli.reachr"
 
   let res: Response
+  const signal = input.timeoutMs ? AbortSignal.timeout(input.timeoutMs) : undefined
   try {
-    res = await irisFetch(ENDPOINT, { method: "POST", body: JSON.stringify(body) })
+    res = await irisFetch(ENDPOINT, { method: "POST", body: JSON.stringify(body), ...(signal ? { signal } : {}) })
   } catch (err: any) {
+    if (signal?.aborted) {
+      return {
+        ok: false,
+        sent: false,
+        timedOut: true,
+        error: `the comms router did not answer within ${Math.round((input.timeoutMs ?? 0) / 1000)}s`,
+      }
+    }
     return { ok: false, sent: false, error: `Could not reach the comms API: ${err?.message ?? err}` }
   }
 
@@ -106,6 +125,27 @@ export async function routerSend(input: RouterSendInput): Promise<RouterSendResu
     stepAdvanced: data.step_advanced ?? null,
     error: data.error,
   }
+}
+
+/**
+ * After a router send that did not succeed: is it safe to send again locally? (#193288)
+ *
+ *  - "unconfirmed": the router timed out, or the bridge said the message MAY have gone out.
+ *    Sending again risks a duplicate in someone's thread — report it and stop.
+ *  - "failed": the bridge attempted the send and Messages said it did not go out. A local retry
+ *    goes through the same Messages account; report it rather than repeat it.
+ *  - "fallback": nothing was attempted (API unreachable, not signed in, bridge offline, no
+ *    channel). Sending locally is the documented escape hatch, and cannot duplicate.
+ *
+ * The bridge's wording is deliberate (iris-daemon drivers/imessage-confirm.js httpResult) and
+ * reaches us verbatim inside the router's error string.
+ */
+export function routerFailureKind(r: RouterSendResult): "unconfirmed" | "failed" | "fallback" {
+  if (r.timedOut) return "unconfirmed"
+  const e = String(r.error ?? "")
+  if (/may (have been sent|still go out)|could not be confirmed|not confirmed/i.test(e)) return "unconfirmed"
+  if (/NOT DELIVERED|NOT sent\b|no message to .* appeared/i.test(e)) return "failed"
+  return "fallback"
 }
 
 /**
@@ -288,6 +328,13 @@ export interface UnloggedSend {
   leadId?: number
   reason: string
   origin?: string
+  /** The address it went out from, when known. */
+  from?: string
+  /**
+   * The exact /atlas/comms/log body that should have been written (lead_id absent when no lead was
+   * known). Backfill posts this instead of rebuilding a thinner row from the fields above.
+   */
+  payload?: Record<string, unknown>
 }
 
 export function unloggedSpoolPath(): string {
@@ -347,18 +394,24 @@ export async function logComm(input: {
   subject?: string
   message: string
   sentAt?: string
+  /** A spooled row (UnloggedSend.payload): written as-is, on this lead. */
+  payload?: Record<string, unknown>
 }): Promise<{ ok: boolean; commId?: number | null; error?: string }> {
   try {
     const res = await irisFetch("/api/v1/atlas/comms/log", {
       method: "POST",
-      body: JSON.stringify({
-        lead_id: input.leadId,
-        channel: input.channel,
-        direction: "outbound",
-        body: input.message,
-        subject: input.subject ?? null,
-        sent_at: input.sentAt ?? new Date().toISOString(),
-      }),
+      body: JSON.stringify(
+        input.payload
+          ? { ...input.payload, lead_id: input.leadId }
+          : {
+              lead_id: input.leadId,
+              channel: input.channel,
+              direction: "outbound",
+              body: input.message,
+              subject: input.subject ?? null,
+              sent_at: input.sentAt ?? new Date().toISOString(),
+            },
+      ),
     })
     if (!res.ok) return { ok: false, error: `comms/log returned ${res.status}` }
     const payload = (await res.json().catch(() => null)) as any

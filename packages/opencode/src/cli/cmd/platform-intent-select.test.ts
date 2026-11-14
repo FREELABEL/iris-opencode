@@ -289,3 +289,56 @@ describe("agent discovery (#186666)", () => {
     expect(agentFrom({ agent: { value: "__none__", confidence: 0.9 } }, cands)).toBeUndefined()
   })
 })
+
+describe("#189469 intent never offers an operator-only command", () => {
+  const ASK =
+    "check google business profile integration and google analytics integration; client pays for netlify pro and web3forms pro; cut costs"
+  test("the client-integration question that picked `prod check` at 93% no longer can", async () => {
+    const { candidatePools } = await import("./platform-intent-select")
+    const { pick, pool } = candidatePools(ASK, 12)
+    const names = [...pick, ...pool].map((x) => x.name)
+    expect(names.filter((n) => /^prod (check|errors|logs|status)$/.test(n) || n === "prod")).toEqual([])
+  })
+  test("production words alone do not bring them back", async () => {
+    const { candidatePools, isOperatorCommand } = await import("./platform-intent-select")
+    const names = candidatePools("check production logs and errors on railway", 12, 40).pool.map((x) => x.name)
+    expect(names.filter((n) => isOperatorCommand(n))).toEqual([])
+    expect(names).not.toContain("playbook run production-deploy")
+  })
+  // Workspace playbooks left the embedded index (IP-07 #189850) and arrive through the merged index,
+  // so this has to merge one in: against the embedded index alone the assertion above is vacuous.
+  test("the production-deploy playbook is not offered from the merged index", async () => {
+    const { candidatePools, useIndex } = await import("./platform-intent-select")
+    const { loadIndex, mergeIndex } = await import("./platform-find")
+    const play = (name: string, describe: string) => ({
+      kind: "playbook" as const,
+      name,
+      describe,
+      aliases: [],
+      run: `iris playbook run ${name}`,
+      haystack: `${name} ${describe}`.toLowerCase(),
+    })
+    useIndex(
+      mergeIndex(loadIndex(), [
+        play("production-deploy", "check production logs and errors on railway"),
+        play("railway-logs-guide", "check production logs and errors on railway"),
+      ]),
+    )
+    try {
+      const names = candidatePools("check production logs and errors on railway", 12, 40).pool.map((x) => x.name)
+      expect(names).not.toContain("playbook run production-deploy")
+      expect(names).toContain("playbook run railway-logs-guide")
+    } finally {
+      useIndex(undefined)
+    }
+  })
+  test("what counts as operator-only", async () => {
+    const { isOperatorCommand } = await import("./platform-intent-select")
+    expect(isOperatorCommand("prod check")).toBe(true)
+    expect(isOperatorCommand("bounty admin run")).toBe(true)
+    expect(isOperatorCommand("licence issue", "mint a licence key (operator only)")).toBe(true)
+    expect(isOperatorCommand("prod integrations", "which operational integrations are connected for you")).toBe(false)
+    expect(isOperatorCommand("licence claim", "claim a licence key for yourself")).toBe(false)
+    expect(isOperatorCommand("products list")).toBe(false)
+  })
+})

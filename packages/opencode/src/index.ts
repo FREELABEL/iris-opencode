@@ -1,5 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
+import { argvShape } from "./util/argv-shape"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
@@ -8,6 +9,7 @@ import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
 import { InstallAppCommand } from "./cli/cmd/install-app"
+import { PlatformAppConfigCommand } from "./cli/cmd/platform-app-config"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
@@ -46,17 +48,20 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
+import { PlatformAtlasGraphCommand } from "./cli/cmd/platform-atlas-graph"
 import { PlatformAtlasStorageCommand } from "./cli/cmd/platform-atlas-storage"
 import { PlatformMintCommand } from "./cli/cmd/platform-mint"
 import { PlatformOkrCommand } from "./cli/cmd/platform-okr"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
+import { PlatformDrivesCommand } from "./cli/cmd/platform-drives"
 import { PlatformOnboardingCommand } from "./cli/cmd/platform-onboarding"
 import { PlatformAtlasListCommand } from "./cli/cmd/platform-atlas-tree"
 import { PlatformAtlasDatabaseCommand } from "./cli/cmd/platform-atlas-database"
@@ -97,6 +102,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformStatusCommand } from "./cli/cmd/platform-status"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
@@ -117,6 +123,7 @@ import { BuzzCommand } from "./cli/cmd/platform-buzz"
 import { MeshCommand } from "./cli/cmd/platform-mesh"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
+import { PlatformOrgCommand } from "./cli/cmd/platform-org"
 import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
@@ -125,6 +132,8 @@ import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformMeetingsCommand } from "./cli/cmd/platform-meetings"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
+import { PlatformAdCampaignsCommand } from "./cli/cmd/platform-ad-campaigns"
+import { PlatformMarketingCommand } from "./cli/cmd/platform-marketing"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
@@ -350,7 +359,7 @@ const cli = yargs(rawArgs)
 
     Log.Default.info("opencode", {
       version: Installation.VERSION,
-      args: process.argv.slice(2),
+      ...argvShape(process.argv.slice(2)),
     })
 
     // THE CLUTCH (#184906), at the one point every command passes through.
@@ -396,6 +405,7 @@ const cli = yargs(rawArgs)
   .command(reg(UpgradeCommand))
   .command(reg(UninstallCommand))
   .command(reg(InstallAppCommand))
+  .command(reg(PlatformAppConfigCommand))
   .command(reg(ServeCommand))
   .command(reg(TunnelCommand))
   .command(reg(WebCommand))
@@ -424,17 +434,20 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
+  .command(reg(PlatformAtlasGraphCommand))
   .command(reg(PlatformAtlasStorageCommand))
   .command(reg(PlatformMintCommand))
   .command(reg(PlatformOkrCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))
+  .command(reg(PlatformDrivesCommand))
   .command(reg(PlatformOnboardingCommand))
   .command(reg(PlatformAtlasItemCommand))
   .command(reg(PlatformAtlasListCommand))
@@ -481,6 +494,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformStatusCommand))
   .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))
@@ -513,6 +527,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformMeetingsCommand))
   .command(reg(PlatformCampaignCommand))
+  .command(reg(PlatformAdCampaignsCommand))
+  .command(reg(PlatformMarketingCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDiscordCommand))
@@ -533,6 +549,7 @@ const cli = yargs(rawArgs)
   .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformAndroidCommand))
+  .command(reg(PlatformOrgCommand))
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformNextCommand)) // #187930: one next move

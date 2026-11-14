@@ -269,7 +269,7 @@ async function runSEOChecks(): Promise<CheckResult[]> {
 
 export const PlatformDoctorCommand = cmd({
   command: "doctor",
-  aliases: ["health", "checkup"],
+  aliases: ["checkup"],
   describe: "full system health check — integrations, tokens, macOS permissions, daemon, SDK",
   builder: (y) =>
     y.option("json", { type: "boolean", default: false, describe: "JSON output" }),

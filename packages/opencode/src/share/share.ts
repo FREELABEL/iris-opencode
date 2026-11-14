@@ -45,7 +45,16 @@ export namespace Share {
       })
   }
 
+  /**
+   * IRIS does not start this uploader (#191488). It streamed every update of a session holding an
+   * old-style share record to opencode's API (api.opencode.ai). Nothing in IRIS creates those
+   * records any more; ShareNext (IRIS's own share server) is the only share path.
+   */
   export function init() {
+    return
+  }
+
+  export function initOpencodeUploader() {
     Bus.subscribe(Session.Event.Updated, async (evt) => {
       await sync("session/info/" + evt.properties.info.id, evt.properties.info)
     })

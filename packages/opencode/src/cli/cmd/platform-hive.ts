@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -20,6 +21,7 @@ import {
   checkContract,
   parseDeadline,
   checkTaskRequest,
+  busyOverrideHint,
   describeApiError,
   describeTask,
   exitCodeForStatus,
@@ -34,10 +36,16 @@ import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import { HiveSessionsCommand, HiveSendInputCommand, HiveAskCommand } from "./platform-hive-sessions"
 import { HiveTunnelCommand } from "./platform-hive-tunnel"
+import { HiveSshGateCommand } from "./platform-hive-ssh-gate"
+import { HiveRolloutCommand } from "./platform-hive-rollout"
+import { HiveModelsCommand } from "./platform-hive-models"
+import { HiveMarketCommand } from "./platform-hive-market"
+import { HiveInventoryCommand } from "./hive-inventory"
 import { HiveDriveCommand } from "./platform-hive-drive"
 import { HiveAnswerCommand, HiveAnswerHookCommand, HiveAnswersCommand, HiveAwayCommand } from "./platform-hive-answer"
 import { HiveTriggerCommand } from "./platform-hive-trigger"
 import { HiveClaimCommand } from "./platform-hive-claim"
+import { route, type Verdict } from "./hive-route"
 import { HiveProofCommand } from "./platform-hive-proof"
 import { HiveRunnerCommand } from "./platform-hive-runner"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand, HiveSandboxCommand } from "./platform-hive-rent"
@@ -978,14 +986,23 @@ function readNodeKey(): string | null {
 export async function cancelTaskWith(
   fetcher: (path: string, init: RequestInit) => Promise<Response>,
   taskId: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; nodeNotified?: boolean }> {
   const res = await fetcher(`/api/v6/nodes/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
-  if (res.ok) return { ok: true, message: "cancelled" }
+  if (res.ok) {
+    // #184886 — whether a machine was told to stop it. Older servers do not say; claim nothing then.
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    return { ok: true, message: "cancelled", nodeNotified: body.node_notified === true }
+  }
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
   if (res.status === 404) return { ok: false, message: `No task ${taskId} on your account` }
   return { ok: false, message: String(body.message ?? body.error ?? `HTTP ${res.status}`) }
 }
 const cancelTask = (taskId: string) => cancelTaskWith(hiveFetch, taskId)
+
+/** #184886 — "cancelled" used to be bookkeeping only; say when its machine was told to stop it. */
+export function cancelledLine(nodeNotified?: boolean): string {
+  return nodeNotified ? "Task cancelled — its machine was told to stop it now" : "Task cancelled"
+}
 
 async function nodeFetch(path: string, options: RequestInit = {}) {
   const nodeKey = readNodeKey()
@@ -1101,6 +1118,19 @@ function timeAgo(iso: string | null | undefined): string {
   return `${Math.round(hrs / 24)}d ago`
 }
 
+/** Recorded gate verdicts (hive-gate-verdicts, bloq 381) for the route. None on any failure: the table decides. */
+async function loadGateVerdicts(): Promise<Verdict[]> {
+  try {
+    const res = await irisFetch(`/api/v1/atlas/datasets/hive-gate-verdicts?per_page=200&bloq_id=381`)
+    if (!res.ok) return []
+    const body = (await res.json()) as any
+    const rows: any[] = Array.isArray(body?.data?.records?.data) ? body.data.records.data : Array.isArray(body?.data?.records) ? body.data.records : []
+    return rows.map((r) => r?.data ?? {}) as Verdict[]
+  } catch {
+    return []
+  }
+}
+
 const HiveTasksCommand = cmd({
   command: "tasks [subcommand] [task-id]",
   describe: "list, inspect, rerun or CREATE tasks on your nodes (create dispatches any task type)",
@@ -1109,7 +1139,7 @@ const HiveTasksCommand = cmd({
       .positional("subcommand", { describe: "create, get, logs or rerun", type: "string" })
       .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
-      .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (mcp_call, remotion, browser_agent, discover…)", type: "string" })
+      .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (code, mcp_call, remotion, browser_agent, discover…). `code` picks the agent runtime for you and prints why", type: "string" })
       .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
       .option("since", { describe: "time window (e.g. 24h, 7d)", type: "string", default: "48h" })
       .option("limit", { describe: "max tasks to show", type: "number", default: 20 })
@@ -1123,16 +1153,19 @@ const HiveTasksCommand = cmd({
       .option("priority", { describe: "(create) priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "(create) queue it and exit instead of waiting for the result", type: "boolean", default: false })
       .option("allow-fallback", { describe: "(create) let another node take it if the named one cannot", type: "boolean", default: false })
+      .option("force", { describe: "(create, rerun) send it to --node even though that node reports high CPU/memory — a full or offline node still refuses", type: "boolean", default: false })
       .option("requires", { describe: "(create) only run on a node advertising this capability (repeatable)", type: "string", array: true })
       .option("not-after", { describe: "(create) never run it after this — a duration from now (30s, 5m) or an ISO time. Late tasks EXPIRE instead of running", type: "string" })
       .option("key", { describe: "(create) idempotency key: the same key returns the same task, and a node never runs it twice", type: "string" })
       .option("retries", { describe: "(create) retry a failure up to N more times — needs --key, never past --not-after", type: "number" })
       .option("json", { describe: "(create) JSON output: the finished task object — it waits for the task like the default; add --queue to get {task_id} at once (#190308)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
+      .example("iris hive tasks create --type code --prompt 'Fix the typo in the README' --queue", "a coding task — the runtime is picked from the prompt and recorded on the task")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
       .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result")
       .example("iris hive tasks create --type sandbox_execute --node drone-01 --prompt 'dronectl goto ring --at 8' --not-after 8s --key ring-8-01 --retries 2 --queue", "deliver by T or not at all; safe to retry, never runs twice")
-      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key"),
+      .example("iris hive tasks rerun 01a0bab8 --node studio", "re-run a finished task on another machine; keeps the same task and idempotency key")
+      .example("iris hive tasks rerun 01a0bab8 --node macbook --force", "re-run it on a node the server calls busy from CPU/memory pressure"),
   async handler(args) {
     UI.empty()
     let sub = args.subcommand as string | undefined
@@ -1162,12 +1195,31 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
       const config = parsedConfig.config
+      if (args.force && !args.node) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
 
       const check = checkTaskRequest({ type, prompt: args.prompt as string | undefined, config })
       if (!check.ok) {
         prompts.log.error(check.error)
         if (check.hint) console.log(dim(`  ${check.hint}`))
         process.exit(1)
+      }
+
+      // `--type code`: pick the agent runtime from the task, and say why (#189154). A runtime named
+      // in --config is the caller's decision and is kept; the route is still recorded beside it.
+      let taskType = type
+      if (type === "code") {
+        taskType = "code_generation"
+        const verdicts = await loadGateVerdicts()
+        const r = route(String(args.prompt ?? ""), verdicts)
+        const chosen = typeof config.runtime === "string" && config.runtime ? String(config.runtime) : r.runtime
+        config.runtime = chosen
+        config.route = { class: r.cls, runtime: chosen, source: chosen === r.runtime ? r.source : "caller", why: r.why }
+        if (!args.json) {
+          console.log(`${dim("→")} route ${bold(chosen)}  ${dim(chosen === r.runtime ? r.why : `named in --config (the route would have picked ${r.runtime}: ${r.why})`)}`)
+        }
       }
 
       // The delivery contract (#187568) — checked before anything is sent.
@@ -1214,7 +1266,7 @@ const HiveTasksCommand = cmd({
 
       const payload = buildTaskPayload({
         userId,
-        type,
+        type: taskType,
         nodeId,
         prompt: args.prompt as string | undefined,
         title: args.title as string | undefined,
@@ -1222,6 +1274,7 @@ const HiveTasksCommand = cmd({
         timeoutSec: args.timeout as number | undefined,
         priority: args.priority as number | undefined,
         allowFallback: Boolean(args["allow-fallback"]),
+        force: Boolean(args.force),
         requiredCapabilities: firstArray(args.requires as string[] | undefined),
         notAfter,
         idempotencyKey: args.key as string | undefined,
@@ -1230,7 +1283,7 @@ const HiveTasksCommand = cmd({
       })
 
       if (!args.json) {
-        console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+        console.log(`${dim("→")} ${bold(describeTask(taskType, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
         if (payload.metadata) console.log(dim("  status and report will appear in this session"))
       }
 
@@ -1244,7 +1297,7 @@ const HiveTasksCommand = cmd({
         process.exit(1)
       }
 
-      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean; duplicate?: boolean }
+      const created = (await createRes.json()) as { task: { id: string; status: string; error?: string | null }; dispatched?: boolean; duplicate?: boolean }
       const taskId = created.task.id
 
       // A key that already existed returns the ORIGINAL task — say so, or a re-run of a script
@@ -1268,6 +1321,8 @@ const HiveTasksCommand = cmd({
           return
         }
         console.log(`${success("✓")} queued ${bold(taskId)}  status=${created.task.status}`)
+        const hint = busyOverrideHint(created.task.error)
+        if (hint) console.log(dim(`  ${created.task.error}\n  ${hint}`))
         console.log(dim(`  Result later:  iris hive tasks get ${taskId}`))
         return
       }
@@ -1329,6 +1384,8 @@ const HiveTasksCommand = cmd({
       if (final.error) {
         console.log(bold("─── error ───"))
         console.log(`\x1b[31m${String(final.error).slice(0, 2000)}\x1b[0m`)
+        const hint = busyOverrideHint(final.error)
+        if (hint) console.log(dim(`  ${hint}`))
       }
       console.log()
       const st = String(final.status ?? "unknown")
@@ -1368,6 +1425,10 @@ const HiveTasksCommand = cmd({
 
       let nodeId: string | undefined
       const target = args.node as string | undefined
+      if (args.force && !target) {
+        prompts.log.error("--force needs --node: it overrides the CPU/memory busy check on the node you name.")
+        process.exit(1)
+      }
       if (target) {
         const node = await resolveNode(userId, String(target))
         if (!node) {
@@ -1380,10 +1441,13 @@ const HiveTasksCommand = cmd({
       const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}/rerun`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(nodeId ? { node_id: nodeId } : {}),
+        body: JSON.stringify(nodeId ? { node_id: nodeId, ...(args.force ? { force: true } : {}) } : {}),
       })
       if (!res.ok) {
-        prompts.log.error(describeApiError(res.status, await res.text().catch(() => "")))
+        const bodyText = await res.text().catch(() => "")
+        prompts.log.error(describeApiError(res.status, bodyText))
+        const hint = busyOverrideHint(bodyText)
+        if (hint) console.log(dim(`  ${hint}`))
         process.exit(1)
       }
       const data = (await res.json()) as { task?: Record<string, unknown> }
@@ -1859,7 +1923,7 @@ const HiveCancelCommand = cmd({
         spinner.start(`Cancelling ${cancelId}…`)
         const r = await cancelTask(cancelId)
         if (r.ok) {
-          spinner.stop(success("Task cancelled"))
+          spinner.stop(success(cancelledLine(r.nodeNotified)))
         } else {
           spinner.stop("Failed", 1)
           prompts.log.error(r.message)
@@ -1889,7 +1953,7 @@ const HiveCancelCommand = cmd({
         if (prompts.isCancel(selected)) { prompts.outro("Cancelled"); return }
 
         const r = await cancelTask(String(selected))
-        if (r.ok) prompts.log.success("Task cancelled")
+        if (r.ok) prompts.log.success(cancelledLine(r.nodeNotified))
         else { prompts.log.error(r.message); process.exitCode = 1 }
       }
     } catch (err) {
@@ -2061,7 +2125,7 @@ const HiveDoctorCommand = cmd({
       .option("all", { describe: "check every node you own", type: "boolean", default: false })
       .option("expect-sha", { describe: "commit the remote daemon SHOULD be running; a mismatch is a failure", type: "string" })
       .option("host", { describe: "override the address, skipping Tailscale resolution", type: "string" })
-      .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+      .option("user", { describe: "ssh user on the node — its own login name, usually not your IRIS account (remembered after the first success)", type: "string" })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
@@ -2501,7 +2565,9 @@ const HiveScriptListCommand = cmd({
           const name = bold(String(entry.name))
           const size = dim(`${entry.size} bytes`)
           const modified = entry.modified ? dim(new Date(String(entry.modified)).toLocaleString()) : ""
-          console.log(`  ${success("■")} ${name}  ${size}  ${modified}`)
+          // `local`: a file on this node, not a registry script (`iris scripts list`) — the two
+          // share a word and nothing else, so the listing says which one you are looking at (#191674).
+          console.log(`  ${success("■")} ${name}  ${dim("local")}  ${size}  ${modified}`)
         }
         console.log()
         console.log(dim(`  ${entries.length} script(s) on node`))
@@ -2634,8 +2700,8 @@ echo "=== Report Complete ==="
 
       // Optionally schedule it
       if (args.schedule) {
-        const schedUrl = await bridgeUrl("/daemon/schedules")
-        const schedRes = await fetch(schedUrl, {
+        // bridgeFetch: the /daemon prefix AND the bridge key (#189156 — a bare fetch 404s/401s).
+        const schedRes = await bridgeFetch("/daemon/schedules", {
           method: "POST",
           headers: bridgeHeaders(),
           body: JSON.stringify({
@@ -2748,7 +2814,7 @@ const HiveScheduleAddCommand = cmd({
     spinner.start("Creating schedule...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+      const res = await bridgeFetch(`/schedules`, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -2792,7 +2858,7 @@ const HiveScheduleRmCommand = cmd({
     prompts.intro("◈  Remove Schedule")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}`, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
@@ -2820,7 +2886,7 @@ const HiveSchedulePauseCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/pause`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -2844,7 +2910,7 @@ const HiveScheduleResumeCommand = cmd({
   async handler(args) {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+      const res = await bridgeFetch(`/schedules/${encodeURIComponent(args.id as string)}/resume`, {
         method: "POST",
         headers: bridgeHeaders(),
       })
@@ -3394,6 +3460,8 @@ const HiveExecCommand = cmd({
       .option("timeout", { describe: "max seconds (1-60)", type: "number", default: 30 })
       .option("user-id", { describe: "user ID", type: "number" }),
   async handler(args) {
+    const timeoutError = wholeNumberError("timeout", args.timeout, { min: 1, max: 60 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, args.json)) return
     UI.empty()
     prompts.intro("◈  Hive Remote Exec")
 
@@ -5151,8 +5219,11 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveScanCommandExport)
       .command(HiveProbeCommandExport)
       .command(HiveSshCommandExport)
+      .command(HiveSshGateCommand)
       // Node management + remote exec
       .command(HiveNodesCommandExport)
+      // Update the daemon + CLI on every node (#191614)
+      .command(HiveRolloutCommand)
       .command(HiveRunCommandExport)
       .command(HiveFilesCommandExport)
       .command(HiveSelftestCommandExport)
@@ -5160,6 +5231,9 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSendInputCommand)
       .command(HiveAskCommand)
       .command(HiveTunnelCommand)
+      .command(HiveModelsCommand)
+      .command(HiveMarketCommand)
+      .command(HiveInventoryCommand)
       .command(HiveDriveCommand)
       .command(HiveAnswerCommand)
       .command(HiveTriggerCommand)

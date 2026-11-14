@@ -441,7 +441,6 @@ const ScaffoldCommand = cmd({
 
 export const PlatformOnboardingCommand = cmd({
   command: "onboarding",
-  aliases: ["onboard", "flows"],
   describe: "multi-step signup flows — public, resumable, magic-link, claimable",
   builder: (y) =>
     y.command(FlowsGroup).command(SessionsCommand).command(AnalyticsCommand).command(ScaffoldCommand).demandCommand(),

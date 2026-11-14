@@ -248,7 +248,6 @@ describe("argv mapping", () => {
   "platform-integrations-pathways.ts · onboard <client> · --user-id",
   "platform-integrations.ts · list · --all",
   "platform-leads.ts · sync-calendar <id> · --account",
-  "platform-leads.ts · enrich · --queue",
   "platform-loop.ts · run <name> [skillArgs..] · --yes",
   "platform-mint.ts · import <file> · --json",
   "platform-outreach-approve.ts · approve [id] · --json",

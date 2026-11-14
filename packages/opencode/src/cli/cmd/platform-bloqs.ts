@@ -12,13 +12,13 @@ import {
   AtlasSealCommand,
   AtlasUnsealCommand,
 } from "./platform-atlas-pin"
-import { buildListEnvelope } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, commandWith, normalizeListResponse } from "./pagination-args"
 import { classifyRef, explainWrongRef } from "./reference-kind"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import { webSearchHandler } from "./platform-web-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, resolveUserId, printDivider, printKV, dim, bold, success, warn as amber, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { confirmWiden } from "./exposure-gate"
@@ -75,6 +75,16 @@ export function failJson(payload: Record<string, unknown>): void {
   console.log(JSON.stringify(payload))
   if (!process.exitCode) process.exitCode = 1
 }
+
+/**
+ * Validate --limit / --page before they reach the API (#191846).
+ *
+ * `bloqs items --limit 0` used to become 50, `--limit -1` became 1, `--limit 300` became 200
+ * and `--page 0|-1` became 1 — all silently, with exit 0. A value we would have to change is
+ * refused instead. The implementation lives in pagination-args.ts — the one shared module for
+ * list flags and the list contract (#191863); re-exported here for existing importers.
+ */
+export { paginationErrors, rejectBadPagination } from "./pagination-args"
 
 /** Normalise a board name. Blank is not a name: refuse it instead of letting the API
  *  substitute its "My First Bloq" default (#190633). */
@@ -188,13 +198,17 @@ function printBloq(b: Record<string, unknown>): void {
 // Subcommands
 // ============================================================================
 
+/** The bloqs index's practical page ceiling: one page holds every board (196 on the main account). */
+export const BLOQS_LIST_MAX_LIMIT = 500
+
 const BloqsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list your knowledge bases",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: `results per page (1-${BLOQS_LIST_MAX_LIMIT})`, type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("search", { alias: "s", describe: "search bloqs by name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       // #180633: the default listing excludes system bloqs — agent workspaces and `app:*`
@@ -208,6 +222,7 @@ const BloqsListCommand = cmd({
       .option("type", { describe: "filter by type: user or system", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args, { maxLimit: BLOQS_LIST_MAX_LIMIT })) return
     cli.empty()
     cli.intro("◈  IRIS Bloqs")
 
@@ -221,8 +236,14 @@ const BloqsListCommand = cmd({
     spinner.start("Loading bloqs…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
-      if (args.search) params.set("search", args.search)
+      // --search is matched here (tokenized, see below), over EVERY board: filtering one
+      // server page found "no match" for boards that sat on page 2 (#191863). The index holds
+      // every board in one 500-row page, so a search fetches that and pages the result here.
+      const params = new URLSearchParams(
+        args.search
+          ? { per_page: String(BLOQS_LIST_MAX_LIMIT), page: "1", simplified: "1" }
+          : { per_page: String(args.limit), page: String(args.page), simplified: "1" },
+      )
       if (args.all) params.set("include_system", "1")
       if (args.type) params.set("type", String(args.type))
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
@@ -247,20 +268,33 @@ const BloqsListCommand = cmd({
           matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, args.search as string),
         )
       }
+      // The list contract (#191863). A search result is complete (every board was matched),
+      // so it is counted and paged here; otherwise the server's page facts are used. A search
+      // that hit the 500-row ceiling is NOT complete — its total is unknown, so say so.
+      const searchComplete = !args.search || serverTotal === undefined || Number(serverTotal) <= BLOQS_LIST_MAX_LIMIT
+      const env = listEnvelope<any>(
+        args.search
+          ? bloqs
+          : { ...normalizeListResponse<any>(data), rows: bloqs },
+        {
+          resource: "bloqs",
+          command: commandWith("atlas list", { search: args.search, all: args.all, type: args.type }),
+          page: args.page,
+          limit: Number(args.limit),
+          complete: Boolean(args.search) && searchComplete,
+          ...(args.search && !searchComplete ? { total: null } : {}),
+          search: "iris atlas search <term>",
+        },
+      )
+      // Deprecated v1.5.25 alias (meta.limit) for scripts that read it.
+      env.meta.limit = env.meta.per_page
+      bloqs = env.data
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
         // Envelope, not a bare array: an agent must be able to see that it is
-        // holding a page rather than an inventory. Client-side search filtering
-        // above changes the count, so a filtered result reports its own size and
-        // is never labelled truncated against the server total.
-        await writeJson(
-          buildListEnvelope(bloqs, {
-            total: args.search ? bloqs.length : serverTotal,
-            limit: args.search ? undefined : Number(args.limit),
-            resource: "bloqs",
-          }),
-        )
+        // holding a page rather than an inventory.
+        await writeJson(env)
         return
       }
 
@@ -278,7 +312,7 @@ const BloqsListCommand = cmd({
           cli.log.warn(`No bloqs matched "${args.search}"`)
           cli.outro(`Try fewer words or ${dim("iris bloqs list")}`)
         } else {
-          cli.log.warn("No bloqs found")
+          cli.log.warn(listFooter(env.meta, "bloqs"))
           cli.outro(`Create one: ${dim("iris bloqs create")}`)
         }
         return
@@ -290,6 +324,7 @@ const BloqsListCommand = cmd({
         console.log()
       }
       printDivider()
+      console.log(`  ${dim(listFooter(env.meta, "bloqs"))}`)
 
       cli.outro(
         `${dim("iris bloqs get <id>")}  ·  ${dim("iris bloqs ingest <id> <file>")}`,
@@ -388,6 +423,7 @@ const BloqsGetCommand = cmd({
       .option("limit", { describe: "max items to show (default 10)", type: "number", default: 10 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
+    if (rejectBadPagination(args)) return
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq ${args.id}`) }
 
     const token = await requireAuth()
@@ -733,7 +769,7 @@ const BloqsCreateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Create bloq"); return }
         await handleApiError(res, "Create bloq")
         prompts.outro("Done")
         return
@@ -846,7 +882,7 @@ const BloqsUpdateCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Update bloq"); return }
         await handleApiError(res, "Update bloq")
         prompts.outro("Done")
         return
@@ -1553,7 +1589,7 @@ const BloqsAddItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Add item"); return }
         await handleApiError(res, "Add item")
         prompts.outro("Done")
         return
@@ -1747,7 +1783,7 @@ const BloqsDeleteItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Delete item"); return }
         await handleApiError(res, "Delete item")
         prompts.outro("Done")
         return
@@ -1794,7 +1830,7 @@ const BloqsRestoreItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Restore item"); return }
         await handleApiError(res, "Restore item")
         prompts.outro("Done")
         return
@@ -1856,7 +1892,7 @@ const BloqsDeleteCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Delete bloq"); return }
         await handleApiError(res, "Delete bloq")
         prompts.outro("Done")
         return
@@ -1981,7 +2017,7 @@ const BloqsMakePublicCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Make public"); return }
         await handleApiError(res, "Make public")
         prompts.outro("Done")
         return
@@ -2046,7 +2082,7 @@ const BloqsMakePrivateCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Make private"); return }
         await handleApiError(res, "Make private")
         prompts.outro("Done")
         return
@@ -2206,7 +2242,9 @@ const BloqsCreateListCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        // --json used to answer a bare `HTTP 403` here, dropping the server's reason ("Only this
+        // board's owner can add lists…"), so a policy refusal read as a broken route (#191045).
+        if (args.json) { await handleApiError(res, "Create list"); return }
         await handleApiError(res, "Create list")
         prompts.outro("Done")
         return
@@ -2262,7 +2300,7 @@ const BloqsRenameListCommand = cmd({
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Rename list"); return }
         await handleApiError(res, "Rename list")
         prompts.outro("Done")
         return
@@ -2419,7 +2457,7 @@ const BloqsMoveItemCommand = cmd({
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Move item"); return }
         await handleApiError(res, "Move item")
         prompts.outro("Done")
         return
@@ -2716,12 +2754,145 @@ export function splitAtlasResults(rows: any[]): { items: any[]; boards: any[]; p
         updated_at: r.updated_at,
         score: r.score,
         found_by: r.found_by,
+        ...(r.matched_words ? { matched_words: r.matched_words, matched_terms: r.matched_terms } : {}),
       })
-    else if (r?.type === "board") boards.push({ id: r.id, name: r.title, found_by: r.found_by })
+    else if (r?.type === "board")
+      boards.push({
+        id: r.id,
+        name: r.title,
+        found_by: r.found_by,
+        ...(r.matched_words ? { matched_words: r.matched_words, matched_terms: r.matched_terms } : {}),
+      })
     else if (r?.type === "page") pages.push(r)
     else if (r) other.push(r)
   }
   return { items, boards, pages, other }
+}
+
+/**
+ * The server's word-match report (#191251, fl-api #202). /atlas/search answers `match` and
+ * content-items answers `data.search`: {mode, words, relaxed, note?}. When EVERY word found
+ * nothing, the server relaxes to ANY word, ranks by how many matched, and says so — this is the
+ * sentence a person (or an agent reading --json) must see, or "2 of 3 words" reads as exact.
+ */
+export type SearchMatch = { mode?: string; words?: string[]; relaxed?: boolean; note?: string; relaxed_types?: string[] }
+
+export function matchNote(match?: SearchMatch | null, search?: SearchMatch | null, rows: any[] = []): string | null {
+  const m = match?.relaxed ? match : search?.relaxed ? search : null
+  if (!m) return null
+  if (m.note) return m.note
+  const of = m.words?.length ?? 0
+  const best = Math.max(0, ...rows.map((r) => Number(r?.matched_terms) || 0))
+  return best && of ? `No result contains all ${of} words — showing the closest, best matched ${best} of ${of} words.` : `No result contains all ${of} words.`
+}
+
+export type RecordsFetcher = (path: string) => Promise<Response>
+
+export interface RecordsResult {
+  items: any[]
+  boards: any[]
+  pages: any[]
+  other: any[]
+  lanes?: Record<string, string>
+  /** /atlas/search's `match` block, when the server sends one (fl-api #202+). */
+  match: SearchMatch | null
+  /** content-items' `data.search` block, when the item half came from it. */
+  search: SearchMatch | null
+  recordsError?: string
+  usedAtlas: boolean
+  showItems: boolean
+  showBoards: boolean
+  showPages: boolean
+}
+
+/**
+ * The "your records" half of `bloqs search`, with the HTTP layer injectable.
+ *
+ * Boards ALWAYS come from /atlas/search?type=boards when the server has it — including with
+ * --bloq, where the old code filtered `GET /bloqs` client-side requiring every word, so
+ * "trading options portfolio" showed 0 boards even after the server learned to relax (#191251).
+ * The client-side filter survives only as the fallback for a server without /atlas/search.
+ */
+export async function searchRecords(
+  o: { query: string; limit: number; userId: number; types: string[]; bloq?: number; typeFlag?: boolean; wantItems: boolean; wantBoards: boolean },
+  fetcher: RecordsFetcher = (p) => irisFetch(p),
+): Promise<RecordsResult> {
+  const r: RecordsResult = { items: [], boards: [], pages: [], other: [], match: null, search: null, usedAtlas: false, showItems: false, showBoards: false, showPages: false }
+  let boardsViaAtlas = false
+  let atlasMissing = false
+
+  const atlas = async (types: string[]) => {
+    const params = new URLSearchParams({ q: o.query, type: types.join(","), limit: String(o.limit) })
+    const res = await fetcher(`/api/v1/atlas/search?${params}`)
+    if (res.status === 404) { atlasMissing = true; return null }
+    if (!res.ok) { r.recordsError = `atlas search HTTP ${res.status}`; return null }
+    const data = (await res.json()) as any
+    if (data?.match) r.match = data.match
+    if (Array.isArray(data?.failed_types) && data.failed_types.length) r.recordsError = `could not search: ${data.failed_types.join(", ")}`
+    return data
+  }
+
+  if (!o.bloq && o.types.length) {
+    try {
+      const data = await atlas(o.types)
+      if (data) {
+        const split = splitAtlasResults(data?.results)
+        r.items = split.items
+        r.boards = split.boards
+        r.pages = split.pages
+        r.other = split.other
+        r.lanes = data?.lanes
+        r.usedAtlas = true
+        boardsViaAtlas = true
+      }
+    } catch (e: any) {
+      r.recordsError = String(e?.message ?? e).slice(0, 120)
+    }
+  } else if (o.bloq && o.types.includes("boards")) {
+    // --bloq narrows ITEMS to one board; board-name matches still come from the shared engine.
+    try {
+      const data = await atlas(["boards"])
+      if (data) { r.boards = splitAtlasResults(data?.results).boards; boardsViaAtlas = true }
+    } catch (e: any) {
+      r.recordsError = String(e?.message ?? e).slice(0, 120)
+    }
+  }
+
+  // Legacy board filter: only for a server that predates /atlas/search.
+  if (!boardsViaAtlas && atlasMissing && o.wantBoards && !o.typeFlag) {
+    try {
+      const res = await fetcher(`/api/v1/user/${o.userId}/bloqs`)
+      if (res.ok) {
+        const data = (await res.json()) as any
+        const rows: any[] = firstArray(data?.data)
+        r.boards = (Array.isArray(rows) ? rows : [])
+          .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, o.query))
+          .slice(0, o.limit)
+        boardsViaAtlas = false
+      }
+    } catch { /* reported as 0 — never silently narrowed */ }
+  }
+
+  if (!r.usedAtlas && o.wantItems && (!o.typeFlag || o.types.includes("items"))) {
+    try {
+      const params = new URLSearchParams({ search: o.query, per_page: String(o.limit) })
+      const url = o.bloq
+        ? `/api/v1/user/${o.userId}/bloqs/${o.bloq}/items?${params}`
+        : `/api/v1/user/${o.userId}/bloqs/content-items?${params}`
+      const res = await fetcher(url)
+      if (res.ok) {
+        const data = (await res.json()) as any
+        const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
+        r.items = Array.isArray(rows) ? rows.slice(0, o.limit) : []
+        if (data?.data?.search) r.search = data.data.search
+      }
+    } catch { /* same */ }
+  }
+
+  r.showItems = r.usedAtlas ? o.types.includes("items") : o.wantItems
+  r.showBoards = r.usedAtlas || boardsViaAtlas ? o.types.includes("boards") : o.wantBoards && !o.typeFlag
+  r.showPages = r.usedAtlas && o.types.includes("pages")
+  return r
 }
 
 export const BloqsSearchCommand = cmd({
@@ -2765,8 +2936,9 @@ export const BloqsSearchCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args)) return
     const query = String(args.query)
-    const limit = Number(args.limit) || 20
+    const limit = Number(args.limit)
     const wantItems = !args["boards-only"]
     const wantBoards = !args["items-only"]
 
@@ -2795,67 +2967,19 @@ export const BloqsSearchCommand = cmd({
       process.exitCode = 1
       return
     }
-    let boards: any[] = []
-    let items: any[] = []
-    let pages: any[] = []
-    let otherTypes: any[] = []
-    let lanes: Record<string, string> | undefined
-    let recordsError: string | undefined
-    let usedAtlas = false
-
-    if (!args.bloq && types.length) {
-      try {
-        const params = new URLSearchParams({ q: query, type: types.join(","), limit: String(limit) })
-        const res = await irisFetch(`/api/v1/atlas/search?${params}`)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const split = splitAtlasResults(data?.results)
-          items = split.items
-          boards = split.boards
-          pages = split.pages
-          otherTypes = split.other
-          lanes = data?.lanes
-          if (Array.isArray(data?.failed_types) && data.failed_types.length)
-            recordsError = `could not search: ${data.failed_types.join(", ")}`
-          usedAtlas = true
-        } else if (res.status !== 404) {
-          recordsError = `atlas search HTTP ${res.status}`
-        }
-      } catch (e: any) {
-        recordsError = String(e?.message ?? e).slice(0, 120)
-      }
-    }
-
-    // Legacy path: --bloq, or a server that predates /atlas/search.
-    if (!usedAtlas && wantBoards && !args.type) {
-      try {
-        const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const rows: any[] = firstArray(data?.data)
-          boards = (Array.isArray(rows) ? rows : [])
-            .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, query))
-            .slice(0, limit)
-        }
-      } catch { /* reported as 0 below — never silently narrowed */ }
-    }
-    if (!usedAtlas && wantItems && (!args.type || types.includes("items"))) {
-      try {
-        const params = new URLSearchParams({ search: query, per_page: String(limit) })
-        const url = args.bloq
-          ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
-          : `/api/v1/user/${userId}/bloqs/content-items?${params}`
-        const res = await irisFetch(url)
-        if (res.ok) {
-          const data = (await res.json()) as any
-          const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
-          items = Array.isArray(rows) ? rows.slice(0, limit) : []
-        }
-      } catch { /* same */ }
-    }
-    const showItems = usedAtlas ? types.includes("items") : wantItems
-    const showBoards = usedAtlas ? types.includes("boards") : wantBoards && !args.type
-    const showPages = usedAtlas && types.includes("pages")
+    const rec = await searchRecords({
+      query,
+      limit,
+      userId,
+      types,
+      bloq: args.bloq as number | undefined,
+      typeFlag: Boolean(args.type),
+      wantItems,
+      wantBoards,
+    })
+    const { items, boards, pages, lanes, recordsError, usedAtlas, showItems, showBoards, showPages } = rec
+    const otherTypes = rec.other
+    const note = matchNote(rec.match, rec.search, [...items, ...boards])
 
     // ── external sources (Obsidian, Drive) ──
     // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
@@ -2893,6 +3017,11 @@ export const BloqsSearchCommand = cmd({
         external,
         // What actually ran on the server — "meaning: not built yet" is not the same as "no matches".
         lanes: lanes ?? null,
+        // #191251: how the words matched. `match` from /atlas/search, `search` from content-items —
+        // passed through as the server sent them, plus the one sentence to read when it relaxed.
+        match: rec.match,
+        search: rec.search,
+        match_note: note,
         records_error: recordsError ?? null,
         // Report every source's outcome, including failures — a source that errored must not
         // be indistinguishable from a source that found nothing.
@@ -2907,13 +3036,18 @@ export const BloqsSearchCommand = cmd({
       console.log(`  ${bold("Your records")} ${dim(`— ${recordsError}`)}`)
     }
 
+    if (note) {
+      printDivider()
+      console.log(`  ${amber("Not every word matched.")} ${note}`)
+    }
+
     if (showItems) {
       printDivider()
       console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
       if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
       for (const i of items) {
         const where = [i.bloq_name, i.list_name].filter(Boolean).join(" › ")
-        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}`)
+        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}${i.matched_words ? dim(`  · ${i.matched_words}`) : ""}`)
         if (where) console.log(`      ${dim(where)}${i.bloq_id ? dim(`  ·  bloq #${i.bloq_id}`) : ""}`)
         const preview = itemContentPreview(i)
         if (preview) console.log(`      ${dim(preview.replace(/\s+/g, " ").slice(0, 110))}`)
@@ -2925,7 +3059,7 @@ export const BloqsSearchCommand = cmd({
       console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
       if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
       for (const b of boards) {
-        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
+        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}${b.matched_words ? dim(`  · ${b.matched_words}`) : ""}`)
         if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
       }
     }
@@ -3062,7 +3196,7 @@ const BloqsRenameCommand = cmd({
 
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, `Rename ${args.type}`); return }
         await handleApiError(res, `Rename ${args.type}`)
         prompts.outro("Done")
         return
@@ -3109,7 +3243,7 @@ const BloqsAttachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Attach lead"); return }
         await handleApiError(res, "Attach lead")
         prompts.outro("Done")
         return
@@ -3154,7 +3288,7 @@ const BloqsDetachLeadCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Detach lead"); return }
         await handleApiError(res, "Detach lead")
         prompts.outro("Done")
         return
@@ -3204,7 +3338,7 @@ const BloqsAttachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Attach playbook"); return }
         await handleApiError(res, "Attach playbook")
         prompts.outro("Done")
         return
@@ -3250,7 +3384,7 @@ const BloqsDetachPlaybookCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Detach playbook"); return }
         await handleApiError(res, "Detach playbook")
         prompts.outro("Done")
         return
@@ -3311,7 +3445,7 @@ const BloqsRelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Relate bloqs"); return }
         await handleApiError(res, "Relate bloqs")
         prompts.outro("Done")
         return
@@ -3368,7 +3502,7 @@ const BloqsUnrelateCommand = cmd({
       })
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Unrelate bloqs"); return }
         await handleApiError(res, "Unrelate bloqs")
         prompts.outro("Done")
         return
@@ -3411,7 +3545,7 @@ const BloqsRelationsCommand = cmd({
       const qs = params.toString()
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations${qs ? `?${qs}` : ""}`)
       if (!res.ok) {
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List bloq relations"); return }
         await handleApiError(res, "List bloq relations")
         return
       }
@@ -3450,7 +3584,7 @@ const BloqsPlaybooksCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/playbooks`, { method: "GET" })
       if (!res.ok) {
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List bloq playbooks"); return }
         await handleApiError(res, "List bloq playbooks")
         return
       }
@@ -3505,7 +3639,7 @@ const BloqsContributorsCommand = cmd({
       const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${args["bloq-id"]}&per_page=100`)
       if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "List contributors"); return }
         await handleApiError(res, "List contributors")
         prompts.outro("Done")
         return
@@ -3614,6 +3748,9 @@ export async function collectListFiltered(
   }
 }
 
+/** The items endpoint's per_page ceiling (BloqItemController). */
+export const ITEMS_MAX_PER_PAGE = 200
+
 const BloqsItemsCommand = cmd({
   command: "items <bloq-id>",
   // There is no `get-item`/`show-item` — every other item verb mutates. This is the only
@@ -3628,7 +3765,7 @@ const BloqsItemsCommand = cmd({
       .option("source", { describe: "also search these sources: obsidian, drive, imessage, gmail (repeatable)", type: "string", array: true })
       .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
-      .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
+      .option("limit", { describe: `items per page (1-${ITEMS_MAX_PER_PAGE})`, type: "number", default: 50 })
       .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
       .option("fields", { describe: "comma-separated fields for --json (default: id,title,status,list_name)", type: "string" })
       .option("compact", { describe: "drop null/empty fields in --json output", type: "boolean", default: false })
@@ -3644,6 +3781,7 @@ const BloqsItemsCommand = cmd({
       process.exitCode = 2
       return
     }
+    if (rejectBadPagination(args, { maxLimit: ITEMS_MAX_PER_PAGE })) return
 
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${bloqId} Items`) }
 
@@ -3742,8 +3880,9 @@ const BloqsItemsCommand = cmd({
         }
       }
 
-      const perPage = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
-      const page = Math.max(Number(args.page) || 1, 1)
+      // Validated above (rejectBadPagination) — used as given, never clamped (#191846).
+      const perPage = Number(args.limit)
+      const page = Number(args.page)
       const params = new URLSearchParams()
       params.set("per_page", String(perPage))
       params.set("page", String(page))
@@ -3809,13 +3948,29 @@ const BloqsItemsCommand = cmd({
       const currentPage = pg.current_page ?? page
       const hasMore = currentPage < lastPage
 
+      // The list contract (#191863). A --list scan is filtered client-side: its count is exact
+      // only when the scan reached the end of the bloq; a capped scan's total is unknown.
+      const listCmd = commandWith(`atlas items ${bloqId}`, { list: args.list, search: args.search, status: args.status, fields: args.fields, compact: args.compact })
+      const env = listEnvelope<any>(
+        args.list !== undefined
+          ? { rows: items, total: listScanIncomplete ? null : total, page: 1, perPage: perPage, lastPage: null, hasMore: listScanIncomplete ? true : null }
+          : { rows: items, total, page: currentPage, perPage: pg.per_page != null ? Number(pg.per_page) : perPage, lastPage, hasMore },
+        { resource: "items", command: listCmd, search: `iris atlas items ${bloqId} --search <term>` },
+      )
+
       if (args.json) {
         await writeJson({
+          data: items.map(project),
+          meta: env.meta,
+          ...(env.links ? { links: env.links } : {}),
+          // Deprecated (#191863): the v1.5.25 {items, pagination} shape, kept beside data/meta
+          // so existing scripts keep working. Read data/meta instead.
           items: items.map(project),
           pagination: {
             total,
             returned: items.length,
-            per_page: pg.per_page ?? perPage,
+            // The server sends per_page as a string ("50"); report the number applied.
+            per_page: pg.per_page !== undefined && pg.per_page !== null ? Number(pg.per_page) : perPage,
             page: currentPage,
             last_page: lastPage,
             has_more: hasMore,
@@ -3836,7 +3991,7 @@ const BloqsItemsCommand = cmd({
             `No items found in list ${args.list} within the first pages scanned — the bloq is large and the scan was capped, so this is NOT proof the list is empty.`,
           )
         } else {
-          prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+          prompts.log.warn(args.search && env.meta.current_page === 1 ? `No items matching "${args.search}".` : listFooter(env.meta, "items"))
         }
         prompts.outro("Done")
         return
@@ -3856,9 +4011,7 @@ const BloqsItemsCommand = cmd({
         }
       }
       console.log()
-      const pageInfo = `Showing ${items.length} of ${total} (page ${currentPage}/${lastPage})`
-      const moreHint = hasMore ? dim(`  —  --page ${currentPage + 1} for more`) : ""
-      console.log(`  ${dim(pageInfo)}${moreHint}`)
+      console.log(`  ${dim(listFooter(env.meta, "items"))}`)
       console.log()
       prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
       return
@@ -4024,7 +4177,7 @@ const BloqsUpdateItemCommand = cmd({
       if (!res.ok) {
         spinner?.stop("Failed", 1)
         // #188294: --json reported success:false and exited 0, so `iris ... --json && next` ran next.
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); process.exitCode = 1; return }
+        if (args.json) { await handleApiError(res, "Update item"); return }
         await handleApiError(res, "Update item")
         process.exitCode = 1
         prompts.outro("Done")
@@ -4641,7 +4794,7 @@ const BloqsPublishPagesCommand = cmd({
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
       if (!res.ok) {
         spinner?.stop("Failed", 1)
-        if (args.json) { failJson({ success: false, error: `HTTP ${res.status}` }); return }
+        if (args.json) { await handleApiError(res, "Load bloq"); return }
         await handleApiError(res, "Load bloq"); prompts.outro("Done"); return
       }
       const bloq = (await res.json()) as Record<string, any>
@@ -4741,7 +4894,7 @@ export const PlatformSearchCommand = cmd({
 // `iris bloqs ...` invocations keep working unchanged.
 export const PlatformBloqsCommand = productCommand({
   name: "atlas",
-  aliases: ["bloqs", "kb", "knowledge", "memory", "projects"],
+  aliases: ["bloqs", "kb", "knowledge", "projects"],
   purpose: "Atlas — your records: knowledge bases, boards, items, and the context agents read",
   keywords: ["atlas", "bloq", "board", "item", "knowledge", "records", "memory", "context", "notes"],
   howtos: ["bloq-access-control", "bloq-relations", "atlas-datasets", "expose-dataset-api"],

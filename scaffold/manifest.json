@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.12-agreements-and-design-standard",
+  "version": "2026.11.02-run-a-case-in-lexicon",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -21,10 +21,22 @@
       "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
     },
     {
+      "src": "how-to/run-a-case-in-lexicon.md",
+      "dest": "how-to/run-a-case-in-lexicon.md",
+      "managed": true,
+      "purpose": "Lawyer-facing path through a matter: intake, conflicts, engagement, signature, chronology, demand."
+    },
+    {
       "src": "how-to/agreements-and-signing.md",
       "dest": "how-to/agreements-and-signing.md",
       "managed": true,
       "purpose": "NDAs, BAAs, multi-party signing, and gating access on an executed agreement. Distinct from payment-gate-contracts, which sells rather than gates."
+    },
+    {
+      "src": "how-to/move-a-mixxx-rig.md",
+      "dest": "how-to/move-a-mixxx-rig.md",
+      "managed": true,
+      "purpose": "Move a Mixxx DJ rig (controller mappings + audio routing) between Macs via `iris app-config` or by hand with Atlas files, the mixxx-rig dataset and atlas pull/push."
     },
     {
       "src": "how-to/atlas-datasets.md",
@@ -37,6 +49,12 @@
       "dest": "how-to/desktop-atlas-offline-copy.md",
       "managed": true,
       "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/iris-drives.md",
+      "dest": "how-to/iris-drives.md",
+      "managed": true,
+      "purpose": "Catalog your drives (iris drives): find any file without plugging the drive in, catch sensitive files on unencrypted drives, encrypt them, and keep two copies of camera cards."
     },
     {
       "src": "how-to/atlas-local-copy.md",
@@ -231,6 +249,12 @@
       "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
     },
     {
+      "src": "how-to/hive-inventory.md",
+      "dest": "how-to/hive-inventory.md",
+      "managed": true,
+      "purpose": "See what your own machines can run before choosing where work goes."
+    },
+    {
       "src": "how-to/hive-tailscale.md",
       "dest": "how-to/hive-tailscale.md",
       "managed": true,
@@ -261,10 +285,22 @@
       "purpose": "See which agents are waiting on you — the question and its options — and answer them from any machine or your phone."
     },
     {
+      "src": "how-to/iris-model-gateway.md",
+      "dest": "how-to/iris-model-gateway.md",
+      "managed": true,
+      "purpose": "The IRIS model gateway: one endpoint, failover, spend and caps — and hive/<model> to use the models on your own machines for free."
+    },
+    {
+      "src": "how-to/run-other-coding-agents.md",
+      "dest": "how-to/run-other-coding-agents.md",
+      "managed": true,
+      "purpose": "Run Claude Code, Codex or Gemini from IRIS over ACP — diffs and permission prompts in one command — and keep the session open to steer from Hive or Desktop."
+    },
+    {
       "src": "how-to/public-url-for-a-local-port.md",
       "dest": "how-to/public-url-for-a-local-port.md",
       "managed": true,
-      "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
+      "purpose": "Give something running on your machine a public https URL (<name>.hivemesh.net), encrypted to the machine, that closes when you stop."
     },
     {
       "src": "how-to/your-own-domain.md",
@@ -289,6 +325,18 @@
       "dest": "how-to/shared-folder-across-machines.md",
       "managed": true,
       "purpose": "One folder on every machine in your Hive — read on demand, saved files visible everywhere at once."
+    },
+    {
+      "src": "how-to/claim-a-licence.md",
+      "dest": "how-to/claim-a-licence.md",
+      "managed": true,
+      "purpose": "How to claim an IRIS licence key on Desktop or the CLI and check its status"
+    },
+    {
+      "src": "how-to/team-licences.md",
+      "dest": "how-to/team-licences.md",
+      "managed": true,
+      "purpose": "How operators issue one licence for a team, track who claimed it and revoke it"
     },
     {
       "src": "how-to/iris-login.md",
@@ -459,6 +507,12 @@
       "purpose": "Send a message or a work item to another person's agent inbox, and read your own. Covers the two halves people conflate — `hive accept` grants trust, `hive connect` makes the machine reachable — plus handoffs, the single-use invite code, and least-privilege access on org-owned machines."
     },
     {
+      "src": "how-to/hive-script-sharing.md",
+      "dest": "how-to/hive-script-sharing.md",
+      "managed": true,
+      "purpose": "Share a Hive script with a board: push it, share or publish it (project / unlisted / public), and teammates find it with `iris scripts list --shared` and run it by slug. Covers `# iris: runs-on=`, versions and `@N`, author/slug when two people share the same slug, unshare/unpublish (which do not un-send), and what members can see — running sends the source to their machine."
+    },
+    {
       "src": "how-to/integration-tenancy.md",
       "dest": "how-to/integration-tenancy.md",
       "managed": true,
@@ -471,10 +525,22 @@
       "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
     },
     {
+      "src": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "dest": "playbooks/talking-head-reel/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Talking-head reel lane (#191299): raw takes → `iris reel cut` (best take, pauses removed) → `iris reel captions` (word-timed, burnt in) → `iris reel covers` → a person reviews → `iris remotion register` → confirm-gated delete of the raw takes. Each step leaves a file the next reads."
+    },
+    {
       "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "managed": true,
       "purpose": "Runnable SOP for the Hive + Tailscale secure mesh — onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
+    },
+    {
+      "src": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "dest": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Runnable SOP for moving a Mixxx DJ rig (#193298): preflight (profile, CoreMIDI ports, CoreAudio devices) → a person approves → `iris app-config export|apply mixxx --bloq <id>` → verify from mixxx.log (controller opened, engine and audio stream started, no controller-script errors). Companion to the move-a-mixxx-rig how-to, which shows the by-hand Atlas commands."
     },
     {
       "src": "how-to/article-evals.md",
@@ -613,6 +679,24 @@
       "dest": "how-to/agent-pause-watch-takeover.md",
       "managed": true,
       "purpose": "Watch an agent's live step and tool calls (CLI and Desktop Agents > Live), take over and hand back with an instruction, pause/resume/stop in every lane."
+    },
+    {
+      "src": "how-to/public-form-to-private-dataset.md",
+      "dest": "how-to/public-form-to-private-dataset.md",
+      "managed": true,
+      "purpose": "Let a public form add records to a private dataset: iris datasets public-submit enable/test/show/disable, honeypot, server reference, form page public and staff page gated."
+    },
+    {
+      "src": "how-to/personal-sign-in-links.md",
+      "dest": "how-to/personal-sign-in-links.md",
+      "managed": true,
+      "purpose": "Let one named person open a gated page without the emailed code: iris pages access-link, single use, expiry, list and revoke, never grants a role."
+    },
+    {
+      "src": "how-to/run-ad-campaigns.md",
+      "dest": "how-to/run-ad-campaigns.md",
+      "managed": true,
+      "purpose": "Run an ad campaign on your own board: iris campaigns setup/create/add-creative/approve/reject/request-changes/list; who decided when; approving never publishes."
     },
     {
       "src": "how-to/dataset-webhooks.md",

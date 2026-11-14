@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { WorkflowsExportCommand } from "./platform-workflows-export"
-import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination, listEnvelope, listFooter, commandWith } from "./pagination-args"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, failNoOp} from "./iris-api"
@@ -108,17 +109,22 @@ async function pollRun(userId: number, runId: string, timeoutSecs = 300): Promis
 // Subcommands
 // ============================================================================
 
+/** CLI page ceiling. The workflows endpoint ignores per_page/page and returns every workflow. */
+export const WORKFLOWS_LIST_MAX_LIMIT = 500
+
 const WorkflowsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list your workflows",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 15 })
+      .option("limit", { describe: `results per page (1-${WORKFLOWS_LIST_MAX_LIMIT})`, type: "number", default: 15 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("include-templates", { describe: "also show campaign templates from hub", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args, { maxLimit: WORKFLOWS_LIST_MAX_LIMIT })) return
     UI.empty()
     prompts.intro("◈  IRIS Workflows")
 
@@ -158,23 +164,27 @@ const WorkflowsListCommand = cmd({
         } catch (_) { /* silently skip template fetch errors */ }
       }
 
-      const all = [...workflows, ...templates]
+      // The endpoint ignores per_page and returns EVERY workflow (83 for --limit 15, measured
+      // 2026-10-30), so `--limit` was never applied. `all` (workflows + templates) is the
+      // complete set: count it and cut the page here (#191863).
+      const env = listEnvelope([...workflows, ...templates], {
+        resource: "workflows",
+        command: commandWith("workflows list", { "include-templates": args["include-templates"] }),
+        complete: true,
+        page: args.page,
+        limit: args.limit,
+      })
+      const all = env.data
       spinner.stop(`${workflows.length} workflow(s)${templates.length > 0 ? ` + ${templates.length} template(s)` : ""}`)
 
       if (args.json) {
-        // `all` concatenates workflows + templates and is not paginated, so it IS
-        // the complete set — total equals what we hold, and truncated is false.
-        await writeJson(
-          buildListEnvelope(projectFields(all, LIST_FIELDS.workflows), {
-            total: all.length,
-            resource: "workflows",
-          }),
-        )
+        // meta.limit: deprecated v1.5.25 alias of per_page.
+        await writeJson({ ...env, data: projectFields(all, LIST_FIELDS.workflows), meta: { ...env.meta, limit: env.meta.per_page } })
         return
       }
 
       if (all.length === 0) {
-        prompts.log.warn("No workflows found")
+        prompts.log.warn(listFooter(env.meta, "workflows"))
         prompts.outro("Done")
         return
       }
@@ -195,6 +205,7 @@ const WorkflowsListCommand = cmd({
         console.log()
       }
       printDivider()
+      console.log(`  ${dim(listFooter(env.meta, "workflows"))}`)
 
       prompts.outro(
         `${dim("iris workflows run <id> --query \"...\"")}  Execute a workflow`,

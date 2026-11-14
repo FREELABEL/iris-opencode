@@ -1,9 +1,12 @@
+import { registryDrift } from "./som-registries"
+import { campaignReport, eligiblePoolPath, type CampaignReport, type PoolLead } from "./som-preflight"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight, writeJson } from "./iris-api"
 import { SomCampaignCommand } from "./platform-som-campaign"
+import { pullSessions, pushSessions } from "./platform-som-sessions"
 import * as fs from "fs"
 import * as os from "os"
 import * as pathNode from "path"
@@ -862,6 +865,16 @@ const SomSyncCommand = cmd({
       process.exit(1)
     }
 
+    // This cache comes from the campaign TEMPLATES (the registry the hive daemon reads), not from
+    // `iris som campaign` (raichu). When they disagree the batch sends the template's strategy, so say
+    // so loudly instead of silently writing a name the operator thinks they changed (#191686, #191770).
+    let drift: { name: string; som: string; daemon: string }[] = []
+    try {
+      const sr = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+      const sb = (await sr.json()) as { data?: { campaigns?: { name: string; strategy_name: string | null }[] } }
+      drift = registryDrift(sb.data?.campaigns ?? [], configs)
+    } catch { /* drift check is advisory */ }
+
     // Write the cache to the bundled bridge som dir (what the daemon spawns), and
     // also to the dev checkout if present, so local runs pick it up too.
     const payload = JSON.stringify({ syncedAt: new Date().toISOString(), campaigns: configs }, null, 2)
@@ -885,10 +898,19 @@ const SomSyncCommand = cmd({
     }
 
     if (args.json) {
-      await writeJson({ synced: count, source: body?.source ?? "database", written })
+      await writeJson({ synced: count, source: body?.source ?? "database", written, drift })
       return
     }
 
+    if (drift.length) {
+      console.log(`\x1b[33m⚠  The two SOM registries disagree. Batches will send the DAEMON strategy:\x1b[0m`)
+      for (const d of drift) {
+        console.log(`  ${bold(d.name)}: daemon/templates "${d.daemon}"  vs  som campaigns "${d.som}"`)
+        console.log(dim(`    align both: iris som campaign update ${d.name} --strategy "${d.som}"`))
+      }
+      console.log("")
+      process.exitCode = 1
+    }
     console.log(success(`Synced ${count} SOM campaign${count === 1 ? "" : "s"} (source: ${body?.source ?? "database"})`))
     for (const [id, c] of Object.entries(configs)) {
       const active = (c as any).active === false ? dim(" (off)") : ""
@@ -901,10 +923,11 @@ const SomSyncCommand = cmd({
 })
 
 // ── Browser-session distribution (encrypted cloud ↔ any node) ─────────────────
-// Sessions live encrypted in the user's cloud (platform_credentials, keyed by
-// bloq_id+platform). push-sessions seeds the cloud from a machine that has the
-// local IG logins; pull-sessions distributes them to any node. This is what lets
-// SOM actually RUN on a fresh machine that has no instagram-auth-*.json.
+// Sessions live encrypted in the user's cloud (project_credentials), keyed by
+// (owner, platform, HANDLE) — the board is metadata (#191640; it used to be the key, and two
+// handles on board 80 overwrote each other's login). push-sessions seeds the cloud from a machine
+// that has the local IG logins; pull-sessions distributes them to any node. Either direction moves
+// a session only when it proves it is that handle (platform-som-sessions.ts).
 
 // The som dirs the bridge/daemon read session files from (bundled install + dev).
 function somSessionDirs(): string[] {
@@ -931,14 +954,6 @@ async function fetchSomIgCampaigns(userId: number): Promise<Array<{ id: string; 
   return out
 }
 
-function findLocalSession(igAccount: string): string | null {
-  for (const dir of somSessionDirs()) {
-    const f = pathNode.join(dir, `instagram-auth-${igAccount}.json`)
-    if (fs.existsSync(f)) return f
-  }
-  return null
-}
-
 const SomPushSessionsCommand = cmd({
   command: "push-sessions",
   describe: "Upload this machine's local IG sessions to your encrypted cloud store",
@@ -955,18 +970,7 @@ const SomPushSessionsCommand = cmd({
     if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
     if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
 
-    const results: Array<{ account: string; board: string; status: string }> = []
-    for (const c of campaigns) {
-      const file = findLocalSession(c.igAccount)
-      if (!file) { results.push({ account: c.igAccount, board: c.boardId, status: "no local session" }); continue }
-      let storageState: any
-      try { storageState = JSON.parse(fs.readFileSync(file, "utf8")) } catch { results.push({ account: c.igAccount, board: c.boardId, status: "unreadable file" }); continue }
-      const res = await irisFetch(`/api/v1/project-credentials`, {
-        method: "POST",
-        body: JSON.stringify({ bloq_id: Number(c.boardId), user_id: userId, platform: "instagram", credential_type: "browser_session", credentials: storageState }),
-      }, IRIS_API)
-      results.push({ account: c.igAccount, board: c.boardId, status: res.ok ? "uploaded" : `failed (${res.status})` })
-    }
+    const results = await pushSessions(campaigns, userId, somSessionDirs(), (p, init) => irisFetch(p, init ?? {}, IRIS_API))
 
     if (args.json) { await writeJson({ results }); return }
     const ok = results.filter((r) => r.status === "uploaded").length
@@ -994,24 +998,8 @@ const SomPullSessionsCommand = cmd({
     if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
     if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
 
-    const results: Array<{ account: string; board: string; status: string }> = []
-    for (const c of campaigns) {
-      const res = await irisFetch(`/api/v1/project-credentials/session?bloq_id=${c.boardId}&platform=instagram&user_id=${userId}`, {}, IRIS_API)
-      if (res.status === 404) { results.push({ account: c.igAccount, board: c.boardId, status: "no cloud session — run: iris som push-sessions" }); continue }
-      if (res.status === 410) { results.push({ account: c.igAccount, board: c.boardId, status: "expired — re-authenticate" }); continue }
-      if (!res.ok) { results.push({ account: c.igAccount, board: c.boardId, status: `failed (${res.status})` }); continue }
-      const body = (await res.json()) as { credentials?: any }
-      if (!body?.credentials) { results.push({ account: c.igAccount, board: c.boardId, status: "empty session" }); continue }
-      const data = JSON.stringify(body.credentials, null, 2)
-      let wrote = false
-      for (const dir of somSessionDirs()) {
-        const isBundled = dir.includes(pathNode.join(".iris", "bridge"))
-        if (!fs.existsSync(dir)) { if (!isBundled) continue; fs.mkdirSync(dir, { recursive: true }) }
-        fs.writeFileSync(pathNode.join(dir, `instagram-auth-${c.igAccount}.json`), data)
-        wrote = true
-      }
-      results.push({ account: c.igAccount, board: c.boardId, status: wrote ? "pulled" : "no writable som dir" })
-    }
+    // #191640 — each account's own session, checked before it is written (platform-som-sessions.ts).
+    const results = await pullSessions(campaigns, userId, somSessionDirs(), (p, init) => irisFetch(p, init ?? {}, IRIS_API))
 
     if (args.json) { await writeJson({ results }); return }
     const ok = results.filter((r) => r.status === "pulled").length
@@ -1021,6 +1009,128 @@ const SomPullSessionsCommand = cmd({
       console.log(`  ${mark} ${bold(r.account)} ${dim(`(board ${r.board})`)} — ${r.status}`)
     }
     if (ok > 0) console.log(dim("\n  Sessions written to ~/.iris/bridge/som/ — SOM can now run on this node."))
+  },
+})
+
+
+// ── Preflight (#191274 #191276) — read-only readiness per campaign ──
+
+const SomPreflightCommand = cmd({
+  command: "preflight [campaign]",
+  describe: "read-only: eligible leads, days of supply and lead-list/strategy fit for each SOM campaign",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "one campaign name (default: all)", type: "string" })
+      .option("active", { describe: "only campaigns that are on", type: "boolean", default: false })
+      .option("board", { describe: "check a board that is not a SOM campaign (with --strategy)", type: "number" })
+      .option("strategy", { describe: "strategy name on --board", type: "string" })
+      .option("daily-cap", { describe: "DMs per day per campaign (default: $DAILY_DM_CAP or 40; LinkedIn 25)", type: "number" })
+      .option("min-days", { describe: "warn below this many days of supply", type: "number", default: 7 })
+      .option("scan", { describe: "max eligible leads to read per board for the source check", type: "number", default: 10000 })
+      .option("strict", { describe: "exit 1 when any campaign has a warning", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    let list: any[] = []
+    if (args.board) {
+      if (!args.strategy) {
+        prompts.log.error("--board needs --strategy <name>")
+        process.exitCode = 1
+        return
+      }
+      list = [{ name: `board-${args.board}`, bloq_id: args.board, strategy_name: args.strategy, ig_account: "adhoc", active: false }]
+    } else {
+      const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+      if (!(await handleApiError(resp, "fetch campaigns"))) return
+      const body = (await resp.json()) as any
+      const got = body?.data?.campaigns ?? body?.data ?? []
+      list = Array.isArray(got) ? got : []
+      if (args.campaign) {
+        list = list.filter((c) => c.name === args.campaign)
+        if (!list.length) {
+          prompts.log.error(`Unknown campaign: ${args.campaign}`)
+          process.exitCode = 1
+          return
+        }
+      }
+      if (args.active) list = list.filter((c) => !!c.active)
+    }
+
+    const envCap = Number(process.env.DAILY_DM_CAP)
+    const pools = new Map<string, { eligible: number; leads: PoolLead[] }>()
+    const readPool = async (board: number, social: boolean) => {
+      const key = `${board}:${social}`
+      const hit = pools.get(key)
+      if (hit) return hit
+      const perPage = 500
+      const leads: PoolLead[] = []
+      let eligible = 0
+      for (let page = 1; leads.length < args.scan; page++) {
+        const r = await irisFetch(eligiblePoolPath(board, { social, perPage, page }), {}, RAICHU)
+        if (!r.ok) break
+        const d = (await r.json()) as any
+        const rows: any[] = d?.data?.data ?? d?.data ?? []
+        if (page === 1) eligible = Number(d?.total ?? d?.data?.total ?? rows.length) || 0
+        leads.push(...rows.slice(0, args.scan - leads.length))
+        const last = Number(d?.last_page ?? d?.data?.last_page ?? page)
+        if (!rows.length || page >= last) break
+      }
+      const out = { eligible, leads }
+      pools.set(key, out)
+      return out
+    }
+
+    const reports: CampaignReport[] = []
+    for (const c of list) {
+      const board = Number(c.bloq_id)
+      const linkedin = !c.ig_account
+      const pool = await readPool(board, !linkedin)
+      const strategy = await fetchStrategyByName(board, c.strategy_name || "")
+      reports.push(
+        campaignReport({
+          campaign: c.name,
+          active: !!c.active,
+          board,
+          strategyName: c.strategy_name || "",
+          strategy: strategy as any,
+          audienceNote: c.metadata?.audience ?? null,
+          eligible: pool.eligible,
+          leads: pool.leads,
+          dailyCap: args["daily-cap"] ?? (linkedin ? 25 : envCap > 0 ? envCap : 40),
+          minDays: args["min-days"],
+        }),
+      )
+    }
+
+    const warned = reports.filter((r) => r.warnings.length).length
+    if (args.strict && warned) process.exitCode = 1
+    if (args.json) {
+      await writeJson({ campaigns: reports, warned })
+      return
+    }
+
+    console.log("")
+    console.log(bold("SOM — Preflight (read-only)"))
+    console.log(dim("  Eligible = never-contacted leads with a social handle, the pool a first-contact batch draws from."))
+    console.log("")
+    for (const r of reports) {
+      const mark = r.warnings.length ? `${UI.Style.TEXT_WARNING}!${UI.Style.TEXT_NORMAL}` : success("✓")
+      console.log(`${mark} ${bold(r.campaign)} ${dim(`board #${r.board} · ${r.active ? "on" : "off"} · ${r.strategy || "(no strategy)"}`)}`)
+      const days = r.days_of_supply === null ? "" : ` · ${r.days_of_supply} days at ${r.daily_cap}/day`
+      console.log(`    Eligible: ${r.eligible.toLocaleString()}${days}`)
+      if (r.matching_eligible !== null)
+        console.log(`    Matching the strategy: ${r.matching_complete ? "" : "≥"}${r.matching_eligible.toLocaleString()} · ${r.matching_days_of_supply} days at ${r.daily_cap}/day`)
+      console.log(`    Audience: ${r.audience} — ${r.audience_reason}`)
+      if (r.scanned) {
+        const posts = r.top_posts.slice(0, 3).map((p) => `/p/${p.post} ${p.count}`)
+        if (r.no_source_post) posts.push(`no post ${r.no_source_post}`)
+        console.log(dim(`    Sources (${r.scanned.toLocaleString()} scanned): ${posts.join(" · ")}`))
+        if (r.top_comments.length) console.log(dim(`    Comments: ${r.top_comments.slice(0, 3).map((k) => `"${k.comment}" ${k.count}`).join(" · ")}`))
+      }
+      for (const w of r.warnings) console.log(`    ${UI.Style.TEXT_WARNING}⚠ ${w}${UI.Style.TEXT_NORMAL}`)
+      console.log("")
+    }
+    console.log(dim(`  ${warned} of ${reports.length} campaign(s) with warnings. Nothing was changed.`))
   },
 })
 
@@ -1039,6 +1149,7 @@ export const PlatformSomCommand = productCommand({
       .command(SomEditCommand)
       .command(SomToggleCommand)
       .command(SomStatusCommand)
+      .command(SomPreflightCommand)
       .command(SomHelpCommand)
       .command(SomLedgerCommand)
       .command(SomRetryCommand)

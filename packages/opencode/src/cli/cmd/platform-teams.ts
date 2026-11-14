@@ -247,7 +247,7 @@ const DeleteCommand = cmd({
 
 export const PlatformTeamsCommand = cmd({
   command: "teams",
-  aliases: ["team", "pods"],
+  aliases: ["pods"],
   describe: "Teams (pods) — named, mixed human+AI subsets of a board's roster",
   builder: (yargs) =>
     yargs

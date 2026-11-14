@@ -2,6 +2,7 @@ import { resolve } from "path"
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { dim, bold, printDivider } from "./iris-api"
+import { InstallAppCommand } from "./install-app"
 import {
   asContext,
   desktopAccounts,
@@ -195,6 +196,12 @@ const SessionsCommand = cmd({
 export const PlatformDesktopCommand = cmd({
   command: "desktop",
   describe: "IRIS Desktop on this machine, from the terminal",
-  builder: (y) => y.command(SessionsCommand).demandCommand(),
+  // `install` is install-app under the name people try first. install-app used to claim the
+  // alias "desktop", which collided with this command (#191225).
+  builder: (y) =>
+    y
+      .command(SessionsCommand)
+      .command({ ...InstallAppCommand, command: "install", aliases: ["update"] } as any)
+      .demandCommand(),
   async handler() {},
 })
