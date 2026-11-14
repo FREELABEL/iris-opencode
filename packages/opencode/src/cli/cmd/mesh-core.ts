@@ -317,18 +317,44 @@ export function ownerIdFromKeystore(keystore: unknown): string | null {
   return typeof id === "string" && id.trim() ? id.trim() : null
 }
 
+/** The one stderr line `iris acp` prints when a mesh is serving here but the user has not opted in. */
+export const ACP_MESH_HINT = "a mesh is running here; add it with --mesh"
+
 /**
- * M4 — should `iris acp` (Buzz) get the mesh provider for this session? Only when the loopback
- * mesh is actually serving, the context is not PHI, and the user has not already configured
- * `mesh` themselves (their entry wins; we never overwrite it in memory either).
+ * Did the user ask `iris acp` for the mesh this session? `--mesh`, or IRIS_ACP_MESH=1. (The third
+ * way in, `iris mesh use`, writes `mesh` into their global config, so it needs no overlay at all.)
+ * Nothing else counts: a mesh merely serving on this machine never adds a model to anyone's list.
+ */
+export function acpMeshOptIn(input: { flag?: boolean; env: Record<string, string | undefined> }): boolean {
+  return input.flag === true || truthy(input.env.IRIS_ACP_MESH)
+}
+
+/**
+ * M4 — should `iris acp` (Buzz) get the mesh provider for this session? Only when the user opted
+ * in (acpMeshOptIn), the loopback mesh is actually serving, the context is not PHI, and the user
+ * has not already configured `mesh` themselves (their entry wins; we never overwrite it in memory
+ * either). It used to be added for anyone with a mesh running, which put models in a list the
+ * user never chose; now nothing appears unless they asked for it.
  */
 export function acpMeshDecision(input: {
   probe: MeshProbe
   phi: string | null
   config: Obj
+  optIn: boolean
 }): { apply: false; reason: string } | { apply: true; reason: string } {
   if (input.phi) return { apply: false, reason: "PHI context" }
-  if (!input.probe.serving) return { apply: false, reason: `mesh not serving: ${input.probe.reason}` }
   if (meshConfigState(input.config).present) return { apply: false, reason: "mesh already configured" }
+  if (!input.optIn) return { apply: false, reason: "not opted in (--mesh, IRIS_ACP_MESH=1, or iris mesh use)" }
+  if (!input.probe.serving) return { apply: false, reason: `mesh not serving: ${input.probe.reason}` }
   return { apply: true, reason: `mesh serving ${input.probe.models.length} model(s)` }
+}
+
+/**
+ * The hint, or null. Only when a mesh is serving, the user has not opted in by any of the three
+ * routes, and this is not a PHI context (where the mesh is refused anyway, so suggesting it is wrong).
+ */
+export function acpMeshHint(input: { probe: MeshProbe; phi: string | null; config: Obj; optIn: boolean }): string | null {
+  if (input.phi || input.optIn || !input.probe.serving) return null
+  if (meshConfigState(input.config).present) return null
+  return ACP_MESH_HINT
 }

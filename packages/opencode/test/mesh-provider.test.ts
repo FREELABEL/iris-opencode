@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
   FORBIDDEN_SERVE_FLAGS,
+  ACP_MESH_HINT,
   acpMeshDecision,
+  acpMeshHint,
+  acpMeshOptIn,
   applyMeshProvider,
   buildServeArgv,
   findMeshBinary,
@@ -19,6 +22,7 @@ import {
   removeMeshProvider,
   type FetchLike,
 } from "../src/cli/cmd/mesh-core"
+import { meshAcpOverlay } from "../src/cli/cmd/platform-mesh"
 
 /** Shared compute via Mesh LLM — epic #187246, slices M1 (iris mesh) and M4 (acp overlay). */
 
@@ -249,21 +253,97 @@ describe("findMeshBinary / ownerIdFromKeystore", () => {
   })
 })
 
-describe("acpMeshDecision — M4: Buzz gets the mesh only when it is really there", () => {
+describe("acpMeshDecision — M4: Buzz gets the mesh only when asked and really there", () => {
   const serving = parseModelsResponse("u", 200, { data: [{ id: "m1" }] })
   const down = parseModelsResponse("u", null, null, "connection refused")
-  test("serving, not PHI, not configured → apply", () => {
-    expect(acpMeshDecision({ probe: serving, phi: null, config: {} }).apply).toBe(true)
+  test("opted in, serving, not PHI, not configured → apply", () => {
+    expect(acpMeshDecision({ probe: serving, phi: null, config: {}, optIn: true }).apply).toBe(true)
+  })
+  test("serving but NOT opted in → change nothing (off by default)", () => {
+    const d = acpMeshDecision({ probe: serving, phi: null, config: {}, optIn: false })
+    expect(d.apply).toBe(false)
+    expect(d.reason).toContain("not opted in")
   })
   test("not serving → change nothing", () => {
-    expect(acpMeshDecision({ probe: down, phi: null, config: {} }).apply).toBe(false)
+    expect(acpMeshDecision({ probe: down, phi: null, config: {}, optIn: true }).apply).toBe(false)
   })
-  test("PHI context → change nothing, even when serving", () => {
-    expect(acpMeshDecision({ probe: serving, phi: "Refusing: PHI", config: {} }).apply).toBe(false)
+  test("PHI context → change nothing, even when serving and opted in", () => {
+    expect(acpMeshDecision({ probe: serving, phi: "Refusing: PHI", config: {}, optIn: true }).apply).toBe(false)
   })
-  test("user already configured mesh → their entry wins", () => {
+  test("user already configured mesh (iris mesh use) → their entry wins", () => {
     const config = { provider: { mesh: meshProviderEntry(1234, []) } }
-    expect(acpMeshDecision({ probe: serving, phi: null, config }).apply).toBe(false)
+    expect(acpMeshDecision({ probe: serving, phi: null, config, optIn: true }).apply).toBe(false)
+    expect(acpMeshDecision({ probe: serving, phi: null, config, optIn: false }).reason).toBe("mesh already configured")
+  })
+})
+
+describe("acpMeshOptIn — only --mesh or IRIS_ACP_MESH", () => {
+  test("off by default, even with other mesh env set", () => {
+    expect(acpMeshOptIn({ env: {} })).toBe(false)
+    expect(acpMeshOptIn({ flag: false, env: { IRIS_MESH_API_PORT: "9337" } })).toBe(false)
+    expect(acpMeshOptIn({ env: { IRIS_ACP_MESH: "0" } })).toBe(false)
+    expect(acpMeshOptIn({ env: { IRIS_ACP_MESH: "" } })).toBe(false)
+  })
+  test("--mesh", () => {
+    expect(acpMeshOptIn({ flag: true, env: {} })).toBe(true)
+  })
+  test("IRIS_ACP_MESH=1 / true / yes", () => {
+    for (const v of ["1", "true", "YES", "on"]) expect(acpMeshOptIn({ env: { IRIS_ACP_MESH: v } })).toBe(true)
+  })
+})
+
+describe("acpMeshHint — one line, only when it would help", () => {
+  const serving = parseModelsResponse("u", 200, { data: [{ id: "m1" }] })
+  const down = parseModelsResponse("u", null, null, "connection refused")
+  test("serving and not opted in → the hint", () => {
+    expect(acpMeshHint({ probe: serving, phi: null, config: {}, optIn: false })).toBe(ACP_MESH_HINT)
+    expect(ACP_MESH_HINT).toBe("a mesh is running here; add it with --mesh")
+  })
+  test("no hint when opted in, configured, not serving, or PHI", () => {
+    const configured = { provider: { mesh: meshProviderEntry(1234, []) } }
+    expect(acpMeshHint({ probe: serving, phi: null, config: {}, optIn: true })).toBeNull()
+    expect(acpMeshHint({ probe: serving, phi: null, config: configured, optIn: false })).toBeNull()
+    expect(acpMeshHint({ probe: down, phi: null, config: {}, optIn: false })).toBeNull()
+    expect(acpMeshHint({ probe: serving, phi: "Refusing: PHI", config: {}, optIn: false })).toBeNull()
+  })
+})
+
+describe("meshAcpOverlay — what `iris acp` actually adds (probe stubbed, no real mesh)", () => {
+  const serving = async () => parseModelsResponse("u", 200, { data: [{ id: "m1" }] })
+  const down = async () => parseModelsResponse("u", null, null, "connection refused")
+  const base = { env: {}, irisConfig: () => null, globalConfig: () => ({}) }
+
+  test("off by default: a serving mesh adds nothing, only the hint", async () => {
+    const r = await meshAcpOverlay({ ...base, optIn: false, probe: serving })
+    expect(r.overlay).toBeNull()
+    expect(r.hint).toBe(ACP_MESH_HINT)
+  })
+  test("off by default, nothing serving: no overlay, no hint", async () => {
+    const r = await meshAcpOverlay({ ...base, optIn: false, probe: down })
+    expect(r.overlay).toBeNull()
+    expect(r.hint).toBeNull()
+  })
+  test("--mesh / IRIS_ACP_MESH=1 (optIn): adds provider mesh in memory", async () => {
+    const r = await meshAcpOverlay({ ...base, optIn: true, probe: serving })
+    expect(r.hint).toBeNull()
+    const out = r.overlay!({ model: "zen-go/x" } as Record<string, unknown>)
+    expect(meshConfigState(out).present).toBe(true)
+    expect(out.model).toBe("zen-go/x")
+  })
+  test("--mesh with nothing serving: no overlay", async () => {
+    expect((await meshAcpOverlay({ ...base, optIn: true, probe: down })).overlay).toBeNull()
+  })
+  test("`iris mesh use` config: no hint, and the user's entry is never replaced", async () => {
+    const mine = { provider: { mesh: meshProviderEntry(1234, []) } }
+    const off = await meshAcpOverlay({ ...base, optIn: false, probe: serving, globalConfig: () => mine })
+    expect(off.overlay).toBeNull()
+    expect(off.hint).toBeNull()
+    const on = await meshAcpOverlay({ ...base, optIn: true, probe: serving })
+    expect(on.overlay!(mine as Record<string, unknown>)).toEqual(mine)
+  })
+  test("PHI context: nothing, not even a hint", async () => {
+    const r = await meshAcpOverlay({ ...base, env: { IRIS_PHI_CONTEXT: "1" }, optIn: true, probe: serving })
+    expect(r).toMatchObject({ overlay: null, hint: null })
   })
 })
 

@@ -21,6 +21,8 @@ import {
   probeMesh,
   removeMeshProvider,
   acpMeshDecision,
+  acpMeshHint,
+  type MeshProbe,
   meshUseEngineRefusal,
   rotateLog,
   MESH_LOG_MAX_BYTES,
@@ -77,21 +79,45 @@ function irisConfig(): unknown {
   }
 }
 
+type MeshOverlay = <T extends Record<string, unknown>>(c: T) => T
+
 /**
- * M4 — for `iris acp` (Buzz): probe the loopback mesh once and, if it serves and this is not a PHI
- * context, return an in-memory config overlay that adds provider `mesh` for this session only.
- * Returns null (change nothing) otherwise. Nothing is written to disk.
+ * M4 — for `iris acp` (Buzz). Opt-in only: with `--mesh` or IRIS_ACP_MESH=1, probe the loopback
+ * mesh and, if it serves and this is not a PHI context, return an in-memory config overlay that adds
+ * provider `mesh` for this session only. Without opt-in nothing is added — the caller gets at most
+ * a one-line `hint` to print when a mesh is serving. `iris mesh use` users already have `mesh` in
+ * their global config, so they need neither. Nothing is written to disk.
  */
-export async function meshAcpOverlay(): Promise<{ overlay: <T extends Record<string, unknown>>(c: T) => T; reason: string } | { overlay: null; reason: string }> {
-  const phi = phiRefusal(process.env, irisConfig())
-  if (phi) return { overlay: null, reason: "PHI context" }
-  const port = meshPort(process.env)
-  const probe = await probeMesh(port)
-  if (!probe.serving) return { overlay: null, reason: `mesh not serving: ${probe.reason}` }
+export async function meshAcpOverlay(
+  opts: {
+    optIn: boolean
+    env?: Record<string, string | undefined>
+    probe?: (port: number) => Promise<MeshProbe>
+    globalConfig?: () => Record<string, unknown>
+    irisConfig?: () => unknown
+  },
+): Promise<{ overlay: MeshOverlay | null; reason: string; hint: string | null }> {
+  const env = opts.env ?? process.env
+  const phi = phiRefusal(env, (opts.irisConfig ?? irisConfig)())
+  if (phi) return { overlay: null, reason: "PHI context", hint: null }
+  const port = meshPort(env)
+  const probe = await (opts.probe ?? ((p: number) => probeMesh(p)))(port)
+  if (!opts.optIn) {
+    let config: Record<string, unknown> = {}
+    try {
+      config = (opts.globalConfig ?? effectiveGlobalConfig)()
+    } catch {
+      // An unreadable global config only costs the hint, never the session.
+    }
+    const hint = acpMeshHint({ probe, phi, config, optIn: false })
+    return { overlay: null, reason: acpMeshDecision({ probe, phi, config, optIn: false }).reason, hint }
+  }
+  if (!probe.serving) return { overlay: null, reason: `mesh not serving: ${probe.reason}`, hint: null }
   const entry = meshProviderEntry(port, probe.models)
   return {
     reason: `mesh serving ${probe.models.length} model(s)`,
-    overlay: (c) => (acpMeshDecision({ probe, phi, config: c }).apply ? applyMeshProvider(c, entry) : c),
+    hint: null,
+    overlay: (c) => (acpMeshDecision({ probe, phi, config: c, optIn: true }).apply ? applyMeshProvider(c, entry) : c),
   }
 }
 
@@ -438,6 +464,14 @@ export const MeshCommand = cmd({
       .command(MeshOffCommand)
       .command(MeshUpCommand)
       .command(MeshDownCommand)
-      .demandCommand(1),
+      .demandCommand(1)
+      .epilog(
+        [
+          "A mesh never joins your model list on its own:",
+          "  iris mesh use          add it as provider `mesh` in your global config (undo: iris mesh off)",
+          "  iris acp --mesh        add it for one ACP session only (or IRIS_ACP_MESH=1); nothing written",
+          "Without either, `iris acp` only prints a one-line hint when a mesh is running here.",
+        ].join("\n"),
+      ),
   handler: () => {},
 })

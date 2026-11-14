@@ -1,36 +1,40 @@
 import { describe, expect, test } from "bun:test"
 import type { SpawnSyncReturns } from "child_process"
-import { mkdtempSync, rmSync } from "fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { FetchOptions } from "./media-fetch"
 import {
-  addPeer,
+  addAccount,
+  migrateLegacyStore,
+  PEERS_RENAMED,
+  PeersDeprecatedCommand,
+  PlatformRadarCommand,
   classifyPullError,
   coverageScore,
   extractKeywords,
-  findPeer,
+  findAccount,
   listArgs,
-  loadPeers,
+  loadWatchList,
   loadPosts,
   median,
   mergePosts,
   parseTarget,
   parseYtDlpLines,
-  peersDir,
+  radarDir,
   postFromYtDlp,
   postText,
   pullAccount,
   pullFailureMessage,
   rankGaps,
-  savePeers,
+  saveWatchList,
   savePosts,
   signatureKeywords,
   hashtagsOf,
   topicLabel,
-  type PeerEntry,
-  type PeerPost,
-} from "./platform-peers"
+  type RadarEntry,
+  type RadarPost,
+} from "./platform-radar"
 
 // Fixtures trimmed from real `yt-dlp --dump-json` output captured 2026-10-27 (fields kept as
 // yt-dlp names them; the dozens we don't read are dropped).
@@ -112,7 +116,7 @@ function fakeYtDlp(answer: (args: string[]) => Partial<SpawnSyncReturns<string>>
   return { run, calls }
 }
 
-function post(over: Partial<PeerPost> & { id: string }): PeerPost {
+function post(over: Partial<RadarPost> & { id: string }): RadarPost {
   return {
     url: `https://x/${over.id}`,
     platform: "tiktok",
@@ -129,7 +133,7 @@ function post(over: Partial<PeerPost> & { id: string }): PeerPost {
     ...over,
   }
 }
-const entry = (id: string, over: Partial<PeerEntry> = {}): PeerEntry => ({
+const entry = (id: string, over: Partial<RadarEntry> = {}): RadarEntry => ({
   id,
   handle: id,
   platform: "tiktok",
@@ -164,38 +168,149 @@ describe("parseTarget — what a person types becomes an account", () => {
 
 describe("watch list", () => {
   test("same handle on a second platform gets its own id instead of overwriting", () => {
-    let peers: PeerEntry[] = []
-    peers = addPeer(peers, { platform: "tiktok", handle: "dj", url: "t" }, { now: NOW }).peers
-    const r = addPeer(peers, { platform: "instagram", handle: "dj", url: "i" }, { now: NOW })
+    let watched: RadarEntry[] = []
+    watched = addAccount(watched, { platform: "tiktok", handle: "dj", url: "t" }, { now: NOW }).watched
+    const r = addAccount(watched, { platform: "instagram", handle: "dj", url: "i" }, { now: NOW })
     expect(r.created).toBe(true)
-    expect(r.peers.map((p) => p.id)).toEqual(["dj", "dj-instagram"])
+    expect(r.watched.map((p) => p.id)).toEqual(["dj", "dj-instagram"])
   })
   test("re-adding updates in place; --mine moves to exactly one account", () => {
-    let peers = addPeer([], { platform: "tiktok", handle: "a", url: "u" }, { now: NOW, mine: true }).peers
-    peers = addPeer(peers, { platform: "tiktok", handle: "b", url: "u" }, { now: NOW }).peers
-    const r = addPeer(peers, { platform: "tiktok", handle: "B", url: "u2" }, { now: NOW, mine: true, label: "scene" })
+    let watched = addAccount([], { platform: "tiktok", handle: "a", url: "u" }, { now: NOW, mine: true }).watched
+    watched = addAccount(watched, { platform: "tiktok", handle: "b", url: "u" }, { now: NOW }).watched
+    const r = addAccount(watched, { platform: "tiktok", handle: "B", url: "u2" }, { now: NOW, mine: true, label: "scene" })
     expect(r.created).toBe(false)
-    expect(r.peers.filter((p) => p.mine).map((p) => p.id)).toEqual(["b"])
-    expect(r.peers.find((p) => p.id === "b")).toMatchObject({ url: "u2", label: "scene" })
-    expect(r.peers.find((p) => p.id === "a")).not.toHaveProperty("mine")
+    expect(r.watched.filter((p) => p.mine).map((p) => p.id)).toEqual(["b"])
+    expect(r.watched.find((p) => p.id === "b")).toMatchObject({ url: "u2", label: "scene" })
+    expect(r.watched.find((p) => p.id === "a")).not.toHaveProperty("mine")
   })
-  test("findPeer by id or unambiguous handle", () => {
-    const peers = [entry("dj"), entry("dj-instagram", { handle: "dj", platform: "instagram" }), entry("solo")]
-    expect(findPeer(peers, "@dj")?.id).toBe("dj")
-    expect(findPeer(peers, "SOLO")?.id).toBe("solo")
-    expect(findPeer(peers, "nobody")).toBeNull()
+  test("findAccount by id or unambiguous handle", () => {
+    const watched = [entry("dj"), entry("dj-instagram", { handle: "dj", platform: "instagram" }), entry("solo")]
+    expect(findAccount(watched, "@dj")?.id).toBe("dj")
+    expect(findAccount(watched, "SOLO")?.id).toBe("solo")
+    expect(findAccount(watched, "nobody")).toBeNull()
   })
-  test("peers.json and posts.json round-trip under IRIS_HOME", () => {
-    const home = mkdtempSync(join(tmpdir(), "peers-test-"))
+  test("radar.json and posts.json round-trip under IRIS_HOME (~/.iris/radar)", () => {
+    const home = mkdtempSync(join(tmpdir(), "radar-test-"))
     try {
-      const dir = peersDir({ IRIS_HOME: home } as any)
-      expect(dir).toBe(join(home, "peers"))
-      savePeers([entry("a")], dir)
-      expect(loadPeers(dir).map((p) => p.id)).toEqual(["a"])
+      const dir = radarDir({ IRIS_HOME: home } as any)
+      expect(dir).toBe(join(home, "radar"))
+      saveWatchList([entry("a")], dir)
+      expect(loadWatchList(dir).map((p) => p.id)).toEqual(["a"])
+      expect(JSON.parse(readFileSync(join(dir, "radar.json"), "utf8")).accounts.map((p: any) => p.id)).toEqual(["a"])
       savePosts("a", [post({ id: "1" })], dir)
       expect(loadPosts("a", dir).map((p) => p.id)).toEqual(["1"])
       expect(loadPosts("missing", dir)).toEqual([])
     } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("rename from `iris peers` — storage", () => {
+  test("IRIS_RADAR_HOME wins; IRIS_PEERS_HOME still works as a fallback", () => {
+    expect(radarDir({ IRIS_RADAR_HOME: "/r", IRIS_PEERS_HOME: "/p", IRIS_HOME: "/h" } as any)).toBe("/r")
+    expect(radarDir({ IRIS_PEERS_HOME: "/p", IRIS_HOME: "/h" } as any)).toBe("/p")
+    expect(radarDir({ IRIS_HOME: "/h" } as any)).toBe(join("/h", "radar"))
+  })
+
+  test("a pre-rename peers.json (key `peers`) is still read, and the next save replaces it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "radar-legacy-"))
+    try {
+      writeFileSync(join(dir, "peers.json"), JSON.stringify({ version: 1, peers: [entry("old")] }))
+      expect(loadWatchList(dir).map((p) => p.id)).toEqual(["old"])
+      saveWatchList([entry("old"), entry("new")], dir)
+      expect(existsSync(join(dir, "peers.json"))).toBe(false)
+      expect(loadWatchList(dir).map((p) => p.id)).toEqual(["old", "new"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("~/.iris/peers moves to ~/.iris/radar once, with its posts", () => {
+    const home = mkdtempSync(join(tmpdir(), "radar-migrate-"))
+    try {
+      const env = { IRIS_HOME: home } as any
+      const old = join(home, "peers")
+      mkdirSync(join(old, "dj"), { recursive: true })
+      writeFileSync(join(old, "peers.json"), JSON.stringify({ version: 1, peers: [entry("dj")] }))
+      writeFileSync(join(old, "dj", "posts.json"), JSON.stringify({ version: 1, posts: [post({ id: "9" })] }))
+
+      expect(migrateLegacyStore(env)).toEqual({ from: old, to: join(home, "radar") })
+      expect(existsSync(old)).toBe(false)
+      const dir = radarDir(env)
+      expect(loadWatchList(dir).map((p) => p.id)).toEqual(["dj"])
+      expect(loadPosts("dj", dir).map((p) => p.id)).toEqual(["9"])
+      expect(migrateLegacyStore(env)).toBeNull() // second run: nothing to do
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test("never overwrites an existing radar folder, and leaves env-overridden stores alone", () => {
+    const home = mkdtempSync(join(tmpdir(), "radar-migrate-"))
+    try {
+      mkdirSync(join(home, "peers"))
+      writeFileSync(join(home, "peers", "peers.json"), JSON.stringify({ peers: [entry("old")] }))
+      expect(migrateLegacyStore({ IRIS_HOME: home, IRIS_PEERS_HOME: join(home, "peers") } as any)).toBeNull()
+      expect(migrateLegacyStore({ IRIS_HOME: home, IRIS_RADAR_HOME: join(home, "x") } as any)).toBeNull()
+      expect(existsSync(join(home, "peers"))).toBe(true)
+
+      mkdirSync(join(home, "radar"))
+      saveWatchList([entry("current")], join(home, "radar"))
+      expect(migrateLegacyStore({ IRIS_HOME: home } as any)).toBeNull()
+      expect(existsSync(join(home, "peers"))).toBe(true)
+      expect(loadWatchList(join(home, "radar")).map((p) => p.id)).toEqual(["current"])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test("nothing to migrate is a no-op", () => {
+    const home = mkdtempSync(join(tmpdir(), "radar-migrate-"))
+    try {
+      expect(migrateLegacyStore({ IRIS_HOME: home } as any)).toBeNull()
+      expect(existsSync(join(home, "radar"))).toBe(false)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("rename from `iris peers` — commands", () => {
+  test("radar is the advertised name; peers is hidden", () => {
+    expect(PlatformRadarCommand.command).toBe("radar")
+    expect(String(PlatformRadarCommand.describe)).toContain("on your radar")
+    expect(String(PlatformRadarCommand.describe).toLowerCase()).not.toContain("peer")
+    expect(PeersDeprecatedCommand.command).toBe("peers")
+    expect(PeersDeprecatedCommand.describe as unknown).toBe(false)
+    expect((PeersDeprecatedCommand as any).aliases).toBeUndefined()
+  })
+
+  test("`iris peers <sub>` prints one line and runs the radar subcommand", async () => {
+    const yargs = (await import("yargs")).default
+    const home = mkdtempSync(join(tmpdir(), "radar-alias-"))
+    const prev = { home: process.env.IRIS_RADAR_HOME, write: process.stderr.write, log: console.log }
+    const err: string[] = []
+    const out: string[] = []
+    process.env.IRIS_RADAR_HOME = home
+    process.stderr.write = ((c: any) => (err.push(String(c)), true)) as any
+    console.log = (...a: any[]) => void out.push(a.join(" "))
+    try {
+      saveWatchList([entry("dj")], home)
+      await yargs([]).command(PlatformRadarCommand).command(PeersDeprecatedCommand).exitProcess(false).parseAsync(["peers", "list"])
+      expect(err.filter((l) => l.includes(PEERS_RENAMED))).toHaveLength(1)
+      expect(out.join("\n")).toContain("dj")
+
+      err.length = 0
+      out.length = 0
+      await yargs([]).command(PlatformRadarCommand).command(PeersDeprecatedCommand).exitProcess(false).parseAsync(["radar", "list"])
+      expect(err.join("")).not.toContain(PEERS_RENAMED)
+      expect(out.join("\n")).toContain("dj")
+    } finally {
+      process.stderr.write = prev.write
+      console.log = prev.log
+      if (prev.home === undefined) delete process.env.IRIS_RADAR_HOME
+      else process.env.IRIS_RADAR_HOME = prev.home
       rmSync(home, { recursive: true, force: true })
     }
   })

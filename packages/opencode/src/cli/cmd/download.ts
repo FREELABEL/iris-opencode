@@ -31,7 +31,7 @@ interface DownloadResult {
   format: string
 }
 
-/** Exported for `iris peers pull --transcribe`, which pulls each post's audio the same way. */
+/** Exported for `iris radar pull --transcribe`, which pulls each post's audio the same way. */
 export async function downloadFile(
   ytdlp: string,
   url: string,
@@ -253,12 +253,12 @@ function extractViaOEmbed(url: string): any | null {
   return null
 }
 
-/** The post's author as yt-dlp reports it. Shared with `iris peers`. */
+/** The post's author as yt-dlp reports it. Shared with `iris radar`. */
 export function metaAuthor(meta: any): string | null {
   return meta?.uploader || meta?.channel || meta?.creator || null
 }
 
-/** The post's date as YYYY-MM-DD, from upload_date or the epoch timestamp. Shared with `iris peers`. */
+/** The post's date as YYYY-MM-DD, from upload_date or the epoch timestamp. Shared with `iris radar`. */
 export function metaDate(meta: any): string | null {
   const d = meta?.upload_date
   if (typeof d === "string" && /^\d{8}$/.test(d)) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
