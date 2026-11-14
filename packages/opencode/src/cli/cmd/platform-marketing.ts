@@ -15,6 +15,8 @@ import {
   KINDS,
   landingContent,
   needsSignIn,
+  PAGE_ORIGIN,
+  pageUrl,
   parsePins,
   PIN_SLUG,
   refusalWords,
@@ -46,7 +48,6 @@ import {
 
 const JSON_OPTION = { describe: "machine-readable output", type: "boolean", default: false } as const
 const PINS_PATH = "/api/v1/me/settings/marketing.pins"
-const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://freelabel.net"
 
 /** The seams a test replaces. */
 export const marketingDeps = {
@@ -336,7 +337,7 @@ async function makeNamed(kind: "landing" | "brand", board: number, name: string)
   const d = j?.data ?? j
   if (kind === "landing") {
     if (typeof d?.slug !== "string") return { ok: false, reason: "IRIS answered, but not with a page. Check `iris pages list` before trying again." }
-    return { ok: true, slug: d.slug, id: Number(d.id) || undefined, name: String(d.title ?? name), url: `${PAGE_ORIGIN}/p/${d.slug}` }
+    return { ok: true, slug: d.slug, id: Number(d.id) || undefined, name: String(d.title ?? name), url: pageUrl(d.slug) }
   }
   if (!Number.isFinite(Number(d?.id))) return { ok: false, reason: "IRIS answered, but not with a brand. Check `iris brand list` before trying again." }
   return { ok: true, id: Number(d.id), slug: String(d.slug ?? base), name: String(d.name ?? name) }

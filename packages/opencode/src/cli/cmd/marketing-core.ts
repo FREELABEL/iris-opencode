@@ -177,3 +177,7 @@ export function needsSignIn(p: { visibility?: unknown; requires_auth?: unknown; 
   const req = p.requires_auth ?? p.requiresAuth
   return req === true || (typeof p.visibility === "string" && p.visibility !== "" && p.visibility !== "public")
 }
+
+/** heyiris.io, never freelabel.net (#188508). The same fl-iris-api serves both hosts. */
+export const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://heyiris.io"
+export const pageUrl = (slug: string) => `${PAGE_ORIGIN}/p/${encodeURIComponent(String(slug).trim().toLowerCase())}`
