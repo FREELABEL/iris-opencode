@@ -1,0 +1,40 @@
+{
+  "_note": "TYPED, not recorded: the fl-api segments API (D3 #193484) was not deployed on 2026-11-14. Shape = the D3 contract as briefed (POST /api/v1/bloqs/{bloq}/segments/preview → breakdown + first page). Counts measured from board 38's lead list that day (11,341 on the board, 849 from post De9Uw8Ilhne, 788 whose comment contains 'roadmap'). Lead rows keep fl-api's real lead field names; names and handles are invented.",
+  "data": {
+    "total": 788,
+    "breakdown": [
+      { "filter": "source_post", "matched": 849, "known": 849, "of": 11341 },
+      { "filter": "comment_contains", "matched": 788, "known": 849, "of": 849 }
+    ],
+    "members": {
+      "current_page": 1,
+      "last_page": 32,
+      "total": 788,
+      "data": [
+        {
+          "id": 101,
+          "name": "@example.one",
+          "nickname": "@example.one",
+          "status": "Prospected",
+          "city": null,
+          "custom_fields": { "comment": "Roadmap", "ig_display_name": "Example One", "ig_followers": 0, "source_post_url": "https://www.instagram.com/p/De9Uw8Ilhne/" }
+        },
+        {
+          "id": 102,
+          "name": "@example.two",
+          "nickname": "@example.two",
+          "status": "Contacted",
+          "city": "Austin",
+          "custom_fields": {
+            "comment": "roadmap 🙌",
+            "ig_display_name": "Example Two",
+            "ig_followers": 12400,
+            "ig_scraped_at": "2026-10-28T23:26:09.332Z",
+            "audience_niche": "Course creator",
+            "audience_role": "Founder"
+          }
+        }
+      ]
+    }
+  }
+}
