@@ -4,7 +4,8 @@
  * Two different things are measured, on purpose in two different places:
  *
  *   1. ANALYTICS (this file): one usage event per drives command — drives_scan, drives_find,
- *      drives_path, drives_list, drives_copies, drives_get, drives_keep, drives_usage. It goes through the
+ *      drives_path, drives_list, drives_copies, drives_get, drives_keep, drives_usage, and for vault
+ *      copies on drives drives_vault_catchup (sync / catch-up on plug-in) and drives_vault_heal. It goes through the
  *      Beacon, so it obeys every opt-out (IRIS_TELEMETRY=0, DO_NOT_TRACK, `iris telemetry off`)
  *      and is fire-and-forget: it never blocks, never throws.
  *
@@ -22,6 +23,8 @@
 import { Beacon } from "../../telemetry/beacon"
 
 export type DrivesOp = "scan" | "find" | "path" | "list" | "copies" | "get" | "keep" | "usage"
+  // #193363 follow-up: `iris vault sync` / the daemon's catch-up on plug-in, and `iris vault heal`.
+  | "vault_catchup" | "vault_heal"
 
 /** Counts and sizes. Non-negative integers only. */
 export const DRIVES_NUMBER_KEYS = [
@@ -38,15 +41,25 @@ export const DRIVES_NUMBER_KEYS = [
   "connected_count",
   "words_count",
   "exit_code",
+  // vault catch-up / heal (#193363 follow-up)
+  "vaults_count",
+  "files_caught_up",
+  "chunks_copied",
+  "lost_count",
+  "rebuilt_count",
+  "alerts_count",
+  "skipped_count",
 ] as const
 
-export const DRIVES_BOOLEAN_KEYS = ["encrypted", "dry_run", "sensitive", "bundle", "manifest_saved"] as const
+/** `auto` = run by the IRIS daemon (a drive was plugged in, or the daily heal), not typed by a person. */
+export const DRIVES_BOOLEAN_KEYS = ["encrypted", "dry_run", "sensitive", "bundle", "manifest_saved", "auto"] as const
 
 /** Words from a closed list. Anything else is dropped, so a free-text value cannot get through. */
 export const DRIVES_ENUM_KEYS = {
   platform: ["darwin", "linux", "win32", "other"],
   checksums: ["default", "all", "none"],
   kind: ["backup-drive", "media-drive", "archive-folder", "other"],
+  trigger: ["mount", "schedule", "manual"],
 } as const satisfies Record<string, readonly string[]>
 
 type NumberKey = (typeof DRIVES_NUMBER_KEYS)[number]
@@ -101,7 +114,7 @@ export class DrivesRun {
     this.done = true
     try {
       this.emit(`drives_${this.op}` as Beacon.UsageType, {
-        command: "drives",
+        command: this.op.startsWith("vault_") ? "vault" : "drives",
         outcome,
         duration_ms: Math.max(0, Math.round(this.now() - this.started)),
         context: drivesUsageContext({

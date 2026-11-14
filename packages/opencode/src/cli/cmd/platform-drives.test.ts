@@ -102,7 +102,7 @@ describe("resolveDrivesBoard", () => {
     const { api, calls } = fakeBoards([{ id: 3, name: "Music", is_owner: true }])
     expect(await resolveDrivesBoard(api, { create: true })).toEqual({ id: 4242, created: true })
     expect(calls).toEqual([
-      "list", "board:Drives", "dataset:drives@4242:31", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
+      "list", "board:Drives", "dataset:drives@4242:33", "dataset:drive-folders@4242:10", "dataset:drive-findings@4242:9",
       "dataset:drive-reads@4242:10",
     ])
     expect(DRIVES_DATASETS.map((d) => d.slug)).toEqual(["drives", "drive-folders", "drive-findings", "drive-reads", "drive-vaults", "drive-kept"])

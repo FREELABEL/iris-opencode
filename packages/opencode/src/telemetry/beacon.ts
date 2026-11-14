@@ -39,7 +39,11 @@ export namespace Beacon {
     | "drives_list"
     | "drives_copies"
     | "drives_get"
+    | "drives_keep"
     | "drives_usage"
+    // vault copies on drives (#193363): catch-up (sync, or the daemon on plug-in) and heal
+    | "drives_vault_catchup"
+    | "drives_vault_heal"
 
   /**
    * What a usage event may carry beyond its name. `context` holds numbers, booleans and

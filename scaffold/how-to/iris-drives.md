@@ -1,7 +1,7 @@
 ---
 category: Data & Atlas
 level: beginner
-tags: [drives, keep, vault, keep it safe, backup copies, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access]
+tags: [drives, keep, vault, keep it safe, spare, lost copy, heal, auto sync, backup copies, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access]
 duration_min: 15
 ---
 # How to: Know what is on every drive you own, and find any file without plugging it in
@@ -349,11 +349,13 @@ iris drives keep "Studio:Album 2026" --vault masters --why "the only copy of the
 ```
 Kept 4 file(s) from Album 2026 from Studio in vault masters · 9 MB
   2 of 3 copies so far: laptop ✓ · Backup A ✓ · Backup B pending
-  A copy on a drive that is not plugged in catches up when it is: iris vault sync on the machine it is plugged into
+  A copy on a drive that is not plugged in catches up when it is plugged into any of your machines (the IRIS daemon does it; or run iris vault sync there)
 ```
 
-**3. Plug Backup B into any of your machines and run `iris vault sync` there.** It fills in the
-missing chunks, checks them, and records the copy. `iris drives list` then says every kept file
+**3. Plug Backup B into any of your machines.** The IRIS daemon there notices the drive and fills
+in the missing chunks within about a minute (or run `iris vault sync` there yourself). It checks
+each chunk and records the copy: `iris vault status masters` then says
+`Backup B: caught up 4 files, 1 min ago`. `iris drives list` then says every kept file
 is at its minimum.
 
 **The rules are the same as `get`:**
@@ -394,6 +396,31 @@ Studio   6 files ...
 
 `iris vault sync` also replaces a chunk that failed its check, from a good copy. Reading a kept
 file on another machine: see "Copies on your own drives" in `iris how-to view vaults`.
+
+**When a copy is lost, it is rebuilt on a spare.** A copy nobody has verified for 14 days is
+**lost**. If you named spares for the vault, IRIS rebuilds the copy on the first spare that is
+reachable and has room. The IRIS daemon checks once a day, or run `iris vault heal` yourself. It
+never uses a drive or machine you did not name as a spare:
+
+```bash
+iris vault spare add masters "Spare A"     # where a lost copy of masters may be rebuilt
+iris vault heal --dry-run                  # what is lost, and where it would go
+```
+
+If no spare can take the copy, nothing is written and you get an alert. It appears in `iris vault
+status`, in `iris drives list` under the lost drive, and on that drive's card in Atlas (**Vault copy
+alert**):
+
+```
+Backup B   0 files ...
+  vault copies on it: masters LOST — not verified for 14+ days (verified 2026-11-02)
+  ⚠ masters: lost (unseen 16 day(s)) — no spare can take it now: Spare A not plugged into this machine
+```
+
+When the lost drive is plugged in again, it is caught up and counts again. The spare keeps its
+copy unless you set `iris vault policy masters --on-return retire`. Every setting and its default:
+"When a copy is lost: spares" in `iris how-to view vaults`.
+
 
 ## Step 6: Encrypt a drive that holds sensitive files
 

@@ -11,6 +11,7 @@
 import fs from "fs"
 import path from "path"
 import { spawnSync } from "child_process"
+import { type PolicyFields, DEFAULT_LOST_AFTER_DAYS, catchupLine } from "./vault-auto"
 import {
   type VaultTarget, type ReplicaIndex, type ReplicaMeta, type SealedManifest, type BlobSource, type ReplicaRow, type KeptRow,
   targetKey, targetLabel, replicaDir, ensureReplica, writeReplicaIndex, heldBlobs, fillReplica, verifyReplica, blobFile,
@@ -73,7 +74,11 @@ export type TargetCheck = {
   wanted: number
   note: string
   written?: number
+  /** the chunk ids copied in this run (catch-up status counts the files they belong to) */
+  writtenIds?: string[]
   mount?: string | null
+  /** extra fields for this target's catalog row (heal: role, replaces, healed_at; catch-up: last_catchup) */
+  row?: Record<string, any>
 }
 
 export function statusOf(wanted: number, held: number, corrupt: number): CheckStatus {
@@ -81,12 +86,22 @@ export function statusOf(wanted: number, held: number, corrupt: number): CheckSt
   return held >= wanted ? "ok" : "partial"
 }
 
-export type VaultLike = { id: string; name: string; created_at: string; replicas: number; targets?: VaultTarget[]; source_node?: string | null }
+export type VaultLike = {
+  id: string; name: string; created_at: string; replicas: number; targets?: VaultTarget[]; source_node?: string | null
+} & PolicyFields
 
 export function replicaMetaFor(meta: VaultLike): ReplicaMeta {
   return {
     format: REPLICA_FORMAT, v: 1, id: meta.id, name: meta.name, created_at: meta.created_at,
     replicas: meta.replicas, targets: meta.targets ?? [], source_node: meta.source_node ?? null,
+    // #193363 follow-up: the policy travels with every copy, so a machine that only has the drive
+    // plugged in (no vault, no key) still knows the vault's spares and when a copy counts as lost.
+    ...(meta.spares?.length ? { spares: meta.spares } : {}),
+    ...(meta.lost_after_days != null ? { lost_after_days: meta.lost_after_days } : {}),
+    ...(meta.on_return ? { on_return: meta.on_return } : {}),
+    ...(meta.auto === false ? { auto: false } : {}),
+    ...(meta.healed?.length ? { healed: meta.healed } : {}),
+    ...(meta.updated_at ? { updated_at: meta.updated_at } : {}),
   }
 }
 
@@ -151,7 +166,7 @@ export async function syncDriveTargets(o: {
     if (fill.errors.length) notes.push(fill.errors[0])
     out.push({
       target: t, key, status: statusOf(wanted, v.held.size, v.corrupt.length), held: v.held, wanted, mount,
-      written: fill.written.length, note: notes.join("; "),
+      written: fill.written.length, writtenIds: fill.written, note: notes.join("; "),
     })
   }
   return out
@@ -182,9 +197,14 @@ export function replicaRow(meta: VaultLike, c: TargetCheck, seq: number, host: s
     drive_id: c.target.kind === "drive" ? c.target.id : "",
     status: c.status, blobs_held: c.held ? c.held.size : undefined, blobs_wanted: c.wanted, manifest_seq: seq,
     replicas: meta.replicas, source_node: meta.source_node ?? "",
+    lost_after_days: meta.lost_after_days ?? DEFAULT_LOST_AFTER_DAYS,
+    // The vault's places and settings, so any of your machines can heal or catch up a copy
+    // without the vault (or its key) being on it. No key, no file names: the same as vault.json on a drive.
+    vault_policy: JSON.stringify(replicaMetaFor(meta)),
     // A pending check proves nothing about the copy, so it never refreshes "last verified".
     ...(c.held ? { last_verified_at: at, last_verified_on: host } : {}),
     note: c.note || "",
+    ...(c.row ?? {}),
   }
 }
 
@@ -277,30 +297,50 @@ export async function refreshDriveAlerts(cat: VaultCatalog, kept: any[], replica
   }
 }
 
-/** Partial drive records (merge) whose kept-file alert or vault-copy summary changed. */
+/** Partial drive records (merge) whose kept-file alert, vault-copy summary, heal alert or last catch-up changed. */
 export function driveAlertRows(drives: any[], kept: KeptRow[], replicaRows: ReplicaRow[], now: Date, days = missingDays()): any[] {
   const alerts = keptAlerts(kept, replicaRows, now, days)
   const out: any[] = []
   for (const d of drives) {
     const id = String(d.external_id)
     const a = alerts.get(id)
-    const mine = (replicaRows as any[]).filter((r) => r.drive_id === id || r.target === `drive:${id}`)
+    const mine = (replicaRows as any[]).filter((r) => (r.drive_id === id || r.target === `drive:${id}`) && r.role !== "spare-retired")
     const summary = mine
-      .map((r) => {
-        const at = r.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
-        const stale = !Number.isFinite(at) || now.getTime() - at > days * 86_400_000
-        const word = r.status === "ok" && stale ? "missing" : r.status
-        return `${r.vault_name ?? r.vault_id}: ${word}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}`
-      })
+      .map((r) => `${r.vault_name ?? r.vault_id}: ${copyWord(r, now, days)}${r.role === "spare" ? " (spare copy)" : ""}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}`)
       .sort()
       .join("\n")
-    const next = { kept_files: a?.kept ?? 0, kept_below_target: a?.below.length ?? 0, copies_alert: alertText(a), vault_replicas: summary }
+    // #193363 follow-up: a copy here that is lost and could not be rebuilt, and the last catch-up.
+    const vaultAlert = mine.filter((r) => r.heal_alert).map((r) => `${r.vault_name ?? r.vault_id}: ${r.heal_alert}`).sort().join("\n")
+    const latest = [...mine].filter((r) => r.last_catchup_at).sort((x, y) => (String(x.last_catchup_at) < String(y.last_catchup_at) ? 1 : -1))[0]
+    const catchup = latest ? `${latest.vault_name ?? latest.vault_id}: ${latest.last_catchup} · ${String(latest.last_catchup_at).replace("T", " ").replace(/:\d\d(\.\d+)?Z$/, " UTC")}` : ""
+    const next = {
+      kept_files: a?.kept ?? 0, kept_below_target: a?.below.length ?? 0, copies_alert: alertText(a), vault_replicas: summary,
+      vault_alert: vaultAlert, vault_catchup: catchup,
+    }
     const same = Number(d.kept_files ?? 0) === next.kept_files && Number(d.kept_below_target ?? 0) === next.kept_below_target &&
-      String(d.copies_alert ?? "") === next.copies_alert && String(d.vault_replicas ?? "") === next.vault_replicas
+      String(d.copies_alert ?? "") === next.copies_alert && String(d.vault_replicas ?? "") === next.vault_replicas &&
+      String(d.vault_alert ?? "") === next.vault_alert && String(d.vault_catchup ?? "") === next.vault_catchup
     if (!same) out.push({ external_id: id, ...next })
   }
   return out
 }
+
+/**
+ * One word for a copy's state: its status, "missing" once unverified past IRIS_VAULT_MISSING_DAYS
+ * (it stops counting), "lost" once unverified past the vault's lost-after (it gets rebuilt on a spare).
+ */
+export function copyWord(r: any, now: Date, days = missingDays()): string {
+  const at = r.last_verified_at ? Date.parse(String(r.last_verified_at)) : NaN
+  const age = Number.isFinite(at) ? now.getTime() - at : Infinity
+  const lostAfter = Number(r.lost_after_days) > 0 ? Number(r.lost_after_days) : DEFAULT_LOST_AFTER_DAYS
+  if (r.status === "pending" && !Number.isFinite(at)) return "pending"
+  if (age > lostAfter * 86_400_000) return "lost"
+  if (age > days * 86_400_000) return "missing"
+  return String(r.status ?? "?")
+}
+
+/** For views: "caught up 3 files, 2 min ago" on a copy that a catch-up filled. */
+export { catchupLine }
 
 function clean<T extends Record<string, any>>(r: T): T {
   for (const k of Object.keys(r)) if (r[k] === undefined) delete r[k]
