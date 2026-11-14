@@ -85,6 +85,53 @@ export async function profileInUse(dir: string): Promise<boolean> {
 }
 
 
+/**
+ * Agent Chromes the engine left behind (#193492). The desktop's supervisor restarts an engine
+ * that stops answering with SIGKILL, and a killed engine never closes its throwaway Chrome: the
+ * MacBook had four of them on 2026-11-14, the oldest 38 hours old, each still holding a WebKit-sized
+ * slice of a machine already at load 300. A throwaway profile's Chrome whose parent is gone
+ * (re-parented to launchd/init, ppid 1) has no engine to answer to: end it and delete its folder.
+ * A Chrome whose engine is alive is never touched, whichever engine it is (CLI runs, other apps).
+ */
+export async function reapOrphanBrowsers(dir = tmpdir()): Promise<number> {
+  if (process.platform === "win32") return 0
+  const { readdir } = await import("fs/promises")
+  const names = await readdir(dir).catch(() => [] as string[])
+  let reaped = 0
+  for (const name of names) {
+    if (!name.startsWith("iris-browser-")) continue
+    const profile = path.join(dir, name)
+    const target = await readlink(path.join(profile, "SingletonLock")).catch(() => undefined)
+    const pid = Number(target?.split("-").pop())
+    if (!Number.isInteger(pid) || pid <= 1) continue
+    const ppid = await parentOf(pid)
+    if (ppid !== 1) continue
+    try {
+      process.kill(pid, "SIGTERM")
+    } catch {
+      continue
+    }
+    reaped++
+    await Bun.sleep(500)
+    await rm(profile, { recursive: true, force: true }).catch(() => {})
+  }
+  return reaped
+}
+
+async function parentOf(pid: number): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    const p = spawn("ps", ["-o", "ppid=", "-p", String(pid)], { stdio: ["ignore", "pipe", "ignore"] })
+    let out = ""
+    p.stdout.on("data", (d) => (out += String(d)))
+    p.on("error", () => resolve(undefined))
+    p.on("close", () => {
+      const n = Number(out.trim())
+      resolve(Number.isInteger(n) && n > 0 ? n : undefined)
+    })
+  })
+}
+let reapedOnce = false
+
 type CdpMessage = { id?: number; method?: string; params?: any; result?: any; error?: { message: string } }
 
 /**
@@ -1081,6 +1128,11 @@ export class PageSession extends ScriptedPage {
       await rm(path.join(dir, "DevToolsActivePort"), { force: true }).catch(() => {})
       this.profileDir = dir
     } else {
+      // Once per engine: clear Chromes a killed engine left running (#193492).
+      if (!reapedOnce) {
+        reapedOnce = true
+        void reapOrphanBrowsers().catch(() => 0)
+      }
       this.profileDir = await mkdtemp(path.join(tmpdir(), "iris-browser-"))
     }
     const args = [

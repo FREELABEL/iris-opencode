@@ -497,3 +497,38 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
 test.if(!chrome)("SKIPPED: no Chrome on this machine — the driver was not exercised", () => {
   expect(chrome).toBeNull()
 })
+
+describe("reapOrphanBrowsers (#193492)", () => {
+  test("ends a throwaway Chrome whose engine is gone, and leaves a live one alone", async () => {
+    const { reapOrphanBrowsers } = await import("./browser-driver")
+    const { mkdtemp, symlink, mkdir, stat } = await import("fs/promises")
+    const { tmpdir } = await import("os")
+    const nodePath = await import("path")
+    const { spawn } = await import("child_process")
+    const root = await mkdtemp(nodePath.join(tmpdir(), "reap-"))
+    // An orphan: a detached sleeper whose parent (a shell that exits at once) is gone.
+    const sh = spawn("sh", ["-c", "sleep 30 & echo $!"], { stdio: ["ignore", "pipe", "ignore"] })
+    const orphanPid = Number(await new Promise<string>((r) => sh.stdout.on("data", (d) => r(String(d).trim()))))
+    await Bun.sleep(300)
+    // Linux with a subreaper (systemd --user) adopts orphans itself: nothing to test there.
+    const { execSync } = await import("child_process")
+    if (execSync(`ps -o ppid= -p ${orphanPid}`).toString().trim() !== "1") {
+      process.kill(orphanPid)
+      return
+    }
+    // A live child of this process: its engine (us) is alive.
+    const live = spawn("sleep", ["30"])
+    for (const [name, pid] of [["iris-browser-orphan", orphanPid], ["iris-browser-live", live.pid!]] as const) {
+      await mkdir(nodePath.join(root, name))
+      await symlink(`host-${pid}`, nodePath.join(root, name, "SingletonLock"))
+    }
+    const n = await reapOrphanBrowsers(root)
+    expect(n).toBe(1)
+    await Bun.sleep(200)
+    expect(() => process.kill(orphanPid, 0)).toThrow()
+    expect(() => process.kill(live.pid!, 0)).not.toThrow()
+    expect(await stat(nodePath.join(root, "iris-browser-orphan")).catch(() => null)).toBeNull()
+    expect(await stat(nodePath.join(root, "iris-browser-live")).catch(() => null)).not.toBeNull()
+    live.kill()
+  })
+})
