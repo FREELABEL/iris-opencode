@@ -216,3 +216,53 @@
     padding: 0 8px;
   }
 }
+
+/* Chat font and spacing choices (#193477): the chosen one is tinted; each button shows what it does. */
+[data-slot="menu-v2-stepper"] [data-component="menu-v2-item"][data-selected="true"] {
+  background: var(--menu-v2-hover);
+  color: var(--v2-text-text-base);
+}
+
+[data-chat-font-option] {
+  min-width: 30px;
+  justify-content: center;
+}
+[data-component="menu-v2-item"][data-chat-font-option="sans"],
+[data-component="menu-v2-item"][data-chat-font-option="sans"] * {
+  font-family: var(--font-family-sans);
+}
+[data-component="menu-v2-item"][data-chat-font-option="serif"],
+[data-component="menu-v2-item"][data-chat-font-option="serif"] * {
+  font-family: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
+}
+[data-component="menu-v2-item"][data-chat-font-option="mono"],
+[data-component="menu-v2-item"][data-chat-font-option="mono"] * {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+}
+
+[data-chat-spacing-option] {
+  min-width: 30px;
+  justify-content: center;
+}
+[data-slot="menu-v2-spacing-glyph"] {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 12px;
+  height: 14px;
+  gap: 2px;
+
+  i {
+    display: block;
+    height: 1.5px;
+    border-radius: 1px;
+    background: currentColor;
+  }
+  &[data-spacing="compact"] {
+    gap: 1px;
+  }
+  &[data-spacing="roomy"] {
+    gap: 3.5px;
+  }
+}

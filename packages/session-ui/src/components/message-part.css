@@ -8,11 +8,11 @@
 }
 
 [data-component="user-message"] {
-  font-family: var(--font-family-sans);
+  font-family: var(--chat-font-family, var(--font-family-sans));
   font-size: var(--font-size-base);
   font-style: normal;
   font-weight: var(--font-weight-regular);
-  line-height: var(--line-height-large);
+  line-height: calc(1.5 * var(--chat-leading-scale, 1));
   letter-spacing: var(--letter-spacing-normal);
   color: var(--v2-text-text-base);
   display: flex;

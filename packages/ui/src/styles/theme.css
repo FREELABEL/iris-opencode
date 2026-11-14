@@ -639,4 +639,8 @@
   --font-size-base: calc(14px * var(--chat-text-scale));
   --font-size-large: calc(16px * var(--chat-text-scale));
   --font-size-x-large: calc(20px * var(--chat-text-scale));
+  /* Chat font and spacing (#193477): the chat's text face, line-height and block-gap multipliers. */
+  --chat-font-family: var(--chat-font, var(--font-family-sans));
+  --chat-leading-scale: var(--chat-leading, 1);
+  --chat-gap-scale: var(--chat-gap, 1);
 }

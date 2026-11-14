@@ -5,6 +5,7 @@ import { persisted } from "@/utils/persist"
 import { configureReadAloud } from "@opencode-ai/session-ui/read-aloud"
 import { usePlatform } from "@/context/platform"
 import { chatTextScale, chatTextSize } from "@/utils/chat-text-size"
+import { chatFont, chatFontFamily, chatSpacing, chatSpacingScale, type ChatFont, type ChatSpacing } from "@/utils/chat-reading"
 
 export interface NotificationSettings {
   agent: boolean
@@ -44,6 +45,8 @@ export interface Settings {
   }
   appearance: {
     fontSize: number
+    chatFont?: ChatFont
+    chatSpacing?: ChatSpacing
     mono: string
     sans: string
     terminal: string
@@ -245,6 +248,8 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
+    chatFont: "sans",
+    chatSpacing: "default",
     mono: "",
     sans: "",
     terminal: "",
@@ -421,6 +426,11 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
       // Read only inside [data-chat-text] (the conversation and its message box), #193464.
       root.style.setProperty("--chat-text-size", String(chatTextScale(store.appearance?.fontSize)))
+      // Chat font and spacing (#193477), read only inside [data-chat-text] like the size.
+      root.style.setProperty("--chat-font", chatFontFamily(store.appearance?.chatFont))
+      const spacing = chatSpacingScale(store.appearance?.chatSpacing)
+      root.style.setProperty("--chat-leading", String(spacing.leading))
+      root.style.setProperty("--chat-gap", String(spacing.gap))
     })
 
     createEffect(() => {
@@ -535,6 +545,14 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         fontSize: withFallback(() => store.appearance?.fontSize, defaultSettings.appearance.fontSize),
         setFontSize(value: number) {
           setStore("appearance", "fontSize", chatTextSize(value))
+        },
+        chatFont: () => chatFont(store.appearance?.chatFont),
+        setChatFont(value: ChatFont) {
+          setStore("appearance", "chatFont", chatFont(value))
+        },
+        chatSpacing: () => chatSpacing(store.appearance?.chatSpacing),
+        setChatSpacing(value: ChatSpacing) {
+          setStore("appearance", "chatSpacing", chatSpacing(value))
         },
         font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
         setFont(value: string) {
