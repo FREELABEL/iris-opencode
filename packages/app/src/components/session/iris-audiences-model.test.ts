@@ -67,35 +67,34 @@ describe("filter rows ↔ fl-api filters", () => {
   })
 })
 
-describe("the cumulative breakdown (typed shape, measured counts)", () => {
+describe("the cumulative breakdown (recorded from fl-api PR #308, served locally)", () => {
   const views = countViews(DRAFT_ROADMAP.filters, PREVIEW_ROADMAP.breakdown)
 
   test("each row is what is left after it and every row above it", () => {
-    expect(views.map((v) => v.count)).toEqual(["849", "788", "0 of 0 known"])
-    expect(countText(views[0])).toBe("849 of 11,341")
-    expect(countText(views[1])).toBe("788 of 849")
+    expect(views.map(countText)).toEqual(["849 of 909", "788 of 849", "can't be judged yet · 788 unknown"])
   })
 
-  test("a demographic filter is never a bare 0: it says how many were known", () => {
-    expect(countText(views[2])).toBe("0 of 0 known · 788 unknown")
-    const tagged = countViews([{ key: "niche_in", value: ["Coach"] }], [{ key: "niche_in", matched: 3, known: 4, of: 6050 }])
+  test("a filter no lead can be judged on says so — never a bare 0", () => {
+    expect(views[2]).toMatchObject({ unjudged: true, count: "can't be judged yet" })
+    expect(views.some((v) => v.count === "0")).toBe(false)
+  })
+
+  test("a partly known field says how many were known and unknown", () => {
+    const tagged = countViews([{ key: "niche_in", value: ["Coach"] }], [{ key: "niche_in", before: 6050, known: 4, unknown: 6046, matched: 3, of: 6050, always_known: false }])
     expect(countText(tagged[0])).toBe("3 of 4 known · 6,046 unknown")
-    expect(tagged[0].label).toBe("Niche is")
-    expect(tagged[0].value).toBe("Coach")
+    expect(tagged[0]).toMatchObject({ label: "Niche is", value: "Coach", unjudged: false })
   })
 
-  test("a demographic filter without a known count falls back to matched of", () => {
-    const v = countViews([{ key: "city_contains", value: "Austin" }], [{ key: "city_contains", matched: 2, known: null, of: 40 }])
-    expect(countText(v[0])).toBe("2 of 40")
+  test("a field every lead has reads matched of before, even with no matches", () => {
+    const v = countViews([{ key: "replied", value: true }], [{ key: "replied", before: 40, known: 40, unknown: 0, matched: 0, of: 40, always_known: true }])
+    expect(countText(v[0])).toBe("0 of 40")
   })
 
-  test("rows the preview has not counted yet are pending, not zero", () => {
-    const more: SegmentFilter[] = [...DRAFT_ROADMAP.filters, { key: "followers_min", value: 5000 }]
-    const v = countViews(more, PREVIEW_ROADMAP.breakdown)
-    expect(v[3]).toMatchObject({ pending: true, count: "…" })
-    expect(countText(v[3])).toBe("…")
-    // A breakdown out of step with the rows (the agent reordered them) is not borrowed.
-    expect(countViews([{ key: "comment_contains", value: "x" }], PREVIEW_ROADMAP.breakdown)[0].pending).toBe(true)
+  test("rows are matched to steps by key: fl-api orders the steps, and a row not counted yet is pending", () => {
+    const reordered = countViews([DRAFT_ROADMAP.filters[1], DRAFT_ROADMAP.filters[0]], PREVIEW_ROADMAP.breakdown)
+    expect(reordered.map(countText)).toEqual(["788 of 849", "849 of 909"])
+    const more: SegmentFilter[] = [...DRAFT_ROADMAP.filters, { key: "has_email", value: true }]
+    expect(countViews(more, PREVIEW_ROADMAP.breakdown)[3]).toMatchObject({ pending: true, count: "…" })
     expect(countViews(DRAFT_ROADMAP.filters, undefined).every((x) => x.pending)).toBe(true)
   })
 })
@@ -103,7 +102,7 @@ describe("the cumulative breakdown (typed shape, measured counts)", () => {
 describe("members", () => {
   test("what the platform does not hold is a dash, not a 0", () => {
     const [a, b, c] = PREVIEW_ROADMAP.members.data.map(memberCells)
-    expect(a).toMatchObject({ handle: "@example.one", niche: "—", role: "—", city: "—", followers: "0" })
+    expect(a).toMatchObject({ handle: "@example.one", niche: "—", role: "—", city: "—", followers: "—" })
     expect(b).toMatchObject({ niche: "Course creator", role: "Founder", city: "Austin", followers: "12,400" })
     expect(c).toMatchObject({ handle: "—", comment: "—", followers: "—" })
   })

@@ -1198,8 +1198,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const outreachSegmentDraftSave = Effect.fn("IrisHttpApi.outreachSegmentDraftSave")((ctx: { payload: { bloq: number; name?: string } }) =>
       Effect.promise(() => saveDraft(ctx.payload.bloq, ctx.payload.name, "panel")),
     )
-    const outreachSegmentPreview = Effect.fn("IrisHttpApi.outreachSegmentPreview")((ctx: { payload: { bloq: number; filters: FilterBody; page?: number } }) =>
-      Effect.promise(() => previewSegment(ctx.payload.bloq, filtersFromApi(ctx.payload.filters), ctx.payload.page)),
+    const outreachSegmentPreview = Effect.fn("IrisHttpApi.outreachSegmentPreview")((ctx: { payload: { bloq: number; filters: FilterBody } }) =>
+      Effect.promise(() => previewSegment(ctx.payload.bloq, filtersFromApi(ctx.payload.filters))),
     )
     const outreachSegmentMembers = Effect.fn("IrisHttpApi.outreachSegmentMembers")((ctx: { params: { segmentID: number }; query: { page?: number } }) =>
       Effect.promise(() => segmentMembers(ctx.params.segmentID, ctx.query.page)),

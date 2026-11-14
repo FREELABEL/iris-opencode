@@ -1,13 +1,10 @@
 /**
- * Audiences fixtures (#193533).
- *
- * TYPED, NOT RECORDED: fl-api's segments API (D3 #193484) was not deployed when this was written,
- * so the SHAPES below follow the engine's normalized output (packages/opencode/src/iris/segments.ts)
- * for the D3 contract as briefed. The COUNTS are measured: board 38's lead list read on 2026-11-14
- * with `curl https://raichu.heyiris.io/api/v1/leads?bloq_id=38&custom_field_key=source_post_url&
- * custom_field_value=https://www.instagram.com/p/De9Uw8Ilhne/` (all pages): 11,341 leads on the
- * board, 849 from that post, 788 whose comment contains "roadmap", 0 with an audience niche yet.
- * Member names and handles are invented (the repo is public).
+ * Audiences fixtures (#193533): the ENGINE's normalized output (packages/opencode/src/iris/segments.ts)
+ * for responses RECORDED 2026-11-14 from fl-api PR #308 (wt/193484-segments @ 33f406dd6) served
+ * locally on a copy of fl_testing seeded with board 38's 849 real De9Uw8Ilhne leads + 60 others:
+ * POST /api/v1/bloqs/<bloq>/segments/preview {"filters":{"source_post":"De9Uw8Ilhne",
+ * "comment_contains":"roadmap","followers_min":1000}}. Raw recordings:
+ * packages/opencode/test/iris/fixtures/fl-api-segment-preview*.json. Members are invented (public repo).
  */
 import type { Draft, Preview } from "./iris-audiences-model"
 
@@ -18,7 +15,7 @@ export const DRAFT_ROADMAP: Draft = {
   filters: [
     { key: "source_post", value: "De9Uw8Ilhne" },
     { key: "comment_contains", value: "roadmap" },
-    { key: "niche_in", value: ["Course creator"] },
+    { key: "followers_min", value: 1000 },
   ],
   rev: 3,
   saved: null,
@@ -28,15 +25,15 @@ export const DRAFT_ROADMAP: Draft = {
 
 export const PREVIEW_ROADMAP: Preview = {
   total: 0,
-  of: 11341,
+  of: 909,
   breakdown: [
-    { key: "source_post", matched: 849, known: 849, of: 11341 },
-    { key: "comment_contains", matched: 788, known: 849, of: 849 },
-    { key: "niche_in", matched: 0, known: 0, of: 788 },
+    { key: "source_post", before: 909, known: 909, unknown: 0, matched: 849, of: 909, always_known: false },
+    { key: "comment_contains", before: 849, known: 849, unknown: 0, matched: 788, of: 909, always_known: false },
+    { key: "followers_min", before: 788, known: 0, unknown: 788, matched: 0, of: 909, always_known: false },
   ],
   members: {
     data: [
-      { id: 1, handle: "@example.one", name: "Example One", status: "Prospected", comment: "Roadmap", niche: null, role: null, city: null, followers: 0 },
+      { id: 1, handle: "@example.one", name: "@example.one", status: "Prospected", comment: "Roadmap", niche: null, role: null, city: null, followers: null },
       { id: 2, handle: "@example.two", name: "Example Two", status: "Contacted", comment: "roadmap 🙌", niche: "Course creator", role: "Founder", city: "Austin", followers: 12400 },
       { id: 3, handle: null, name: "Lead 3", status: "Prospected", comment: "", niche: null, role: null, city: null, followers: null },
     ],

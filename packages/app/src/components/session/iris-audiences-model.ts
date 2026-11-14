@@ -3,8 +3,8 @@
  * rows, each row's count from the preview's breakdown, and the member rows. The engine side is
  * packages/opencode/src/iris/segments.ts (the draft, and fl-api's segments API, D3 #193484).
  *
- * A demographic filter (niche, role, city, followers) is never shown as a bare 0: most leads have
- * not been tagged yet, so its count is "3 of 4 known · 6,046 unknown".
+ * A filter on a field most leads lack (niche, role, city, followers) is never shown as a bare 0:
+ * its count is "3 of 4 known · 6,046 unknown", or "can't be judged yet" when no lead has it.
  */
 
 export type FilterKey =
@@ -24,22 +24,23 @@ export type FilterValue = string | number | boolean | string[]
 export type SegmentFilter = { key: FilterKey; value: FilterValue }
 
 type Kind = "text" | "list" | "flag" | "number"
-export type FilterDef = { key: FilterKey; label: string; kind: Kind; demographic: boolean; hint: string }
+export type FilterDef = { key: FilterKey; label: string; kind: Kind; hint: string }
+/** fl-api's SegmentFilters::KEYS order — also the order the breakdown walks and a saved segment keeps. */
 
 /** Every filter fl-api's segments take, in the order the "add filter" menu lists them. */
 export const FILTER_DEFS: FilterDef[] = [
-  { key: "source_post", label: "Commented on post", kind: "text", demographic: false, hint: "post URL or shortcode" },
-  { key: "comment_contains", label: "Comment contains", kind: "text", demographic: false, hint: "roadmap" },
-  { key: "discovery_mode", label: "Found by", kind: "text", demographic: false, hint: "comments, followers, profiles, inbox" },
-  { key: "status_in", label: "Status is", kind: "list", demographic: false, hint: "Prospected, Contacted" },
-  { key: "replied", label: "Replied", kind: "flag", demographic: false, hint: "yes or no" },
-  { key: "contacted", label: "Contacted", kind: "flag", demographic: false, hint: "yes or no" },
-  { key: "niche_in", label: "Niche is", kind: "list", demographic: true, hint: "Course creator, Coach" },
-  { key: "role_in", label: "Role is", kind: "list", demographic: true, hint: "Founder, Creator" },
-  { key: "city_contains", label: "City contains", kind: "text", demographic: true, hint: "Austin" },
-  { key: "followers_min", label: "Followers at least", kind: "number", demographic: true, hint: "5000" },
-  { key: "followers_max", label: "Followers at most", kind: "number", demographic: true, hint: "50000" },
-  { key: "has_email", label: "Has email", kind: "flag", demographic: false, hint: "yes or no" },
+  { key: "source_post", label: "Commented on post", kind: "text", hint: "post URL or shortcode" },
+  { key: "comment_contains", label: "Comment contains", kind: "text", hint: "roadmap" },
+  { key: "discovery_mode", label: "Found by", kind: "text", hint: "comments, followers, profiles, inbox" },
+  { key: "status_in", label: "Status is", kind: "list", hint: "Prospected, Contacted" },
+  { key: "replied", label: "Replied", kind: "flag", hint: "yes or no" },
+  { key: "contacted", label: "Contacted", kind: "flag", hint: "yes or no" },
+  { key: "niche_in", label: "Niche is", kind: "list", hint: "Course creator, Coach" },
+  { key: "role_in", label: "Role is", kind: "list", hint: "Founder, Creator" },
+  { key: "city_contains", label: "City contains", kind: "text", hint: "Austin" },
+  { key: "followers_min", label: "Followers at least", kind: "number", hint: "5000" },
+  { key: "followers_max", label: "Followers at most", kind: "number", hint: "50000" },
+  { key: "has_email", label: "Has email", kind: "flag", hint: "yes or no" },
 ]
 const DEF = new Map(FILTER_DEFS.map((d) => [d.key, d]))
 export const filterDef = (key: string) => DEF.get(key as FilterKey)
@@ -97,7 +98,8 @@ export function nextKey(rows: FilterRow[]): FilterKey | undefined {
 
 // ─── Counts ───────────────────────────────────────────────────────────────────
 
-export type BreakdownRow = { key: string; matched: number; known: number | null; of: number }
+/** One step of fl-api's breakdown (PR #308): `before` reached the filter, `known` of them have the field. */
+export type BreakdownRow = { key: string; before: number; known: number; unknown: number; matched: number; of: number; always_known: boolean }
 export type MemberRow = {
   id: number
   handle: string | null
@@ -125,29 +127,29 @@ export type Segment = { id: number; bloq_id: number; name: string; filters: Segm
 
 const n = (v: number) => v.toLocaleString("en-US")
 
-/** One count cell: what is left after this filter, and of how many. */
-export type CountView = { key: string; label: string; value: string; count: string; detail: string; pending: boolean }
+/** One count cell: what is left after this filter, and how it was judged. */
+export type CountView = { key: string; label: string; value: string; count: string; detail: string; pending: boolean; unjudged: boolean }
 
 /**
- * Each filter's count, cumulative in order: row i is what is left after filters 1..i. A row with
- * no matching breakdown entry (the preview is still running, or fl-api skipped it) is pending.
- * Demographic rows say how many were known: "3 of 4 known · 6,046 unknown".
+ * Each filter's count, cumulative in fl-api's order: the step for a key is what is left after it
+ * and every filter above it. A key with no step yet (the preview is still running) is pending.
+ * - every lead could be judged: "788" · "of 849"
+ * - some could not: "3 of 4 known" · "6,046 unknown"
+ * - none could (known 0): "can't be judged yet" · "788 unknown" — never "0 match"
  */
 export function countViews(filters: SegmentFilter[], breakdown: BreakdownRow[] | undefined): CountView[] {
-  return filters.map((f, i) => {
+  return filters.map((f) => {
     const def = DEF.get(f.key)
-    const r = breakdown?.[i]?.key === f.key ? breakdown[i] : undefined
-    const base = { key: f.key, label: def?.label ?? f.key, value: filterToRow(f).text }
+    const r = breakdown?.find((x) => x.key === f.key)
+    const base = { key: f.key, label: def?.label ?? f.key, value: filterToRow(f).text, unjudged: false }
     if (!r) return { ...base, count: "…", detail: "", pending: true }
-    if (def?.demographic && r.known !== null) {
-      const unknown = Math.max(0, r.of - r.known)
-      return { ...base, count: `${n(r.matched)} of ${n(r.known)} known`, detail: `${n(unknown)} unknown`, pending: false }
-    }
-    return { ...base, count: n(r.matched), detail: `of ${n(r.of)}`, pending: false }
+    if (r.always_known || r.unknown === 0) return { ...base, count: n(r.matched), detail: `of ${n(r.before)}`, pending: false }
+    if (r.known === 0) return { ...base, count: "can't be judged yet", detail: `${n(r.unknown)} unknown`, pending: false, unjudged: true }
+    return { ...base, count: `${n(r.matched)} of ${n(r.known)} known`, detail: `${n(r.unknown)} unknown`, pending: false }
   })
 }
 
-/** "3 of 4 known · 6,046 unknown" / "849 of 6,895" — the row's whole count as one line. */
+/** The row's whole count as one line: "849 of 11,341", "3 of 4 known · 6,046 unknown", "can't be judged yet · 788 unknown". */
 export const countText = (c: CountView) => (c.pending ? "…" : c.detail.endsWith("unknown") ? `${c.count} · ${c.detail}` : `${c.count} ${c.detail}`)
 
 /** A member's cells; anything the platform does not hold is "—", never a made-up 0. */

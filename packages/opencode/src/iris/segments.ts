@@ -8,7 +8,7 @@ import { postKey } from "./som-preflight"
  * AUDIENCES (#193533 U2a, #193534 U2b, #193535 U2c; epic #193481): a board's saved segments, and
  * the ONE draft segment the person and the agent build together.
  *
- * The server half is fl-api's segments API (D3 #193484):
+ * The server half is fl-api's segments API (D3 #193484, fl-api PR #308; CLI `iris segment`, PR #590):
  *   GET/POST  /api/v1/bloqs/{bloq}/segments          GET/PATCH/DELETE /api/v1/segments/{id}
  *   GET       /api/v1/segments/{id}/members?page=    POST /api/v1/bloqs/{bloq}/segments/preview {filters}
  * Preview saves nothing. Every reader here shapes what fl-api sends defensively and fills nothing in.
@@ -19,8 +19,9 @@ import { postKey } from "./som-preflight"
  * follows whoever touched a draft last. The draft is in memory only — saved segments are fl-api's.
  *
  * LIVE (U2c). A change emits `iris.outreach.segment.updated` on the event stream; the panel also
- * polls the draft every 5 s while visible. fl-api's SegmentUpdated is a server broadcast this
- * engine has no subscriber for, so a CLI edit arrives through the poll: a draft that still matches
+ * polls the draft every 5 s while visible. fl-api's SegmentUpdated is broadcast on the private
+ * channel `private-bloq.{id}` (event `outreach.segment.updated`); this engine has no broadcast
+ * client or channel auth, so it does not subscribe, and a CLI edit arrives through the poll: a draft that still matches
  * its saved segment re-reads that segment on each read, and takes the server's filters when they
  * changed. A draft with unsaved edits keeps them.
  *
@@ -30,6 +31,7 @@ import { postKey } from "./som-preflight"
 
 export const SEGMENT_EVENT = "iris.outreach.segment.updated"
 
+/** fl-api's SegmentFilters::KEYS, in its order: the order the breakdown walks. */
 export const FILTER_KEYS = [
   "source_post",
   "comment_contains",
@@ -80,7 +82,7 @@ export function parseFilterValue(key: FilterKey, raw: unknown): FilterValue | un
   return key === "source_post" ? (postKey(s) ?? s) : s
 }
 
-/** The ordered list → the `filters` object fl-api takes. Key order is the breakdown's order. */
+/** The ordered list → the `filters` object fl-api takes. fl-api re-orders keys into FILTER_KEYS order. */
 export function filtersToApi(filters: SegmentFilter[]): Record<string, FilterValue> {
   return Object.fromEntries(filters.map((f) => [f.key, f.value]))
 }
@@ -99,26 +101,31 @@ export function filtersFromApi(raw: unknown): SegmentFilter[] {
   })
 }
 
-// ─── Shapes ───────────────────────────────────────────────────────────────────
+// ─── Shapes (fl-api PR #308, SomSegmentController / SegmentQuery) ───────────────
 
 export type Segment = {
   id: number
   bloq_id: number
   name: string
   filters: SegmentFilter[]
+  /** The breakdown's final `matched`; null when fl-api sent no breakdown. */
   member_count: number | null
   updated_at: string | null
 }
 
-/** One row of the breakdown: after this filter (and every one above it), how many are left. */
+/**
+ * One step of fl-api's breakdown, in its fixed key order: `before` leads reached this filter,
+ * `known` of them have the field, `matched` are left after it. `of` is the whole board.
+ */
 export type BreakdownRow = {
   key: FilterKey | string
-  /** Still in the set after this filter. */
+  before: number
+  known: number
+  unknown: number
   matched: number
-  /** Of the set this filter was applied to, how many have the field at all. null = not said. */
-  known: number | null
-  /** The size of the set this filter was applied to. */
   of: number
+  /** status / replied / contacted / has_email: every lead has the field. */
+  always_known: boolean
 }
 
 export type MemberPage = { data: Member[]; total: number; page: number; last_page: number }
@@ -132,6 +139,7 @@ export type Member = {
   niche: string | null
   role: string | null
   city: string | null
+  /** null = unknown. fl-api already treats a 0 as unknown (the scraper wrote 0 for unread profiles). */
   followers: number | null
 }
 
@@ -150,65 +158,68 @@ export function shapeSegment(s: any): Segment {
     bloq_id: Number(s?.bloq_id),
     name: String(s?.name ?? ""),
     filters: filtersFromApi(s?.filters),
-    member_count: num(s?.member_count ?? s?.members_count ?? s?.count),
+    member_count: num(s?.breakdown?.matched),
     updated_at: str(s?.updated_at),
   }
 }
 
-/** A lead as a member row. Followers only when the profile was read (an unread 0 is not a 0). */
+/** fl-api's member row (SegmentQuery::memberRow). The handle comes without its @. */
 export function shapeMember(l: any): Member {
-  const cf = l?.custom_fields ?? {}
-  const nick = str(l?.nickname) ?? (str(l?.name)?.startsWith("@") ? str(l?.name) : null) ?? (str(cf.ig_username) ? `@${cf.ig_username}` : null)
+  const handle = str(l?.handle)
+  const followers = num(l?.followers)
   return {
     id: Number(l?.id),
-    handle: nick,
-    name: str(cf.ig_display_name) ?? str(l?.name) ?? `Lead ${l?.id}`,
+    handle: handle ? `@${handle.replace(/^@/, "")}` : null,
+    name: str(l?.name) ?? `Lead ${l?.id}`,
     status: str(l?.status) ?? "—",
-    comment: String(cf.comment ?? "").trim(),
-    niche: str(cf.audience_niche) ?? str(l?.niche),
-    role: str(cf.audience_role) ?? str(l?.role),
-    city: str(l?.city) ?? str(cf.city),
-    followers: cf.ig_scraped_at || l?.followers !== undefined ? num(l?.followers ?? cf.ig_followers) : null,
+    comment: str(l?.comment) ?? "",
+    niche: str(l?.niche),
+    role: str(l?.role),
+    city: str(l?.city),
+    followers: followers && followers > 0 ? followers : null,
   }
 }
 
+/** `{data[], meta{total, per_page, current_page, last_page}}` — a preview's members, or the members route's data. */
 export function shapePage(raw: any): MemberPage {
-  const b = raw?.members ?? raw
-  const rows: any[] = Array.isArray(b) ? b : Array.isArray(b?.data) ? b.data : Array.isArray(b?.data?.data) ? b.data.data : []
-  const meta = Array.isArray(b?.data) || Array.isArray(b) ? b : (b?.data ?? {})
-  const total = num(meta?.total ?? b?.total) ?? rows.length
+  const rows: any[] = Array.isArray(raw?.data) ? raw.data : []
   return {
     data: rows.map(shapeMember),
-    total,
-    page: num(meta?.current_page ?? meta?.page ?? b?.current_page) ?? 1,
-    last_page: num(meta?.last_page ?? b?.last_page) ?? 1,
+    total: num(raw?.meta?.total) ?? rows.length,
+    page: num(raw?.meta?.current_page) ?? 1,
+    last_page: num(raw?.meta?.last_page) ?? 1,
   }
 }
 
-/** The breakdown as a list in filter order, whether fl-api sends a list or an object keyed by filter. */
-export function shapeBreakdown(raw: unknown): BreakdownRow[] {
-  const rows: [unknown, any][] = Array.isArray(raw)
-    ? raw.map((r: any) => [r?.key ?? r?.filter, r])
-    : raw && typeof raw === "object"
-      ? Object.entries(raw)
-      : []
-  return rows.flatMap(([k, r]) => {
+/** The breakdown's steps, in the order fl-api walked them. */
+export function shapeBreakdown(raw: any): BreakdownRow[] {
+  const steps: any[] = Array.isArray(raw?.steps) ? raw.steps : []
+  return steps.flatMap((r) => {
+    const before = num(r?.before)
     const matched = num(r?.matched)
-    const of = num(r?.of)
-    if (typeof k !== "string" || matched === null || of === null) return []
-    return [{ key: k, matched, known: num(r?.known), of }]
+    if (typeof r?.key !== "string" || before === null || matched === null) return []
+    const known = num(r?.known) ?? before
+    return [{ key: r.key, before, known, unknown: num(r?.unknown) ?? before - known, matched, of: num(r?.of) ?? before, always_known: r?.field_always_known === true }]
   })
 }
 
+/** POST …/segments/preview's data: {bloq_id, filters, breakdown, members, saved:false}. */
 export function shapePreview(raw: any): Preview {
   const d = unwrap(raw)
-  const breakdown = shapeBreakdown(d?.breakdown)
   return {
-    total: num(d?.total ?? d?.matched) ?? breakdown.at(-1)?.matched ?? null,
-    of: num(d?.of ?? d?.board_total) ?? breakdown[0]?.of ?? null,
-    breakdown,
-    members: shapePage(d?.members ?? d?.first_page ?? { data: [] }),
+    total: num(d?.breakdown?.matched),
+    of: num(d?.breakdown?.of),
+    breakdown: shapeBreakdown(d?.breakdown),
+    members: shapePage(d?.members),
   }
+}
+
+/** "788 of 849" when every lead could be judged; else "3 of 4 known · 6,046 unknown"; known 0 = "can't be judged yet". */
+export function stepText(r: BreakdownRow): string {
+  const n = (v: number) => v.toLocaleString("en-US")
+  if (r.always_known || r.unknown === 0) return `${n(r.matched)} of ${n(r.before)}`
+  if (r.known === 0) return `can't be judged yet · ${n(r.unknown)} unknown`
+  return `${n(r.matched)} of ${n(r.known)} known · ${n(r.unknown)} unknown`
 }
 
 // ─── fl-api ───────────────────────────────────────────────────────────────────
@@ -236,7 +247,9 @@ async function fl(path: string, init?: { method: string; body?: unknown }): Prom
     )
     const body = (await res.json().catch(() => null)) as any
     if (res.status === 404 && !body?.message && !body?.error) return { ok: false, reason: `fl-api has no ${path} yet (segments API, #193484)` }
-    if (!res.ok) return { ok: false, reason: body?.error ?? body?.message ?? `fl-api ${res.status}` }
+    // A 422 names the bad key in `errors` ("Unknown filter key(s): … Allowed: …"); its `message` is generic.
+    const detail = body?.errors && typeof body.errors === "object" ? Object.values(body.errors).flat().find((x) => typeof x === "string") : undefined
+    if (!res.ok) return { ok: false, reason: (detail as string | undefined) ?? body?.error ?? body?.message ?? `fl-api ${res.status}` }
     return { ok: true, body }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }
@@ -257,13 +270,14 @@ export async function getSegment(id: number): Promise<PlatformResult<Segment | n
 }
 
 export async function segmentMembers(id: number, page = 1): Promise<PlatformResult<MemberPage>> {
-  const r = await fl(`/api/v1/segments/${id}/members?page=${Math.max(1, Math.floor(page))}`)
+  const r = await fl(`/api/v1/segments/${id}/members?page=${Math.max(1, Math.floor(page))}&per_page=25`)
   if (!r.ok) return { measured: false, reason: r.reason, data: { data: [], total: 0, page: 1, last_page: 1 } }
-  return { measured: true, data: shapePage(r.body) }
+  return { measured: true, data: shapePage(unwrap(r.body)) }
 }
 
-export async function previewSegment(bloq: number, filters: SegmentFilter[], page = 1): Promise<PlatformResult<Preview | null>> {
-  const r = await fl(`/api/v1/bloqs/${bloq}/segments/preview`, { method: "POST", body: { filters: filtersToApi(filters), page } })
+/** Breakdown + the first page of members; saves nothing, fires no event. fl-api pages only saved segments. */
+export async function previewSegment(bloq: number, filters: SegmentFilter[]): Promise<PlatformResult<Preview | null>> {
+  const r = await fl(`/api/v1/bloqs/${bloq}/segments/preview`, { method: "POST", body: { filters: filtersToApi(filters), per_page: 25 } })
   if (!r.ok) return { measured: false, reason: r.reason, data: null }
   return { measured: true, data: shapePreview(r.body) }
 }
@@ -359,7 +373,9 @@ export async function changeDraft(c: DraftChange): Promise<PlatformResult<Draft>
     return { measured: true, data: put({ bloq: s.data.bloq_id || c.bloq, segment_id: s.data.id, name: s.data.name, filters: s.data.filters, saved: snapshot(s.data), by }) }
   }
   const base = c.reset ? fresh(c.bloq) : (drafts.get(c.bloq) ?? fresh(c.bloq))
-  const filters = (c.filters ?? base.filters).filter((f) => isFilterKey(f.key))
+  // fl-api walks (and stores) filters in FILTER_KEYS order; the draft keeps that order too, so
+  // the panel's rows, the breakdown's steps and the saved segment line up one to one.
+  const filters = (c.filters ?? base.filters).filter((f) => isFilterKey(f.key)).toSorted((a, b) => FILTER_KEYS.indexOf(a.key) - FILTER_KEYS.indexOf(b.key))
   return { measured: true, data: put({ ...base, filters, name: c.name ?? base.name, by }) }
 }
 

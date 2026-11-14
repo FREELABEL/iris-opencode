@@ -13,8 +13,8 @@ import {
   readDraft,
   removeFilter,
   saveDraft,
+  stepText,
   unsaved,
-  type BreakdownRow,
   type Draft,
   type Preview,
   type SegmentFilter,
@@ -41,22 +41,16 @@ export function outreachShowCommand(view: OutreachView): Panel.Command {
   return { action: "show", surface: "outreach", sub: view }
 }
 
-const DEMOGRAPHIC = new Set(["niche_in", "role_in", "city_contains", "followers_min", "followers_max"])
 const n = (v: number) => v.toLocaleString("en-US")
 const valueText = (v: SegmentFilter["value"]) => (Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "yes" : "no") : String(v))
 
-/** One line per filter, in order, with what is left after it — the same numbers the panel draws. */
+/** One line per filter, in order, with what is left after it — the same words the panel shows. */
 export function describeBreakdown(filters: SegmentFilter[], p: Preview | null): string {
   if (!filters.length) return "No filters yet: the segment is the whole board."
   return filters
     .map((f, i) => {
-      const r: BreakdownRow | undefined = p?.breakdown[i]?.key === f.key ? p.breakdown[i] : undefined
-      const count = !r
-        ? "not counted"
-        : DEMOGRAPHIC.has(f.key) && r.known !== null
-          ? `${n(r.matched)} of ${n(r.known)} known · ${n(r.of - r.known)} unknown`
-          : `${n(r.matched)} of ${n(r.of)}`
-      return `${i + 1}. ${f.key} = ${valueText(f.value)} → ${count}`
+      const r = p?.breakdown.find((x) => x.key === f.key)
+      return `${i + 1}. ${f.key} = ${valueText(f.value)} → ${r ? stepText(r) : "not counted"}`
     })
     .join("\n")
 }

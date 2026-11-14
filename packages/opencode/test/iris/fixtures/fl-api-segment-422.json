@@ -1,0 +1,9 @@
+{
+  "_note": "RECORDED 2026-11-14, same local fl-api PR #308 server: preview with {\"filters\":{\"bogus\":1}} \u2192 HTTP 422.",
+  "message": "The given data was invalid.",
+  "errors": {
+    "filters": [
+      "Unknown filter key(s): bogus. Allowed: source_post, comment_contains, discovery_mode, status_in, replied, contacted, niche_in, role_in, city_contains, followers_min, followers_max, has_email."
+    ]
+  }
+}

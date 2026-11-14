@@ -4304,8 +4304,8 @@ export const IrisApi = HttpApi.make("iris").add(
         success: described(ReachrResponse, "The draft, saved as a segment on fl-api"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentDraftSave", summary: "Save the draft as a segment" })),
       HttpApiEndpoint.post("outreachSegmentPreview", IrisPaths.outreachSegmentPreview, {
-        payload: Schema.Struct({ bloq: Schema.Number, filters: Schema.Array(SegmentFilterBody), page: Schema.optional(Schema.Number) }),
-        success: described(ReachrResponse, "Each filter's matched/known/of, in order, and the first page of members. Saves nothing."),
+        payload: Schema.Struct({ bloq: Schema.Number, filters: Schema.Array(SegmentFilterBody) }),
+        success: described(ReachrResponse, "Each filter's step (before/known/unknown/matched), in fl-api's order, and the first 25 members. Saves nothing."),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentPreview", summary: "Preview a segment" })),
       HttpApiEndpoint.get("outreachSegmentMembers", IrisPaths.outreachSegmentMembers, {
         params: { segmentID: Schema.NumberFromString },

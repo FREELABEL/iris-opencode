@@ -177,23 +177,19 @@ export function IrisAudiences(props: {
       if (!k || !s.draft) return
       const ticket = ++asked
       set({ counting: true, page: 1 })
-      const r = await json<Preview | null>(props.doFetch, "/iris/outreach/segments/preview", { method: "POST", body: { bloq: s.draft.bloq, filters: s.draft.filters, page: 1 } })
+      const r = await json<Preview | null>(props.doFetch, "/iris/outreach/segments/preview", { method: "POST", body: { bloq: s.draft.bloq, filters: s.draft.filters } })
       if (!alive || ticket !== asked) return
       set({ counting: false, preview: r.measured ? r.data : null, previewReason: r.measured ? undefined : r.reason, members: r.data?.members ?? null })
     }),
   )
 
+  // fl-api pages a SAVED segment's members; a preview returns the first 25 only.
+  const pageable = () => !!s.draft?.segment_id && !draftUnsaved(s.draft)
   const turnPage = async (page: number) => {
-    const d = s.draft
-    if (!d) return
+    const id = s.draft?.segment_id
+    if (!id || !pageable()) return
     set("page", page)
-    // A saved, unchanged segment pages its own members; anything else pages the preview.
-    const r =
-      d.segment_id && !draftUnsaved(d)
-        ? await json<MemberPage>(props.doFetch, `/iris/outreach/segments/${d.segment_id}/members?page=${page}`)
-        : await json<Preview | null>(props.doFetch, "/iris/outreach/segments/preview", { method: "POST", body: { bloq: d.bloq, filters: d.filters, page } }).then(
-            (x) => ({ ...x, data: x.data?.members as MemberPage }) as Payload<MemberPage>,
-          )
+    const r = await json<MemberPage>(props.doFetch, `/iris/outreach/segments/${id}/members?page=${page}`)
     if (alive && r.measured && r.data) set("members", r.data)
   }
 
@@ -315,15 +311,9 @@ export function IrisAudiences(props: {
             <span class="m" data-slot="or-by-agent">edited by the agent</span>
           </Show>
         </div>
-        <div class="iris-or-frow iris-or-fhead">
-          <span>Filter</span>
-          <span>Value</span>
-          <span class="r">Left</span>
-        </div>
-        <div class="iris-or-frow" data-slot="or-board-row">
-          <span class="m">Board</span>
-          <span class="m">{s.bloq ? `#${s.bloq}` : "—"}</span>
-          <span class="r num">{s.preview?.of === null || s.preview?.of === undefined ? "—" : s.preview.of.toLocaleString("en-US")}</span>
+        <div class="iris-or-board" data-slot="or-board-row">
+          <span class="m">Board {s.bloq ? `#${s.bloq}` : "—"}</span>
+          <span class="num">{s.preview?.of === null || s.preview?.of === undefined ? "—" : `${s.preview.of.toLocaleString("en-US")} leads`}</span>
         </div>
         <For each={s.rows}>
           {(row, i) => {
@@ -346,7 +336,7 @@ export function IrisAudiences(props: {
                   placeholder={FILTER_DEFS.find((d) => d.key === row.key)?.hint}
                   onInput={(e) => setRow(i(), { text: e.currentTarget.value })}
                 />
-                <span class="r num" data-slot="or-count" title={c() ? countText(c()!) : "Not counted yet"}>
+                <span class="num iris-or-count" data-slot="or-count" data-unjudged={c()?.unjudged ? "" : undefined} title={c() ? countText(c()!) : "Not counted yet"}>
                   <Show when={c()} fallback={<span class="m">—</span>}>
                     {(cv) => (
                       <>
@@ -499,15 +489,20 @@ export function IrisAudiences(props: {
             </For>
           </div>
           <div class="iris-or-pager">
-            <button type="button" class="iris-or-link" disabled={s.page <= 1} onClick={() => void turnPage(s.page - 1)}>
-              Previous
-            </button>
-            <span class="m">
-              {s.page} / {s.members!.last_page}
-            </span>
-            <button type="button" class="iris-or-link" disabled={s.page >= s.members!.last_page} onClick={() => void turnPage(s.page + 1)}>
-              Next
-            </button>
+            <Show
+              when={pageable()}
+              fallback={<span class="m">{`First ${s.members!.data.length} of ${s.members!.total.toLocaleString("en-US")}. Save the segment to page through all of them.`}</span>}
+            >
+              <button type="button" class="iris-or-link" disabled={s.page <= 1} onClick={() => void turnPage(s.page - 1)}>
+                Previous
+              </button>
+              <span class="m">
+                {s.page} / {s.members!.last_page}
+              </span>
+              <button type="button" class="iris-or-link" disabled={s.page >= s.members!.last_page} onClick={() => void turnPage(s.page + 1)}>
+                Next
+              </button>
+            </Show>
           </div>
         </Show>
       </section>

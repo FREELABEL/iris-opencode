@@ -102,7 +102,7 @@ describe("outreach_show", () => {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "desk" })
       const child = yield* sessions.create({ parentID: parent.id, title: "sub" })
-      serve({ "GET /api/v1/segments/77": () => ({ data: { id: 77, bloq_id: 38, name: "Roadmap", filters: { source_post: "De9Uw8Ilhne" } } }) })
+      serve({ "GET /api/v1/segments/77": () => ({ data: { segment: { id: 77, bloq_id: 38, name: "Roadmap", filters: { source_post: "De9Uw8Ilhne" } } } }) })
       const desk = fakeDesktop(String(parent.id))
       try {
         const r = yield* exec(OutreachShowTool, { view: "audiences", segment_id: 77 }, ctxFor(child.id))
@@ -147,10 +147,10 @@ describe("segment tools", () => {
       yield* exec(SegmentAddFilterTool, { key: "source_post", value: "https://www.instagram.com/p/De9Uw8Ilhne/", bloq: 38 }, ctx)
       // No bloq: the draft on screen.
       const r = yield* exec(SegmentAddFilterTool, { key: "comment_contains", value: "roadmap" }, ctx)
-      expect(r.output).toContain("1. source_post = De9Uw8Ilhne → 849 of 11,341")
+      expect(r.output).toContain("1. source_post = De9Uw8Ilhne → 849 of 909")
       expect(r.output).toContain("2. comment_contains = roadmap → 788 of 849")
       expect(r.output).toContain("In the segment now: 788")
-      expect(calls.at(-1)).toEqual({ path: "/api/v1/bloqs/38/segments/preview", method: "POST", body: { filters: { source_post: "De9Uw8Ilhne", comment_contains: "roadmap" }, page: 1 } })
+      expect(calls.at(-1)).toEqual({ path: "/api/v1/bloqs/38/segments/preview", method: "POST", body: { filters: { source_post: "De9Uw8Ilhne", comment_contains: "roadmap" }, per_page: 25 } })
       const gone = yield* exec(SegmentRemoveFilterTool, { key: "comment_contains" }, ctx)
       expect(gone.title).toContain("Removed comment_contains")
       expect(calls.at(-1)!.body.filters).toEqual({ source_post: "De9Uw8Ilhne" })
@@ -164,7 +164,7 @@ describe("segment tools", () => {
       asks.length = 0
       serve({
         "POST /api/v1/bloqs/38/segments/preview": () => preview,
-        "POST /api/v1/bloqs/38/segments": (c) => ({ data: { id: 91, bloq_id: 38, ...c.body } }),
+        "POST /api/v1/bloqs/38/segments": (c) => ({ data: { segment: { id: 91, bloq_id: 38, ...c.body } } }),
       })
       const ctx = ctxFor("ses_x")
       yield* exec(SegmentAddFilterTool, { key: "source_post", value: "De9Uw8Ilhne", bloq: 38 }, ctx)
@@ -197,10 +197,13 @@ describe("segment tools", () => {
 })
 
 describe("breakdown text", () => {
-  it.instance("a demographic filter says known and unknown, never a bare 0", () =>
+  it.instance("a filter no lead can be judged on says so; a partly known one says known and unknown", () =>
     Effect.sync(() => {
-      const text = describeBreakdown([{ key: "niche_in", value: ["Coach"] }], { total: 3, of: 6050, breakdown: [{ key: "niche_in", matched: 3, known: 4, of: 6050 }], members: { data: [], total: 0, page: 1, last_page: 1 } })
-      expect(text).toBe("1. niche_in = Coach → 3 of 4 known · 6,046 unknown")
+      const step = (key: string, known: number, matched: number) => ({ key, before: 6050, known, unknown: 6050 - known, matched, of: 6050, always_known: false })
+      const p = { total: 0, of: 6050, breakdown: [step("niche_in", 4, 3), step("followers_min", 0, 0)], members: { data: [], total: 0, page: 1, last_page: 1 } }
+      expect(describeBreakdown([{ key: "niche_in", value: ["Coach"] }, { key: "followers_min", value: 1000 }], p)).toBe(
+        "1. niche_in = Coach → 3 of 4 known · 6,046 unknown\n2. followers_min = 1000 → can't be judged yet · 6,050 unknown",
+      )
     }),
   )
 })

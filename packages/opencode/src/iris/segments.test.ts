@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import preview from "../../test/iris/fixtures/fl-api-segment-preview.json"
+import unjudged from "../../test/iris/fixtures/fl-api-segment-preview-unjudged.json"
+import refusal from "../../test/iris/fixtures/fl-api-segment-422.json"
 import {
   addFilter,
   changeDraft,
@@ -18,6 +20,7 @@ import {
   SegmentIO,
   shapeMember,
   shapePreview,
+  stepText,
   targetCampaign,
   unsaved,
 } from "./segments"
@@ -65,27 +68,28 @@ describe("filter values", () => {
   })
 })
 
-describe("shapes (typed fixture, measured counts)", () => {
-  test("a preview: breakdown in order, totals, the first page of members", () => {
+describe("shapes (recorded from fl-api PR #308, served locally)", () => {
+  test("a preview: the steps in fl-api's order, totals, the first page of members", () => {
     const p = shapePreview(preview)
     expect(p.total).toBe(788)
-    expect(p.of).toBe(11341)
-    expect(p.breakdown).toEqual([
-      { key: "source_post", matched: 849, known: 849, of: 11341 },
-      { key: "comment_contains", matched: 788, known: 849, of: 849 },
+    expect(p.of).toBe(909)
+    expect(p.breakdown.map((r) => [r.key, r.before, r.known, r.matched])).toEqual([
+      ["source_post", 909, 909, 849],
+      ["comment_contains", 849, 849, 788],
     ])
-    expect(p.members).toMatchObject({ total: 788, page: 1, last_page: 32 })
-    expect(p.members.data.map((m) => m.handle)).toEqual(["@example.one", "@example.two"])
+    expect(p.members).toMatchObject({ total: 788, page: 1, last_page: 394 })
+    expect(p.members.data.map((m) => m.handle)).toEqual(["@example.1", "@example.2"])
+    expect(p.members.data[0]).toMatchObject({ comment: "Roadmap", followers: null, niche: null, city: null })
   })
-  test("followers only when the profile was read; tags from the audience tagger's fields", () => {
-    const [a, b] = preview.data.members.data.map(shapeMember)
-    expect(a).toMatchObject({ name: "Example One", comment: "Roadmap", followers: null, niche: null, city: null })
-    expect(b).toMatchObject({ followers: 12400, niche: "Course creator", role: "Founder", city: "Austin" })
+  test("each step reads as matched of before, known/unknown, or can't be judged yet — never a bare 0", () => {
+    const steps = shapePreview(unjudged).breakdown
+    expect(steps.map(stepText)).toEqual(["849 of 909", "788 of 849", "can't be judged yet · 788 unknown"])
+    expect(stepText({ key: "niche_in", before: 6050, known: 4, unknown: 6046, matched: 3, of: 6050, always_known: false })).toBe("3 of 4 known · 6,046 unknown")
+    expect(stepText({ key: "replied", before: 10, known: 10, unknown: 0, matched: 9, of: 10, always_known: true })).toBe("9 of 10")
   })
-  test("a breakdown keyed by filter reads the same as a list", () => {
-    const p = shapePreview({ breakdown: { source_post: { matched: 5, known: 5, of: 9 } } })
-    expect(p.breakdown).toEqual([{ key: "source_post", matched: 5, known: 5, of: 9 }])
-    expect(p.total).toBe(5)
+  test("a follower count of 0 is unknown, as fl-api means it", () => {
+    expect(shapeMember({ id: 1, handle: "a", followers: 0 }).followers).toBeNull()
+    expect(shapeMember({ id: 1, handle: "@a", followers: 1200 })).toMatchObject({ handle: "@a", followers: 1200 })
   })
 })
 
@@ -98,9 +102,15 @@ describe("routes asked of fl-api", () => {
     ])
     expect(r.measured).toBe(true)
     expect(calls).toEqual([
-      { path: "/api/v1/bloqs/38/segments/preview", method: "POST", body: { filters: { source_post: "De9Uw8Ilhne", comment_contains: "roadmap" }, page: 1 } },
+      { path: "/api/v1/bloqs/38/segments/preview", method: "POST", body: { filters: { source_post: "De9Uw8Ilhne", comment_contains: "roadmap" }, per_page: 25 } },
     ])
     expect(Object.keys(calls[0].body.filters)).toEqual(["source_post", "comment_contains"])
+  })
+
+  test("an unknown key's 422 is passed on with the allowed keys (recorded)", async () => {
+    SegmentIO.fl = async () => new Response(JSON.stringify(refusal), { status: 422 })
+    const r = await previewSegment(38, [])
+    expect(r.reason).toStartWith("Unknown filter key(s): bogus. Allowed: source_post,")
   })
 
   test("a missing segments API says which one, not a bare 404", async () => {
@@ -112,8 +122,8 @@ describe("routes asked of fl-api", () => {
 
   test("save POSTs a new segment, then PATCHes the same one", async () => {
     serve({
-      "POST /api/v1/bloqs/38/segments": (c: Call) => ({ data: { id: 77, bloq_id: 38, ...c.body } }),
-      "PATCH /api/v1/segments/77": (c: Call) => ({ data: { id: 77, bloq_id: 38, ...c.body } }),
+      "POST /api/v1/bloqs/38/segments": (c: Call) => ({ data: { segment: { id: 77, bloq_id: 38, ...c.body } } }),
+      "PATCH /api/v1/segments/77": (c: Call) => ({ data: { segment: { id: 77, bloq_id: 38, ...c.body } } }),
     })
     await addFilter(38, "source_post", "De9Uw8Ilhne")
     const first = await saveDraft(38, "Roadmap")
@@ -135,10 +145,10 @@ describe("routes asked of fl-api", () => {
   })
 
   test("targeting a campaign PUTs segment_id on it, and says when fl-api ignores the field", async () => {
-    serve({ "PUT /api/v1/som/campaigns/53": { data: { id: 53, segment_id: 77 } } })
+    serve({ "PUT /api/v1/som/campaigns/53": { data: { campaign: { id: 53, segment_id: 77 } } } })
     expect((await targetCampaign(53, 77)).data).toEqual({ campaign: 53, segment_id: 77 })
     expect(calls[0]).toEqual({ path: "/api/v1/som/campaigns/53", method: "PUT", body: { segment_id: 77 } })
-    serve({ "PUT /api/v1/som/campaigns/53": { data: { id: 53, name: "Silent Iris" } } })
+    serve({ "PUT /api/v1/som/campaigns/53": { data: { campaign: { id: 53, name: "Silent Iris" } } } })
     const r = await targetCampaign(53, 77)
     expect(r.measured).toBe(false)
     expect(r.reason).toContain("segment_id")
@@ -166,9 +176,10 @@ describe("the shared draft", () => {
   })
 
   test("adding a key already there replaces its value in place; removing drops it", async () => {
-    await addFilter(38, "source_post", "a")
     await addFilter(38, "comment_contains", "roadmap")
+    await addFilter(38, "source_post", "a")
     await addFilter(38, "source_post", "De9Uw8Ilhne")
+    // In fl-api's order (SegmentFilters::KEYS), whatever order they were added in.
     expect((await readDraft(38)).data!.filters.map((f) => `${f.key}=${f.value}`)).toEqual(["source_post=De9Uw8Ilhne", "comment_contains=roadmap"])
     await removeFilter(38, "source_post")
     expect((await readDraft(38)).data!.filters.map((f) => f.key)).toEqual(["comment_contains"])
@@ -177,7 +188,7 @@ describe("the shared draft", () => {
 
   test("a CLI edit of the saved segment reaches a clean draft on the next read (U2c)", async () => {
     let server = { id: 77, bloq_id: 38, name: "Roadmap", filters: { source_post: "De9Uw8Ilhne" } }
-    serve({ "GET /api/v1/segments/77": () => ({ data: server }) })
+    serve({ "GET /api/v1/segments/77": () => ({ data: { segment: server } }) })
     const opened = await changeDraft({ bloq: 38, load: 77 })
     expect(opened.data).toMatchObject({ segment_id: 77, name: "Roadmap" })
     // Nothing changed on the server: same rev.
@@ -193,7 +204,7 @@ describe("the shared draft", () => {
 
   test("a draft with unsaved edits keeps them over the server's", async () => {
     const server = { id: 77, bloq_id: 38, name: "Roadmap", filters: { source_post: "De9Uw8Ilhne" } }
-    serve({ "GET /api/v1/segments/77": () => ({ data: server }) })
+    serve({ "GET /api/v1/segments/77": () => ({ data: { segment: server } }) })
     await changeDraft({ bloq: 38, load: 77 })
     await addFilter(38, "replied", "no", "panel")
     server.filters = { source_post: "OTHER" } as any
