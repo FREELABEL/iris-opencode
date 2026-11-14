@@ -227,13 +227,16 @@
   min-width: 30px;
   justify-content: center;
 }
-[data-chat-font-option="sans"] {
+[data-component="menu-v2-item"][data-chat-font-option="sans"],
+[data-component="menu-v2-item"][data-chat-font-option="sans"] * {
   font-family: var(--font-family-sans);
 }
-[data-chat-font-option="serif"] {
+[data-component="menu-v2-item"][data-chat-font-option="serif"],
+[data-component="menu-v2-item"][data-chat-font-option="serif"] * {
   font-family: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
 }
-[data-chat-font-option="mono"] {
+[data-component="menu-v2-item"][data-chat-font-option="mono"],
+[data-component="menu-v2-item"][data-chat-font-option="mono"] * {
   font-family: var(--font-family-mono);
   font-size: 12px;
 }

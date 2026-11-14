@@ -22,7 +22,10 @@
 .ihd-i svg { width: 14px; height: 14px; flex: none; }
 .ihd-actions { display: flex; gap: 6px; }
 .ihd-chip { border: 1px solid var(--ihd-line); border-radius: 999px; padding: 4px 11px; font-size: 12.5px; color: var(--ihd-mute); background: var(--ihd-card); }
-.ihd-chip:hover { color: var(--ihd-ink); }
+.ihd-chip:hover { color: var(--ihd-ink); background: color-mix(in oklab, var(--ihd-card), var(--ihd-ink) 6%); border-color: color-mix(in oklab, var(--ihd-line), var(--ihd-ink) 12%); }
+.ihd-chip, .ihd-go { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, filter 120ms ease; }
+.ihd-go:hover { filter: brightness(1.1); }
+.ihd-chip:active, .ihd-go:active { filter: brightness(0.96); }
 .ihd-go { background: var(--ihd-btn); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 12.5px; font-weight: 500; }
 .ihd-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
 @container (max-width: 720px) { .ihd-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
