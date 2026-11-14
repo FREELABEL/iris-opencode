@@ -48,7 +48,7 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
-import { PlatformPeersCommand } from "./cli/cmd/platform-peers"
+import { PlatformRadarCommand, PeersDeprecatedCommand } from "./cli/cmd/platform-radar"
 import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -435,7 +435,8 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
-  .command(reg(PlatformPeersCommand))
+  .command(reg(PlatformRadarCommand))
+  .command(reg(PeersDeprecatedCommand)) // hidden: the pre-rename name, prints one line then runs radar
   .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))

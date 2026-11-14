@@ -92,7 +92,19 @@ type Entry = {
 // strings, and a generator that can crash on an unrelated import is a generator nobody runs.
 
 /** The source text of one `cmd({ ... })` block, brace-matched. */
-type Block = { command: string; describe: string; aliases: string[]; body: string; file: string }
+type Block = { command: string; describe: string; aliases: string[]; body: string; file: string; hidden: boolean }
+
+/** The block's OWN keys (for `hidden`): every nested `{…}` removed, so a child's options cannot speak for it. */
+function ownKeys(block: string): string {
+  let depth = 0
+  let out = ""
+  for (const c of block) {
+    if (c === "{") depth++
+    if (depth <= 1) out += c
+    if (c === "}") depth--
+  }
+  return out
+}
 
 /**
  * Extract the block starting at the `{` of `cmd({`. Brace-matched rather than
@@ -177,6 +189,10 @@ function collectBlocks(dir: string): BlockIndex {
         aliases: [...aliasRaw.matchAll(/"([^"]+)"/g)].map((a) => a[1]),
         body,
         file: abs,
+        // A hidden (`describe: false`) AND `deprecated` command is an old name kept so scripts
+        // keep working (`iris peers` → `iris radar`). Indexing it would teach agents the old name.
+        // Hidden-only commands are left as they were: some are indexed on purpose.
+        hidden: /\bdescribe:\s*false\b/.test(ownKeys(body)) && /\bdeprecated:/.test(ownKeys(body)),
       }
       const list = byName.get(m[1]) ?? []
       list.push(block)
@@ -362,6 +378,7 @@ function collectCommands(): Entry[] {
 
     const token = b.command.split(/\s+/)[0]
     if (token === "*" || token === "$0") return [] // yargs internals, not capabilities
+    if (b.hidden) return [] // e.g. `iris peers`, the deprecated name of `iris radar`
 
     const path = [...prefix, token]
     const rest = b.command.slice(token.length).trim()

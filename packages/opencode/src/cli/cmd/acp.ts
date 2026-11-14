@@ -8,6 +8,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Config } from "@/config/config"
 import { meshAcpOverlay } from "./platform-mesh"
+import { acpMeshOptIn } from "./mesh-core"
 import { ACP_AGENTS, AcpSession, agentInstalled, resolveAgentCommand, type PermissionPolicy } from "@/acp/client"
 import { listHolders, startHolder, type Holder } from "@/acp/holder"
 import * as readline from "node:readline/promises"
@@ -27,13 +28,25 @@ export const AcpCommand = cmd({
       type: "string",
       default: process.cwd(),
     })
+      .option("mesh", {
+        describe: "add this machine's loopback mesh as model provider `mesh` for this session (or IRIS_ACP_MESH=1)",
+        type: "boolean",
+        default: false,
+      })
+      .epilog(
+        "A mesh running on this machine is never added on its own. Opt in with --mesh or IRIS_ACP_MESH=1 " +
+          "(this session only, nothing written), or with `iris mesh use` (saved in your global config).",
+      )
   },
   handler: async (args) => {
     // Buzz bridge (#187246 M4): a Buzz desktop (or `iris mesh up`) mesh on loopback becomes provider
-    // `mesh` for this session only — in memory, never written. Not serving → nothing changes.
-    const mesh = await meshAcpOverlay().catch((e) => ({ overlay: null, reason: String(e) }))
+    // `mesh` for this session only — in memory, never written — and only when the user opted in.
+    // Without opt-in nothing is added; a serving mesh earns one stderr hint (stdout is the protocol).
+    const optIn = acpMeshOptIn({ flag: args.mesh === true, env: process.env })
+    const mesh = await meshAcpOverlay({ optIn }).catch((e) => ({ overlay: null, reason: String(e), hint: null }))
     if (mesh.overlay) Config.addOverlay(mesh.overlay)
-    log.info("mesh overlay", { applied: !!mesh.overlay, reason: mesh.reason })
+    if (mesh.hint) process.stderr.write(`${mesh.hint}\n`)
+    log.info("mesh overlay", { applied: !!mesh.overlay, optIn, reason: mesh.reason })
 
     await bootstrap(process.cwd(), async () => {
       const opts = await resolveNetworkOptions(args)
