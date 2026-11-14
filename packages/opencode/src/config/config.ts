@@ -41,6 +41,16 @@ export namespace Config {
     return merged
   }
 
+  /**
+   * Process-local, in-memory config overlays, applied last and never written to disk. Register
+   * BEFORE the first Config read. `iris acp` uses this to offer a loopback mesh for one session
+   * (#187246 M4) without touching the user's config files.
+   */
+  const overlays: Array<(config: Info) => Info> = []
+  export function addOverlay(overlay: (config: Info) => Info) {
+    overlays.push(overlay)
+  }
+
   export const state = Instance.state(async () => {
     const auth = await Auth.all()
     let result = await global()
@@ -164,6 +174,8 @@ export namespace Config {
     if (Flag.OPENCODE_DISABLE_PRUNE) {
       result.compaction = { ...result.compaction, prune: false }
     }
+
+    for (const overlay of overlays) result = overlay(result)
 
     return {
       config: result,

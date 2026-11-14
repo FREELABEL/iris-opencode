@@ -48,6 +48,7 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformPeersCommand } from "./cli/cmd/platform-peers"
 import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -120,6 +121,7 @@ import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
 import { BuzzCommand } from "./cli/cmd/platform-buzz"
+import { MeshCommand } from "./cli/cmd/platform-mesh"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
 import { PlatformOrgCommand } from "./cli/cmd/platform-org"
@@ -389,6 +391,7 @@ const cli = yargs(rawArgs)
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
+  .command(reg(MeshCommand))
   .command(reg(McpCommand))
   .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
@@ -432,6 +435,7 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformPeersCommand))
   .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
