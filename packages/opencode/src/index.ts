@@ -1,5 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
+import { argvShape } from "./util/argv-shape"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
@@ -8,11 +9,13 @@ import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
 import { InstallAppCommand } from "./cli/cmd/install-app"
+import { PlatformAppConfigCommand } from "./cli/cmd/platform-app-config"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@opencode-ai/util/error"
 import { FormatError } from "./cli/error"
+import { CliUsageError, wantsJson, writeErrorJson } from "./cli/json-error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
@@ -45,17 +48,21 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformPeersCommand } from "./cli/cmd/platform-peers"
+import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
+import { PlatformAtlasGraphCommand } from "./cli/cmd/platform-atlas-graph"
 import { PlatformAtlasStorageCommand } from "./cli/cmd/platform-atlas-storage"
 import { PlatformMintCommand } from "./cli/cmd/platform-mint"
 import { PlatformOkrCommand } from "./cli/cmd/platform-okr"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
+import { PlatformDrivesCommand } from "./cli/cmd/platform-drives"
 import { PlatformOnboardingCommand } from "./cli/cmd/platform-onboarding"
 import { PlatformAtlasListCommand } from "./cli/cmd/platform-atlas-tree"
 import { PlatformAtlasDatabaseCommand } from "./cli/cmd/platform-atlas-database"
@@ -96,6 +103,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformStatusCommand } from "./cli/cmd/platform-status"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
@@ -113,8 +121,10 @@ import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
 import { BuzzCommand } from "./cli/cmd/platform-buzz"
+import { MeshCommand } from "./cli/cmd/platform-mesh"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
+import { PlatformOrgCommand } from "./cli/cmd/platform-org"
 import { PlatformIntentCommand } from "./cli/cmd/platform-intent"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
@@ -123,6 +133,8 @@ import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformMeetingsCommand } from "./cli/cmd/platform-meetings"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
+import { PlatformAdCampaignsCommand } from "./cli/cmd/platform-ad-campaigns"
+import { PlatformMarketingCommand } from "./cli/cmd/platform-marketing"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
@@ -147,6 +159,7 @@ import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformExposureCommand } from "./cli/cmd/platform-exposure"
 import { PlatformFindCommand } from "./cli/cmd/platform-find"
 import { LocateCommand } from "./cli/cmd/platform-locate"
+import { PlatformWtCommand } from "./cli/cmd/platform-wt"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformNewsroomCommand } from "./cli/cmd/platform-newsroom"
@@ -155,6 +168,7 @@ import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
+import { PlatformHeartbeatsCommand } from "./cli/cmd/platform-heartbeats"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
@@ -169,6 +183,7 @@ import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
 import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
+import { PlatformDesktopCommand } from "./cli/cmd/platform-desktop"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
@@ -185,6 +200,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformMailingCommand } from "./cli/cmd/platform-mailing"
 import { PlatformSendersCommand } from "./cli/cmd/platform-senders"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
@@ -344,7 +360,7 @@ const cli = yargs(rawArgs)
 
     Log.Default.info("opencode", {
       version: Installation.VERSION,
-      args: process.argv.slice(2),
+      ...argvShape(process.argv.slice(2)),
     })
 
     // THE CLUTCH (#184906), at the one point every command passes through.
@@ -371,9 +387,11 @@ const cli = yargs(rawArgs)
   .command(reg(TelemetryCommand))
   .command(reg(PlatformFindCommand))
   .command(reg(LocateCommand))
+  .command(reg(PlatformWtCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
+  .command(reg(MeshCommand))
   .command(reg(McpCommand))
   .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
@@ -388,6 +406,7 @@ const cli = yargs(rawArgs)
   .command(reg(UpgradeCommand))
   .command(reg(UninstallCommand))
   .command(reg(InstallAppCommand))
+  .command(reg(PlatformAppConfigCommand))
   .command(reg(ServeCommand))
   .command(reg(TunnelCommand))
   .command(reg(WebCommand))
@@ -416,17 +435,21 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformPeersCommand))
+  .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
+  .command(reg(PlatformAtlasGraphCommand))
   .command(reg(PlatformAtlasStorageCommand))
   .command(reg(PlatformMintCommand))
   .command(reg(PlatformOkrCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))
+  .command(reg(PlatformDrivesCommand))
   .command(reg(PlatformOnboardingCommand))
   .command(reg(PlatformAtlasItemCommand))
   .command(reg(PlatformAtlasListCommand))
@@ -473,6 +496,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformStatusCommand))
   .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))
@@ -505,6 +529,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformMeetingsCommand))
   .command(reg(PlatformCampaignCommand))
+  .command(reg(PlatformAdCampaignsCommand))
+  .command(reg(PlatformMarketingCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDiscordCommand))
@@ -525,6 +551,7 @@ const cli = yargs(rawArgs)
   .command(reg(VideoCommand))
   .command(reg(PlatformCameraCommand))
   .command(reg(PlatformAndroidCommand))
+  .command(reg(PlatformOrgCommand))
   .command(reg(PlatformIntentCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformNextCommand)) // #187930: one next move
@@ -543,6 +570,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformScriptsCommand))
+  .command(reg(PlatformHeartbeatsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformDriveCommand))
   .command(reg(PlatformObsidianCommand))
@@ -557,6 +585,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformWisprCommand))
+  .command(reg(PlatformDesktopCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
@@ -571,6 +600,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRecallCommand))
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
+  .command(reg(PlatformMailingCommand))
   .command(reg(PlatformSendersCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWhatsappCommand))
@@ -599,6 +629,9 @@ const cli = yargs(rawArgs)
   .fail((msg, err) => {
     // A thrown error from inside a command handler — let the outer catch format it.
     if (err) throw err
+    // --json callers get the failure as JSON, not a help dump (#190878). Thrown so the top-level
+    // catch renders it, which also drains stdout before the process exits.
+    if (wantsJson(rawArgs)) throw new CliUsageError(msg || "Invalid arguments")
     // Validation failures (missing required args, unknown flags, bad values, etc.):
     // always surface the message and the command usage so the user knows what went
     // wrong. Previously only three message prefixes triggered help, so failures like
@@ -774,7 +807,13 @@ try {
   // cli_command_error would make a machine doing exactly what it was configured to do look
   // like the least healthy one in the fleet.
   if (e instanceof Error && e.name === "SealedError") {
-    UI.error(e.message + EOL)
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
+    process.exitCode = 1
+  } else if (e instanceof CliUsageError) {
+    // How the command was called, not a crash: no fatal log, no cli_command_error beacon (#190878).
+    if (wantsJson(rawArgs)) await writeErrorJson(e.message, e)
+    else UI.error(e.message + EOL)
     process.exitCode = 1
   } else {
   let data: Record<string, any> = {}
@@ -828,8 +867,12 @@ try {
     context: { name: e instanceof Error ? e.name : undefined },
   })
   const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
+  if (wantsJson(rawArgs)) {
+    // #190878: one JSON object on stdout, whatever went wrong. A playbook whose header does not
+    // parse carries its file as `path` (#190274).
+    await writeErrorJson(formatted || (e instanceof Error ? e.message : String(e)), e)
+  } else if (formatted) UI.error(formatted)
+  if (formatted === undefined && !wantsJson(rawArgs)) {
     UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
     console.error(e)
   }

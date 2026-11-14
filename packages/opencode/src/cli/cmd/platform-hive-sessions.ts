@@ -1,8 +1,11 @@
 import { fetchClaims } from "./platform-hive-claim"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success, warn } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import os from "os"
+import { followStep, newFollowState, refusedAtCreate, type TranscriptMessage } from "../lib/hive-chat-follow"
+import { followLive, type FollowMode } from "../lib/hive-live-follow"
 
 /**
  * `iris hive sessions` — what AI sessions are running across your fleet.
@@ -53,6 +56,43 @@ export function waitingLines(w: Waiting | null | undefined): string[] {
   return out
 }
 
+/** A node report older than this lists nothing — the server's SessionRows::REPORT_WINDOW_S (#190653). */
+export const REPORT_WINDOW_MS = 7 * 86400 * 1000
+
+/**
+ * The sessions the fleet currently reports, one per provider + id (#190653).
+ *
+ * A machine that re-registered keeps its OLD node record, and that record keeps its last list
+ * forever: the Mac had a live record plus two dead ones from 2026-09-13 with 50 frozen rows each,
+ * all shown beside its real sessions — and any session in both made `send-input <full id>` refuse
+ * as "matches 2 sessions". So: a report older than REPORT_WINDOW_MS contributes no rows (it is
+ * returned in `retired`, never silently dropped), and a session reported by several records is
+ * taken from the newest report. A node with no report time at all is kept: unknown is not old.
+ */
+export function reportedSessions(
+  nodes: any[],
+  now = Date.now(),
+): { entries: Array<{ node: any; s: Session; at: number }>; retired: Array<{ node: any; name: string; rows: number; at: string }> } {
+  const best = new Map<string, { node: any; s: Session; at: number }>()
+  const retired: Array<{ node: any; name: string; rows: number; at: string }> = []
+  for (const n of nodes || []) {
+    const list = (n?.active_sessions || []) as Session[]
+    const at = Date.parse(n?.sessions_updated_at ?? n?.last_heartbeat_at ?? "")
+    if (!Number.isNaN(at) && now - at > REPORT_WINDOW_MS) {
+      if (list.length) retired.push({ node: n, name: String(n.name), rows: list.length, at: n.sessions_updated_at ?? n.last_heartbeat_at })
+      continue
+    }
+    const t = Number.isNaN(at) ? 0 : at
+    for (const s of list) {
+      if (!s || !s.session_id) continue
+      const key = `${(s as any).provider ?? ""}|${s.session_id}`
+      const prev = best.get(key)
+      if (!prev || t > prev.at) best.set(key, { node: n, s, at: t })
+    }
+  }
+  return { entries: [...best.values()], retired }
+}
+
 function age(iso: string | null): string {
   if (!iso) return "—"
   const ms = Date.now() - Date.parse(iso)
@@ -90,11 +130,15 @@ function label(s: Session): string {
 const STATUS_ORDER: Record<string, number> = { needs_you: -1, active: 0, idle: 1, unknown: 2, stale: 3 }
 
 const SessionsCommand = cmd({
-  command: "sessions",
-  describe: "AI sessions running across your Hive — what, where, on which model",
+  command: "sessions [action] [session-id]",
+  describe: "AI sessions running across your Hive — what, where, on which model; `follow <id>` to watch one live",
   builder: (yargs) =>
     yargs
-      .option("node", { describe: "only this node", type: "string" })
+      .positional("action", { describe: "follow — watch one session live, as it is written", type: "string", choices: ["follow"] })
+      .positional("session-id", { describe: "(follow) the session, from `iris hive sessions`", type: "string" })
+      .option("node", { describe: "only this node; with follow, the machine holding the session (skips the lookup)", type: "string" })
+      .option("provider", { describe: "(follow) the session's provider, when --node is given", type: "string", default: "claude_code" })
+      .option("timeout", { describe: "(follow) stop after this many seconds; 0 follows until Ctrl-C", type: "number", default: 0 })
       .option("status", { describe: "needs_you | active | idle | stale | unknown", type: "string" })
       .option("all", { describe: "include stale sessions (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
@@ -107,6 +151,7 @@ const SessionsCommand = cmd({
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
+    if (argv.action === "follow") return followSession(argv, userId)
 
     const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
     const body = (await res.json().catch(() => ({}))) as any
@@ -124,18 +169,17 @@ const SessionsCommand = cmd({
     // still ten missed heartbeats, so it does not fire on a brief hiccup.
     const QUIET_MS = 5 * 60 * 1000
 
-    for (const n of nodes) {
-      if (argv.node && String(n.name).toLowerCase() !== String(argv.node).toLowerCase()) continue
-
+    const wantNode = (n: any) => !argv.node || String(n.name).toLowerCase() === String(argv.node).toLowerCase()
+    const { entries, retired } = reportedSessions(nodes.filter(wantNode))
+    const old = new Set(retired.map((r) => r.node))
+    for (const n of nodes.filter(wantNode)) {
+      if (old.has(n)) continue // named below as an older record, not as a quiet machine
       const reported = n.sessions_updated_at ? Date.parse(n.sessions_updated_at) : NaN
       if (Number.isNaN(reported) || Date.now() - reported > QUIET_MS) {
         quiet.push({ name: n.name, ago: n.sessions_updated_at ? age(n.sessions_updated_at) : "never" })
       }
-
-      for (const s of (n.active_sessions || []) as Session[]) {
-        rows.push({ ...s, node: n.name })
-      }
     }
+    for (const { node, s } of entries) rows.push({ ...s, node: node.name })
 
     // Stale is hidden by default but COUNTED and reported, never silently dropped — a list
     // quietly filtered cannot be told from one that is complete.
@@ -163,6 +207,12 @@ const SessionsCommand = cmd({
       console.log(dim(`  ⚠ ${q.name} last reported its sessions ${q.ago} ago — what follows for it may be out of date.`))
     }
     if (quiet.length) console.log()
+    // Old node records (a machine that re-registered) — named, with how much they hold, so a
+    // reader knows rows are left out and why. `iris hive nodes` can remove them.
+    for (const r of retired) {
+      console.log(dim(`  ${r.name}: an older record last reported ${age(r.at)} ago — its ${r.rows} sessions are not shown.`))
+    }
+    if (retired.length) console.log()
 
     if (shown.length === 0) {
       console.log(dim("  No sessions." + (staleCount ? `  ${staleCount} stale hidden — see with --all` : "")))
@@ -206,6 +256,117 @@ const SessionsCommand = cmd({
 })
 
 /**
+ * The one session `wanted` names, and the node holding it — or exit with the reason. Shared by
+ * send-input and ask so "which session did you mean" is answered one way.
+ */
+async function resolveSession(userId: number, wanted: string): Promise<{ node: any; s: Session }> {
+  const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
+  const body = (await res.json().catch(() => ({}))) as any
+  const nodes = (body.nodes || body.data || []) as any[]
+
+  // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
+  // characters, and a truncated match is how a wrong diagnosis got filed on this project
+  // once already (#182312).
+  // From the current reports only, one per session (#190653): a session also listed by an old
+  // record of the same machine used to count twice and refuse even a full id.
+  const hits: Array<{ node: any; s: Session }> = reportedSessions(nodes).entries.filter(
+    ({ s }) => s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted)),
+  )
+
+  if (hits.length === 0) {
+    console.error(`No session matching "${wanted}".`)
+    console.error(dim("  List them:  iris hive sessions --all"))
+    process.exit(1)
+  }
+  if (hits.length > 1) {
+    // Refuse rather than guess which machine to type into.
+    console.error(`"${wanted}" matches ${hits.length} sessions — use the full id:`)
+    for (const h of hits) console.error(dim(`  ${h.s.session_id}  on ${h.node.name}`))
+    process.exit(1)
+  }
+
+  const { node, s } = hits[0]
+  if (s.status === "stale") {
+    console.error(`That session is stale (last active ${age(s.updated_at)} ago) — it is unlikely to answer.`)
+    console.error(dim("  Check with:  iris hive sessions --all"))
+    process.exit(1)
+  }
+  return { node, s }
+}
+
+/** One transcript message as a terminal line. */
+export function messageLine(m: TranscriptMessage): string {
+  if (m.type === "tool_use") return dim(`· ${m.tool || "tool"}${m.command || m.file_path ? " " + (m.command || m.file_path) : ""}`)
+  if (typeof m.text !== "string") return ""
+  return m.role === "user" ? bold(`› ${m.text}`) : m.text
+}
+
+/** What a follower prints when the live stream drops or returns (#192964: say it, never hide it). */
+export function modeLine(mode: FollowMode, why?: string): string {
+  if (mode === "live") return success("● live")
+  if (mode === "polling") return warn(`◌ ${why?.startsWith("live ") ? why : `live paused — polling${why ? ` (${why})` : ""}`}`)
+  return dim("… connecting")
+}
+
+/**
+ * `iris hive sessions follow <id>` — watch a session on another machine as it is written (#192964).
+ *
+ * Live: the machine pushes what is appended, so nothing is polled and no task runs on it. If the
+ * socket is down, this says "live paused — polling" and reads every 5 s until it returns. With
+ * --json it writes one JSON object per line: {event:"state",mode} and {event:"messages",reset,messages}.
+ */
+async function followSession(argv: any, userId: number) {
+  const wanted = String(argv["session-id"] ?? "").trim()
+  if (!wanted) {
+    console.error("Usage: iris hive sessions follow <session-id> [--node <machine>]")
+    process.exit(1)
+  }
+  let machine = argv.node as string | undefined
+  let provider = String(argv.provider || "claude_code")
+  let sessionId = wanted
+  let name = wanted.slice(0, 8)
+  if (!machine) {
+    const { node, s } = await resolveSession(userId, wanted)
+    machine = String(node.name)
+    provider = String(s.provider || provider)
+    sessionId = s.session_id
+    name = label(s)
+  }
+
+  const json = !!argv.json
+  const emit = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n")
+  if (!json) console.error(dim(`→ following ${name} on ${machine} · ${provider}  (Ctrl-C to stop)`))
+
+  const f = followLive({
+    sessionId,
+    machine,
+    provider,
+    fetch: hiveFetch,
+    onMessages: (msgs, reset) => {
+      if (json) return emit({ event: "messages", reset, messages: msgs })
+      if (reset) console.log(dim(`— the last ${msgs.length} messages —`))
+      for (const m of msgs) {
+        const line = messageLine(m)
+        if (line) console.log(line)
+      }
+    },
+    onMode: (mode, why) => (json ? emit({ event: "state", mode, why: why ?? null }) : console.error(modeLine(mode, why))),
+  })
+
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      f.stop()
+      resolve()
+    }
+    process.once("SIGINT", done)
+    process.once("SIGTERM", done)
+    const secs = Number(argv.timeout) || 0
+    if (secs > 0) setTimeout(done, secs * 1000)
+  })
+  process.exit(0)
+}
+
+/**
  * `iris hive send-input` — put a message into a session that is already running, on whichever
  * machine holds it.
  *
@@ -232,42 +393,7 @@ const SendInputCommand = cmd({
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    const wanted = String(argv["session-id"])
-
-    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
-    const body = (await res.json().catch(() => ({}))) as any
-    const nodes = (body.nodes || body.data || []) as any[]
-
-    // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
-    // characters, and a truncated match is how a wrong diagnosis got filed on this project
-    // once already (#182312).
-    const hits: Array<{ node: any; s: Session }> = []
-    for (const n of nodes) {
-      for (const s of (n.active_sessions || []) as Session[]) {
-        if (s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted))) {
-          hits.push({ node: n, s })
-        }
-      }
-    }
-
-    if (hits.length === 0) {
-      console.error(`No session matching "${wanted}".`)
-      console.error(dim("  List them:  iris hive sessions --all"))
-      process.exit(1)
-    }
-    if (hits.length > 1) {
-      // Refuse rather than guess which machine to type into.
-      console.error(`"${wanted}" matches ${hits.length} sessions — use the full id:`)
-      for (const h of hits) console.error(dim(`  ${h.s.session_id}  on ${h.node.name}`))
-      process.exit(1)
-    }
-
-    const { node, s } = hits[0]
-    if (s.status === "stale") {
-      console.error(`That session is stale (last active ${age(s.updated_at)} ago) — it is unlikely to answer.`)
-      console.error(dim("  Check with:  iris hive sessions --all"))
-      process.exit(1)
-    }
+    const { node, s } = await resolveSession(userId, String(argv["session-id"]))
 
     const create = await hiveFetch(`/api/v6/nodes/tasks`, {
       method: "POST",
@@ -298,6 +424,11 @@ const SendInputCommand = cmd({
 
     const created = (await create.json()) as any
     if (argv.json) return void (await writeJson(created))
+    const refused = refusedAtCreate(created)
+    if (refused) {
+      console.error(`Not sent: ${node.name} ${refused}.`)
+      process.exit(1)
+    }
 
     console.log()
     console.log(success(`✓ sent to ${bold(label(s))}`) + dim(`  on ${node.name} · ${s.provider}`))
@@ -307,5 +438,111 @@ const SendInputCommand = cmd({
   },
 })
 
+/**
+ * `iris hive ask` — say something to a session on any machine and read its answer here (#190671).
+ *
+ * send-input delivers and walks away: the reply happens in a window on another machine. This sends
+ * with `submit` (the session takes a turn — it spends THAT session's tokens, which is why send-input
+ * does not) and then follows the transcript until the reply settles. Live since #192964: the machine
+ * pushes the transcript as it is written; the 2 s transcript poll is only the fallback while the
+ * socket is down, and it says so.
+ */
+const AskCommand = cmd({
+  command: "ask <session-id> <message>",
+  describe: "talk to a session on any node in your Hive and print its reply as it is written",
+  builder: (yargs) =>
+    yargs
+      .positional("session-id", { describe: "from `iris hive sessions`", type: "string", demandOption: true })
+      .positional("message", { describe: "what to say", type: "string", demandOption: true })
+      .option("timeout", { describe: "seconds to follow the reply", type: "number", default: 300 })
+      .option("interval", { describe: "seconds between transcript reads, only while the live stream is down", type: "number", default: 2 })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 10 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+
+    const { node, s } = await resolveSession(userId, String(argv["session-id"]))
+    const message = String(argv.message)
+
+    const create = await hiveFetch(`/api/v6/nodes/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        node_id: node.id,
+        type: "session_message",
+        title: `ask ${label(s)}`,
+        prompt: message,
+        config: {
+          session_id: s.session_id,
+          provider: s.provider,
+          message,
+          from: os.hostname().replace(/\.local$/, ""),
+          submit: true,
+        },
+      }),
+    })
+    if (!create.ok) {
+      const t = await create.text()
+      console.error(`Could not send: HTTP ${create.status} ${t.slice(0, 200)}`)
+      process.exit(1)
+    }
+    const refused = refusedAtCreate(await create.json().catch(() => null))
+    if (refused) {
+      console.error(`Not sent: ${node.name} ${refused}.`)
+      process.exit(1)
+    }
+
+    console.error(dim(`→ ${label(s)} on ${node.name} · ${s.provider}`))
+    const state = newFollowState()
+    const deadline = Date.now() + Math.max(10, Number(argv.timeout) || 300) * 1000
+    // A reply that has not changed for this long is done. A model waiting on a slow tool looks the
+    // same, so it is generous; --timeout bounds the whole thing either way.
+    const QUIET_MS = 8000
+    let lastChange = Date.now()
+
+    // Live (#192964): the machine pushes the transcript as it is written. Only while the socket is
+    // down does this read the transcript, every --interval seconds, and it says so.
+    const live = followLive({
+      sessionId: s.session_id,
+      machine: String(node.name),
+      provider: String(s.provider || ""),
+      fetch: hiveFetch,
+      pollMs: Math.max(1, Number(argv.interval) || 2) * 1000,
+      onMessages: () => {
+        const { out, changed } = followStep(state, live.state.messages as TranscriptMessage[], message)
+        if (out) process.stdout.write(out)
+        if (changed) lastChange = Date.now()
+      },
+      onMode: (mode, why) => {
+        if (mode !== "connecting") console.error("\n" + modeLine(mode, why))
+      },
+    })
+
+    await new Promise<void>((resolve) => {
+      const t = setInterval(() => {
+        if ((state.answered && Date.now() - lastChange >= QUIET_MS) || Date.now() >= deadline) {
+          clearInterval(t)
+          resolve()
+        }
+      }, 250)
+    })
+    live.stop()
+    process.stdout.write("\n")
+    if (!state.anchored) {
+      console.error(warn(`The message did not show up in ${label(s)}'s transcript within the timeout.`))
+      process.exit(1)
+    }
+    if (!state.answered || Date.now() - lastChange < QUIET_MS) {
+      console.error(dim(`  Still going after ${argv.timeout}s — read it with: iris hive sessions follow ${s.session_id.slice(-8)}, or open it on ${node.name}.`))
+    }
+    process.exit(0)
+  },
+})
+
 export const HiveSessionsCommand = SessionsCommand
 export const HiveSendInputCommand = SendInputCommand
+export const HiveAskCommand = AskCommand

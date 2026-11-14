@@ -15,30 +15,30 @@ import PROMPT_ANTHROPIC_SPOOF from "./prompt/anthropic_spoof.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import type { Provider } from "@/provider/provider"
-
-const IRIS_IDENTITY = [
-  "You are the IRIS CLI, an AI coding assistant from the IRIS platform (heyiris.io).",
-  "You help users write and ship code in their own projects and can drive the IRIS platform on their behalf.",
-  "IRIS-specific commands include `iris-login`, `iris-daemon`, `iris hive`, `iris platform-*`, and `iris mcp serve`.",
-  "Run `iris --help` for the full command list.",
-  "By default, assume the user is working in their own project, not on IRIS source code.",
-].join(" ")
-
+import { RemotePrompts } from "./remote-prompts"
 
 export namespace SystemPrompt {
-  export function header(providerID: string) {
-    const out: string[] = [IRIS_IDENTITY]
+  /**
+   * Neutral fallback only. The full IRIS identity is served by the private API as
+   * `iris.identity` (IP-07 #189850) and must never be compiled into the public binary.
+   * IRIS identity is injected ONCE, here in header() — not in the per-provider prompts.
+   */
+  export const IDENTITY_FALLBACK = "You are the IRIS CLI, an AI coding assistant."
+
+  export async function header(providerID: string) {
+    const out: string[] = [await RemotePrompts.get("iris.identity", IDENTITY_FALLBACK)]
     if (providerID.includes("anthropic")) out.push(PROMPT_ANTHROPIC_SPOOF.trim())
     return out
   }
 
-  export function provider(model: Provider.Model) {
+  // The shipped .txt files are upstream opencode v1.1.3 verbatim; IRIS's versions are remote.
+  export async function provider(model: Provider.Model) {
     if (model.api.id.includes("gpt-5")) return [PROMPT_CODEX]
     if (model.api.id.includes("gpt-") || model.api.id.includes("o1") || model.api.id.includes("o3"))
-      return [PROMPT_BEAST]
-    if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
-    if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
-    return [PROMPT_ANTHROPIC_WITHOUT_TODO]
+      return [await RemotePrompts.get("session.beast", PROMPT_BEAST)]
+    if (model.api.id.includes("gemini-")) return [await RemotePrompts.get("session.gemini", PROMPT_GEMINI)]
+    if (model.api.id.includes("claude")) return [await RemotePrompts.get("session.anthropic", PROMPT_ANTHROPIC)]
+    return [await RemotePrompts.get("session.qwen", PROMPT_ANTHROPIC_WITHOUT_TODO)]
   }
 
   export async function environment() {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { newGroupId, GROUP_ID, buildLogPayloads, checkLogged, alsoSentTo, uniqueRecipients } from "./comms-log-group"
 
-const viktor = { lead_id: 29019, name: "Viktor", email: "viktor@experience.art" }
-const jc = { lead_id: 29016, name: "J.C. Adams", email: "jc@experience.art" }
+const viktor = { lead_id: 29019, name: "Viktor", email: "user10@firm-h.example.com" }
+const jc = { lead_id: 29016, name: "J.C. Adams", email: "user11@firm-h.example.com" }
 const clayton = { lead_id: 29021, name: "Clayton Kirkwood", email: null }
 
 const input = {
@@ -27,7 +27,7 @@ describe("comms log — one message to several leads (#186156)", () => {
     for (const x of p) {
       expect(x.metadata.recipients.map((r) => r.lead_id)).toEqual([29019, 29016, 29021])
       // a lead with no email on file is still a recipient; it just contributes no address
-      expect(x.to_identifiers).toEqual(["viktor@experience.art", "jc@experience.art"])
+      expect(x.to_identifiers).toEqual(["user10@firm-h.example.com", "user11@firm-h.example.com"])
     }
   })
 
@@ -43,9 +43,9 @@ describe("comms log — one message to several leads (#186156)", () => {
   })
 
   test("CC addresses are recorded, not logged to", () => {
-    const p = buildLogPayloads([viktor], { ...input, cc: ["assistant@experience.art"] })
+    const p = buildLogPayloads([viktor], { ...input, cc: ["assistant@firm-h.example.com"] })
     expect(p.length).toBe(1)
-    expect(p[0]!.metadata.cc).toEqual(["assistant@experience.art"])
+    expect(p[0]!.metadata.cc).toEqual(["assistant@firm-h.example.com"])
   })
 
   test("a 200 carrying ANOTHER lead's row is not success — that was the bug", () => {

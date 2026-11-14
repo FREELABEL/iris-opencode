@@ -37,8 +37,12 @@ describe("pickLatestCliTag", () => {
     expect(pickLatestCliTag(REAL)).toBe("v1.3.214")
   })
 
-  test("recency wins, not semver order — a re-cut release must be able to win", () => {
-    expect(pickLatestCliTag([{ tag_name: "v1.3.9" }, { tag_name: "v1.3.214" }])).toBe("v1.3.9")
+  test("the highest version wins, not the newest listing (#188596)", () => {
+    expect(pickLatestCliTag([{ tag_name: "v1.3.9" }, { tag_name: "v1.3.214" }])).toBe("v1.3.214")
+  })
+
+  test("a 1.3.x cut after the v2 engine shipped never outranks it", () => {
+    expect(pickLatestCliTag([{ tag_name: "v1.3.360" }, { tag_name: "desktop-v1.18.200" }, { tag_name: "v1.5.0" }])).toBe("v1.5.0")
   })
 
   test("drafts are not releases", () => {

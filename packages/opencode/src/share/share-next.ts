@@ -1,5 +1,6 @@
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { irisShareTarget } from "./iris-target"
 import { ulid } from "ulid"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session"
@@ -11,8 +12,13 @@ import type * as SDK from "@opencode-ai/sdk/v2"
 export namespace ShareNext {
   const log = Log.create({ service: "share-next" })
 
-  async function url() {
-    return Config.get().then((x) => x.enterprise?.url ?? "https://opncd.ai")
+  // IRIS's own share server, never opencode's public one (#191488). See iris-target.ts.
+  async function target() {
+    return irisShareTarget({
+      enterpriseUrl: await Config.get().then((x) => x.enterprise?.url),
+      irisApi: process.env["IRIS_API_URL"]?.trim() || "https://heyiris.io",
+      irisKey: process.env["IRIS_API_KEY"],
+    })
   }
 
   export async function init() {
@@ -64,15 +70,15 @@ export namespace ShareNext {
 
   export async function create(sessionID: string) {
     log.info("creating share", { sessionID })
-    const result = await fetch(`${await url()}/api/share`, {
+    const t = await target()
+    const result = await fetch(`${t.baseUrl}${t.api.create}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json", ...t.headers },
       body: JSON.stringify({ sessionID: sessionID }),
+    }).then(async (x) => {
+      if (!x.ok) throw new Error(`IRIS could not create the share (HTTP ${x.status})`)
+      return (await x.json()) as { id: string; url: string; secret: string }
     })
-      .then((x) => x.json())
-      .then((x) => x as { id: string; url: string; secret: string })
     await Storage.write(["session_share", sessionID], result)
     fullSync(sessionID)
     return result
@@ -130,11 +136,11 @@ export namespace ShareNext {
       const share = await get(sessionID).catch(() => undefined)
       if (!share) return
 
-      await fetch(`${await url()}/api/share/${share.id}/sync`, {
+      const t = await target().catch(() => undefined)
+      if (!t) return // signed out since sharing: nothing is sent anywhere
+      await fetch(`${t.baseUrl}${t.api.sync(share.id)}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json", ...t.headers },
         body: JSON.stringify({
           secret: share.secret,
           data: Array.from(queued.data.values()),
@@ -148,11 +154,10 @@ export namespace ShareNext {
     log.info("removing share", { sessionID })
     const share = await get(sessionID)
     if (!share) return
-    await fetch(`${await url()}/api/share/${share.id}`, {
+    const t = await target()
+    await fetch(`${t.baseUrl}${t.api.remove(share.id)}`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json", ...t.headers },
       body: JSON.stringify({
         secret: share.secret,
       }),

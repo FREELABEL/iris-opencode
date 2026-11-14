@@ -296,6 +296,22 @@ export const PlatformInvoicesCommand = cmd({
       .command(CheckoutCmd)
       .command(SendCmd)
       .command(MarkPaidCmd)
-      .demandCommand(),
+      .demandCommand()
+      // The one-command path exists and nothing pointed at it (#190001). A user asking to
+      // bill a client was routed to create → checkout → send, three commands with an id
+      // copied between each, while `leads collect` did all three in one. A help screen is
+      // the only place that gap can be closed without guessing.
+      .epilogue(
+        [
+          "In one step:   iris leads collect <lead-id> --amount 500",
+          "               creates the invoice, generates the Stripe link and reports it. Add",
+          "               --send to email the client; without it nothing leaves your machine.",
+          "",
+          "Offline paid:  iris leads collect <lead-id> --amount 500 --method cash",
+          "               records a cash/check/wire payment instead of taking a card.",
+          "",
+          "Not sure which: iris how-to view payment-gate-contracts",
+        ].join("\n"),
+      ),
   async handler() {},
 })

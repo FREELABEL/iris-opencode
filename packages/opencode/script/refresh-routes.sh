@@ -38,4 +38,5 @@ json.dump(out, open(sys.argv[1] + "/routes.snapshot.json", "w"), indent=0)
 print(f"  {len(out['routes'])} routes")
 PY
 
-echo "done — commit script/routes.snapshot.json"
+echo "done — wrote script/routes.snapshot.json (gitignored: this repo is public, do NOT commit it)."
+echo "  To share it, copy it to the workspace repo: ops/iris-cli/routes.snapshot.json"

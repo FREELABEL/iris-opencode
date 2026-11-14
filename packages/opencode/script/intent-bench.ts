@@ -32,6 +32,10 @@ const gate = arg("--gate", 2)?.map(Number)
 
 // A playbook written for one client (frontmatter `client:`), read from the same index intent uses.
 const index = await Bun.file(join(import.meta.dir, "../capabilities.json")).json()
+// Client playbooks are workspace entries, which are no longer in capabilities.json (IP-07 #189850).
+// Point IRIS_WORKSPACE_CAPABILITIES at a --workspace-out file to include them here.
+if (process.env.IRIS_WORKSPACE_CAPABILITIES)
+  index.entries.push(...((await Bun.file(process.env.IRIS_WORKSPACE_CAPABILITIES).json()).entries ?? []))
 const clientOf = new Map<string, string>(
   index.entries.filter((e: any) => e.client).map((e: any) => [`playbook run ${e.name}`, e.client]),
 )

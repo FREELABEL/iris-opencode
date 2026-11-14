@@ -44,6 +44,16 @@ export const BODY_CLASSES: BodyClass[] = [
   // open_link, ...), collapsed to the sub-commands `iris phone` exposes. Read out of their source,
   // not invented — the `device` row above records what inventing verbs costs.
   { name: "android", describe: "an Android device over ADB — a real phone, with real sessions on it", verbs: ["run", "tap", "type", "swipe", "key", "app", "open"] },
+  // A drone is flown by a Hive SCRIPT (freelabel hardware/parrot-mambo/mambo.py), not by an `iris`
+  // sub-command, so there is no head word for `routeFor` and no route row below. The script asks
+  // `iris kinetic check` for every verb in its plan, then records the flight with `iris kinetic act`.
+  //
+  // Verbs are mambo.py's flight-plan grammar (parse_plan: up, down, turn, hover, flip) plus the
+  // takeoff every plan implies. Read out of the script, not invented — #189857's first draft
+  // proposed hop/spin/move, which are PRESET names and a direction the grammar has no word for.
+  // `land` is deliberately absent: every plan ends with a landing, including on error, and a couple
+  // that could refuse a landing could strand a drone in the air.
+  { name: "drone", describe: "a drone flown by a Hive script — every plan takes off and always lands", verbs: ["takeoff", "up", "down", "turn", "hover", "flip"] },
 ]
 
 export const bodyClass = (name: string): BodyClass | null =>
@@ -72,7 +82,9 @@ const READS: Record<string, string[]> = {
   // ARTEMIS's `mobile_diagnose`, which can launch an emulator and apply fixes. A read that can
   // repair things is not a read, and naming ours `doctor` while calling theirs would smuggle an
   // act through this list.
-  android: ["devices", "list", "ls", "state", "screen", "screenshot", "logcat", "trace", "doctor", "status"],
+  // `health` reads dumpsys; `check` reads the accessibility tree and compares it — the checker
+  // looks, it never taps (the batch does the tap, through the guard, after the check passes).
+  android: ["devices", "list", "ls", "state", "screen", "screenshot", "logcat", "trace", "doctor", "status", "health", "check"],
 }
 
 /** `iris obs record status` is a read; `iris obs record start` is an act. Same sub-command, different argv. */
@@ -153,6 +165,11 @@ export function routeFor(argv: string[], parsed?: string[]): Route | null {
     return verb ? { class: "node", verb, instance: third && !third.startsWith("-") ? third : null } : null
   }
   if (cls === "android") {
+    // `batch run` is a night of acts, so it asks the class question BEFORE adb is contacted —
+    // an agent with no couple is refused at the door, not after the first task has opened an app.
+    // Each task inside still asks the precise question per act. `batch status|retry|drop|report`
+    // only touch the batch's own bookkeeping, never the phone.
+    if (sub === "batch" || sub === "night") return third === "run" ? { class: "android", verb: "run", instance: null } : null
     const verb =
       sub === "run" || sub === "task" ? "run"
       : sub === "tap" || sub === "click" || sub === "press" ? "tap"

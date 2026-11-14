@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 import { itemContentText } from "./bloq-item-format"
+import { rejectBadPagination, listEnvelope, listFooter, commandWith } from "./pagination-args"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
@@ -544,6 +545,23 @@ async function submitBug(args: {
  * The signal that DOES separate them: in a collapse, positional words appear AFTER an option
  * flag. Nothing legitimate puts a bare title word after `--json`.
  */
+const SEVERITY_TAG = /^\s*\[\s*(low|medium|high|critical)\s*\]\s*/i
+
+/**
+ * #190214 — split leading severity tags off a bug title. `[HIGH] [high] foo` → title `foo`.
+ * The --severity flag wins when given; otherwise the first tag in the title; otherwise medium.
+ */
+export function resolveTitleSeverity(title: string, flag?: string): { title: string; severity: string } {
+  let rest = title
+  let tag: string | undefined
+  for (let m = rest.match(SEVERITY_TAG); m; m = rest.match(SEVERITY_TAG)) {
+    tag ??= m[1].toLowerCase()
+    rest = rest.slice(m[0].length)
+  }
+  rest = rest.trim()
+  return { title: rest || title.trim(), severity: (flag ?? tag ?? "medium").toLowerCase() }
+}
+
 export function titleProvenance(argv: string[]): {
   explicit?: string
   collapsed?: { flag: string; strayAfter: string }
@@ -596,7 +614,9 @@ const ReportCommand = cmd({
         alias: "s",
         describe: "bug severity",
         choices: ["low", "medium", "high", "critical"] as const,
-        default: "medium" as const,
+        // No yargs default: an unset flag must be distinguishable from `--severity medium`, so a
+        // title tag like "[HIGH] …" can supply the severity when the flag is absent (#190214).
+        // The effective default is still medium — see resolveTitleSeverity().
       })
       .option("command", {
         alias: "c",
@@ -713,7 +733,14 @@ const ReportCommand = cmd({
       }
     }
     let description = args.description
-    let severity = args.severity as string
+    // #190214: the server prefixes "[SEVERITY] " to the title, so a title that already carries
+    // a tag was saved as "[HIGH] [HIGH] …". Strip it here; the flag wins, else the tag, else medium.
+    let severity: string = "medium"
+    if (title) {
+      const r = resolveTitleSeverity(title, args.severity as string | undefined)
+      title = r.title
+      severity = r.severity
+    } else if (args.severity) severity = String(args.severity)
 
     // Guard: catch known subcommand names passed as titles (e.g. "iris bug report list")
     const subcommands = ["list", "ls", "close", "done", "resolve", "complete"]
@@ -846,19 +873,23 @@ const ReportCommand = cmd({
   },
 })
 
+/** The bloq items endpoint's per_page ceiling (same endpoint as `atlas items`). */
+export const BUG_LIST_MAX_LIMIT = 200
+
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list bug reports (with pagination and filtering)",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "results per page", type: "number", default: 20 })
-      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${BUG_LIST_MAX_LIMIT})`, type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("status", { describe: "filter by status (default: open bugs only)", choices: ["todo", "in_progress", "done", "all"] as const, default: "todo" as const })
       .option("severity", { describe: "filter by severity", choices: ["low", "medium", "high", "critical"] as const })
       .option("search", { alias: "q", describe: "search bug titles", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    if (rejectBadPagination(args, { maxLimit: BUG_LIST_MAX_LIMIT })) return
     const token = await requireAuth()
     if (!token) return
 
@@ -932,7 +963,9 @@ const ListCommand = cmd({
 
       totalItems = matches.length
       lastPage = Math.max(1, Math.ceil(totalItems / args.limit))
-      currentPage = Math.min(Math.max(1, args.page), lastPage)
+      // The page asked for, not a clamped one: past the end is an empty page that says so
+      // (#191863), not silently the last page.
+      currentPage = args.page
       const start = (currentPage - 1) * args.limit
       items = matches.slice(start, start + args.limit)
     } else {
@@ -945,6 +978,17 @@ const ListCommand = cmd({
       lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
     }
 
+    // The list contract (#191863). A capped severity scan has no honest total.
+    const listCmd = commandWith("bug list", { status: args.status === "todo" ? undefined : args.status, severity: args.severity, search: args.search })
+    const listSource = {
+      rows: items,
+      total: scanTruncated ? null : totalItems,
+      page: currentPage,
+      perPage: args.limit,
+      lastPage: scanTruncated ? null : lastPage,
+      hasMore: scanTruncated ? true : null,
+    }
+
     if (args.json) {
       // AWAITED write, not console.log. console.log is fire-and-forget: for a
       // large payload Bun hands part of it to the pipe and the process exits
@@ -954,7 +998,15 @@ const ListCommand = cmd({
       // fourth delivered all 142,482. It reads as corrupt data rather than a
       // lost write, and never reproduces in a terminal because TTY writes are
       // synchronous. Awaiting the write removes the race.
-      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) })
+      await writeJson(
+        listEnvelope(listSource, {
+          resource: "bugs",
+          command: listCmd,
+          // Deprecated (#191863): the v1.5.25 {items, page, total, last_page} shape, kept beside
+          // data/meta so existing scripts keep working. Read data/meta instead.
+          legacy: { items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) },
+        }),
+      )
       return
     }
 
@@ -976,7 +1028,7 @@ const ListCommand = cmd({
     printDivider()
 
     if (items.length === 0) {
-      console.log(`  ${dim("No bug reports found")}`)
+      console.log(`  ${dim(listFooter(listEnvelope(listSource, { resource: "bug reports" }).meta, "bug reports"))}`)
       if (filters.length > 0) {
         console.log(`  ${dim("Try: iris bug list --status=all")}`)
       }
@@ -1004,12 +1056,7 @@ const ListCommand = cmd({
     }
 
     printDivider()
-    if (currentPage < lastPage) {
-      console.log(dim(`  iris bug list --page=${currentPage + 1} — next page`))
-    }
-    if (currentPage > 1) {
-      console.log(dim(`  iris bug list --page=${currentPage - 1} — previous page`))
-    }
+    if (items.length > 0) console.log(dim(`  ${listFooter(listEnvelope(listSource, { resource: "bug reports" }).meta, "bug reports")}`))
     console.log(dim("  iris bug list --status=all — include completed bugs"))
     console.log(dim("  iris bug list --severity=critical — critical bugs only"))
     console.log(dim("  iris bug list --search=\"invoice\" — search titles"))
@@ -1149,6 +1196,13 @@ const ShowCommand = cmd({
       }
     }
 
+    const comments = await fetchBugComments(Number(found.id))
+    if (comments.length) {
+      printDivider()
+      console.log(`  ${bold("Comments")}`)
+      for (const c of comments) console.log(`    ${dim(`${c.when}  ${c.who}:`)} ${c.text}`)
+    }
+
     printDivider()
     console.log(dim(`  iris bug close ${found.id} --solution "..." — record the fix`))
     console.log("")
@@ -1184,9 +1238,16 @@ async function resolveBug(
     const text = await res.text().catch(() => "")
     throw new Error(`HTTP ${res.status}: ${text}`)
   }
+
+  // A 200 is not the claim being made here. "resolved" is printed only for a bug the server says
+  // is now done (#191888).
+  const data = (await res.json().catch(() => null)) as any
+  if (data?.success === false || data?.data?.status !== "done") {
+    throw new Error(`the server did not mark it done (status: ${data?.data?.status ?? "not reported"})`)
+  }
 }
 
-const CloseCommand = cmd({
+export const CloseCommand = cmd({
   command: "close <id..>",
   aliases: ["done", "resolve", "complete"],
   describe: "mark bug report(s) as completed — optionally record the fix/solution + commit hash",
@@ -1200,10 +1261,10 @@ const CloseCommand = cmd({
       })
       .option("commit", {
         alias: "hash",
-        describe: "fix commit hash (auto-detected from git HEAD when --solution is given)",
+        describe: "fix commit hash to record. Optional: without it the bug still closes, with no commit recorded",
         type: "string",
       })
-      .option("no-commit", { describe: "skip git commit auto-detection", type: "boolean", default: false })
+      .option("no-commit", { describe: "don't offer git HEAD as the fix commit", type: "boolean", default: false })
       .option("note", { alias: "n", describe: "(deprecated alias for --solution)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -1235,15 +1296,11 @@ const CloseCommand = cmd({
         // #177889-#177893 (iris-opencode work) got stamped with fd678579 — an unrelated
         // fl-api geo commit that happened to be the cwd's HEAD — making five "fixed"
         // references untrustworthy and hiding that none were actually fixed.
-        if (ids.length > 1) {
-          prompts.log.error(
-            `Refusing to auto-stamp a commit across ${ids.length} bugs — cwd HEAD is one commit in one repo.`,
-          )
-          prompts.log.info(dim("Pass --commit <hash> if they really share a fix, --no-commit to record none,"))
-          prompts.log.info(dim("or close them one at a time so each gets its own commit."))
-          prompts.outro("Done")
-          return
-        }
+        //
+        // Not stamping is not the same as not closing. These branches used to return here and
+        // exit 0 under the word "Done" with nothing written: 16 tickets "closed" that way on
+        // 2026-10-30 were still open hours later (#191888). The solution is what was asked to
+        // be recorded and it needs no commit, so the close goes ahead without one.
         // A SINGLE close auto-stamped cwd HEAD, announcing it in dim text. Naming the
         // repo was not enough: closing an iris-opencode bug from the freelabel monorepo
         // recorded a8a9cc45 (fl-eco-docker) as the fix, and a wrong hash is indistinguishable
@@ -1257,29 +1314,27 @@ const CloseCommand = cmd({
         if (git.hash) {
           const repo = detectGitRepo()
           const from = `${git.hash}${repo ? ` from ${repo}` : ""}`
-          const interactive = Boolean(process.stdin.isTTY) && !args.json
+          const interactive = ids.length === 1 && Boolean(process.stdin.isTTY) && !args.json
 
           if (!interactive) {
-            prompts.log.error(`Refusing to guess the fix commit. cwd HEAD is ${from}.`)
-            prompts.log.info(dim(`Pass --commit ${git.hash} if that IS the fix, --commit <hash> if it is not,`))
-            prompts.log.info(dim("or --no-commit to close without one."))
-            prompts.outro("Done")
-            return
-          }
-
-          // Default NO. The failure mode is a confident wrong reference, so a bare
-          // Enter must record nothing rather than record a guess.
-          const useHead = await prompts.confirm({
-            message: `Record ${from} as the fix commit?`,
-            initialValue: false,
-          })
-          if (prompts.isCancel(useHead)) {
-            prompts.outro("Cancelled")
-            return
-          }
-          if (useHead) {
-            fixCommit = git.hash
-            fixCommitUrl = git.url
+            if (!args.json) {
+              prompts.log.info(dim(`No fix commit recorded: cwd HEAD (${from}) is not assumed to be the fix. Add --commit <hash> to record one.`))
+            }
+          } else {
+            // Default NO. The failure mode is a confident wrong reference, so a bare
+            // Enter must record nothing rather than record a guess.
+            const useHead = await prompts.confirm({
+              message: `Record ${from} as the fix commit?`,
+              initialValue: false,
+            })
+            if (prompts.isCancel(useHead)) {
+              prompts.outro("Cancelled")
+              return
+            }
+            if (useHead) {
+              fixCommit = git.hash
+              fixCommitUrl = git.url
+            }
           }
         }
       }
@@ -1547,6 +1602,7 @@ const UpdateCommand = cmd({
     const data = await res.json().catch(() => ({}) as any)
     if (!res.ok || data?.success === false) {
       console.error(`Update failed: ${data?.error ?? `HTTP ${res.status}`}`)
+      for (const line of bugUpdateNotFoundHint(res.status, data?.error, itemId)) console.error(line)
       process.exitCode = 1
       return
     }
@@ -1710,10 +1766,111 @@ const FlushCommand = cmd({
   },
 })
 
+/** Where a card's comments and activity trail live. The trail is what stamps who and when. */
+const bugCardPath = (userId: number, itemId: number, leaf: string) =>
+  `/api/v1/user/${userId}/bloqs/list/item/${itemId}/${leaf}`
+
+/** Comments newest-last from a card's activity trail. Unreadable is empty: `bug show` still works. */
+export async function fetchBugComments(itemId: number): Promise<Array<{ who: string; when: string; text: string }>> {
+  try {
+    const userId = await resolveUserId()
+    if (!userId) return []
+    const res = await irisFetch(`${bugCardPath(userId, itemId, "activity")}?limit=200`)
+    if (!res.ok) return []
+    const activity = ((await res.json()) as any)?.data?.activity
+    if (!Array.isArray(activity)) return []
+    return activity
+      .filter((a: any) => a?.type === "comment")
+      .map((a: any) => ({
+        who: String(a.actor ?? "someone"),
+        when: String(a.created_at ?? ""),
+        text: String(a.content ?? ""),
+      }))
+      .sort((a, b) => a.when.localeCompare(b.when))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * `iris bug comment <id> "<text>"` (#189449). It used to be `bug update --note` under another name,
+ * which appends to the bug's description, so comments could not be told apart from the original
+ * report (#191888). It now writes to the card's own comment trail, which records who and when and
+ * leaves the description alone. `bug update --note` is still there for changing the report itself.
+ */
+export const CommentCommand = cmd({
+  command: "comment <id> <text..>",
+  aliases: ["note"],
+  describe: "add a timestamped, attributed comment to a bug — the description, status and title are untouched",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .positional("text", { describe: "the comment", type: "string", array: true, demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .example('$0 bug comment 186544 "Picked up by epic #189448"', "point a bug at the plan that closes it"),
+  async handler(args) {
+    const text = ([] as string[]).concat((args.text as any) ?? []).join(" ").trim()
+    if (!text) {
+      console.error('\n  Nothing to add. Usage: iris bug comment <id> "your comment"\n')
+      process.exitCode = 1
+      return
+    }
+    const itemId = args.id as number
+    const token = await requireAuth()
+    if (!token) {
+      process.exitCode = 1
+      return
+    }
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error("\n  Could not resolve your user ID, so nothing was added.\n")
+      process.exitCode = 1
+      return
+    }
+
+    const res = await irisFetch(bugCardPath(userId, itemId, "comments"), {
+      method: "POST",
+      body: JSON.stringify({ body: text }),
+    })
+    const data = (await res.json().catch(() => ({}))) as any
+    if (!res.ok || data?.success === false) {
+      if (args.json) await writeJson({ success: false, error: data?.error ?? `HTTP ${res.status}`, status: res.status })
+      else {
+        console.error(`\n  Comment not added: ${data?.error ?? data?.message ?? `HTTP ${res.status}`}`)
+        // Commenting needs write access to the board. Appending to the report is a separate,
+        // public action, so it is offered by name and never done in its place.
+        if (res.status === 403 || res.status === 404) {
+          console.error(`  You may not have write access to this board. To add to the report itself: iris bug update ${itemId} --note "..."\n`)
+        }
+      }
+      process.exitCode = 1
+      return
+    }
+    if (args.json) await writeJson(data)
+    else console.log(success(`✓ Comment added to bug #${itemId}`))
+  },
+})
+
 export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(FlushCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(CommentCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })
+
+
+/**
+ * #189895 — `bugs update` on an id that exists but is not a bug report (an epic, a note on another
+ * board) answered only "Bug report not found", which reads as "that id does not exist". Say what
+ * it means and name the commands that do edit any Atlas item.
+ */
+export function bugUpdateNotFoundHint(status: number, error: unknown, itemId: string | number): string[] {
+  const notFound = status === 404 || /not found/i.test(String(error ?? ""))
+  if (!notFound) return []
+  return [
+    `  #${itemId} is not on a bug board. If it is another Atlas item (an epic, a note), edit it with:`,
+    `    iris atlas use ${itemId} --out item.md                      # read it; drop the leading --- header`,
+    `    iris bloqs update-item ${itemId} --content="$(cat item.md)"  # write it back WHOLE (it replaces)`,
+  ]
+}

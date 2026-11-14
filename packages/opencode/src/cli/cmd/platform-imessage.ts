@@ -3,11 +3,60 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle, confirmOutgoing } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
-import { routerSend, describeSend } from "./comms-send"
+import { routerSend, describeSend, routerFailureKind } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
 import { firstArray } from "../../util/array"
+import { emitJsonError } from "./iris-api"
+import { positiveInt, resolveWindow, type Window } from "../lib/imessage-window"
+
+/**
+ * A failure is a failure under --json too (#193252, contract from #180540): one parseable
+ * `{success:false,error}` on stdout and a non-zero exit — never empty stdout with exit 0, which a
+ * script cannot tell apart from "no results".
+ */
+function fail(json: unknown, message: string): never {
+  if (json) emitJsonError(message)
+  else {
+    prompts.log.error(message)
+    prompts.outro("Done")
+  }
+  process.exit(1)
+}
+
+/** Reject bad counts (#193253) and resolve --since/--days (#193251, #193254) before any SQL is built. */
+function checkInputs(
+  args: Record<string, unknown>,
+  counts: string[],
+  window: { since?: boolean } | false = false,
+): Window | undefined {
+  for (const name of counts) {
+    const r = positiveInt(name, args[name])
+    if (!r.ok) fail(args.json, r.error)
+  }
+  if (!window) return undefined
+  const w = resolveWindow({ since: window.since ? args.since : undefined, days: args.days })
+  if (!w.ok) fail(args.json, w.error)
+  return w.value
+}
+
+function requireAccess(json: unknown): void {
+  if (!isAvailable()) fail(json, diagnoseAccess())
+}
+
+/** Run a chat.db query; a failure exits non-zero with one clean line (no SQL, no path) — #193251. */
+function queryOrFail<T>(json: unknown, run: () => T): T {
+  try {
+    return run()
+  } catch (err: any) {
+    const message = String(err?.message ?? "")
+    if (/authorization|not permitted/i.test(message)) {
+      fail(json, "Permission denied. Grant Full Disk Access to your terminal in System Settings > Privacy > Full Disk Access.")
+    }
+    fail(json, message || "iMessage database query failed")
+  }
+}
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -23,11 +72,10 @@ const ImessageSearchCommand = cmd({
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Search — "${args.query}"`) }
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
+    // #193252: `search ""` used to fall through to contact resolution and match a real person.
+    if (!String(args.query ?? "").trim()) fail(args.json, "Please provide a phone number, email or contact name to search for")
+    const window = checkInputs(args, ["limit"], { since: true })!
+    requireAccess(args.json)
 
     // Normalize phone number — strip everything except digits
     const digits = args.query.replace(/\D/g, "")
@@ -86,44 +134,31 @@ const ImessageSearchCommand = cmd({
     const matchTerm = isPhone || resolvedName ? normalized : args.query
     const whereClause = `c.chat_identifier LIKE '%${matchTerm.replace(/'/g, "''")}%'`
 
-    // --since takes priority over --days (#58884)
-    const cutoffSeconds = args.since
-      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
-      : (args.days as number) * 86400
-    try {
-      const messages = queryMessagesWithBody(whereClause, cutoffSeconds, args.limit as number)
-      if (!messages.length) {
-        prompts.log.info(`No messages matching "${args.query}" in the last ${args.days} days`)
-        prompts.outro("Done")
-        return
-      }
-
-      if (args.json) {
-        await writeJson(messages)
-        return
-      }
-
-      // Use already-resolved name from lead lookup, or resolve from phone digits (#58888)
-      const contactName = resolvedName ?? await resolveContactName(digits || String(args.query)) ?? "Them"
-
-      // Display in chronological order (oldest first)
-      const reversed = [...messages].reverse()
-      printDivider()
-      for (const msg of reversed) {
-        const direction = msg.from_me ? bold("You →") : bold(`← ${contactName}`)
-        const dateStr = dim(msg.date)
-        console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
-      }
-      printDivider()
-      prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}`)
-    } catch (err: any) {
-      if (err.message?.includes("authorization") || err.message?.includes("not permitted")) {
-        prompts.log.error("Permission denied. Grant Full Disk Access to your terminal in System Settings > Privacy > Full Disk Access.")
-      } else {
-        prompts.log.error(`Query failed: ${err.message?.slice(0, 200)}`)
-      }
-      prompts.outro("Done")
+    const messages = queryOrFail(args.json, () => queryMessagesWithBody(whereClause, window.cutoffSeconds, args.limit as number))
+    // An empty result is a successful answer: `[]` under --json, not empty stdout (#193252).
+    if (args.json) {
+      await writeJson(messages)
+      return
     }
+    if (!messages.length) {
+      prompts.log.info(`No messages matching "${args.query}" ${window.label}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Use already-resolved name from lead lookup, or resolve from phone digits (#58888)
+    const contactName = resolvedName ?? await resolveContactName(digits || String(args.query)) ?? "Them"
+
+    // Display in chronological order (oldest first)
+    const reversed = [...messages].reverse()
+    printDivider()
+    for (const msg of reversed) {
+      const direction = msg.from_me ? bold("You →") : bold(`← ${contactName}`)
+      const dateStr = dim(msg.date)
+      console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}`)
   },
 })
 
@@ -135,21 +170,14 @@ const ImessageReadCommand = cmd({
       .positional("query", { type: "string", demandOption: true, describe: "phone number or chat identifier" })
       .option("last", { type: "number", default: 10, describe: "number of recent messages" })
       .option("days", { type: "number", default: 30, describe: "search last N days" })
+      .option("since", { type: "string", describe: "read from date (YYYY-MM-DD)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Read — "${args.query}"`) }
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
-
-    if (!args.query?.trim()) {
-      prompts.log.error("Please provide a phone number, lead ID, or contact name")
-      prompts.outro("Done")
-      return
-    }
+    if (!args.query?.trim()) fail(args.json, "Please provide a phone number, lead ID, or contact name")
+    const window = checkInputs(args, ["last"], { since: true })!
+    requireAccess(args.json)
 
     let digits = args.query.replace(/\D/g, "")
     let isPhone = digits.length >= 7
@@ -207,38 +235,29 @@ const ImessageReadCommand = cmd({
     const matchTerm = isPhone || readResolvedName ? normalized : args.query
     const whereClause = `c.chat_identifier LIKE '%${matchTerm.replace(/'/g, "''")}%'`
 
-    // --since takes priority over --days (#58884)
-    const cutoffSeconds = args.since
-      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
-      : (args.days as number) * 86400
-    try {
-      const messages = queryMessagesWithBody(whereClause, cutoffSeconds, args.last as number)
-      if (!messages.length) {
-        prompts.log.info(`No messages matching "${args.query}"`)
-        prompts.outro("Done")
-        return
-      }
-
-      if (args.json) {
-        await writeJson(messages)
-        return
-      }
-
-      // Prefer a resolved contact name; otherwise resolve from the handle.
-      const them = readResolvedName ?? (isPhone ? await resolveContactName(normalized) : null) ?? "Them"
-      const reversed = [...messages].reverse()
-      printDivider()
-      for (const msg of reversed) {
-        const direction = msg.from_me ? bold("  You →") : bold(`← ${them}`)
-        const dateStr = dim(msg.date)
-        console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
-      }
-      printDivider()
-      prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}`)
-    } catch (err: any) {
-      prompts.log.error(`Query failed: ${err.message?.slice(0, 200)}`)
-      prompts.outro("Done")
+    const messages = queryOrFail(args.json, () => queryMessagesWithBody(whereClause, window.cutoffSeconds, args.last as number))
+    // An empty result is a successful answer: `[]` under --json, not empty stdout (#193252).
+    if (args.json) {
+      await writeJson(messages)
+      return
     }
+    if (!messages.length) {
+      prompts.log.info(`No messages matching "${args.query}" ${window.label}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Prefer a resolved contact name; otherwise resolve from the handle.
+    const them = readResolvedName ?? (isPhone ? await resolveContactName(normalized) : null) ?? "Them"
+    const reversed = [...messages].reverse()
+    printDivider()
+    for (const msg of reversed) {
+      const direction = msg.from_me ? bold("  You →") : bold(`← ${them}`)
+      const dateStr = dim(msg.date)
+      console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}`)
   },
 })
 
@@ -253,19 +272,11 @@ const ImessageChatsCommand = cmd({
       .option("limit", { type: "number", default: 50, describe: "max conversations" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Recent iMessage Chats")
+    if (!args.json) { UI.empty(); prompts.intro("◈  Recent iMessage Chats") }
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
-
-    // --since takes priority over --days (#58884)
-    const cutoffSeconds = args.since
-      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
-      : (args.days as number) * 86400
+    // --since takes priority over --days (#58884); both are validated before reaching SQL.
+    const { cutoffSeconds, label } = checkInputs(args, ["limit"], { since: true })!
+    requireAccess(args.json)
     const sql = `
       SELECT
         c.chat_identifier,
@@ -280,10 +291,11 @@ const ImessageChatsCommand = cmd({
       LIMIT ${args.limit};
     `.replace(/\n/g, " ").trim()
 
+    const raw = queryOrFail(args.json, () => queryMessages(sql))
     try {
-      const raw = queryMessages(sql)
       if (!raw) {
-        prompts.log.info("No recent conversations")
+        if (args.json) { await writeJson([]); return }
+        prompts.log.info(`No conversations ${label}`)
         prompts.outro("Done")
         return
       }
@@ -314,15 +326,13 @@ const ImessageChatsCommand = cmd({
       if (args.json) {
         // `unresolved` is emitted explicitly rather than left implicit in `name: null` (#58896),
         // so an automated consumer can act on a resolution gap instead of having to infer one.
-        console.log(
-          JSON.stringify(
-            chats.map((c) => {
-              const name = phoneMap.get(c.identifier) ?? null
-              return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
-            }),
-            null,
-            2,
-          ),
+        // writeJson, not console.log: the CLI ends in process.exit(), which drops whatever a pipe
+        // has not drained yet — `chats --json | jq` was cut off at exactly 65536 bytes (#193286).
+        await writeJson(
+          chats.map((c) => {
+            const name = phoneMap.get(c.identifier) ?? null
+            return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
+          }),
         )
         return
       }
@@ -365,8 +375,7 @@ const ImessageChatsCommand = cmd({
 
       prompts.outro(`${success("✓")} ${chats.length} conversation${chats.length === 1 ? "" : "s"}`)
     } catch (err: any) {
-      prompts.log.error(`Query failed: ${err.message?.slice(0, 200)}`)
-      prompts.outro("Done")
+      fail(args.json, `Listing chats failed: ${String(err?.message ?? err).slice(0, 200)}`)
     }
   },
 })
@@ -374,7 +383,7 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage (routed through the comms router so it is logged)",
+  describe: "send an iMessage (routed through the comms router so it is logged). Exit 0 = confirmed sent, 1 = not sent, 2 = handed to Messages but not confirmed",
   builder: (yargs) =>
     yargs
       .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
@@ -385,9 +394,7 @@ const ImessageSendCommand = cmd({
     prompts.intro(`◈  iMessage Send → ${args.handle}`)
 
     if (process.platform !== "darwin") {
-      prompts.log.error("iMessage is only available on macOS")
-      prompts.outro("Done")
-      return
+      return notSent("iMessage is only available on macOS")
     }
 
     // Resolve handle: could be phone, lead ID, contact name, or "me"/"self"
@@ -397,13 +404,11 @@ const ImessageSendCommand = cmd({
     if (isSelfAlias(handle)) {
       const self = resolveSelfHandle(args.phone ? "phone" : "email")
       if (!self) {
-        prompts.log.error(
+        return notSent(
           "Couldn't resolve your own handle. Set it with:\n" +
             "  iris imessage me --set-email you@icloud.com\n" +
             "  iris imessage me --set-phone +15551234567",
         )
-        prompts.outro("Done")
-        return
       }
       prompts.log.info(`Resolved "${args.handle}" → you (${self})`)
       handle = self
@@ -444,14 +449,10 @@ const ImessageSendCommand = cmd({
               resolvedLeadId = Number(lead.id ?? handle)
               handle = lead.phone
             } else {
-              prompts.log.error(`Lead #${handle} has no phone number`)
-              prompts.outro("Done")
-              return
+              return notSent(`Lead #${handle} has no phone number`)
             }
           } else {
-            prompts.log.error(`Lead #${handle} not found`)
-            prompts.outro("Done")
-            return
+            return notSent(`Lead #${handle} not found`)
           }
         } else {
           // Search by name
@@ -466,13 +467,17 @@ const ImessageSendCommand = cmd({
               resolvedLeadId = Number(withPhone.id) || undefined
               handle = withPhone.phone
             } else {
-              prompts.log.error(`No lead with phone found for "${handle}"`)
-              prompts.outro("Done")
-              return
+              return notSent(`No lead with phone found for "${handle}"`)
             }
           }
         }
       } catch {}
+    }
+
+    // Still a bare name (no contact, no lead, CRM unreachable)? Messages would be told to send to
+    // a participant literally called e.g. "Mom" — which it accepts and never delivers (#193288).
+    if (!handle.includes("@") && handle.replace(/\D/g, "").length < 7) {
+      return notSent(`Couldn't resolve "${args.handle}" to a phone number or email — nothing was sent`)
     }
 
     // Normalize phone — prepend +1 if 10 digits
@@ -495,20 +500,43 @@ const ImessageSendCommand = cmd({
     // resolvedLeadId is set when resolution went through the CRM, which is what earns the send
     // full outreach attribution instead of a bare handle row.
     {
+      // #193288: this wait used to be silent and unbounded — the router waits on the bridge on
+      // the sending Mac (up to ~15 s per call, plus the daemon confirming in chat.db), and the
+      // screen showed only "Resolved …" until it came back, if it came back.
+      const rs = prompts.spinner()
+      rs.start(`Sending via the comms router to ${handle}… (this can take up to ${ROUTER_TIMEOUT_MS / 1000}s)`)
       const routed = await routerSend({
         toLeadId: resolvedLeadId,
         toHandle: resolvedLeadId ? undefined : handle,
         channel: "imessage",
         message: cleanMessage,
         origin: "cli.reachr",
+        timeoutMs: ROUTER_TIMEOUT_MS,
       })
 
       if (routed.ok && routed.sent) {
+        rs.stop(success("Sent"))
         prompts.log.info(describeSend(routed))
         console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
         prompts.outro("Done")
         return
       }
+
+      // Only send again locally when the router never attempted it — otherwise a slow or
+      // unconfirmed send becomes two messages in the recipient's thread.
+      const kind = routerFailureKind(routed)
+      if (kind === "unconfirmed") {
+        rs.stop("Not confirmed", 1)
+        return notConfirmed(
+          `${routed.error ?? "The comms router did not confirm the send"}. The message to ${handle} may still go out — ` +
+            `check the conversation in Messages before sending it again.`,
+        )
+      }
+      if (kind === "failed") {
+        rs.stop("Failed", 1)
+        return notSent(`${routed.error ?? "The send failed"} — not retried locally, it would go through the same Messages account.`)
+      }
+      rs.stop("Router unavailable", 1)
 
       // Falling back to the local AppleScript path keeps the operator able to send when the API
       // is unreachable — but it is announced, because an unlogged send is a real gap and the
@@ -524,23 +552,64 @@ tell application "Messages"
 end tell`
 
     const sp = prompts.spinner()
-    sp.start(`Sending to ${handle}…`)
+    sp.start(`Handing to Messages for ${handle}…`)
+    const startedAt = Date.now() / 1000
 
     try {
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
         encoding: "utf-8",
         timeout: 15000,
+        stdio: ["ignore", "pipe", "pipe"],
       })
-      sp.stop(success(`Sent to ${handle}`))
-      console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
-      prompts.outro("Done")
     } catch (err: any) {
       sp.stop("Failed", 1)
-      prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
-      prompts.outro("Done")
+      const why = String(err?.stderr || err?.message || "").split("\n").find((l: string) => l.trim()) ?? "unknown error"
+      return notSent(`Messages rejected the send: ${why.slice(0, 200)}`)
+    }
+
+    // #193288: osascript returning only means Messages ACCEPTED the command. Read chat.db and
+    // only say "Sent" when Messages itself marks the outgoing row sent.
+    sp.message?.(`Confirming in Messages…`)
+    const c = await confirmOutgoing(handle, cleanMessage, startedAt)
+    const preview = dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)
+    switch (c.state) {
+      case "sent":
+        sp.stop(success(`Sent to ${handle}${c.delivered ? " — delivered" : ""} (confirmed in Messages)`))
+        console.log(`  ${preview}`)
+        prompts.outro("Done")
+        return
+      case "failed":
+        sp.stop("Failed", 1)
+        return notSent(`Messages marked the message to ${handle} as NOT DELIVERED (error ${c.error}). Check the conversation in Messages.`)
+      case "pending":
+        sp.stop("Not confirmed", 1)
+        return notConfirmed(`The message to ${handle} is in Messages but still not sent after 15s — it may be stuck. Check the conversation before retrying.`)
+      case "missing":
+        sp.stop("Failed", 1)
+        return notSent(`Messages accepted the command but no message to ${handle} appeared in the conversation — it was NOT sent. Is ${handle} reachable on iMessage, and is Messages signed in?`)
+      case "unknown":
+        sp.stop("Not confirmed", 1)
+        return notConfirmed(`Handed to Messages for ${handle}, but delivery could NOT be confirmed: ${c.reason}. Check the conversation before telling anyone it was sent.`)
     }
   },
 })
+
+/** fl-api waits up to 15 s per bridge call (resolve, then send) and the daemon confirms for ≤ 8 s. */
+const ROUTER_TIMEOUT_MS = 45_000
+
+/** #193288: a send that did not happen exits 1 — never 0 with a "Sent"-shaped message. */
+function notSent(message: string): void {
+  prompts.log.error(message)
+  process.exitCode = 1
+  prompts.outro("Done") // renders as "Failed (exit 1)"
+}
+
+/** Handed off but unverified: exit 2, so a script or agent cannot read it as success. */
+function notConfirmed(message: string): void {
+  prompts.log.warn(message)
+  process.exitCode = 2
+  prompts.outro("Done")
+}
 
 const ImessageContactsCommand = cmd({
   command: "contacts",
@@ -556,11 +625,8 @@ const ImessageContactsCommand = cmd({
     UI.empty()
     prompts.intro("◈  iMessage Contact Cards")
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
+    checkInputs(args, ["days", "limit"])
+    requireAccess(args.json)
 
     const sp = prompts.spinner()
     sp.start("Scanning attachments…")
@@ -764,6 +830,7 @@ const MentionsRespondCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Mention Respond")
+    checkInputs(args, ["days", "limit"])
     const processed = mrProcessed()
     const pending = mrReadMentions(args.days as number, args.client as string, args["include-self"] as boolean)
       .filter((m) => !processed.has(mrKey(m)))
@@ -920,6 +987,7 @@ const ImessageMentionsCommand = cmd({
     // If a subcommand (respond/drafts/show/approve/reject) ran, yargs invoked it
     // already and this default handler is skipped. Reaching here = bare `mentions`.
     if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
+    checkInputs(args, ["days", "limit"])
 
     const cutoff = new Date(Date.now() - (args.days as number) * 86400 * 1000)
     let mentions: any[] = []
@@ -1066,11 +1134,8 @@ const ImessageGroupsCommand = cmd({
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  iMessage Group Chats") }
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
+    checkInputs(args, ["days", "limit"])
+    requireAccess(args.json)
 
     const groups = listGroupChats(args.days as number, args.limit as number)
     if (!groups.length) {
@@ -1107,7 +1172,7 @@ const ImessageGroupsCommand = cmd({
     }
     const filtered = groups.filter(g => matchesQuery(g.guid, g.display_name))
     if (!filtered.length) {
-      if (args.json) { console.log("[]"); return }
+      if (args.json) { await writeJson([]); return }
       prompts.log.info(`No group chats match ${bold(String(args.query))}`)
       prompts.outro("Done")
       return
@@ -1155,19 +1220,15 @@ const ImessageReadGroupCommand = cmd({
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Group — "${args.query}"`) }
 
-    if (!isAvailable()) {
-      prompts.log.error(diagnoseAccess())
-      prompts.outro("Done")
-      return
-    }
+    if (!String(args.query ?? "").trim()) fail(args.json, "Please provide a group name or chat identifier")
+    const window = checkInputs(args, ["last"], {})!
+    requireAccess(args.json)
 
     // Resolve group by name or ID
     const group = resolveGroupChat(args.query)
     if (!group) {
-      prompts.log.error(`No group chat matching "${args.query}"`)
-      prompts.log.info(dim("Use: iris imessage groups — to list available group chats"))
-      prompts.outro("Done")
-      return
+      if (!args.json) prompts.log.info(dim("Use: iris imessage groups — to list available group chats"))
+      fail(args.json, `No group chat matching "${args.query}"`)
     }
 
     prompts.log.info(`${bold(group.display_name)} — ${group.participants} members, ${group.message_count} total msgs`)
@@ -1184,17 +1245,17 @@ const ImessageReadGroupCommand = cmd({
       console.log()
     }
 
-    const cutoffSeconds = (args.days as number) * 86400
-    const messages = readGroupMessages(group.guid, cutoffSeconds, args.last as number)
+    const messages = queryOrFail(args.json, () => readGroupMessages(group.guid, window.cutoffSeconds, args.last as number))
 
-    if (!messages.length) {
-      prompts.log.info(`No messages in the last ${args.days} days`)
-      prompts.outro("Done")
+    // An empty result is a successful answer under --json, not empty stdout (#193252).
+    if (args.json) {
+      await writeJson({ group, messages })
       return
     }
 
-    if (args.json) {
-      await writeJson({ group, messages })
+    if (!messages.length) {
+      prompts.log.info(`No messages ${window.label}`)
+      prompts.outro("Done")
       return
     }
 

@@ -3,6 +3,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import {
+  ANSWERABLE_PROVIDERS,
   runAnswerHook,
   withHook,
   withoutHook,
@@ -147,4 +148,11 @@ test("parseDuration", () => {
   expect(parseDuration("2h")).toBe(120 * 60_000)
   expect(parseDuration("30")).toBe(30 * 60_000)
   for (const bad of ["", "soon", "-5m", "2d", undefined]) expect(parseDuration(bad as any)).toBeNull()
+})
+
+
+// #190649 — IRIS Desktop / opencode sessions can be answered too (iris-daemon #38 routes the answer
+// to the engine's own permission and question replies). Anything else is still refused by name.
+test("answer reaches Claude Code, IRIS Desktop / opencode and kept ACP sessions (#191170), and nothing else", () => {
+  expect(ANSWERABLE_PROVIDERS).toEqual(["claude_code", "opencode", "acp"])
 })

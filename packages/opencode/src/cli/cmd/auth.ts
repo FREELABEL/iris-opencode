@@ -180,6 +180,7 @@ export const AuthCommand = cmd({
       .command(AuthWhoamiCommand)
       .command(AuthAccountsCommand)
       .command(AuthSwitchCommand)
+      .command(AuthTokenCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -338,6 +339,41 @@ export const AuthSwitchCommand = cmd({
     }
     prompts.log.info(`${UI.Style.TEXT_DIM}IRIS Desktop notices the new key and offers to restart; its chat history is kept per account.${UI.Style.TEXT_NORMAL}`)
     prompts.outro("Done")
+    },
+  })
+
+/**
+ * What `iris auth token` prints, as data. Only the bearer goes to stdout, so a script can
+ * capture it; every explanation goes to stderr, and no token is a non-zero exit — a script
+ * must never receive an empty string and send "Bearer " to the API (#191214).
+ */
+export function authTokenOutput(token: string | undefined): { code: number; stdout?: string; stderr?: string } {
+  const t = (token ?? "").trim()
+  if (!t) return { code: 1, stderr: "Not signed in to IRIS on this machine. Run: iris auth login" }
+  return { code: 0, stdout: t }
+}
+
+/**
+ * `iris auth token` — the bearer this machine's IRIS sign-in uses for the platform API.
+ *
+ * For scripts and playbooks that call the API directly, so they run as the account the
+ * machine is signed in as instead of reading a token pasted into a repo `.env`. That pasted
+ * token is how the Discover feed's playbook broke: it was revoked in a rotation and nothing
+ * else could authenticate it (#191214). Same contract as `gh auth token`.
+ */
+export const AuthTokenCommand = cmd({
+  command: "token",
+  describe: "print the API token this machine's IRIS sign-in uses (for scripts and playbooks)",
+  async handler() {
+    const { resolveToken } = await import("./iris-api")
+    let token: string | undefined
+    try {
+      token = await resolveToken()
+    } catch {}
+    const out = authTokenOutput(token)
+    if (out.stdout) process.stdout.write(out.stdout + "\n")
+    if (out.stderr) process.stderr.write(out.stderr + "\n")
+    process.exitCode = out.code
   },
 })
 
@@ -702,8 +738,9 @@ export const AuthLoginCommand = cmd({
           // Validate token against API
           const apiBase = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
           try {
-            // /api/v1/me answers 404 (measured 2026-10-14); whoami is the route `iris auth whoami` uses.
-            const res = await fetch(`${apiBase}/api/v1/auth/whoami`, {
+            // /api/v1/cli/auth/me answers {user_id, email}; /api/v1/me does not exist (404), so
+            // every --token login failed here (#187775).
+            const res = await fetch(`${apiBase}/api/v1/cli/auth/me`, {
               headers: { Authorization: `Bearer ${args.token}`, Accept: "application/json" },
               signal: AbortSignal.timeout(10_000),
             })
@@ -712,7 +749,7 @@ export const AuthLoginCommand = cmd({
               return
             }
             const data = (await res.json()) as any
-            const userId = args.userId ?? data?.data?.id ?? data?.id
+            const userId = args.userId ?? data?.user_id ?? data?.data?.user_id ?? data?.data?.id ?? data?.id
             if (!userId) {
               prompts.log.error("Token valid but could not resolve user ID")
               return

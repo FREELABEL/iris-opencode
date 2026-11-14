@@ -16,6 +16,8 @@ and lets you answer it from any other machine, or from your phone, without openi
 
 - `iris auth login`, and the machine is in your Hive (`iris hive nodes list`)
 - The agent runs **inside tmux** (or you turn on away mode before you leave — see step 3)
+- No tmux? Start the agent with `iris acp run --keep` instead: those sessions are answerable from
+  anywhere with no hook or away mode. See [Run Claude Code, Codex or Gemini from IRIS](run-other-coding-agents.md).
 
 ## Steps
 

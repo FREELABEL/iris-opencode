@@ -462,7 +462,6 @@ const IngestCommand = cmd({
 
 export const PlatformAtlasMeetingsCommand = cmd({
   command: "atlas:meetings",
-  aliases: ["meetings"],
   describe: "[Atlas OS] Scan Gmail for meeting notes and extract intelligence",
   builder: (yargs) =>
     yargs

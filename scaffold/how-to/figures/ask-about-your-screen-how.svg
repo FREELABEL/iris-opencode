@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 790" width="720" height="790" role="img" aria-labelledby="t d" font-family="'Instrument Sans', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">Ask about what&#x27;s on your screen</title>
+  <desc id="d">Run iris look with a question. Drag a box over the part of the screen you mean, such as a failing test. IRIS reads that region and prints a short answer in your terminal. The screenshot is deleted after the answer unless you add --keep.</desc>
+  <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+<linearGradient id="gh" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#d946ef"/><stop offset=".55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+<marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#a3a3a3"/></marker>
+<marker id="ahg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/></marker></defs>
+  <rect width="720" height="790" rx="22" fill="#0a0a0a"/><rect x=".5" y=".5" width="719" height="789" rx="22" fill="none" stroke="#262626"/>
+  <text x="40" y="58" fill="#737373" font-size="24" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" letter-spacing=".04em">ASK ABOUT WHAT&#x27;S ON YOUR SCREEN</text>
+  <g transform="translate(40 96)"><rect width="160" height="150" rx="16" fill="#111" stroke="#262626"/>
+  <rect x="18" y="22" width="90" height="8" rx="4" fill="#262626"/><rect x="26" y="52" width="108" height="10" rx="5" fill="#e0705f"/><rect x="34" y="72" width="70" height="8" rx="4" fill="#a3a3a3"/><rect x="34" y="88" width="70" height="8" rx="4" fill="#a3a3a3"/>
+  <rect x="16" y="40" width="128" height="68" rx="6" fill="none" stroke="#3b82f6" stroke-width="4"/><path d="M128 100 l0 28 l8 -7 l6 13 l7 -3 l-6 -12 l10 0 Z" fill="#fafafa" stroke="#0a0a0a" stroke-width="2"/></g>
+  <text x="232" y="146" fill="#a3a3a3" font-size="26"><tspan fill="#fafafa" font-weight="700">1</tspan>  <tspan fill="#fafafa" font-weight="700" font-size="32">Drag over it</tspan></text>
+  <text x="232" y="186" fill="#a3a3a3" font-size="24" font-weight="400" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" text-anchor="start">iris look "why?"</text>
+  <text x="232" y="222" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">a failing test, a chart, a message</text>
+  <path d="M120 256 L120 340" stroke="#22d3ee" stroke-width="4" marker-end="url(#ahg)"/>
+  <polygon points="120.0,356.0 184.1,393.0 184.1,467.0 120.0,504.0 55.9,467.0 55.9,393.0" fill="#111" stroke="url(#g)" stroke-width="4"/>
+  <rect x="94" y="408" width="52" height="44" rx="5" fill="none" stroke="#3b82f6" stroke-width="4"/>
+  <text x="232" y="420" fill="#a3a3a3" font-size="26"><tspan fill="#fafafa" font-weight="700">2</tspan>  <tspan fill="#fafafa" font-weight="700" font-size="32">IRIS reads it</tspan></text>
+  <text x="232" y="458" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">just the region you dragged</text>
+  <path d="M120 514 L120 598" stroke="#22d3ee" stroke-width="4" marker-end="url(#ahg)"/>
+  <g transform="translate(40 606)"><rect width="160" height="150" rx="16" fill="#111" stroke="#262626"/>
+  <rect x="24" y="30" width="64" height="10" rx="5" fill="#34d399"/><rect x="24" y="58" width="112" height="9" rx="4.5" fill="#fafafa"/><rect x="24" y="78" width="96" height="9" rx="4.5" fill="#fafafa"/><rect x="24" y="110" width="80" height="8" rx="4" fill="#737373"/></g>
+  <text x="232" y="652" fill="#a3a3a3" font-size="26"><tspan fill="#fafafa" font-weight="700">3</tspan>  <tspan fill="#fafafa" font-weight="700" font-size="32">Read the answer</tspan></text>
+  <text x="232" y="690" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">right in your terminal</text>
+  <text x="232" y="726" fill="#a3a3a3" font-size="24" font-weight="400" text-anchor="start">screenshot deleted after</text>
+
+</svg>

@@ -138,15 +138,13 @@ if ($RequestedVersion) {
     # So: enumerate releases, keep bare vX.Y.Z tags (desktop-v* are excluded by the anchor),
     # skip drafts, and take the newest one that actually HAS this platform's asset.
     try {
-        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" -UseBasicParsing -ErrorAction Stop
-        $Chosen = $null
-        foreach ($r in $Releases) {
-            if ($r.draft) { continue }
-            if ($r.tag_name -notmatch '^v\d+\.\d+\.\d+$') { continue }
-            if (-not ($r.assets | Where-Object { $_.name -eq $Filename })) { continue }
-            $Chosen = $r
-            break
-        }
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" -UseBasicParsing -ErrorAction Stop
+        # The HIGHEST version with this platform's asset, not the first listed (#188596): GitHub
+        # lists a release by its tag's commit date, so v1.5.0 (the v2 engine) sat below v1.3.355.
+        $Chosen = $Releases |
+            Where-Object { -not $_.draft -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and ($_.assets | Where-Object { $_.name -eq $Filename }) } |
+            Sort-Object { [version]($_.tag_name.Substring(1)) } -Descending |
+            Select-Object -First 1
         if (-not $Chosen) {
             Write-Host "No published release contains $Filename yet." -ForegroundColor Red
             Write-Host "A release may still be uploading  -  try again shortly." -ForegroundColor DarkGray
@@ -523,8 +521,46 @@ function Install-IrisDaemonSource {
             throw "the downloaded archive has no daemon.js  -  refusing to overwrite the install"
         }
 
+        # The exact commit: GitHub stores it as the zip's archive comment, the last bytes of the
+        # file. Recorded so `iris hive doctor` can say what this node runs (#191480).
+        $commit = $null
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($zip)
+            $n = [Math]::Min(256, $bytes.Length)
+            $tail = [System.Text.Encoding]::ASCII.GetString($bytes, $bytes.Length - $n, $n)
+            if ($tail -match '([0-9a-f]{40})\s*$') {
+                $commit = $Matches[1]
+                Set-Content -Path (Join-Path $root.FullName ".iris-commit") -Value $commit -Encoding ascii
+            }
+        } catch { }
+
+        # The manifest the daemon reads to report its commit (#191614). Without it a Windows node
+        # showed "commit unknown" forever, and `iris daemon update` could not tell the shipped
+        # files from local edits (#192109). Hashed from the ARCHIVE, before this machine's runtime
+        # files are copied in, by the daemon's own hashTree, so the paths and exclusions are
+        # exactly what the daemon checks.
+        if ($commit -and (Get-Command node -ErrorAction SilentlyContinue)) {
+            $js = @'
+const [dir, commit, source] = process.argv.slice(1)
+const vm = require(dir + '/lib/version-manifest')
+const manifest = { schema: 1, commit, installed_at: new Date().toISOString(), source, files: vm.hashTree(dir) }
+require('fs').writeFileSync(dir + '/' + vm.MANIFEST_NAME, JSON.stringify(manifest, null, 2) + '\n')
+'@
+            try { & node -e $js $root.FullName $commit $Url 2>$null } catch { }
+        }
+
         $result.Updated = Test-Path (Join-Path $BridgeDir "daemon.js")
         New-Item -ItemType Directory -Path $BridgeDir -Force -ErrorAction Stop | Out-Null
+
+        # A .git left by an old clone-based install describes a commit these files no longer are,
+        # and `iris daemon update` trusts .git over the manifest: it reported that old commit and
+        # hundreds of "local changes" on a real node. Moved aside (kept), never deleted.
+        $staleGit = Join-Path $BridgeDir ".git"
+        if (Test-Path $staleGit) {
+            $backup = "$BridgeDir.git-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+            Move-Item -Path $staleGit -Destination $backup -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $staleGit)) { Write-Host "  Moved the old git checkout aside: $backup" -ForegroundColor DarkGray }
+        }
 
         # Remove only the files the repo owns; leave preserved entries untouched.
         Get-ChildItem -Path $BridgeDir -Force -ErrorAction SilentlyContinue | Where-Object {

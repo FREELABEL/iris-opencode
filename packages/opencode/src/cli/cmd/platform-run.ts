@@ -6,6 +6,7 @@ import {
   IntegrationsUnshareCommand,
   IntegrationsDisconnectCommand,
   IntegrationsSetupNativeCommand,
+  IntegrationsRotateCommand,
 } from "./platform-integrations"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -26,7 +27,7 @@ import {
 import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
-import { verifyProbeFor, isProbeSuccess, isProbeInconclusive } from "./integration-verify-probe"
+import { verifyProbeFor, isProbeSuccess, isProbeInconclusive, checkConnection, statusLabelFor, connectionKey, type ConnectionVerdict } from "./integration-verify-probe"
 import { IntegrationsHealthCommand, IntegrationsTestCommand } from "./integration-health"
 import {
   normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
@@ -38,7 +39,8 @@ import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-
 import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
-import { isReadAction, knownFunction, dryRunResult } from "./integration-write-gate"
+import { listEnvelope, listFooter } from "./pagination-args"
+import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
 // ============================================================================
@@ -307,13 +309,25 @@ async function buildComposioConnectionState(
 // Param parsing — key=value pairs into typed object
 // ============================================================================
 
-function parseParams(raw: string[]): Record<string, unknown> {
+/**
+ * Take off quotes that wrap the WHOLE value, and only those. This stripped a leading and a trailing
+ * quote separately, so query='from:a OR "b c"' reached Gmail as `from:a OR "b c` and
+ * query='"a b" OR "c d"' as `a b" OR "c d`: not the search that was typed (#191935).
+ */
+export function stripWrappingQuotes(val: string): string {
+  const q = val[0]
+  if (val.length < 2 || (q !== '"' && q !== "'") || val[val.length - 1] !== q) return val
+  const inner = val.slice(1, -1)
+  return inner.includes(q) ? val : inner
+}
+
+export function parseParams(raw: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const p of raw) {
     if (!p.includes("=")) continue
     const eq = p.indexOf("=")
     const key = p.slice(0, eq)
-    let val: unknown = p.slice(eq + 1).replace(/^["']|["']$/g, "")
+    let val: unknown = stripWrappingQuotes(p.slice(eq + 1))
     if (typeof val === "string") {
       if (/^-?\d+$/.test(val)) val = parseInt(val, 10)
       else if (/^-?\d*\.\d+$/.test(val)) val = parseFloat(val)
@@ -409,13 +423,28 @@ async function executeMacosLocal(
     if ([...qs].length > 0) url += `?${qs.toString()}`
   }
 
+  // The bridge requires X-Bridge-Key on these routes. This call was the one bridge client that
+  // never sent it, so every macOS action through `integrations exec` answered 401 — and the
+  // generic hint sent people to `iris auth login`, which has nothing to do with it (#189836).
+  const headers: Record<string, string> = {}
+  if (route.useBody) headers["Content-Type"] = "application/json"
+  const bridgeKey = getBridgeToken()
+  if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
   let res: Response
   try {
     res = await fetch(url, {
       method: route.method,
-      headers: route.useBody ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body,
     })
+    // When the bridge hosts the daemon (embedded mode), the daemon's routes are mounted under
+    // /daemon — /api/calendar/list and /create-event exist only there, and the bare path is an
+    // Express "Cannot GET". Retry once under the prefix before calling it missing.
+    if (res.status === 404) {
+      const embedded = await fetch(url.replace(bridgeBase, `${bridgeBase}/daemon`), { method: route.method, headers, body })
+      if (embedded.status !== 404) res = embedded
+    }
   } catch (e) {
     throw new Error(
       `Cannot reach local bridge at ${bridgeBase}. ` +
@@ -430,6 +459,14 @@ async function executeMacosLocal(
       const parsed = JSON.parse(text)
       errMsg = parsed.error ?? text
     } catch { /* keep raw text */ }
+    if (res.status === 401) {
+      throw new Error(
+        `The local bridge refused ${route.method} ${route.path}: ` +
+          (bridgeKey
+            ? "the key in ~/.iris/bridge-token is not the one this daemon expects (stale after a reinstall?). Run: iris bridge status"
+            : "~/.iris/bridge-token is missing, so no key was sent. Run: iris bridge status"),
+      )
+    }
     throw new Error(`Bridge ${route.method} ${route.path} failed (HTTP ${res.status}): ${errMsg}`)
   }
 
@@ -687,6 +724,16 @@ export function accountLine(result: any): string | null {
   return `↳ ${who}${a.integration_id ? ` (#${a.integration_id})` : ""} · from ${os.hostname()}`
 }
 
+/** One line per attendee: name, email, response. Both the server's and Google's field names. */
+export function attendeeLines(attendees: unknown): string[] {
+  if (!Array.isArray(attendees)) return []
+  return attendees.map((a: any) => {
+    const name = a?.name ?? a?.displayName ?? a?.display_name
+    const response = a?.response_status ?? a?.responseStatus ?? a?.response
+    return [name, a?.email].filter(Boolean).join(" · ") + (response ? ` (${response})` : "") + (a?.organizer ? " organizer" : "")
+  })
+}
+
 function displayArrayItems(items: any[], indent = "    "): void {
   for (const item of items.slice(0, 25)) {
     if (typeof item === "object" && item !== null) {
@@ -699,6 +746,7 @@ function displayArrayItems(items: any[], indent = "    "): void {
       const startTime = typeof rawStart === "string" ? rawStart : (rawStart?.dateTime ?? rawStart?.date ?? item.start_time ?? "")
       const timeLabel = startTime ? dim(` ${startTime}`) : ""
       console.log(`${indent}${bold(String(label))}${id}${timeLabel}${type ? `  ${dim(type)}` : ""}`)
+      for (const line of attendeeLines(item.attendees)) console.log(`${indent}  ${dim(line)}`)
     } else {
       console.log(`${indent}${item}`)
     }
@@ -716,7 +764,26 @@ export function isFailedResult(result: any): boolean {
   if (result === null || result === undefined) return true
   if (typeof result !== "object") return false
   if (result.success === false) return true
+  // A page can arrive AND the fetch after it can fail. Composio answers 413
+  // (Upstream_PayloadTooLarge) as `error_after_page` on an otherwise successful payload, so
+  // `success: true` was reported with exit 0 for a call that did not return what was asked
+  // (#190573). A partial result with an upstream failure is a failed result.
+  if (result.error_after_page) return true
   return result.success !== true && !!result.error
+}
+
+/**
+ * An upstream WAF answers with a whole HTML page, and the CLI printed it verbatim:
+ * `Composio action failed: <!DOCTYPE html> … Attention Required! | Cloudflare …` (#190575).
+ * The refusal is correct; the markup is not an error message. Keep one line, keep the Ray ID
+ * (the only thing support can act on), drop the document.
+ */
+export function summarizeUpstreamError(raw: string): string {
+  if (!/<!DOCTYPE|<html[\s>]|<\/html>/i.test(raw)) return raw
+  const ray = raw.match(/Ray ID:\s*([a-f0-9]+)/i)?.[1]
+  const blocked = /cloudflare|attention required/i.test(raw)
+  const head = blocked ? "upstream blocked the request (Cloudflare)" : "upstream returned an HTML error page"
+  return `${head}${ray ? ` — Ray ID ${ray}` : ""}. The request was not executed.`
 }
 
 /** The function-name guess failed upstream ("Tool GOOGLEDRIVE_FIND_FOLDER not found"). */
@@ -749,6 +816,45 @@ export type ActionSignature = {
   writes: boolean
   effect?: string | null
   parameters: { name: string; type: string; required: boolean; description: string }[]
+}
+
+/**
+ * Refuse a parameter the action does not declare, and name a required one that is absent.
+ *
+ * A typo used to be DROPPED IN SILENCE — `exec gmail read_emails totally_bogus=1` completed
+ * and returned 10 messages, so a wrong parameter looked exactly like a right one (#190572).
+ * The catalogue is the signature; this is the client-side check that spends nothing upstream
+ * to prove the call is wrong.
+ *
+ * `synonyms` are the groups the executor already broadcasts (limit / max_results / maxResults).
+ * A name in the same group as a declared parameter is legitimate, not a typo — otherwise this
+ * guard would reject the very spellings the CLI adds itself (#182866).
+ */
+export function validateActionParams(
+  sig: ActionSignature,
+  params: Record<string, unknown>,
+  synonyms: string[][] = [],
+): { ok: boolean; unknown: string[]; missing: string[] } {
+  const declared = new Set(sig.parameters.map((p) => p.name))
+  // An action that declares no parameters is a passthrough; do not lecture the caller.
+  if (declared.size === 0) return { ok: true, unknown: [], missing: [] }
+  // No parameters at all is the caller asking "how do I call this?" — exec answers that with
+  // the full signature (exit 2, signature_only), which a "missing required" refusal would hide (#188781).
+  if (Object.keys(params).length === 0) return { ok: true, unknown: [], missing: [] }
+
+  const accepted = new Set(declared)
+  for (const group of synonyms) {
+    if (group.some((k) => declared.has(k))) for (const k of group) accepted.add(k)
+  }
+
+  const unknown = Object.keys(params)
+    .filter((k) => !accepted.has(k))
+    .sort()
+  const missing = sig.parameters
+    .filter((p) => p.required && (params[p.name] === undefined || params[p.name] === null))
+    .map((p) => p.name)
+
+  return { ok: unknown.length === 0 && missing.length === 0, unknown, missing }
 }
 
 export async function actionSignaturesLive(target: string): Promise<ActionSignature[] | undefined> {
@@ -831,6 +937,8 @@ function displayResult(result: any, name: string): void {
   console.log(`  ${success("✓")} ${bold(name)} completed`)
   for (const [k, v] of Object.entries(result ?? {})) {
     if (k === "success" || k === "status") continue
+    // Calendar answers both `events` and the provider's raw data.items; print the list once.
+    if (k === "data" && Array.isArray(result?.events)) continue
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       console.log(`  ${dim(k + ":")} ${v}`)
     } else if (Array.isArray(v)) {
@@ -936,10 +1044,18 @@ const ListToolsCommand = cmd({
 const ListIntegrationsCommand = cmd({
   command: "list-integrations",
   describe: "list known integration types",
-  async handler() {
+  // The one list command without --json, so scripting it meant screen-scraping (#190578).
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const { entries, degraded } = await loadCatalog()
+    if (args.json) {
+      // `degraded` is part of the answer: a list served from the binary's built-in copy is
+      // not the registry, and a caller that cannot see that will treat it as complete.
+      await writeJson({ integrations: entries, count: entries.length, degraded })
+      return
+    }
     UI.empty()
     prompts.intro("◈  Available Integrations")
-    const { entries, degraded } = await loadCatalog()
     if (degraded) prompts.log.warn(`Showing this binary's built-in list only — could not read the registry (${degraded}).`)
     printDivider()
     for (const e of entries) console.log(`  ${highlight(e.type)}`)
@@ -1055,7 +1171,22 @@ const ListConnectedCommand = cmd({
     if (args.json) {
       // Machine consumers need the distinction most — an agent parsing `[]` will state it as
       // fact. Emit the error instead of an empty list it cannot tell apart from "none".
-      await writeJson(failure ? { error: failure, connections: null } : items)
+      // Success is the list contract (#191863): every store is read whole, so the total is
+      // exact and nothing is withheld. Failure stays an error object, never an empty list.
+      if (failure) {
+        process.exitCode = 1
+        await writeJson({ success: false, error: failure, connections: null })
+      } else {
+        const partial = read.unreachable.length > 0
+        const env = partial
+          ? listEnvelope({ rows: items ?? [], total: null, page: 1, perPage: Math.max((items ?? []).length, 1), lastPage: 1, hasMore: false }, { resource: "integrations" })
+          : listEnvelope(items ?? [], { resource: "integrations", complete: true })
+        // A store that did not answer: the total is unknown and rows may be missing, but no
+        // page would return them — so truncated, with no next page.
+        if (partial) env.meta.truncated = true
+        if (partial) env.meta.hint = `Only ${stores.length - read.unreachable.length} of ${stores.length} stores answered (could not reach ${read.unreachable.join(", ")}); this list may be incomplete.`
+        await writeJson(env)
+      }
       prompts.outro("Done")
       return
     }
@@ -1072,7 +1203,7 @@ const ListConnectedCommand = cmd({
     // `!items` is unreachable here (failure returned above) but narrows the type for the
     // probe loop below, and keeps this honest if the branches above are ever reordered.
     if (!items || items.length === 0) {
-      prompts.log.warn("No integrations connected.")
+      prompts.log.warn("No integrations connected (0 found across every store that answered).")
       prompts.outro(dim("iris integrations list-available"))
       return
     }
@@ -1081,178 +1212,51 @@ const ListConnectedCommand = cmd({
     const verifySpinner = prompts.spinner()
     verifySpinner.start("Verifying tokens…")
 
-    // A probe reports WHY, not just that it failed. "unverified — could not probe"
-    // is unactionable: it collapses "the local bridge isn't running", "the API
-    // returned a 500" and "the network is down" into one useless string. Each
-    // probe now returns the cause and, where one exists, the command that fixes it.
-    // "unknown" is a real answer and a separate one from "broken". If the probe
-    // ENDPOINT is missing (404) we cannot tell whether the integration works, and
-    // saying either "verified" or "unverified" would be a claim we cannot support.
-    // The previous code returned "verified" for any non-401/403 response, so a 404
-    // on the probe path rendered as a green [verified] — a false positive that hid
-    // the fact that these probe endpoints do not currently resolve.
-    type ProbeState = "verified" | "expired" | "error" | "unknown"
-    type Probe = { state: ProbeState; reason?: string; fix?: string }
-
-    // fetch() rejects for DNS/connection-refused/timeout. Turn that into a cause
-    // the reader can act on rather than a generic failure.
-    const netReason = (e: unknown, target: string): string => {
-      const msg = String((e as any)?.message ?? e ?? "")
-      if (/abort|timeout|timed out/i.test(msg)) return `${target} timed out`
-      if (/ECONNREFUSED|refused/i.test(msg)) return `nothing is listening on ${target}`
-      if (/ENOTFOUND|EAI_AGAIN|dns/i.test(msg)) return `${target} did not resolve`
-      return msg ? `${target} unreachable — ${msg}` : `${target} unreachable`
-    }
-
-    // A FAILING PROBE IS NOT A FAILING INTEGRATION (#182861, #182867).
-    //
-    // The state model above already says the right thing — "unknown" renders dim, as "we could
-    // not determine this", and is deliberately not coloured like a failure. The classification
-    // did not match it: only a 404 reached that branch, so a 500/502/503 from the probe endpoint,
-    // or iris-api being unreachable, fell through to `error` and rendered [unverified]. That is a
-    // claim about the INTEGRATION made on the strength of a failure in OUR probe path — and it
-    // was measurably wrong: connections reporting [unverified] executed their functions fine.
-    //
-    // The distinction that matters is WHO failed:
-    //   - the probe transport failed (4xx-not-auth, 5xx, network) -> we could not ask -> unknown
-    //   - the probe ran and was REFUSED (401/403)                 -> we asked, denied  -> expired
-    // Only the second is evidence about the integration.
-    //
-    // Deliberately NOT applied to the calendar/bridge probe: there the bridge IS the execution
-    // path, so a dead bridge means calendar reads genuinely do not work. That one stays `error`.
-    const probeUnavailable = (status: number, endpoint: string): Probe | null => {
-      if (status === 401 || status === 403) return null // auth answers are real answers
-      if (status === 404)
-        return { state: "unknown", reason: `probe endpoint ${endpoint} returned 404` }
-      if (status === 408 || status === 429 || status >= 500)
-        return {
-          state: "unknown",
-          reason: `probe endpoint ${endpoint} returned HTTP ${status} — the probe is unavailable, which says nothing about the integration`,
-        }
-      return null
-    }
-
-    const verifyFns: Record<string, (row: any) => Promise<Probe>> = {
-      gmail: async () => {
-        let r: Response | null = null
-        try {
-          r = await irisFetch(`/api/v1/leads/0/gmail-threads`)
-        } catch (e) {
-          // Could not reach our own API. That is a fact about us, not about Gmail.
-          return { state: "unknown", reason: netReason(e, "iris-api") }
-        }
-        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
-        if (r.status === 401 || r.status === 403)
-          return { state: "expired", reason: "Google OAuth token rejected" }
-        const gUnavail = probeUnavailable(r.status, "/leads/0/gmail-threads")
-        if (gUnavail) return gUnavail
-        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
-        return { state: "verified", reason: "Gmail API reachable" }
-      },
-      "google-calendar": async () => {
-        // Calendar reads go through the LOCAL bridge, not iris-api. The usual
-        // cause of failure is that the bridge daemon isn't running at all, which
-        // the old "could not probe" text never said.
-        const _bh: Record<string, string> = { Accept: "application/json" }
-        const _bt = getBridgeToken()
-        if (_bt) _bh["X-Bridge-Key"] = _bt
-        let r: Response | null = null
-        try {
-          r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, {
-            signal: AbortSignal.timeout(3000),
-            headers: _bh,
-          })
-        } catch (e) {
-          return {
-            state: "error",
-            reason: netReason(e, "local bridge on :3200"),
-            fix: "iris hive doctor",
-          }
-        }
-        if (!r.ok) {
-          if (r.status === 401 || r.status === 403)
-            return {
-              state: "error",
-              reason: _bt ? "bridge rejected the bridge key" : "no bridge key configured",
-              fix: "iris hive doctor",
-            }
-          return { state: "error", reason: `local bridge returned HTTP ${r.status}`, fix: "iris hive doctor" }
-        }
-        return { state: "verified", reason: "via local bridge" }
-      },
-      "google-drive": async (row: any) => {
-        // Probe THIS row's account. Without integration_id every Drive account
-        // gets whichever connection the API picks by default, so three accounts
-        // all report one shared result.
-        const body: Record<string, unknown> = {
-          type: "google-drive",
-          function: "list_files",
-          params: { maxResults: 1 },
-        }
-        if (row?.id) body.integration_id = row.id
-        let r: Response | null = null
-        try {
-          r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify(body) })
-        } catch (e) {
-          return { state: "unknown", reason: netReason(e, "iris-api") }
-        }
-        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
-        if (r.status === 401 || r.status === 403)
-          return { state: "expired", reason: "Google OAuth token rejected" }
-        const dUnavail = probeUnavailable(r.status, "/integrations/exec")
-        if (dUnavail) return dUnavail
-        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
-        return { state: "verified", reason: "Drive API reachable" }
-      },
-    }
-
-    // Key by integration id, not type. Keying by type made every account of the
-    // same provider share one result — the opposite of the multi-account
-    // visibility this command exists to give.
-    const probeKey = (i: any) => String(i?.id ?? `type:${i?.type}`)
-    const verified = new Map<string, Probe>()
+    // Each connection is checked with one read-only call through ITS OWN account, on the rail
+    // `integrations exec` really uses (#191975). See integration-verify-probe.ts.
+    const verified = new Map<string, ConnectionVerdict | null>()
     await Promise.allSettled(
       items.map(async (i) => {
-        const fn = verifyFns[i.type]
-        if (!fn) return
-        const result = await fn(i).catch((e) => ({
-          state: "error" as const,
-          reason: netReason(e, "probe"),
-        }))
-        verified.set(probeKey(i), result)
+        verified.set(
+          connectionKey(i),
+          await checkConnection(i, async (body) => {
+            const r = await irisFetch(
+              `/api/v1/users/${userId}/integrations/execute-direct`,
+              {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: { "X-Iris-Node": os.hostname() },
+                signal: AbortSignal.timeout(20_000),
+              },
+              IRIS_API,
+            )
+            return { status: r.status, body: await r.json().catch(() => null) }
+          }),
+        )
       }),
     )
     verifySpinner.stop("Done")
 
     printDivider()
     for (const i of items) {
-      const v = verified.get(probeKey(i))
+      const v = verified.get(connectionKey(i)) ?? null
+      const label = statusLabelFor(i, v)
       let statusLabel: string
-      if (v?.state === "verified") {
-        statusLabel = `${success("[verified]")}${v.reason ? ` ${dim(`— ${v.reason}`)}` : ""}`
-      } else if (v?.state === "expired") {
-        const why = v.reason ? `${v.reason} — ` : ""
-        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}reconnect: iris connect ${i.type}`)}`
-      } else if (v?.state === "unknown") {
-        // Do not colour this like a failure. The integration may be fine; it is
-        // the probe that cannot answer, and the fix is ours, not the user's.
-        statusLabel = `${dim("[unknown]")} ${dim(`— ${v.reason ?? "probe unavailable"}; integration status not determined`)}`
-      } else if (v?.state === "error") {
-        // Always say what failed. Append the fix only when one exists.
-        const why = v.reason ?? "probe failed for an unknown reason"
-        const fix = v.fix ? ` ${dim(`→ ${v.fix}`)}` : ""
-        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}`)}${fix}`
-      } else {
-        statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
-      }
+      if (label.tone === "good") statusLabel = success(label.text)
+      else if (label.tone === "bad") statusLabel = `${UI.Style.TEXT_DANGER}${label.text}${UI.Style.TEXT_NORMAL}`
+      else if (label.tone === "warn") statusLabel = `${UI.Style.TEXT_WARNING}${label.text}${UI.Style.TEXT_NORMAL}`
+      else statusLabel = dim(label.text)
+      if (label.detail) statusLabel += ` ${dim(`— ${label.detail}`)}`
       // Show ID + per-account info so multi-account is discoverable.
-      const idLabel = i.id ? dim(`#${i.id}`) : dim("(no local id)")
+      // An fl-api id is not an --integration-id: exec resolves ids in iris-api's store only.
+      const idLabel = i.id ? dim(i.inExecStore === false ? `#${i.id} (fl-api)` : `#${i.id}`) : dim("(no local id)")
       const account = i.account_email ?? i.name ?? null
       const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
       const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
       console.log(`  ${highlight(i.type)}  ${idLabel}  ${statusLabel}${accountLabel}${provider}`)
     }
     printDivider()
+    console.log(`  ${dim(listFooter(listEnvelope(items, { resource: "integrations", complete: true }).meta, "integrations"))}`)
     prompts.outro(dim("Pick an account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
   },
 })
@@ -1580,10 +1584,15 @@ export const ConnectCommand = cmd({
           const vs = prompts.spinner()
           vs.start(`Verifying by ${probe.label}…`)
           try {
-            const r = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
-              method: "POST",
-              body: JSON.stringify({ integration: entry.type, action: probe.action, params: probe.params }),
-            })
+            // execute-direct lives on iris-api; on fl-api this was a 404, so every key read "could not verify".
+            const r = await irisFetch(
+              `/api/v1/users/${userId}/integrations/execute-direct`,
+              {
+                method: "POST",
+                body: JSON.stringify({ integration: entry.type, action: probe.action, params: probe.params }),
+              },
+              IRIS_API,
+            )
             const body = await r.json().catch(() => null)
             if (isProbeSuccess(body)) {
               vs.stop(`${success("✓")} ${bold(entry.type)} connected — verified by ${probe.label}`)
@@ -2024,7 +2033,7 @@ const DescribeCommand = cmd({
 const ExecCommand = cmd({
   command: "exec <target> [function] [params..]",
   aliases: ["call"],
-  describe: "execute an integration function or system tool",
+  describe: "execute an integration function or system tool — writes and sends are a dry run unless --apply",
   builder: (y) =>
     y
       .positional("target", { type: "string", demandOption: true, describe: "integration type or tool name" })
@@ -2051,7 +2060,7 @@ const ExecCommand = cmd({
       .option("apply", {
         type: "boolean",
         default: false,
-        describe: "actually run a write action (send, create, move, delete…). Without it, writes are a dry run that changes nothing",
+        describe: "actually run a write/send action (send, create, move, delete…). Without it, anything that is not a read is a dry run: it shows the account, the parameters and the recipient count, sends nothing, and exits 0",
       })
       .option("dry-run", {
         type: "boolean",
@@ -2059,7 +2068,10 @@ const ExecCommand = cmd({
         describe: "rehearse even a read action",
       })
       .example("iris integrations exec gmail create_label label_name=Clients", "dry run — shows what would happen, changes nothing")
-      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real"),
+      .example("iris integrations exec gmail create_label label_name=Clients --apply", "does it for real")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json", "dry run — prints what would be sent, sends nothing")
+      .example("iris integrations exec mailjet send_transactional_email --integration-id 138 --params-file msg.json --apply", "sends it")
+      .example("iris integrations exec mailjet get_contact_lists", "reads run without --apply"),
   async handler(args) {
     // Suppress all UI chrome when --json for clean pipeable output (#55735)
     if (!args.json) {
@@ -2199,6 +2211,28 @@ const ExecCommand = cmd({
         // in the same response — the caller is usually an agent that will otherwise guess again.
         const known = await knownFunctionsLive(target)
 
+        // Refuse a parameter this action does not declare, before spending a call. The server
+        // told us this in a dry run; doing it on every run is what stops a typo from becoming
+        // a silent wrong answer (#190572/#190573).
+        const signature = (await actionSignaturesLive(target))?.find((a) => a.name === fn)
+        if (signature) {
+          const check = validateActionParams(signature, params, PARAM_SYNONYMS)
+          if (!check.ok) {
+            const problems: string[] = []
+            if (check.unknown.length) problems.push(`unknown parameter(s): ${check.unknown.join(", ")}`)
+            if (check.missing.length) problems.push(`missing required: ${check.missing.join(", ")}`)
+            const message = `${target}.${fn} — ${problems.join("; ")}. Parameters: ${signature.parameters.map((p) => p.name).join(", ") || "(none)"}.`
+            process.exitCode = 1
+            if (args.json) {
+              await writeJson({ success: false, error: message, unknown: check.unknown, missing: check.missing })
+              return
+            }
+            prompts.log.error(message)
+            prompts.outro("Nothing was run.")
+            return
+          }
+        }
+
         // A write called with NO parameters is asking "how do I call this?" — answer with the
         // signature instead of a failed dry run (#188781). Reads with no required params still run.
         if (Object.keys(params).length === 0 && !args.apply) {
@@ -2212,98 +2246,113 @@ const ExecCommand = cmd({
           }
         }
 
-        // DRY RUN BY DEFAULT for anything that is not a read (integration-write-gate.ts). A name this
-        // CLI does not know is stopped FIRST, before even a rehearsal: rehearsing a guessed name would
-        // suggest it exists, which is the loop that put a probe label in a client's mailbox.
+        // DRY RUN BY DEFAULT for anything that is not a read — the decision lives in ONE place,
+        // gatedExec (integration-write-gate.ts), so it can be tested without a network (#189462).
+        // A name with a write verb (send, create, delete…) never runs without --apply, whatever the
+        // server's plan says; the server can only make a rehearsal stricter.
         const isKnown = knownFunction(fn, known)
-        const apply = Boolean(args.apply)
-        let rehearse = Boolean(args["dry-run"]) || (!apply && !isReadAction(fn))
-
-        // The SERVER judges a rehearsal (#188638). It knows the account the call would reach, the
-        // real action name, whether it reads or writes, and whether the upstream tool exists — the
-        // local verb list and function list are only a fallback when it cannot be asked. On
-        // 2026-10-08 a local rehearsal said "looks good" for a move whose Composio tool did not exist.
-        if (rehearse) {
-          let plan: any = null
-          try {
-            plan = await executeIntegrationCall(target, fn, params, { ...accountOpts, dryRun: true })
-          } catch {}
-          if (plan?.dry_run && plan?.would_run) {
-            const readNotForced = plan.ok && plan.would_run.effect === "read" && !args["dry-run"]
-            if (!readNotForced) {
-              process.exitCode = plan.ok ? 2 : 1
-              const out = { ...plan, params, client_node: os.hostname(), apply_with: `iris integrations exec ${target} ${fn} … --apply` }
-              if (args.json) { await writeJson(out); return }
-              const w = plan.would_run
-              if (plan.ok) prompts.log.warn(`DRY RUN — nothing was changed. This would run:`)
-              else prompts.log.error(`DRY RUN FAILED — this would not work:`)
-              console.log(`  ${bold(`${w.integration}.${w.action}`)}${w.requested_action ? dim(` (you typed ${w.requested_action})`) : ""}  ${dim(w.effect ?? "")}`)
-              const line = accountLine(plan)
-              if (line) console.log(`  ${line}`)
-              if (w.upstream_tool) console.log(dim(`  upstream: ${w.upstream_tool}${w.upstream_tool_exists === false ? " — DOES NOT EXIST" : w.upstream_tool_exists ? " ✓" : ""}`))
-              console.log(`  ${dim(JSON.stringify(params))}`)
-              for (const p of plan.problems ?? []) prompts.log.error(p)
-              prompts.outro(plan.ok ? `To do it for real, add ${highlight("--apply")}` : "Fix the above, then dry-run again.")
-              return
-            }
-            rehearse = false // the server says it is a read that will work — just run it
-          } else if (plan?.success === false && plan?.error) {
-            // A refusal (e.g. several accounts, none chosen) is the rehearsal's answer.
-            process.exitCode = 1
-            if (args.json) { await writeJson(plan); return }
-            prompts.log.error(String(plan.error))
-            prompts.outro("Nothing was changed.")
-            return
-          }
-        }
-        if (rehearse && isKnown === false) {
-          const out = { success: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
-          if (args.json) { await writeJson(out); process.exitCode = 1; return }
-          prompts.log.error(out.error)
-          for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
-          process.exitCode = 1
-          prompts.outro("Done")
-          return
-        }
-        if (rehearse) {
-          const out = dryRunResult(target, fn, params)
-          // Exit 2 = "not executed": distinct from 0 (done) and 1 (failed), so a script or agent
-          // that expected the write cannot mistake a rehearsal for success.
-          process.exitCode = 2
-          if (args.json) { await writeJson(out); return }
-          prompts.log.warn(`DRY RUN — ${target}.${fn} would run with:`)
-          console.log(`  ${dim(JSON.stringify(params))}`)
-          prompts.outro(`Nothing was changed. To do it for real, add ${highlight("--apply")}`)
-          return
-        }
-        const withHint = (result: any) =>
-          isFailedResult(result) && isUnknownFunctionError(result) && known
-            ? {
-                ...result,
-                hint: `${fn} is not a ${target} function. Use one of: ${known.map((f) => f.name).join(", ")}`,
-                available_functions: known,
-              }
-            : result
-        if (args.json) {
-          const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
-          await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
-          if (isFailedResult(result)) process.exitCode = 1
-          return
-        }
-        const spinner = prompts.spinner()
+        const spinner = args.json ? null : prompts.spinner()
         const accountLabel = accountOpts.integrationId
           ? ` ${dim(`(#${accountOpts.integrationId})`)}`
           : accountOpts.account
             ? ` ${dim(`(${accountOpts.account})`)}`
             : ""
-        spinner.start(`Executing ${target}.${fn}${accountLabel}…`)
-        const result = withHint(await executeIntegrationCall(target, fn, params, accountOpts))
-        spinner.stop(`${target}.${fn}`)
+        const fnName = fn
+        const outcome = await gatedExec(fnName, { apply: Boolean(args.apply), forceDryRun: Boolean(args["dry-run"]) }, (dryRun) => {
+          if (!dryRun) spinner?.start(`Executing ${target}.${fnName}${accountLabel}…`)
+          return executeIntegrationCall(target, fnName, params, { ...accountOpts, dryRun })
+        })
+
+        if (outcome.kind === "refused") {
+          // A refusal (e.g. several accounts, none chosen) is the rehearsal's answer.
+          const plan = outcome.result
+          process.exitCode = 1
+          if (args.json) { await writeJson(plan); return }
+          prompts.log.error(String(plan.error))
+          prompts.outro("Nothing was changed.")
+          return
+        }
+
+        if (outcome.kind === "rehearsed") {
+          const plan = outcome.plan
+          const recipients = recipientCount(params)
+          const shown = previewParams(params)
+          const applyWith = `iris integrations exec ${target} ${fn} … --apply`
+          if (!plan && isKnown === false) {
+            const out = { success: false, dry_run: true, executed: false, error: `${fn} is not a known ${target} function — nothing was run.`, available_functions: known }
+            if (args.json) { await writeJson(out); process.exitCode = 1; return }
+            prompts.log.error(out.error)
+            for (const f of known ?? []) console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
+          // A rehearsal is not a failure: exit 0 unless the plan found a problem (#189462). The JSON
+          // still says dry_run:true / executed:false / success:false, so nothing reads it as "sent".
+          const problems: string[] = plan?.problems ?? []
+          if (plan && plan.ok === false) process.exitCode = 1
+          if (outcome.server_ignored_dry_run) process.exitCode = 1
+          const out = {
+            ...(plan ?? dryRunResult(target, fn, params)),
+            success: false,
+            dry_run: true,
+            executed: false,
+            integration: target,
+            function: fn,
+            integration_id: plan?.would_run?.integration_id ?? accountOpts.integrationId ?? null,
+            account: plan?.would_run?.account ?? accountOpts.account ?? null,
+            params: shown,
+            recipients,
+            ...(outcome.server_ignored_dry_run ? { warning: "The server did not acknowledge the dry run — it may have performed the action. Check before retrying." } : {}),
+            client_node: os.hostname(),
+            apply_with: applyWith,
+          }
+          if (args.json) { await writeJson(out); return }
+          if (outcome.server_ignored_dry_run) prompts.log.error(out.warning as string)
+          if (!plan || plan.ok) prompts.log.warn(`DRY RUN — nothing was changed. This would run:`)
+          else prompts.log.error(`DRY RUN FAILED — this would not work:`)
+          const w = plan?.would_run
+          console.log(`  ${bold(`${w?.integration ?? target}.${w?.action ?? fn}`)}${w?.requested_action ? dim(` (you typed ${w.requested_action})`) : ""}  ${dim(w?.effect ?? "write")}`)
+          const line = plan ? accountLine(plan) : null
+          if (line) console.log(`  ${line}`)
+          else if (accountOpts.integrationId || accountOpts.account) console.log(`  ${dim(`↳ ${accountOpts.account ?? `connection #${accountOpts.integrationId}`}`)}`)
+          if (w?.upstream_tool) console.log(dim(`  upstream: ${w.upstream_tool}${w.upstream_tool_exists === false ? " — DOES NOT EXIST" : w.upstream_tool_exists ? " ✓" : ""}`))
+          if (recipients !== null) console.log(`  ${bold(`recipients: ${recipients}`)}`)
+          for (const [k, v] of Object.entries(shown)) console.log(`  ${dim(`${k}:`)} ${typeof v === "string" ? v : JSON.stringify(v)}`)
+          for (const p of problems) prompts.log.error(p)
+          prompts.outro(!plan || plan.ok ? `To do it for real, add ${highlight("--apply")}` : "Fix the above, then dry-run again.")
+          return
+        }
+
+        const withHint = (result: any) => {
+          // A WAF page is not an error message (#190575). Summarise before either surface —
+          // the text output and the JSON — so neither carries a document.
+          const cleaned =
+            isFailedResult(result) && typeof result?.error === "string"
+              ? { ...result, error: summarizeUpstreamError(result.error) }
+              : result
+          return isFailedResult(cleaned) && isUnknownFunctionError(cleaned) && known
+            ? {
+                ...cleaned,
+                hint: `${fn} is not a ${target} function. Use one of: ${known.map((f) => f.name).join(", ")}`,
+                available_functions: known,
+              }
+            : cleaned
+        }
+        if (args.json) {
+          const result = withHint(outcome.result)
+          await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
+          if (isFailedResult(result)) process.exitCode = 1
+          return
+        }
+        const result = withHint(outcome.result)
+        spinner?.stop(`${target}.${fn}`)
         displayResult(result, `${target}.${fn}`)
         const who = accountLine(result)
         if (who) console.log(dim(`  ${who}`))
         if (result?._account?.notice) console.log(dim(`  ${result._account.notice}`))
         if (result?.hint) prompts.log.warn(String(result.hint))
+        for (const w of Array.isArray(result?._warnings) ? result._warnings : []) prompts.log.warn(String(w))
         if (isFailedResult(result)) {
           process.exitCode = 1
           if (result?.available_functions) {
@@ -2787,6 +2836,8 @@ export const PlatformRunCommand = cmd({
       .command(IntegrationsUnshareCommand)
       .command(IntegrationsDisconnectCommand)
       .command(IntegrationsSetupNativeCommand)
+      // #190525 — replace a stored key, test it, keep the old one if the test fails.
+      .command(IntegrationsRotateCommand)
       .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},

@@ -29,6 +29,7 @@ import {
   buildScript, ddlFor, describePublish, fieldsFromSchema, projectRecord, assertClean, sensitiveFields, publishedKey,
   INTERNAL_KEYS, IDENT, type FeedRecord, type Field,
 } from "./atlas-database-core"
+import { buildQuery, toRecords, nextCursor, hasMore, schemaFromRows, redact, summarize as summarizePull, assertIdent } from "./atlas-database-pull"
 
 const stateDir = () => join(homedir(), ".iris", "atlas-database")
 const statePath = (dataset: string, table: string) => join(stateDir(), `${dataset}__${table}.cursor.json`)
@@ -268,10 +269,146 @@ const PublishCommand = cmd({
   },
 })
 
+
+/**
+ * `iris atlas:database pull <table> --dataset <slug>` — the other direction (#186475).
+ *
+ * Reads a Supabase table over PostgREST and upserts it into an Atlas dataset, incrementally. No
+ * Postgres driver and no inbound access to their database: only a key that can SELECT. The rules
+ * (ordered paging, a cursor that never goes backwards, rows without an id dropped rather than given
+ * an invented key) live in atlas-database-pull.ts.
+ *
+ * DRY BY DEFAULT. The first thing anyone runs against a client's warehouse cannot change anything.
+ */
+const PullCommand = cmd({
+  command: "pull <table>",
+  describe: "mirror a Supabase/Postgres table into an Atlas dataset, incrementally — dry unless --apply",
+  builder: (y: any) =>
+    y
+      .positional("table", { type: "string", demandOption: true, describe: "source table (plain identifier)" })
+      .option("dataset", { type: "string", demandOption: true, describe: "Atlas dataset slug to upsert into" })
+      .option("source", { type: "string", describe: "Supabase project URL (or SUPABASE_URL)" })
+      .option("key-env", { type: "string", default: "SUPABASE_KEY", describe: "env var holding a key that can SELECT — never pass a key as a flag" })
+      .option("cursor-field", { type: "string", default: "updated_at", describe: "column that decides what is new" })
+      .option("id-field", { type: "string", default: "id", describe: "column that becomes external_id as <table>:<id>" })
+      .option("limit", { type: "number", default: 500, describe: "rows per page" })
+      .option("max-pages", { type: "number", default: 50, describe: "ceiling on pages per run" })
+      .option("bloq", { type: "number", describe: "board the dataset lives on" })
+      .option("apply", { type: "boolean", default: false, describe: "actually write to Atlas. Without it nothing is written" })
+      .option("reset", { type: "boolean", default: false, describe: "forget the cursor and read the table from the beginning" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    const table = String(args.table)
+    const dataset = String(args.dataset)
+    const cursorField = String(args["cursor-field"])
+    const idField = String(args["id-field"])
+    try { assertIdent(table, "table name"); assertIdent(cursorField, "cursor field"); assertIdent(idField, "id field") }
+    catch (e: any) { console.error(e.message); process.exitCode = 1; return }
+
+    const source = String(args.source || process.env.SUPABASE_URL || "").replace(/\/+$/, "")
+    const key = process.env[String(args["key-env"])]
+    if (!source || !key) { console.error(`pull needs --source (or SUPABASE_URL) and a key in $${args["key-env"]}`); process.exitCode = 1; return }
+    const say = (s = "") => console.error(redact(s, [key]))
+
+    const statePath = join(stateDir(), `pull__${dataset}__${table}.cursor.json`)
+    let since: string | null = null
+    if (!args.reset) { try { since = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf-8"))?.cursor ?? null : null } catch { since = null } }
+
+    const limit = Math.max(1, Math.min(10000, Number(args.limit) || 500))
+    const all: Record<string, unknown>[] = []
+    let cursor = since
+    let stalled = false
+    for (let page = 0; page < Number(args["max-pages"] || 50); page++) {
+      const url = buildQuery({ baseUrl: source, table, cursorField, since: cursor, limit })
+      const res = await fetch(url, { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } })
+      if (!res.ok) {
+        const body = (await res.text().catch(() => "")).slice(0, 300)
+        // Day one is usually this: the invite is accepted but the key cannot read the table. The
+        // fix is a grant, not a retry — so name the table.
+        say(`  source said ${res.status} reading "${table}": ${body}`)
+        process.exitCode = 1
+        return
+      }
+      const rows = (await res.json().catch(() => [])) as Record<string, unknown>[]
+      if (!Array.isArray(rows) || rows.length === 0) break
+      all.push(...rows)
+      const advanced = nextCursor(rows, cursorField, cursor)
+      // A page that does not move the cursor would be fetched for ever. Stop and name the suspect.
+      if (advanced === cursor) { stalled = true; break }
+      cursor = advanced
+      if (!hasMore(rows, limit)) break
+    }
+
+    const { records, skipped } = toRecords(all, { idField, table })
+    const result = summarizePull({ table, fetched: all.length, records: records.length, skipped: skipped.length, from: since, to: cursor })
+
+    say(`  ${bold(table)} → ${dataset}`)
+    say(`  fetched ${result.fetched} · to import ${result.imported} · skipped (no ${idField}) ${result.skipped_no_id}`)
+    say(`  cursor ${result.cursor_from} → ${result.cursor_to}`)
+    if (stalled) say(`  ! a page came back but "${cursorField}" did not advance — stopped. Is --cursor-field right?`)
+    if (skipped.length) say(`  ! ${skipped.length} row(s) have no "${idField}" and were NOT imported — an invented key would duplicate them on every run`)
+
+    if (records.length === 0) { say(args.apply ? "  nothing new" : "  nothing new (dry run)"); if (args.json) await writeJson({ ...result, applied: false }); return }
+
+    const token = await requireAuth(); if (!token) return
+    const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${encodeURIComponent(dataset)}`)
+    const datasetExists = schemaRes.ok
+
+    if (!args.apply) {
+      const schema = schemaFromRows(all)
+      const guessed = schema.filter((f) => f.inferred_from_nulls_only).map((f) => f.key)
+      say("")
+      say(`  DRY RUN — nothing was written to Atlas. ${schema.length} column(s) seen.`)
+      if (guessed.length) say(`  typed as text because every sampled row was null: ${guessed.join(", ")}`)
+      if (!datasetExists) {
+        say(`  the dataset "${dataset}" does not exist yet — create it, then re-run with --apply:`)
+        say(`    iris atlas:datasets schemas create --name "${table}" --slug ${dataset}${args.bloq ? ` --bloq ${args.bloq}` : ""} \\`)
+        say(`      --fields '${JSON.stringify({ fields: schema.map(({ key, label, type }) => ({ key, label, type })) })}'`)
+      } else say(`  dataset "${dataset}" exists — re-run with --apply to import`)
+      if (args.json) await writeJson({ ...result, applied: false, dataset_exists: datasetExists, inferred_schema: schema })
+      return
+    }
+
+    if (!datasetExists) { say(`  the dataset "${dataset}" does not exist — run without --apply to get the create command`); process.exitCode = 1; return }
+
+    let created = 0, updated = 0, failed = 0
+    for (let i = 0; i < records.length; i += 500) {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(dataset)}/import`, {
+        method: "POST",
+        body: JSON.stringify({ records: records.slice(i, i + 500), validate: true, ...(args.bloq != null ? { bloq_id: args.bloq } : {}) }),
+      })
+      if (!(await handleApiError(res, "Import"))) {
+        // The cursor is NOT advanced: re-reading this window is absorbed by the upsert; skipping it is not.
+        say(`  cursor left at ${since ?? "(beginning)"} — nothing was skipped`)
+        process.exitCode = 1
+        return
+      }
+      const d = ((await res.json().catch(() => null)) as any)?.data
+      created += d?.created ?? 0
+      updated += d?.updated ?? 0
+      failed += d?.failed_count ?? 0
+    }
+
+    // Rows the server refused are rows the next run must see again. Advancing past them would lose
+    // them for good, and "failed_count: 3" is the only place that loss would ever have been written.
+    if (failed > 0) {
+      say(`  ${created} new · ${updated} merged · ${bold(`${failed} REFUSED by the dataset`)} — cursor NOT advanced, so the next run retries them`)
+      process.exitCode = 1
+      return
+    }
+
+    mkdirSync(stateDir(), { recursive: true })
+    writeFileSync(statePath, JSON.stringify({ cursor, table, dataset, source, updated_at: new Date().toISOString() }, null, 2) + "\n", { mode: 0o600 })
+    say(`  ${success(`imported: ${created} new · ${updated} merged`)}`)
+    say(dim(`  cursor saved — the next run reads only rows after ${cursor}`))
+    if (args.json) await writeJson({ ...result, applied: true, created, updated })
+  },
+})
+
 export const PlatformAtlasDatabaseCommand = cmd({
   command: "atlas:database",
   aliases: ["atlas-database", "atlas:db"],
-  describe: "publish Atlas datasets into a client's own database — their fields, never IRIS internals",
-  builder: (y: any) => y.command(PublishCommand).command(DdlCommand).demandCommand(),
+  describe: "Atlas ↔ a client's own database — publish their fields out (never IRIS internals), pull their tables in",
+  builder: (y: any) => y.command(PublishCommand).command(PullCommand).command(DdlCommand).demandCommand(),
   async handler() {},
 })

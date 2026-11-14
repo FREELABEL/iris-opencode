@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buzzHarnessDir, irisHarness, resolveIrisPath } from "../src/cli/cmd/platform-buzz"
+import { buzzHarnessDir, irisHarness, localBinLinkPlan, resolveIrisPath } from "../src/cli/cmd/platform-buzz"
 
 /**
  * `iris buzz setup` writes the custom-harness file Buzz loads at launch (Tauri app_data_dir() +
@@ -117,5 +117,25 @@ describe("Buzz one-line install — asset pick and signature gate", () => {
   })
   test("refuses unsigned", () => {
     expect(isBlockSigned("code object is not signed at all", "rejected")).toBe(false)
+  })
+})
+
+describe("localBinLinkPlan — so Buzz's built-in IRIS entry can find the binary", () => {
+  const iris = "/Users/a/.iris/bin/iris"
+  test("nothing at ~/.local/bin/iris → create the link", () => {
+    expect(localBinLinkPlan(iris, "/Users/a", "darwin", undefined)).toEqual({
+      action: "create",
+      link: "/Users/a/.local/bin/iris",
+    })
+  })
+  test("already a link to this iris → nothing to do", () => {
+    expect(localBinLinkPlan(iris, "/Users/a", "darwin", iris).action).toBe("ok")
+  })
+  test("a real file, or a link somewhere else → never overwritten", () => {
+    expect(localBinLinkPlan(iris, "/Users/a", "darwin", null).action).toBe("leave")
+    expect(localBinLinkPlan(iris, "/Users/a", "darwin", "/opt/other/iris").action).toBe("leave")
+  })
+  test("Windows → skipped (no ~/.local/bin convention there)", () => {
+    expect(localBinLinkPlan(iris, "C:\\Users\\a", "win32", undefined).action).toBe("skip")
   })
 })

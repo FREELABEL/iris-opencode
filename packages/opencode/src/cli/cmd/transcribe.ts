@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { locateYtDlp, fetchWithYtDlp, isStaleSignatureError } from "./media-fetch"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -467,67 +468,13 @@ function ensureDep(name: string, installCmd: string): string | null {
 // Local video download via yt-dlp (runs on user's machine, uses their cookies)
 // ============================================================================
 
-/**
- * Where yt-dlp may live when `which` cannot see it. The CLI's PATH can be minimal (#187135: a
- * Homebrew yt-dlp reported "not found" on a Mac that had it), and the standalone build this
- * command installs on machines with no brew goes to ~/.iris/bin, which is on nobody's PATH.
- */
-const YTDLP_SELF = join(homedir(), ".iris", "bin", "yt-dlp")
-export function findYtDlp(exists: (p: string) => boolean = existsSync): string | null {
-  const onPath = which("yt-dlp")
-  if (onPath) return onPath
-  for (const p of [YTDLP_SELF, "/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", join(homedir(), ".local", "bin", "yt-dlp")]) {
-    if (exists(p)) return p
-  }
-  return null
-}
-
-/** The official standalone release asset for this machine — no Python, no package manager. */
-export function ytDlpAsset(platform: string = process.platform, arch: string = process.arch): string | null {
-  if (platform === "darwin") return "yt-dlp_macos"
-  if (platform === "linux") return arch === "arm64" ? "yt-dlp_linux_aarch64" : arch === "x64" ? "yt-dlp_linux" : null
-  if (platform === "win32") return "yt-dlp.exe"
-  return null
-}
-
-/**
- * #188318 row 5: the only install path was `brew install yt-dlp`, so a Linux Hive node with no
- * brew could not transcribe any social URL — it printed "Install: brew install yt-dlp" on a
- * machine where that command does not exist. Fall back to the project's own release binary.
- */
-async function installYtDlpStandalone(): Promise<string | null> {
-  const asset = ytDlpAsset()
-  if (!asset) return null
-  try {
-    const res = await fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`, { redirect: "follow" })
-    if (!res.ok) return null
-    mkdirSync(join(homedir(), ".iris", "bin"), { recursive: true })
-    writeFileSync(YTDLP_SELF, Buffer.from(await res.arrayBuffer()), { mode: 0o755 })
-    const ok = spawnSync(YTDLP_SELF, ["--version"], { stdio: "pipe", timeout: 30_000 }).status === 0
-    return ok ? YTDLP_SELF : null
-  } catch {
-    return null
-  }
-}
+// The locate + retry ladder that used to live here is the shared engine now (#190460), so
+// `iris download` and the rest get the same fixes. Re-exported for existing importers.
+export { findYtDlp, ytDlpAsset } from "./media-fetch"
 
 async function downloadVideoLocally(url: string): Promise<string | null> {
-  let ytdlp = findYtDlp()
-  if (!ytdlp) {
-    prompts.log.info("Installing yt-dlp…")
-    if (which("brew")) spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
-    ytdlp = findYtDlp()
-    if (!ytdlp && which("pip3")) {
-      spawnSync("pip3", ["install", "--user", "yt-dlp"], { stdio: "pipe", timeout: 60_000 })
-      ytdlp = findYtDlp()
-    }
-    if (!ytdlp) ytdlp = await installYtDlpStandalone()
-    if (!ytdlp) {
-      prompts.log.error(
-        `yt-dlp not found and could not be installed. Get it from https://github.com/yt-dlp/yt-dlp/releases and put it on your PATH or at ${YTDLP_SELF}`,
-      )
-      return null
-    }
-  }
+  const ytdlp = await locateYtDlp()
+  if (!ytdlp) return null
 
   const outPath = join(tmpdir(), `iris-dl-${Date.now()}.mp4`)
 
@@ -535,56 +482,22 @@ async function downloadVideoLocally(url: string): Promise<string | null> {
   // looser selectors, ending with NO -f so yt-dlp picks its own default. A single
   // hardcoded selector was the cause of "Requested format is not available"
   // (#147267) when YouTube didn't offer that exact format. Each entry is tried
-  // both with browser cookies and without.
-  const formatLadder = [
-    "bestaudio[ext=m4a]/bestaudio/best",
-    "bestaudio/best",
-    "worstaudio/worst",
-    null, // let yt-dlp choose its default format
-  ]
-  // Keep --no-warnings OFF so nsig/SSAP/"Only images" diagnostics reach stderr (#152290).
-  const commonArgs = ["--no-playlist", "-o", outPath]
-
-  const tryLadder = (): { path?: string; err: string } => {
-    let lastErr = "Download failed"
-    for (const fmt of formatLadder) {
-      const fmtArgs = fmt ? ["-f", fmt] : []
-      // Cookies first (Instagram/age-gated need them), then a cookieless attempt.
-      for (const browser of ["chrome", "firefox", "safari", null]) {
-        const cookieArgs = browser ? ["--cookies-from-browser", browser] : []
-        const dl = spawnSync(ytdlp!, [...fmtArgs, ...commonArgs, ...cookieArgs, url], {
-          encoding: "utf8",
-          timeout: 60_000,
-        })
-        if (dl.status === 0 && existsSync(outPath)) return { path: outPath, err: "" }
-        const out = (dl.stderr || dl.stdout || "").trim()
-        if (out) lastErr = out // keep the FULL stderr, not just the last line (#152290)
-      }
-    }
-    return { err: lastErr }
-  }
-
-  const isStaleSignatureError = (err: string) =>
-    /format is not available|requested format|nsig|only images|player|signature|ssap/i.test(err)
-
-  let res = tryLadder()
-  if (res.path) return res.path
-
-  // #152290 — a format/nsig failure is almost always a STALE yt-dlp that can't solve
-  // YouTube's current player signature. Self-update once and retry, rather than misleading
-  // the user with a bare "Requested format is not available".
-  if (isStaleSignatureError(res.err)) {
-    prompts.log.info(`yt-dlp couldn't solve YouTube's player (likely stale) — updating (${highlight("yt-dlp -U")})…`)
-    spawnSync(ytdlp, ["-U"], { stdio: "pipe", timeout: 120_000 })
-    spawnSync("brew", ["upgrade", "yt-dlp"], { stdio: "pipe", timeout: 120_000 }) // -U no-ops on brew installs
-    res = tryLadder()
-    if (res.path) return res.path
-  }
+  // both with browser cookies and without; a stale player self-updates once (#152290).
+  const res = fetchWithYtDlp(ytdlp, url, {
+    formats: ["bestaudio[ext=m4a]/bestaudio/best", "bestaudio/best", "worstaudio/worst", null],
+    // Keep --no-warnings OFF so nsig/SSAP/"Only images" diagnostics reach stderr (#152290).
+    args: ["--no-playlist", "-o", outPath],
+    expect: outPath,
+    timeoutMs: 60_000,
+    verbose: false,
+  })
+  if (res.ok) return outPath
 
   // Everything failed — surface the REAL yt-dlp error (full stderr incl. nsig/SSAP/"Only
   // images"), not a swallowed generic line.
-  prompts.log.error(res.err)
-  if (isStaleSignatureError(res.err)) {
+  const err = res.stderr || res.error || "Download failed"
+  prompts.log.error(err)
+  if (isStaleSignatureError(err)) {
     prompts.log.info(`yt-dlp may still be stale — ${highlight("brew upgrade yt-dlp")} or ${highlight("pip3 install -U yt-dlp")}`)
   }
   return null
@@ -759,8 +672,10 @@ export const PlatformTranscribeCommand = cmd({
     }
 
     const url = String(args.url)
-    const looksLikeFile =
-      args.local || (!/^https?:\/\//i.test(url) && existsSync(resolve(url)))
+    // A link is never a file. `--local` with a URL used to land here and fail with "File not
+    // found: https:/…" instead of downloading it (#190460) — the URL branch below handles --local.
+    const isLink = /^https?:\/\//i.test(url)
+    const looksLikeFile = !isLink && (args.local || existsSync(resolve(url)))
 
     // ── Your own Hive node (--on) ───────────────────────────────
     if (args.on) {

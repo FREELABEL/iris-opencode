@@ -53,8 +53,8 @@ import { accountLine } from "../../src/cli/cmd/platform-run"
 import os from "os"
 
 test("accountLine names the account, its connection id and this machine", () => {
-  const line = accountLine({ success: true, _account: { integration_id: 136, account: "archive@vanguardhcs.com" } })
-  expect(line).toBe(`↳ archive@vanguardhcs.com (#136) · from ${os.hostname()}`)
+  const line = accountLine({ success: true, _account: { integration_id: 136, account: "archive@firm-e.example.com" } })
+  expect(line).toBe(`↳ archive@firm-e.example.com (#136) · from ${os.hostname()}`)
 })
 
 test("accountLine reads a server dry-run plan too, and says when the address is unknown", () => {

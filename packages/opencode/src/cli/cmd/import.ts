@@ -5,6 +5,24 @@ import { bootstrap } from "../bootstrap"
 import { Storage } from "../../storage/storage"
 import { Instance } from "../../project/instance"
 import { EOL } from "os"
+import { irisShareTarget } from "../../share/iris-target"
+
+/** One item as IRIS's share server returns it: GET /api/v6/shares/{id}/data (#191488). */
+export type ShareItem = { type: string; data: any }
+
+/** The flat list → { info, messages: [{ info, parts }] }, the shape a session file has. */
+export function groupShareItems(items: ShareItem[]): { info: any; messages: Array<{ info: any; parts: any[] }> } | undefined {
+  const session = items.find((i) => i.type === "session")?.data
+  const messages = items.filter((i) => i.type === "message").map((i) => i.data)
+  if (!session || messages.length === 0) return undefined
+  const parts = new Map<string, any[]>()
+  for (const p of items.filter((i) => i.type === "part").map((i) => i.data)) {
+    const list = parts.get(p.messageID) ?? []
+    list.push(p)
+    parts.set(p.messageID, list)
+  }
+  return { info: session, messages: messages.map((m) => ({ info: m, parts: parts.get(m.id) ?? [] })) }
+}
 
 export const ImportCommand = cmd({
   command: "import <file>",
@@ -31,13 +49,35 @@ export const ImportCommand = cmd({
       const isUrl = args.file.startsWith("http://") || args.file.startsWith("https://")
 
       if (isUrl) {
-        const urlMatch = args.file.match(/https?:\/\/opncd\.ai\/share\/([a-zA-Z0-9_-]+)/)
-        if (!urlMatch) {
-          process.stdout.write(`Invalid URL format. Expected: https://opncd.ai/share/<slug>`)
+        // An IRIS share link (#191488): https://heyiris.io/share/<id>, read with the owner's IRIS key.
+        const irisMatch = args.file.match(/^https?:\/\/([^/]+)\/share\/([a-z0-9]{10,40})$/)
+        if (irisMatch && !/(^|\.)opncd\.ai$/.test(irisMatch[1])) {
+          const t = irisShareTarget({ irisApi: new URL(args.file).origin, irisKey: process.env["IRIS_API_KEY"] })
+          const response = await fetch(`${t.baseUrl}${t.api.data(irisMatch[2])}`, { headers: t.headers })
+          if (!response.ok) {
+            process.stdout.write(
+              response.status === 404 ? `Share not found, or it is not yours: ${irisMatch[2]}` : `Failed to fetch share data: HTTP ${response.status}`,
+            )
+            process.stdout.write(EOL)
+            return
+          }
+          const grouped = groupShareItems((await response.json()) as ShareItem[])
+          if (!grouped) {
+            process.stdout.write(`Share has no messages: ${irisMatch[2]}`)
+            process.stdout.write(EOL)
+            return
+          }
+          exportData = grouped
+        }
+
+        const urlMatch = exportData ? null : args.file.match(/https?:\/\/opncd\.ai\/share\/([a-zA-Z0-9_-]+)/)
+        if (!exportData && !urlMatch) {
+          process.stdout.write(`Invalid URL format. Expected: https://heyiris.io/share/<id>`)
           process.stdout.write(EOL)
           return
         }
 
+        if (urlMatch) {
         const slug = urlMatch[1]
         const response = await fetch(`https://opncd.ai/api/share/${slug}`)
 
@@ -64,6 +104,7 @@ export const ImportCommand = cmd({
               parts,
             }
           }),
+        }
         }
       } else {
         const file = Bun.file(args.file)

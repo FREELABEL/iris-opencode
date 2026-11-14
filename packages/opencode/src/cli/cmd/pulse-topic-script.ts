@@ -17,9 +17,12 @@ import {
   sweepFiles,
   sweepClaudeCode,
   sweepOpencode,
+  sweepDesktop,
   sweepImessage,
   sweepEmail,
   sweepGmail,
+  sweepCalendar,
+  sweepDrive,
   sweepBloq,
 } from "./pulse-check-sweep"
 
@@ -33,9 +36,12 @@ export const TOPIC_LABEL: Record<TopicSource, string> = {
   files: "files",
   claude_code: "Claude Code",
   opencode: "opencode",
+  iris_desktop: "IRIS Desktop",
   imessage: "iMessage",
   email: "Apple Mail",
   gmail: "Gmail",
+  calendar: "Calendar",
+  drive: "Google Drive",
   bloq: "Atlas",
 }
 
@@ -89,10 +95,13 @@ export const topicSources: Record<TopicSource, Source<SweepOptions, TopicReading
   ),
   files: topicSource("files", (q) => [`git grep in ${q.repo}`], (q) => sweepFiles(q)),
   claude_code: topicSource("claude_code", () => [join(homedir(), ".claude", "projects")], (q) => sweepClaudeCode(q)),
-  opencode: topicSource("opencode", () => [join(homedir(), ".local", "share", "opencode", "storage")], (q) => sweepOpencode(q)),
+  opencode: topicSource("opencode", () => [join(homedir(), ".local", "share", "opencode", "opencode.db"), join(homedir(), ".local", "share", "opencode", "storage")], (q) => sweepOpencode(q)),
+  iris_desktop: topicSource("iris_desktop", () => [join(homedir(), ".iris", "accounts", "<account>", "opencode", "opencode.db")], (q) => sweepDesktop(q)),
   imessage: topicSource("imessage", (q) => [q.messagesDb ?? join(homedir(), "Library", "Messages", "chat.db")], (q) => sweepImessage(q)),
   email: topicSource("email", (q) => [`${q.bridgeUrl ?? "http://127.0.0.1:3200"}/api/mail/search`], (q) => sweepEmail(q)),
   gmail: topicSource("gmail", () => ["Gmail via IRIS integrations"], (q) => sweepGmail(q)),
+  calendar: topicSource("calendar", () => ["every connected Google calendar", "this computer's calendar app"], (q) => sweepCalendar(q)),
+  drive: topicSource("drive", () => ["every connected Google Drive — counts and file kinds only leave this machine"], (q) => sweepDrive(q)),
   bloq: topicSource("bloq", (q) => [`Atlas boards of user ${q.userId ?? "?"}`], (q) => sweepBloq(q)),
 }
 
@@ -105,7 +114,7 @@ export const defaultTopicScript: PulseScript<SweepOptions, SourceSweep> = {
   route: "topic",
   readOnly: true,
   mode: "sequential",
-  stops: (["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const).map((id) =>
+  stops: (["git", "diary", "files", "claude_code", "opencode", "iris_desktop", "imessage", "email", "gmail", "calendar", "drive", "bloq"] as const).map((id) =>
     topicStop(topicSources[id]),
   ),
 }

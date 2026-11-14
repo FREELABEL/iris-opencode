@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API, IRIS_API, PUBLIC_SITE } from "./iris-api"
+import { bloqWebUrl } from "./bloq-web-url"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 
@@ -646,7 +647,7 @@ const AutoCarouselCommand = cmd({
             spinner.stop("Registration failed", 1)
           } else {
             spinner.stop(success(`Registered → item #${id} (pending review)`))
-            console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
+            console.log(`  ${dim("Board:")} ${bloqWebUrl(args.board, PUBLIC_SITE)}  ${dim(`(signed in · item #${id})`)}`) // Atlas, not Elon /iris/bloq (#190012)
           }
         }
       }
@@ -737,7 +738,7 @@ const RegisterCommand = cmd({
       return
     }
     spinner.stop(success(`Registered → item #${id} on board ${args.board} (pending review)`))
-    console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
+    console.log(`  ${dim("Board:")} ${bloqWebUrl(args.board, PUBLIC_SITE)}  ${dim(`(signed in · item #${id})`)}`) // Atlas, not Elon /iris/bloq (#190012)
     prompts.outro("Done")
   },
 })

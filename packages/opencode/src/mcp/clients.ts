@@ -1,7 +1,8 @@
 import path from "path"
 import os from "os"
 import fs from "fs/promises"
-import { realpathSync } from "fs"
+import { readFileSync, realpathSync } from "fs"
+import { spawnSync } from "child_process"
 
 /**
  * Registry of known MCP clients and how to wire the IRIS MCP server into each.
@@ -141,19 +142,113 @@ export namespace McpClients {
    * path (not the bare `iris`) is what makes GUI-launched clients — which spawn
    * the command WITHOUT a login shell, so `~/.zshrc` PATH edits don't apply —
    * able to start the server. Falls back to the canonical install location.
+   *
+   * Never a path in a temporary folder (#190590): run once from a throwaway HOME, this saved
+   * /tmp/tmp.CN1nv3EnPW/.iris/bin/iris into a project .mcp.json, and every later session failed
+   * to start the server once that folder was gone. The stable install is checked under $HOME and
+   * under the account's real home, because a throwaway HOME is exactly the case being refused.
    */
-  export function irisBinary(): string {
+  export function irisBinary(opts: { execPath?: string; tmpRoots?: string[]; accountHome?: string } = {}): string {
+    const found = stableIrisBinary(opts)
+    if (found) return found
+    // Nothing installed yet: still name where it WILL be, never a temp folder (some callers write
+    // this into a launch agent or a PATH). The account home first: a throwaway $HOME is the trap.
+    const tmpRoots = opts.tmpRoots ?? temporaryRoots()
+    return (
+      [opts.accountHome ?? accountHome(), homeDir()]
+        .map((home) => path.join(home, ".iris", "bin", "iris"))
+        .find((p) => !isTemporaryPath(p, tmpRoots)) ?? path.join(homeDir(), ".iris", "bin", "iris")
+    )
+  }
+
+  /**
+   * The iris binary to WRITE into a config: never one in a temporary folder, or undefined when
+   * nothing stable exists. `iris mcp install` refuses on undefined rather than saving a path that
+   * will disappear (#190590).
+   */
+  export function stableIrisBinary(opts: { execPath?: string; tmpRoots?: string[]; accountHome?: string } = {}): string | undefined {
+    const tmpRoots = opts.tmpRoots ?? temporaryRoots()
     try {
-      const real = realpathSync(process.execPath)
+      const real = realpathSync(opts.execPath ?? process.execPath)
       // When running the shipped binary, execPath IS iris. When running from
       // source (bun dev), it's the bun runtime — fall back to the install path.
-      if (/[\\/](iris|opencode)$/i.test(real) || real.includes(`${path.sep}.iris${path.sep}`)) {
+      if ((/[\\/](iris|opencode)$/i.test(real) || real.includes(`${path.sep}.iris${path.sep}`)) && !isTemporaryPath(real, tmpRoots)) {
         return real
       }
     } catch {
-      // ignore — fall through to the default location
+      // A path that no longer resolves is used as given, if it is not temporary.
+      if (opts.execPath && !isTemporaryPath(opts.execPath, tmpRoots)) return opts.execPath
     }
-    return path.join(homeDir(), ".iris", "bin", "iris")
+    const stable = [homeDir(), opts.accountHome ?? accountHome()]
+      .map((home) => path.join(home, ".iris", "bin", "iris"))
+      .filter((p) => !isTemporaryPath(p, tmpRoots))
+    return stable.find(exists)
+  }
+
+  /** True when `p` is inside one of the temp roots (the folder itself counts; a sibling named alike does not). */
+  export function isTemporaryPath(p: string, tmpRoots: string[] = temporaryRoots()): boolean {
+    const target = path.resolve(p)
+    return tmpRoots.some((root) => {
+      const r = path.resolve(root)
+      return target === r || target.startsWith(r.endsWith(path.sep) ? r : r + path.sep)
+    })
+  }
+
+  function temporaryRoots(): string[] {
+    const roots = new Set([os.tmpdir(), "/tmp", "/var/tmp", "/var/folders", "/private/tmp", "/private/var/folders"])
+    for (const r of [...roots]) {
+      try {
+        roots.add(realpathSync(r))
+      } catch {
+        // not on this platform
+      }
+    }
+    return [...roots]
+  }
+
+  /**
+   * The account's home from the system's user database — not $HOME, which a throwaway shell can
+   * point anywhere. Under Bun, os.userInfo().homedir FOLLOWS $HOME (Node reads getpwuid), which is
+   * how v1.5.9 still saved a temp path (#190590). So: getent/passwd on Linux, the directory
+   * service on macOS; $HOME-based answers only as a last resort.
+   */
+  export function accountHome(): string {
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined
+    if (uid !== undefined) {
+      if (process.platform === "darwin") {
+        const out = runQuiet("dscacheutil", ["-q", "user", "-a", "uid", String(uid)])
+        const dir = out?.match(/^dir:\s*(.+)$/m)?.[1]?.trim()
+        if (dir) return dir
+      } else {
+        const line =
+          runQuiet("getent", ["passwd", String(uid)])?.trim() ||
+          readPasswd().find((l) => l.split(":")[2] === String(uid))
+        const dir = line?.split(":")[5]
+        if (dir) return dir
+      }
+    }
+    try {
+      return os.userInfo().homedir
+    } catch {
+      return homeDir()
+    }
+  }
+
+  function runQuiet(cmd: string, args: string[]): string | undefined {
+    try {
+      const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 2000 })
+      return r.status === 0 ? r.stdout : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  function readPasswd(): string[] {
+    try {
+      return readFileSync("/etc/passwd", "utf8").split("\n")
+    } catch {
+      return []
+    }
   }
 
   /**

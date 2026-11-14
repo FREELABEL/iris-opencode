@@ -8,7 +8,7 @@ const clientPage = () => ({
   render_mode: "html",
   html:
     "<h1>DreX CFO — senior finance, without the salary line</h1>" +
-    "<p>Founded by Haroon. Call +44 20 7946 0018 or write to hello@drexcfo.co.uk</p>",
+    "<p>Founded by Haroon. Call +44 20 7946 0018 or write to hello@firm-k.example.com</p>",
   css: "/* brand-tokens:start */:root{--brand-accent:#123}/* brand-tokens:end */",
 })
 const TARGET = { name: "Acme Advisory", colors: { primary: "#ff0000" } }
@@ -16,7 +16,7 @@ const TARGET = { name: "Acme Advisory", colors: { primary: "#ff0000" } }
 describe("rebrand on HTML pages (#188547)", () => {
   test("emails and international phone numbers are scrubbed from the html", () => {
     const { json } = rebrandJsonContent(clientPage(), TARGET)
-    expect(json.html).not.toContain("hello@drexcfo.co.uk")
+    expect(json.html).not.toContain("hello@firm-k.example.com")
     expect(json.html).not.toContain("7946") // UK number: missed by the US-shaped regex before
   })
 
