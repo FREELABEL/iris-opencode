@@ -10,6 +10,7 @@ import {
   listingFooter,
   looksIrreversible,
   normalizeDate,
+  otherPageReason,
   refuseNavigationReason,
   refuseOptionReason,
   refuseScrollReason,
@@ -18,6 +19,7 @@ import {
   renderElements,
   renderInspect,
   shortHref,
+  typeReadbackNote,
   windowOfLines,
 } from "./browser-verbs"
 
@@ -475,5 +477,37 @@ describe("#193442 — a step that lands on an error page says FAILED, not progre
     expect(errorPageReason({ ...before, title: "503 Service Unavailable", textLength: 50, head: "" })).toContain("503")
     expect(errorPageReason({ ...before, title: "Oops", textLength: 200, head: "Sorry, this page not found." })).toBeDefined()
     expect(errorPageReason({ ...before, title: "", textLength: 0, head: "" })).toBe("a blank page")
+  })
+})
+
+describe("#193442 — a landing on another page, and a field that did not take the text, are said plainly", () => {
+  test("a different path is a different page; a new query or hash is the same page moving", () => {
+    const s = otherPageReason("https://www.google.com/travel/flights?q=x", "https://www.google.com/travel/explore?q=x")
+    expect(s).toContain("DIFFERENT PAGE")
+    expect(s).toContain("was /travel/flights")
+    expect(otherPageReason("https://x.test/search?q=a", "https://x.test/search?q=b")).toBeUndefined()
+    expect(otherPageReason("https://x.test/a", "https://x.test/a/#top")).toBeUndefined()
+    expect(otherPageReason("https://a.test/", "https://b.test/x")).toContain("was a.test/")
+    expect(otherPageReason("about:blank", "https://b.test/x")).toBeUndefined()
+  })
+
+  test("describeChange says it, and still says navigated to", () => {
+    const before = { url: "https://g.test/travel/flights", title: "Flights", textLength: 1000, textHash: "a", values: {} }
+    const s = describeChange(before, { ...before, url: "https://g.test/travel/explore", title: "Explore", textHash: "b" })
+    expect(s).toContain("navigated to https://g.test/travel/explore")
+    expect(s).toContain("DIFFERENT PAGE")
+  })
+
+  test("type: empty, changed, a picker, or fine", () => {
+    expect(typeReadbackNote({ ref: 3, typed: "Austin", shown: "" })).toContain("still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "x", shown: "", date: true })).toContain("date field is still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "Thu, Dec 10" })).toContain("NOT AS TYPED")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "2026-12-10", date: true })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 18, typed: "12/10/2026", shown: "12/10/2026", dateBox: true })).toContain("NOT CHOSEN YET: [18] is a date picker")
+    expect(typeReadbackNote({ ref: 4, typed: "aus", shown: "aus", picker: true })).toContain("NOT CHOSEN YET")
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: "kimi" })).toBeUndefined()
+    // The field went away (the page moved on), or it is a password: nothing is said or echoed.
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: null })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 4, typed: "hunter2", shown: "x", secret: true })).toBeUndefined()
   })
 })

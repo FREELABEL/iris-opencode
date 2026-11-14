@@ -555,7 +555,9 @@ export function describeChange(before: PageState, after: PageState): string {
   const failed = moved ? errorPageReason(after) : undefined
   if (failed) return `FAILED: that landed on ${failed} at ${after.url}${after.title ? ` ("${after.title.slice(0, 80)}")` : ""}, not the site. ${RECOVER}`
   const parts: string[] = []
-  if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
+  const other = otherPageReason(before.url, after.url)
+  if (other) parts.push(other)
+  else if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
   if (before.title !== after.title) parts.push(`title is now "${after.title}"`)
   for (const [ref, v] of Object.entries(after.values)) {
     if ((before.values[ref] ?? "") !== v) parts.push(`[${ref}] now holds ${JSON.stringify(v.slice(0, 60))}`)
@@ -566,6 +568,75 @@ export function describeChange(before: PageState, after: PageState): string {
   }
 
   return parts.length ? parts.join("; ") : "nothing changed — same url, same text, same field values"
+}
+
+/**
+ * The action took the page to a DIFFERENT page of the site, not a new state of the same one
+ * (#193442). On 2026-11-13 "Search" on Google Flights landed on /travel/explore instead of the
+ * results; the answer read "navigated to …" like any other step and the agent carried on. A
+ * changed path (or host) is said as what it is, with the path it left, so the agent checks the
+ * page before the next step. Same path with a new query or #hash is the same page, still moving.
+ */
+export function otherPageReason(beforeUrl: string, afterUrl: string): string | undefined {
+  if (beforeUrl === afterUrl) return undefined
+  let a: URL
+  let b: URL
+  try {
+    a = new URL(beforeUrl)
+    b = new URL(afterUrl)
+  } catch {
+    return undefined
+  }
+  const path = (u: URL) => u.pathname.replace(/\/+$/, "") || "/"
+  if (a.host === b.host && path(a) === path(b)) return undefined
+  // Leaving about:blank or a fresh tab is just arriving.
+  if (!/^https?:$/.test(a.protocol)) return undefined
+  const was = a.host === b.host ? path(a) : `${a.host}${path(a)}`
+  return `navigated to ${afterUrl} — a DIFFERENT PAGE (was ${was}). Read it before the next step: if it is not the page you meant (results, the form, the next step), say so and go back rather than carry on`
+}
+
+/**
+ * What a field shows after typing, said honestly (#193442). On 2026-11-13 `type` on Google
+ * Flights' Departure answered `[18] now holds "12/10/2026"`; the date never counted, and Search
+ * just reopened the calendar. A box holding text is not a site that took it:
+ *  - the page cleared it            → it is EMPTY (the old note, now read after the page settled)
+ *  - the page changed it            → it shows what it shows, not what was typed
+ *  - a picker (combobox, date box)  → the text is there, but the choice is made in its list or
+ *                                     calendar; pick it there and check the field again.
+ * A password is never read back, not even here.
+ */
+export function typeReadbackNote(r: {
+  ref: number
+  typed: string
+  /** What the field holds after the page settled; null when the field is gone (the page moved on). */
+  shown: string | null
+  /** An <input type=date>. */
+  date?: boolean
+  /** A combobox, an autocomplete, or a box that opens a list/calendar. */
+  picker?: boolean
+  /** A text box for a date (Departure, Check-in) given a date. */
+  dateBox?: boolean
+  secret?: boolean
+}): string | undefined {
+  if (r.secret || r.shown === null) return undefined
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim()
+  const typed = norm(r.typed)
+  const shown = norm(r.shown)
+  if (typed && !shown) {
+    return r.date
+      ? "the date field is still EMPTY: it did not take that date. Type it as YYYY-MM-DD (e.g. 2026-12-10), or pick it in the site's calendar."
+      : "the field is still EMPTY after typing: the site did not take the text. Look at it (screenshot) before going on."
+  }
+  const iso = normalizeDate(r.typed)
+  const same = shown === typed || (r.date && iso !== null && shown === iso)
+  if (!same) {
+    return `NOT AS TYPED: [${r.ref}] now shows ${JSON.stringify(shown.slice(0, 60))}, not ${JSON.stringify(typed.slice(0, 60))}: the site changed or rejected it. Check the field before going on.`
+  }
+  if (r.picker || r.dateBox) {
+    const what = r.dateBox ? "a date picker" : "a picker (a box with a list)"
+    return `NOT CHOSEN YET: [${r.ref}] is ${what}. The text is in the box, but sites like this only take a choice made in the list or calendar it opens. Run elements, pick the ${r.dateBox ? "day (check its month and year)" : "option"} there, or press Enter in [${r.ref}] — then check the field shows it before searching.`
+  }
+  return undefined
 }
 
 /**
