@@ -1688,7 +1688,7 @@ export function MessageTimeline(props: {
                           />
                           <MenuV2.Portal>
                             <MenuV2.Content
-                              style={{ width: "180px", "min-width": "180px" }}
+                              style={{ width: "170px", "min-width": "170px" }}
                               onCloseAutoFocus={(event) => {
                                 if (title.pendingRename) {
                                   event.preventDefault()
@@ -1719,67 +1719,76 @@ export function MessageTimeline(props: {
                                   </>
                                 )}
                               </Show>
-                              <div data-slot="menu-v2-stepper" data-action="chat-text-size">
-                                <span data-slot="menu-v2-stepper-label">{language.t("session.textSize.title")}</span>
-                                <MenuV2.Item
-                                  closeOnSelect={false}
-                                  aria-label={language.t("session.textSize.smaller")}
-                                  disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES[0]}
-                                  onSelect={() =>
-                                    settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1))
-                                  }
-                                >
-                                  A−
-                                </MenuV2.Item>
-                                <MenuV2.Item
-                                  closeOnSelect={false}
-                                  aria-label={language.t("session.textSize.bigger")}
-                                  disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES.at(-1)}
-                                  onSelect={() =>
-                                    settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1))
-                                  }
-                                >
-                                  A+
-                                </MenuV2.Item>
-                              </div>
-                              <div data-slot="menu-v2-stepper" data-action="chat-font">
-                                <span data-slot="menu-v2-stepper-label">{language.t("session.chatFont.title")}</span>
-                                <For each={CHAT_FONTS}>
-                                  {(font) => (
-                                    <MenuV2.Item
-                                      closeOnSelect={false}
-                                      data-chat-font-option={font}
-                                      data-selected={settings.appearance.chatFont() === font ? "true" : undefined}
-                                      aria-label={language.t(`session.chatFont.${font}`)}
-                                      title={language.t(`session.chatFont.${font}`)}
-                                      onSelect={() => settings.appearance.setChatFont(font)}
-                                    >
-                                      Aa
-                                    </MenuV2.Item>
-                                  )}
-                                </For>
-                              </div>
-                              <div data-slot="menu-v2-stepper" data-action="chat-spacing">
-                                <span data-slot="menu-v2-stepper-label">{language.t("session.chatSpacing.title")}</span>
-                                <For each={CHAT_SPACINGS}>
-                                  {(spacing) => (
-                                    <MenuV2.Item
-                                      closeOnSelect={false}
-                                      data-chat-spacing-option={spacing}
-                                      data-selected={settings.appearance.chatSpacing() === spacing ? "true" : undefined}
-                                      aria-label={language.t(`session.chatSpacing.${spacing}`)}
-                                      title={language.t(`session.chatSpacing.${spacing}`)}
-                                      onSelect={() => settings.appearance.setChatSpacing(spacing)}
-                                    >
-                                      <span data-slot="menu-v2-spacing-glyph" data-spacing={spacing} aria-hidden="true">
-                                        <i />
-                                        <i />
-                                        <i />
-                                      </span>
-                                    </MenuV2.Item>
-                                  )}
-                                </For>
-                              </div>
+                              <MenuV2.Sub gutter={0} overlap overflowPadding={8}>
+                                <MenuV2.SubTrigger data-action="chat-text">
+                                  {language.t("session.chatText.title")}
+                                </MenuV2.SubTrigger>
+                                <MenuV2.Portal>
+                                  <MenuV2.SubContent data-chat-text-menu style={{ width: "220px" }}>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-text-size">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.textSize.title")}</span>
+                                      <MenuV2.Item
+                                        closeOnSelect={false}
+                                        aria-label={language.t("session.textSize.smaller")}
+                                        disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES[0]}
+                                        onSelect={() =>
+                                          settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1))
+                                        }
+                                      >
+                                        A−
+                                      </MenuV2.Item>
+                                      <MenuV2.Item
+                                        closeOnSelect={false}
+                                        aria-label={language.t("session.textSize.bigger")}
+                                        disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES.at(-1)}
+                                        onSelect={() =>
+                                          settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1))
+                                        }
+                                      >
+                                        A+
+                                      </MenuV2.Item>
+                                    </div>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-font">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.chatFont.title")}</span>
+                                      <For each={CHAT_FONTS}>
+                                        {(font) => (
+                                          <MenuV2.Item
+                                            closeOnSelect={false}
+                                            data-chat-font-option={font}
+                                            data-selected={settings.appearance.chatFont() === font ? "true" : undefined}
+                                            aria-label={language.t(`session.chatFont.${font}`)}
+                                            title={language.t(`session.chatFont.${font}`)}
+                                            onSelect={() => settings.appearance.setChatFont(font)}
+                                          >
+                                            Aa
+                                          </MenuV2.Item>
+                                        )}
+                                      </For>
+                                    </div>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-spacing">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.chatSpacing.title")}</span>
+                                      <For each={CHAT_SPACINGS}>
+                                        {(spacing) => (
+                                          <MenuV2.Item
+                                            closeOnSelect={false}
+                                            data-chat-spacing-option={spacing}
+                                            data-selected={settings.appearance.chatSpacing() === spacing ? "true" : undefined}
+                                            aria-label={language.t(`session.chatSpacing.${spacing}`)}
+                                            title={language.t(`session.chatSpacing.${spacing}`)}
+                                            onSelect={() => settings.appearance.setChatSpacing(spacing)}
+                                          >
+                                            <span data-slot="menu-v2-spacing-glyph" data-spacing={spacing} aria-hidden="true">
+                                              <i />
+                                              <i />
+                                              <i />
+                                            </span>
+                                          </MenuV2.Item>
+                                        )}
+                                      </For>
+                                    </div>
+                                  </MenuV2.SubContent>
+                                </MenuV2.Portal>
+                              </MenuV2.Sub>
                               <MenuV2.Item
                                 onSelect={() => {
                                   setTitle("pendingRename", true)

@@ -847,6 +847,7 @@ export const dict = {
   "common.moreOptions": "More options",
   "session.pinned.title": "Pinned messages",
   "session.textSize.title": "Text size",
+  "session.chatText.title": "Text",
   "session.chatFont.title": "Font",
   "session.chatFont.sans": "Sans serif",
   "session.chatFont.serif": "Serif",
