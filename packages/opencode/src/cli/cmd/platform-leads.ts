@@ -24,6 +24,7 @@ import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport }
 import { probeBridge } from "./platform-mail"
 import { refreshLeadComms } from "./platform-atlas-comms"
 import { productCommand } from "./product-command"
+import { LeadsPromoteCommand } from "./platform-leads-promote"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -11703,6 +11704,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsAnalyzeCommand)
       .command(LeadsTagCommand)
       .command(LeadsUntagCommand)
+      .command(LeadsPromoteCommand)
       .demandCommand(),
   async handler() {},
 })
