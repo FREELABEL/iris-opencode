@@ -98,9 +98,9 @@ describe("the leads list's query (#192544)", () => {
   })
 })
 
-describe("old Outreach links land on Needs approval (#192544)", () => {
-  test("the outreach id is Leads › review", () => {
-    expect(resolveSurfaceAlias("outreach")).toEqual({ surface: "leads", sub: "review" })
+describe("old Outreach queue links land on Needs approval (#192544, #193487)", () => {
+  test("outreach/review is Leads › review; outreach alone is the Outreach product again", () => {
+    expect(resolveSurfaceAlias("outreach")).toEqual({ surface: "outreach", sub: undefined })
     expect(resolveSurfaceAlias("outreach", "review")).toEqual({ surface: "leads", sub: "review" })
     expect(resolveSurfaceAlias("atlas")).toEqual({ surface: "atlas", sub: undefined })
   })

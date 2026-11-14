@@ -37,8 +37,11 @@ const FILTER_WORD: Record<ReviewFilter, string> = { all: "All", review: "In revi
 // A batch that is going out is worth watching. One that isn't shouldn't poll.
 const LIVE_POLL_MS = 15_000
 
-export function IrisReachrReview(props: { doFetch: Fetch }) {
-  const [batchId, setBatchId] = createSignal<number>()
+export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch (Outreach › Today, #193487). */ batchId?: number }) {
+  const [batchId, setBatchId] = createSignal<number | undefined>(props.batchId)
+  createEffect(() => {
+    if (props.batchId !== undefined) setBatchId(props.batchId)
+  })
   const [filter, setFilter] = createSignal<ReviewFilter>("all")
   const [selected, setSelected] = createSignal<number>()
   const [editing, setEditing] = createSignal<{ subject: string; body: string }>()

@@ -484,7 +484,8 @@ export function useThread(doFetch: Fetch, leadId: Accessor<number | undefined>) 
   return createResource(leadId, (id): Promise<ThreadAnswer> => json(doFetch, `${ROUTE}/thread/${id}`))
 }
 
-function ConversationDetail(props: {
+/** One conversation beside the lead's card. Also Outreach › Today's reply view (#193487). */
+export function ConversationDetail(props: {
   doFetch: Fetch
   leadId: number
   name: string

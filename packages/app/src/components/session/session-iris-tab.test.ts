@@ -393,8 +393,17 @@ describe("Playbooks › All", () => {
 })
 
 describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
-  test("Outreach is part of Leads now: the old id is Leads, whose Needs approval draws Reachr (#192544)", () => {
-    expect(normalizeSurface("outreach")).toBe("leads")
+  test("Outreach is its own product again (#193487); Leads keeps Needs approval, which draws Reachr (#192544)", () => {
+    expect(normalizeSurface("outreach")).toBe("outreach")
+    expect(resolvePane("outreach", undefined).pane).toBe("outreach-today")
+    expect(resolvePane("outreach", "campaigns").pane).toBe("outreach-campaigns")
+    expect(resolvePane("outreach", "scripts").pane).toBe("outreach-scripts")
+    // Inbox and Leads are links to those products, never Outreach's own view — even if stored.
+    expect(resolvePane("outreach", "inbox").pane).toBe("outreach-today")
+    expect(SUBVIEWS.outreach!.filter((s) => s.goto).map((s) => [s.id, s.goto!.surface])).toEqual([
+      ["inbox", "inbox"],
+      ["leads", "leads"],
+    ])
     expect(resolvePane("leads", undefined).pane).toBe("leads-crm")
     // Leads › Outreach kept its id (`review`), so a stored or deep-linked sub-view still lands on the queue.
     expect(resolvePane("leads", "review").pane).toBe("reachr")

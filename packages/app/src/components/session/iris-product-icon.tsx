@@ -93,6 +93,11 @@ const INBOX: Shape[] = [
   ["path", { d: "M22 12h-6l-2 3h-4l-2-3H2" }],
   ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
 ]
+// lucide "send" — Outreach (#193487).
+const SEND: Shape[] = [
+  ["path", { d: "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" }],
+  ["path", { d: "m21.854 2.147-10.94 10.939" }],
+]
 // lucide "globe" — Browser (#193062).
 const GLOBE: Shape[] = [
   ["circle", { cx: "12", cy: "12", r: "10" }],
@@ -132,6 +137,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   playbooks: { shapes: SCROLL_TEXT, color: "#c084fc" }, // purple-400
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
   pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
+  outreach: { shapes: SEND, color: "#06b6d4" }, // cyan-500 — a colour no other tab uses
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
   inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
   marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500

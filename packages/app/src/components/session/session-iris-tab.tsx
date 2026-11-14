@@ -90,12 +90,13 @@ import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import type { StepId } from "./iris-agent-editor-model"
 import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
-import { watchOutreachBadge } from "./iris-outreach-badge"
+import { watchOutreachBadge, watchOutreachTodayBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
 import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
 import { IrisReachrReview } from "./iris-reachr-review"
+import { IrisOutreach } from "./iris-outreach"
 import { IrisLeadsTab, requestLeadOpen } from "./iris-leads-tab"
 import { IrisInbox, watchInboxBadge } from "./iris-inbox"
 import { IrisGenesisPages } from "./iris-genesis-pages"
@@ -666,9 +667,10 @@ function normalizeGraphScope(v: unknown): GraphScope {
 const SURFACES = [
   { id: "atlas", label: "Atlas", path: (b: number) => `/iris/atlas/${b}` },
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
-  // #192544: Leads and Outreach are one tab. Approving outreach is an action on leads, so Reachr's
-  // queue is Leads › Needs approval. The `outreach` id (#192483) is an alias now (SURFACE_ALIASES),
-  // so old links, pins and stored panels still land there.
+  // #193487: Outreach is a product again — Today (replies + drafts in review), Campaigns (every SOM
+  // campaign: audience → script → leads) and Scripts. Account-wide: campaigns are the account's.
+  { id: "outreach", label: "Outreach", path: () => `/iris/outreach/campaigns` },
+  // #192544: Reachr's queue stays Leads › Needs approval (`outreach/review` still lands there).
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
   // #192688: conversations with leads across channels (Elon's unified inbox), and the Hive inbox —
   // messages between your computers — as Inbox › Computers (it was Hive › Inbox; that id is an alias).
@@ -757,6 +759,8 @@ export function registerBrowserPane(pane: Component) {
 SELF_PANES.add("comms-inbox")
 // Agents › Running (#192855) reads the engine's sessions for itself.
 SELF_PANES.add("agent-runs")
+// Outreach (#193487) draws and fetches for itself.
+for (const p of ["outreach-today", "outreach-campaigns", "outreach-scripts"]) SELF_PANES.add(p)
 
 interface SubView {
   id: string
@@ -774,6 +778,8 @@ interface SubView {
   signIn?: true
   /** A number the view's tab carries, from the surface store (#192544: Needs approval's in-review count). */
   countOf?: string
+  /** A tab that opens another product instead of drawing a pane here (#193487: Outreach › Inbox). Never stored. */
+  goto?: { surface: SurfaceId; sub?: string }
 }
 
 /**
@@ -887,6 +893,14 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   // people in IRIS have contacts, not accounts. Both panes draw and fetch for themselves.
   // Elon's BloqLeadsTab (#190553, #192544), and Reachr's approval queue beside it (#191990) — the
   // Outreach tab folded in. Both panes fetch for themselves (their search and paging are the server's).
+  // #193487. Inbox and Leads are links to those products, not copies of them.
+  outreach: [
+    { id: "today", label: "Today", pane: "outreach-today", path: () => `/iris/comms`, default: true, countOf: "outreach" },
+    { id: "campaigns", label: "Campaigns", pane: "outreach-campaigns", path: () => `/iris/outreach/campaigns` },
+    { id: "scripts", label: "Scripts", pane: "outreach-scripts", path: () => `/iris/outreach/strategies` },
+    { id: "inbox", label: "Inbox", pane: "comms-inbox", path: () => `/iris/comms`, goto: { surface: "inbox", sub: "messages" } },
+    { id: "leads", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, goto: { surface: "leads", sub: "all" } },
+  ],
   leads: [
     { id: "all", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, default: true },
     { id: "review", label: "Needs approval", pane: "reachr", path: () => `/iris/reachr`, countOf: "leads" },
@@ -1111,7 +1125,9 @@ export function resolvePane(
 ): { sub?: SubView; pane: string; path: (b: number) => string; slug?: string } {
   const list = SUBVIEWS[surface]
   if (list?.length) {
-    const chosen = list.find((s) => s.id === sub) ?? list.find((s) => s.default) ?? list[0]
+    // A `goto` tab opens another product; it is never this surface's view.
+    const own = list.filter((s) => !s.goto)
+    const chosen = own.find((s) => s.id === sub) ?? own.find((s) => s.default) ?? own[0] ?? list[0]
     return { sub: chosen, pane: chosen.pane, path: chosen.path, slug: chosen.slug }
   }
   // A surface with no sub-views may name its renderer (Outreach draws the `reachr` pane), and a
@@ -1307,14 +1323,8 @@ try {
     if (storage(LAST_SURFACE_KEY) === "hive") localStorage.setItem(LAST_SURFACE_KEY, "inbox")
   }
 } catch {}
-if (storage(LAST_SURFACE_KEY) === "outreach") {
-  try {
-    const raw = JSON.parse(storage(LAST_SUBVIEW_KEY) ?? "{}")
-    const subs = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}
-    localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify({ ...subs, leads: "review" }))
-    localStorage.setItem(LAST_SURFACE_KEY, "leads")
-  } catch {}
-}
+// (#193487) A stored `outreach` is the Outreach product again: it opens on Today. The rewrite that
+// sent it to Leads › Needs approval (#192544) is gone; anyone it already moved stays on Leads.
 /** Whether the person pinned Atlas themselves — the side panel then opens on IRIS (#189766). */
 export const irisOpensOnAtlas = () => pinnedByChoice(pinsRawSig(), "atlas")
 export const irisPinned = irisPinnedSig
@@ -1649,6 +1659,8 @@ export function SessionIrisTab() {
   })
   // #192688: the Inbox tab's unread count, for the strip. The tab counts for itself while it is open.
   watchInboxBadge({ doFetch, shown: () => irisPinnedSig().includes("inbox"), paneOpen: () => pane() === "comms-inbox" })
+  // #193487: Outreach's count — replies waiting plus messages in review. Today counts for itself while open.
+  watchOutreachTodayBadge({ doFetch, shown: () => irisPinnedSig().includes("outreach"), paneOpen: () => pane() === "outreach-today" })
 
   /**
    * Accumulated pages. Reset whenever the surface or board changes — see the effect below.
@@ -3451,7 +3463,11 @@ export function SessionIrisTab() {
                     aria-selected={resolved().sub?.id === sv.id}
                     class="iris-subnav__item"
                     classList={{ "iris-subnav__item--active": resolved().sub?.id === sv.id }}
-                    onClick={() => chooseSub(sv.id)}
+                    onClick={() => {
+                      if (!sv.goto) return chooseSub(sv.id)
+                      chooseSurface(sv.goto.surface)
+                      if (sv.goto.sub) chooseSub(sv.goto.sub, sv.goto.surface)
+                    }}
                   >
                     {sv.label}
                     <Show when={sv.countOf ? surfaceCount(sv.countOf) : undefined}>
@@ -4464,6 +4480,17 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "reachr"}>
               <IrisReachrReview doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "outreach-today" || pane() === "outreach-campaigns" || pane() === "outreach-scripts"}>
+              <IrisOutreach
+                doFetch={doFetch}
+                view={pane() === "outreach-campaigns" ? "campaigns" : pane() === "outreach-scripts" ? "scripts" : "today"}
+                onOpenLead={(id) => {
+                  requestLeadOpen(id)
+                  chooseSurface("leads")
+                  chooseSub("all", "leads")
+                }}
+              />
             </Match>
             {/* A pinned Genesis page (#192480) — any surface or sub-view with `pane: "page"` and a slug.
               KEYED (#192623): the page reads its slug inside promise callbacks (a frame check, a

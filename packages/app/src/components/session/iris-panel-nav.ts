@@ -4,15 +4,14 @@
  */
 
 /** Products that belong to the account or machine, not to a project. */
-export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon", "inbox"])
+export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon", "inbox", "outreach"])
 
 /**
- * Product ids that were retired into another product (#192544). Outreach (#192483) is Leads'
- * "Needs approval" now: a stored surface, a deep link or an agent asking for `outreach` lands there.
+ * Product ids that were retired into another product. Empty since #193487: Outreach (#192483), folded
+ * into Leads by #192544, is a product again (Today · Campaigns · Scripts). Its old view, the approval
+ * queue, stays Leads › Needs approval — `outreach/review` lands there (MOVED_SUBVIEWS).
  */
-export const SURFACE_ALIASES: Record<string, { surface: string; sub: string }> = {
-  outreach: { surface: "leads", sub: "review" },
-}
+export const SURFACE_ALIASES: Record<string, { surface: string; sub: string }> = {}
 
 /**
  * Sub-views that moved to another product (#192688): Hive › Inbox is Inbox › Computers. A stored
@@ -20,6 +19,10 @@ export const SURFACE_ALIASES: Record<string, { surface: string; sub: string }> =
  */
 export const MOVED_SUBVIEWS: Record<string, { surface: string; sub: string }> = {
   "hive/inbox": { surface: "inbox", sub: "computers" },
+  // #193487: Outreach's Inbox and Leads tabs open those products; its old queue stays in Leads.
+  "outreach/review": { surface: "leads", sub: "review" },
+  "outreach/inbox": { surface: "inbox", sub: "messages" },
+  "outreach/leads": { surface: "leads", sub: "all" },
 }
 
 /** The product and view an id means today. A sub-view asked for explicitly is kept. */
