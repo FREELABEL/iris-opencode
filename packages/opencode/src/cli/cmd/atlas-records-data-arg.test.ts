@@ -42,7 +42,11 @@ beforeEach(() => {
     requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
     return new Response(JSON.stringify({ message: "Record created", data: { id: 9 } }), { status: 200, headers: { "Content-Type": "application/json" } })
   }) as any
-  const grab = (c: any) => { ui += String(c); return true }
+  const grab = (c: any, ...rest: any[]) => {
+    ui += String(c)
+    rest.find((r) => typeof r === "function")?.()
+    return true
+  }
   // clack writes plain text to process.stderr when stdout is not a TTY (as under bun test).
   spies = [
     spyOn(process.stderr, "write").mockImplementation(grab as any),
