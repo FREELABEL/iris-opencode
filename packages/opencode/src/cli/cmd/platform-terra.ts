@@ -179,7 +179,7 @@ async function searchAndPrint(args: any, query: string, near: string | undefined
   await run(args, title, async (spin) => {
     spin?.start("Searching…")
     const r = await terraGet("search", { q: query, near, limit: Number(args.limit) || 10, ...common(args) })
-    const places: any[] = r?.places ?? []
+    const places: any[] = Array.isArray(r?.places) ? r.places : []
     spin?.stop(`${places.length} place(s)${r?.source ? ` from ${r.source}` : ""}`)
     if (args.json) {
       if (!places.length) process.exitCode = 1
@@ -340,7 +340,7 @@ const SourcesCheckCommand = cmd({
       const userId = await resolveUserId()
       const res = await irisFetch(`/api/v1/terra/sources/check${userId ? `?user_id=${userId}` : ""}`, { method: "POST", body: "{}" }, IRIS_API)
       const r = await readTerra(res, "sources/check")
-      const rows: any[] = r?.results ?? []
+      const rows: any[] = Array.isArray(r?.results) ? r.results : []
       const bad = rows.filter((x) => x.enabled && x.status !== "verified" && x.status !== "no-adapter")
       spin?.stop(bad.length ? `${bad.length} enabled source(s) not answering` : "All enabled sources answered")
       if (bad.length) process.exitCode = 1
