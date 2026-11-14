@@ -772,7 +772,7 @@ interface SubView {
   default?: true
   /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
   empty?: string
-  /** A pinned Genesis page (#192480): `pane: "page"` frames freelabel.net/p/<slug>. Config, not code. */
+  /** A pinned Genesis page (#192480): `pane: "page"` frames heyiris.io/p/<slug>. Config, not code. */
   slug?: string
   /** Open that page signed in as the IRIS user — no emailed code (#192482). The page must load iris-sdk 1.0.7+. */
   signIn?: true

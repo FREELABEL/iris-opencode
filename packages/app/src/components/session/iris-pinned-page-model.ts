@@ -8,7 +8,9 @@
  * frame's own `load` (or a timeout) only decides when to stop the spinner.
  */
 
-export const PAGE_ORIGIN = "https://freelabel.net"
+/** heyiris.io, never freelabel.net (#188508): the same fl-iris-api serves both, and IRIS never sends people to freelabel.net. */
+export const PAGE_ORIGIN = "https://heyiris.io"
+export const PAGE_HOST = new URL(PAGE_ORIGIN).host
 
 /** How long a frame may take to fire `load` before the tab says so instead of spinning forever. */
 export const PAGE_LOAD_TIMEOUT_MS = 20_000
@@ -59,22 +61,28 @@ function allowsTheApp(reason: string | undefined): boolean {
   return APP_ORIGINS.some((o) => sources.includes(o))
 }
 
-export function pageVerdict(slug: string, a: FrameCheckAnswer): PageVerdict {
+/**
+ * `appOrigin` is where this panel REALLY runs (`location.origin`). The workaround below — a refusal
+ * naming the app's origins is a wrong guess — is only true inside the Desktop webview. In a browser
+ * at any other address (IRIS opened over a tailnet, 2026-11-13) the refusal is real, and ignoring it
+ * framed the page anyway: a blank grey box instead of "Open in browser".
+ */
+export function pageVerdict(slug: string, a: FrameCheckAnswer, appOrigin: string): PageVerdict {
   if (!a || !a.state) return { show: true }
   if (a.state === "unreachable")
-    return { show: false, title: "Couldn't reach freelabel.net", detail: a.reason ?? "no connection" }
+    return { show: false, title: `Couldn't reach ${PAGE_HOST}`, detail: a.reason ?? "no connection" }
   // A refusal that names the app's own origins is a wrong guess about where the app runs, not a
   // refusal: the sidecar judges by the `location.origin` it is handed, and 1.18.169 on macOS
   // reported "frame-ancestors allows only 'self' tauri://localhost …" for lexicon-console, whose
   // header lists tauri://localhost (2026-11-05). The webview enforces the header against its real
   // origin, so the page is framed and the status check below still catches a missing page.
-  if (a.state === "refused" && !allowsTheApp(a.reason))
+  if (a.state === "refused" && !(APP_ORIGINS.includes(appOrigin) && allowsTheApp(a.reason)))
     return { show: false, title: "This page can't be shown inside IRIS", detail: a.reason ?? "the site refuses" }
   if (a.state === "invalid") return { show: false, title: "Not a page address", detail: slug }
   if (typeof a.status === "number" && a.status >= 400)
     return {
       show: false,
-      title: a.status === 404 ? "This page isn't published" : `freelabel.net answered ${a.status}`,
+      title: a.status === 404 ? "This page isn't published" : `${PAGE_HOST} answered ${a.status}`,
       detail: a.status === 404 ? `/p/${slug} is missing, a draft, or renamed` : `/p/${slug}`,
     }
   return { show: true }

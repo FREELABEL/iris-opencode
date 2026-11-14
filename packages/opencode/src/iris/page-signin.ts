@@ -17,7 +17,7 @@ import { IRIS_API, irisFetch } from "./platform"
  * would be a spent one.
  */
 
-export const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://freelabel.net"
+export const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://heyiris.io"
 
 /** Genesis slugs: lowercase words and hyphens. Anything else is refused before any request. */
 export const PAGE_SLUG = /^[a-z0-9][a-z0-9-]{0,190}$/
