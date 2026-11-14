@@ -184,11 +184,13 @@ describe("one Inbox tab; old ids land on it (#192688)", () => {
     expect(MOVED_SUBVIEWS["hive/inbox"]).toEqual({ surface: "inbox", sub: "computers" })
     expect(resolveSurfaceAlias("hive", "inbox")).toEqual({ surface: "inbox", sub: "computers" })
     expect(resolveSurfaceAlias("hive", "machines")).toEqual({ surface: "hive", sub: "machines" })
-    expect(resolveSurfaceAlias("outreach")).toEqual({ surface: "leads", sub: "review" })
+    // #193487: Outreach is a product again; only its old queue (`outreach/review`) moves to Leads.
+    expect(resolveSurfaceAlias("outreach")).toEqual({ surface: "outreach", sub: undefined })
+    expect(resolveSurfaceAlias("outreach", "review")).toEqual({ surface: "leads", sub: "review" })
   })
   test("the Inbox is account-wide, and shown by default after Leads — also for a saved layout that never had it", () => {
     expect(panelScope("inbox", "comms-inbox")).toBe("account")
-    expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing", "browser"])
+    expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "leads", "inbox", "marketing", "browser"])
     const saved = { version: 2, order: ["leads", "marketing", "atlas", "pages"], hidden: [] }
     const merged = mergeNavLayout(DEFAULT_NAV_LAYOUT, saved)
     // Browser (#193062) now follows Marketing; what this test is about is Inbox after Leads.

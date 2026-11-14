@@ -1,0 +1,91 @@
+/*
+ * Outreach (#193487). FLAT: hairlines, type and spacing only — the panel's tokens (iris-panel-ui.css).
+ * No card backgrounds, no shadows, no filled pills, no icons as decoration. A state is a text colour
+ * (`.tone[data-tone]`); a chosen row is the panel's selection tint, as every list in the panel does.
+ */
+.iris-or { font-size: 12px; }
+.iris-or .n, .iris-or .num { font-variant-numeric: tabular-nums; }
+.iris-or .num { font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; }
+.iris-or .m { color: var(--text-weak); }
+.iris-or .r { text-align: end; justify-content: flex-end; }
+.iris-or .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.iris-or .tone[data-tone] { color: var(--tone); }
+
+.iris-or-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 12px 6px; font-size: 11px; color: var(--text-weak); text-transform: none; border-bottom: 1px solid var(--border-weaker-base); min-width: 0; }
+.iris-or-head > span:first-child { color: var(--text-strong); font-weight: 500; }
+.iris-or-head b { font-weight: 500; color: var(--text-weak); margin-inline-end: 4px; font-variant-numeric: tabular-nums; }
+.iris-or-head .n { color: var(--text-weak); font-weight: 400; margin-inline-start: 4px; }
+.iris-or-link { border: 0; background: none; padding: 0; font-size: 11px; color: var(--text-weak); cursor: pointer; }
+.iris-or-link:hover:not(:disabled) { color: var(--text-strong); text-decoration: underline; }
+.iris-or-link:disabled { opacity: 0.45; cursor: default; }
+.iris-or-note { margin: 8px 12px; font-size: 12px; line-height: 1.45; color: var(--tone, var(--text-base)); }
+.iris-or-absent { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--border-weaker-base); font-size: 11px; color: var(--text-weak); display: grid; gap: 3px; }
+.iris-or-absent span { color: var(--text-base); }
+
+/* List ⇄ detail (Today, Scripts) */
+.iris-or-split { flex: 1 1 0; min-height: 0; display: flex; }
+.iris-or-list { flex: 0 0 300px; min-width: 0; overflow-y: auto; border-right: 1px solid var(--border-weaker-base); display: flex; flex-direction: column; }
+.iris-or-detail { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.iris-or-pad { padding: 12px 16px; overflow-y: auto; }
+.iris-or-sect { display: flex; justify-content: space-between; padding: 12px 12px 4px; font-size: 11px; color: var(--text-weak); }
+.iris-or-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; text-align: start; border: 0; border-bottom: 1px solid var(--border-weaker-base); background: none; color: inherit; padding: 8px 12px; cursor: pointer; }
+.iris-or-row:hover { background: var(--ui-hover); }
+.iris-or-row[aria-selected="true"] { background: var(--ui-sel); }
+.iris-or-row .t { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-or-row .s { grid-column: 1 / -1; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-or-row .m { grid-row: 1; grid-column: 2; font-size: 11px; }
+
+/* Campaigns: the grid on top, Audience → Script → Leads below */
+.iris-or-cols { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.iris-or-camps { flex: none; border-bottom: 1px solid var(--border-weak-base); }
+.iris-or-table { display: flex; flex-direction: column; min-width: 0; }
+.iris-or-tr { display: grid; grid-template-columns: minmax(130px, 1.4fr) 44px minmax(90px, 1fr) 30px minmax(110px, 1.3fr) 62px 58px 66px 104px minmax(90px, 1fr); gap: 10px; align-items: baseline; width: 100%; text-align: start; border: 0; border-bottom: 1px solid var(--border-weaker-base); background: none; color: var(--text-base); padding: 6px 12px; cursor: pointer; font-size: 12px; }
+.iris-or-tr > span { min-width: 0; display: flex; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.iris-or-tr:hover:not(.iris-or-th) { background: var(--ui-hover); }
+.iris-or-tr[aria-selected="true"] { background: var(--ui-sel); }
+.iris-or-tr .t { color: var(--text-strong); }
+.iris-or-th { cursor: default; font-size: 11px; color: var(--text-weak); padding-top: 4px; padding-bottom: 4px; }
+.iris-or-leads .iris-or-tr { grid-template-columns: minmax(100px, 1fr) minmax(90px, 1.2fr) minmax(70px, 0.8fr) 40px 50px; }
+.iris-or-pager { display: flex; justify-content: flex-end; gap: 14px; padding: 8px 12px; }
+
+.iris-or-three { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.1fr) minmax(320px, 1.6fr); min-height: 360px; }
+.iris-or-col { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border-weaker-base); }
+.iris-or-col:last-child { border-right: 0; }
+.iris-or-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; padding: 8px 12px; font-size: 12px; }
+.iris-or-kv > span:nth-child(odd) { color: var(--text-weak); }
+.iris-or-seg { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; text-align: start; border: 0; border-bottom: 1px solid var(--border-weaker-base); background: none; color: var(--text-base); padding: 7px 12px; cursor: pointer; font-size: 12px; }
+.iris-or-seg:first-of-type { border-top: 1px solid var(--border-weaker-base); }
+.iris-or-seg:hover:not(:disabled) { background: var(--ui-hover); }
+.iris-or-seg[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); }
+.iris-or-seg:disabled { cursor: default; }
+.iris-or-seg .s { grid-column: 1 / -1; color: var(--text-weak); font-size: 11px; }
+.iris-or-seg .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.iris-or-steps { padding: 4px 0; }
+.iris-or-desc { margin: 6px 12px 8px; color: var(--text-weak); line-height: 1.45; }
+.iris-or-step { padding: 8px 12px 10px; border-bottom: 1px solid var(--border-weaker-base); }
+.iris-or-step .h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.iris-or-step .h b { font-weight: 500; color: var(--text-strong); font-size: 12.5px; }
+.iris-or-step .h .num { color: var(--text-weak); }
+.iris-or-msg { margin: 6px 0 0; line-height: 1.5; color: var(--text-base); white-space: pre-wrap; }
+.iris-or-ai { margin-top: 6px; color: var(--text-weak); font-size: 11px; }
+.iris-or-ai summary { cursor: pointer; }
+.iris-or-ai p { margin: 4px 0 0; line-height: 1.45; white-space: pre-wrap; }
+.iris-or-title { font-size: 15px; font-weight: 500; color: var(--text-strong); margin-bottom: 4px; }
+.iris-or-pad .iris-or-kv, .iris-or-pad .iris-or-desc, .iris-or-pad .iris-or-step { padding-inline: 0; margin-inline: 0; }
+.iris-or-foot { margin-top: 12px; color: var(--text-weak); font-size: 11px; }
+.iris-or-foot code { font-size: 11px; color: var(--text-base); }
+
+@container (max-width: 760px) {
+  .iris-or-three { grid-template-columns: 1fr; }
+  .iris-or-col { border-right: 0; border-bottom: 1px solid var(--border-weaker-base); }
+  .iris-or-tr { grid-template-columns: minmax(120px, 1fr) 30px 62px 58px 62px; }
+  .iris-or-camps .iris-or-tr > span:nth-child(2), .iris-or-camps .iris-or-tr > span:nth-child(3), .iris-or-camps .iris-or-tr > span:nth-child(5), .iris-or-camps .iris-or-tr > span:nth-child(9), .iris-or-camps .iris-or-tr > span:nth-child(10) { display: none; }
+  .iris-or-split { flex-direction: column; }
+  .iris-or-list { flex: 0 0 auto; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--border-weaker-base); }
+}
+.iris-or-none { padding: 4px 12px 10px; color: var(--text-weak); }
+.iris-or-filter { display: inline-flex; gap: 8px; margin-inline-start: auto; margin-inline-end: 12px; }
+.iris-or-link[aria-pressed="true"] { color: var(--text-strong); text-decoration: underline; text-underline-offset: 3px; }
+.iris-or-people { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-weaker-base); min-width: 0; }
+.iris-or-people .ell { flex: 1 1 auto; }

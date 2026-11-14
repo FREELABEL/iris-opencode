@@ -2017,6 +2017,9 @@ export const IrisPaths = {
   reachrBatches: `${root}/reachr/batches`,
   reachrBatch: `${root}/reachr/batches/:batchID`,
   reachrAction: `${root}/reachr/action`,
+  outreachCampaigns: `${root}/outreach/campaigns`,
+  outreachAudience: `${root}/outreach/campaigns/:campaignID/audience`,
+  outreachStrategies: `${root}/outreach/strategies`,
   agreements: `${root}/agreements`,
   agreement: `${root}/agreements/:agreementID`,
   agreementIssue: `${root}/agreements/:agreementID/issue`,
@@ -4246,6 +4249,19 @@ export const IrisApi = HttpApi.make("iris").add(
         params: { batchID: Schema.NumberFromString },
         success: described(ReachrResponse, "One batch with the exact text of every message"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.reachrBatch", summary: "Read a review batch" })),
+      // Outreach (#193487): SOM campaigns, their audience (iris som preflight, ported) and scripts. Read-only.
+      HttpApiEndpoint.get("outreachCampaigns", IrisPaths.outreachCampaigns, {
+        success: described(ReachrResponse, "The account's SOM campaigns with eligible leads and days of supply"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachCampaigns", summary: "List SOM campaigns" })),
+      HttpApiEndpoint.get("outreachAudience", IrisPaths.outreachAudience, {
+        params: { campaignID: Schema.NumberFromString },
+        query: { refresh: Schema.optional(Schema.String) },
+        success: described(ReachrResponse, "Preflight for one campaign: where its leads came from and how many fit its script"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachAudience", summary: "A campaign's audience" })),
+      HttpApiEndpoint.get("outreachStrategies", IrisPaths.outreachStrategies, {
+        query: { bloq: Schema.optional(Schema.String) },
+        success: described(ReachrResponse, "Outreach strategies (scripts) on those boards, with the campaigns that run each"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachStrategies", summary: "List outreach scripts" })),
       HttpApiEndpoint.post("leadsApi", IrisPaths.leadsApi, {
         payload: Schema.Struct({
           op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness"]),

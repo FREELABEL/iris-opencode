@@ -131,50 +131,49 @@ describe("carrying over the pre-#191509 pins", () => {
   })
 })
 
-describe("Outreach folded into Leads (#192544)", () => {
+describe("Outreach is a product again (#193487; it was folded into Leads by #192544)", () => {
   // The layout #469 shipped to previews: Outreach shown, Leads hidden.
   const withOutreach: NavLayout = {
     version: 2,
     order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "marketing", "leads", "playbooks", "hive", "integrations", "mcp"],
     hidden: [FILES_ITEM, "leads", "playbooks", "hive", "integrations", "mcp"],
   }
-  test("a pinned Outreach becomes a shown Leads, in Outreach's slot, once", () => {
+  test("a saved layout with the old `outreach` id keeps Outreach where it was, shown; Leads stays as the person left it", () => {
     const l = merged(migrateNavLayout(withOutreach))
-    // Inbox (#192688) is new to this layout, so it lands where the default puts it: after Leads.
-    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "leads", "inbox", "marketing", "browser"])
-    expect(l.order.filter((x) => x === "leads")).toHaveLength(1)
-    expect(l.order).not.toContain("outreach")
-    expect(l.hidden).not.toContain("outreach")
+    // Inbox and Browser were never in this layout, so they land after their default neighbours.
+    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "marketing", "browser", "inbox"])
+    expect(isNavItemVisible(l, "leads")).toBe(false)
+    expect(l.order.filter((x) => x === "outreach")).toHaveLength(1)
   })
-  test("both shown: one Leads, where the first of them was", () => {
-    const saved: NavLayout = { version: 2, order: ["leads", "atlas", "outreach", "pages"], hidden: [] }
-    const l = migrateNavLayout(saved)
-    expect(l.order).toEqual(["leads", "atlas", "pages"])
-    expect(l.hidden).toEqual([])
-  })
-  test("Outreach shown after a hidden Leads: Leads moves to Outreach's slot and shows", () => {
-    const saved: NavLayout = { version: 2, order: ["leads", "atlas", "outreach", "pages"], hidden: ["leads"] }
-    const l = migrateNavLayout(saved)
-    expect(l.order).toEqual(["atlas", "leads", "pages"])
+  test("a saved layout that hid the old Outreach keeps it hidden", () => {
+    const saved: NavLayout = { version: 2, order: ["atlas", "outreach", "pages", "leads"], hidden: ["outreach"] }
+    const l = merged(migrateNavLayout(saved))
+    expect(isNavItemVisible(l, "outreach")).toBe(false)
+    expect(visibleNavItems(l)).not.toContain("outreach")
     expect(isNavItemVisible(l, "leads")).toBe(true)
   })
-  test("Outreach hidden and Leads hidden: Leads stays hidden — the person hid both", () => {
-    const saved: NavLayout = { version: 2, order: ["atlas", "outreach", "leads"], hidden: ["outreach", "leads"] }
-    const l = merged(migrateNavLayout(saved))
-    expect(isNavItemVisible(l, "leads")).toBe(false)
-    expect(l.order.filter((x) => x === "leads")).toHaveLength(1)
-  })
-  test("Outreach hidden, Leads shown: Leads keeps its own slot", () => {
-    const saved: NavLayout = { version: 2, order: ["atlas", "outreach", "pages", "leads"], hidden: ["outreach"] }
-    expect(migrateNavLayout(saved)).toEqual({ version: 2, order: ["atlas", "pages", "leads"], hidden: [] })
-  })
-  test("a layout that never had Outreach is unchanged", () => {
-    const saved: NavLayout = { version: 2, order: ["atlas", "leads", "pages"], hidden: ["leads"] }
+  test("migration renames nothing now: every layout is returned as it was", () => {
+    const saved: NavLayout = { version: 2, order: ["leads", "atlas", "outreach", "pages"], hidden: ["leads"] }
     expect(migrateNavLayout(saved)).toEqual(saved)
   })
-  test("the shipped default shows Leads and has no Outreach", () => {
-    expect(DEF.order).not.toContain("outreach")
-    expect(isNavItemVisible(merged(null), "leads")).toBe(true)
+  test("a fresh layout shows Outreach, right before Leads", () => {
+    const shown = visibleNavItems(merged(null))
+    expect(shown).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "leads", "inbox", "marketing", "browser"])
+    expect(DEF.hidden).not.toContain("outreach")
+  })
+  test("a layout migrated by #192544 (no `outreach`, Leads hidden): Outreach lands where the default puts it, shown; Leads stays hidden", () => {
+    const saved: NavLayout = { version: 2, order: ["atlas", "leads", "pages"], hidden: ["leads"] }
+    const l = merged(migrateNavLayout(saved))
+    expect(isNavItemVisible(l, "outreach")).toBe(true)
+    expect(isNavItemVisible(l, "leads")).toBe(false)
+    // Their order is untouched; Outreach goes in after the items that precede it in the default.
+    const theirs = l.order.filter((x) => ["atlas", "leads", "pages"].includes(x))
+    expect(theirs).toEqual(["atlas", "leads", "pages"])
+    expect(l.order.indexOf("outreach")).toBeGreaterThan(l.order.indexOf("pages"))
+  })
+  test("a person who later hides Outreach keeps it hidden on the next upgrade", () => {
+    const off = setNavItemVisible(merged(null), "outreach", false)
+    expect(isNavItemVisible(merged(parseNavLayout(JSON.stringify(off))), "outreach")).toBe(false)
   })
 })
 

@@ -34,18 +34,25 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = {
   // saved layout they land after what the person arranged.
   // Inbox (#192688) is shown, after Leads: replies wait there, with an unread count on the tab.
   // Browser (#193062) is shown, after Marketing: a tab nobody can find is the bug it was filed for.
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "leads", "inbox", "marketing", "browser", "playbooks", "hive", "integrations", "mcp"],
+  // Outreach (#193487) is shown, before Leads: replies and drafts waiting on you, and the campaigns
+  // behind them. New to every saved layout (the old `outreach` id was migrated to Leads by #192544),
+  // so it lands here — after whatever the person put before Leads — and shows.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "inbox", "marketing", "browser", "playbooks", "hive", "integrations", "mcp"],
   hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
 }
 
 /**
- * Items that became another item (#192544): Outreach is part of Leads now.
+ * Items that became another item. A layout holding `from` keeps the person's choice: the merged
+ * item takes the slot of whichever of the two they had showing (the first one, in their order), and
+ * is shown if either was. Never twice. A layout that never had `from` is returned as it was.
  *
- * A layout saved while Outreach was its own tab keeps the person's choice: the merged item takes
- * the slot of whichever of the two they had showing (the first one, in their order), and is shown
- * if either was. Never twice. A layout that never had Outreach is returned as it was.
+ * Empty since #193487. #192544 folded Outreach into Leads (`outreach: "leads"`); Outreach is its own
+ * product again, so the id is no longer renamed. A layout that still holds `outreach` (saved while
+ * Outreach was a tab — #192544 migrated it on read, and only wrote the result back on a change) keeps Outreach where it was,
+ * shown or hidden as the person left it. One that was migrated already has no `outreach`: the new
+ * item lands where the default puts it, shown. Either way Leads keeps its own slot and visibility.
  */
-export const RENAMED_NAV_ITEMS: Record<string, string> = { outreach: "leads" }
+export const RENAMED_NAV_ITEMS: Record<string, string> = {}
 
 export function migrateNavLayout(saved: NavLayout): NavLayout {
   let { order, hidden } = saved
