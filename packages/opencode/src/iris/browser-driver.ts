@@ -18,7 +18,7 @@
  * the refusals move with it.
  */
 import { withCursor } from "./agent-cursor"
-import { normalizeDate, type ElementListing, type PageElement, type PageSignals } from "./browser-verbs"
+import { normalizeDate, typeReadbackNote, type ElementListing, type PageElement, type PageSignals } from "./browser-verbs"
 import { spawn, type ChildProcess } from "child_process"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm } from "fs/promises"
 import { homedir, tmpdir } from "os"
@@ -468,6 +468,49 @@ export abstract class ScriptedPage {
         if (c && c !== names[i]) names[i] = names[i] + ' (' + c + ')'
       })
 
+      // 4b. A calendar day is a number to a person only because the month is printed over it
+      // (#193443): Google Flights listed "10 $410" with no month or year, and the agent picked the
+      // wrong December. A day in a grid gets its date from the page itself — a data-iso/data-date
+      // on it, else the month its grid is labelled with, else the month printed just above it.
+      const MONTH = /\\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)\\b/i
+      const DAY = /^(\\d{1,2})(?!\\d)/
+      const isoOf = (el) => {
+        for (let x = el, i = 0; x && x.getAttribute && i < 4; x = x.parentElement, i++) {
+          for (const a of ['data-iso', 'data-date', 'data-day', 'datetime', 'data-value']) {
+            const v = x.getAttribute(a)
+            if (v && /^\\d{4}-\\d{2}-\\d{2}/.test(v)) return v.slice(0, 10)
+          }
+        }
+        return ''
+      }
+      const monthLabel = (t) => {
+        const s = clean((t.tagName === 'TABLE' && t.caption ? t.caption.innerText : '') || t.getAttribute('aria-label') || byIds(t, 'aria-labelledby'))
+        return s && s.length <= 40 && MONTH.test(s) ? s : ''
+      }
+      const monthOf = (el) => {
+        for (let x = el.parentElement, i = 0; x && x !== x.ownerDocument.body && i < 8; x = x.parentElement, i++) {
+          const own = monthLabel(x)
+          if (own) return own
+          const first = x.firstElementChild
+          if (first && !within(first, el)) { const t = clean(first.innerText); if (t && t.length <= 30 && MONTH.test(t)) return t }
+          for (let s = x.previousElementSibling, j = 0; s && j < 3; s = s.previousElementSibling, j++) {
+            const t = clean(s.innerText)
+            if (t && t.length <= 30 && MONTH.test(t)) return t
+          }
+        }
+        return ''
+      }
+      picked.forEach((f, i) => {
+        const n = names[i]
+        const m = n && n.match(DAY)
+        if (!m || +m[1] < 1 || +m[1] > 31 || MONTH.test(n)) return
+        const iso = isoOf(f.el)
+        const inGrid = !!f.el.closest('table, [role=grid], [role=gridcell], [role=row], [role=rowgroup]')
+        if (!iso && !inGrid) return
+        const when = iso || monthOf(f.el)
+        if (when) names[i] = n + ' (' + when + ')'
+      })
+
       // 5. Something on top of it (a cookie overlay, a sticky bar): a person's click would land
       // there, so say so and let the agent clear it first (#193355).
       const coveredBy = (f) => {
@@ -712,7 +755,7 @@ export abstract class ScriptedPage {
    */
   async typeRef(ref: number, text: string): Promise<boolean> {
     const iso = normalizeDate(text)
-    const got = await this.evaluate<{ ok: boolean; empty?: boolean; date?: boolean } | null>(`(() => {
+    const got = await this.evaluate<{ ok: boolean; date?: boolean; picker?: boolean; dateBox?: boolean; secret?: boolean } | null>(`(() => {
       ${DEEP}
       ${SETTLE}
       const el = byRef(${Math.trunc(ref)})
@@ -772,16 +815,24 @@ export abstract class ScriptedPage {
         }
       })
       if (!ed) el.dispatchEvent(new V.Event('change', { bubbles: true }))
-      const now = ed ? el.textContent : el.value
-      return { ok: true, empty: v.trim() !== '' && !String(now || '').trim(), date: el.type === 'date' }
+      // A box that opens a list or a calendar: text in it is not a choice yet (#193442).
+      const hp = (el.getAttribute('aria-haspopup') || '').toLowerCase()
+      const picker = el.getAttribute('role') === 'combobox' || !!el.getAttribute('aria-autocomplete') || (hp !== '' && hp !== 'false') || el.hasAttribute('list') || !!el.closest('[role=combobox]')
+      const said = [el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('name'), el.id, el.labels && el.labels[0] && el.labels[0].innerText].join(' ')
+      const dateBox = el.type !== 'date' && !!ISO && /date|depart|return|check.?in|check.?out|arriv|pick.?up|drop.?off|when/i.test(said)
+      return { ok: true, date: el.type === 'date', picker, dateBox, secret: el.type === 'password' }
     })()`)
-    if (got?.ok) await this.settle(1500)
-    if (got?.empty) {
-      this.notes.push(
-        got.date
-          ? "the date field is still EMPTY: it did not take that date. Type it as YYYY-MM-DD (e.g. 2026-12-10), or pick it in the site's calendar."
-          : "the field is still EMPTY after typing: the site did not take the text. Look at it (screenshot) before going on.",
-      )
+    if (got?.ok) {
+      await this.settle(1500)
+      // Read it back AFTER the page has had its say: a site can clear, reformat or keep it.
+      const shown = await this.evaluate<string | null>(`(() => {
+        ${DEEP}
+        const el = byRef(${Math.trunc(ref)})
+        if (!el) return null
+        return String((el.isContentEditable ? el.textContent : el.value) || '')
+      })()`).catch(() => null)
+      const note = typeReadbackNote({ ref, typed: text, shown, date: got.date, picker: got.picker, dateBox: got.dateBox, secret: got.secret })
+      if (note) this.notes.push(note)
     }
 
     return !!got?.ok

@@ -56,6 +56,13 @@ const STRESS: Record<string, string> = {
     ${Array.from({ length: 3 }, (_, i) => `<div><span>Flight WN${100 + i}</span><button>Select</button></div>`).join("")}
     <span id="lbl">Swap origin and destination</span><button aria-labelledby="lbl"><svg width="16" height="16"></svg></button>
     <button><svg width="16" height="16"><title>Close dialog</title></svg></button>`,
+  // Google Flights (#193443): one grid per month, the month printed above it, each day a price
+  // button with no month of its own; a row of days that carry data-iso.
+  "/calendar": `<title>cal</title>${["December 2026", "January 2027"].map((m, k) => `<div><div>${m}</div><div role="grid">${Array.from({ length: 3 }, (_, i) => `<div role="gridcell"><div role="button">${i + 10} $${410 + i + k}</div></div>`).join("")}</div></div>`).join("")}
+    <div>${[1, 2].map((d) => `<span data-iso="2026-11-0${d}" role="button" tabindex="0">${d}</span>`).join("")}</div>
+    <input aria-label="Departure" placeholder="Departure" onchange="setTimeout(()=>this.value='',50)">
+    <input aria-label="Where to?" role="combobox" aria-autocomplete="list">
+    <input aria-label="Phone" oninput="this.value=this.value.replace(/[^0-9]/g,'')">`,
   // A control under a full-page overlay.
   "/overlay": `<title>ov</title><button style="margin:100px">Search flights</button><div style="position:fixed;inset:0;background:rgba(0,0,0,.5)"><button style="position:absolute;bottom:20px;right:20px" onclick="this.parentElement.remove()">Accept cookies</button></div>`,
   // Expedia's block page, and Kayak's.
@@ -438,6 +445,27 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(names).not.toContain("Select")
     expect(names).toContain("Swap origin and destination")
     expect(names).toContain("Close dialog")
+  }, 60_000)
+
+  test("a calendar day carries its month and year: from the month printed above it, or its data-iso (#193443)", async () => {
+    await session.open(`${url}calendar`)
+    const names = (await session.elements()).map((e) => e.name)
+    expect(names).toContain("10 $410 (December 2026)")
+    expect(names).toContain("10 $411 (January 2027)")
+    expect(names).toContain("1 (2026-11-01)")
+  }, 60_000)
+
+  test("typing says when the site cleared it, changed it, or still needs a choice from its list (#193442)", async () => {
+    await session.open(`${url}calendar`)
+    const els = await session.elements()
+    const by = (n: string) => els.find((e) => e.name === n)!
+    session.takeNotes()
+    await session.typeRef(by("Departure").ref, "12/10/2026")
+    expect(session.takeNotes().join(" ")).toContain("still EMPTY")
+    await session.typeRef(by("Where to?").ref, "Austin")
+    expect(session.takeNotes().join(" ")).toContain("NOT CHOSEN YET")
+    await session.typeRef(by("Phone").ref, "512-555")
+    expect(session.takeNotes().join(" ")).toContain(`NOT AS TYPED: [${by("Phone").ref}] now shows "512555"`)
   }, 60_000)
 
   test("a control under an overlay is flagged as covered (#193355)", async () => {
