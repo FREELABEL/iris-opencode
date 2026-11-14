@@ -28,6 +28,7 @@ import {
   type SoundSettingsController,
 } from "./general-controllers"
 import { CHAT_TEXT_SIZES, chatTextSize } from "@/utils/chat-text-size"
+import { CHAT_FONTS, CHAT_SPACINGS } from "@/utils/chat-reading"
 import "./settings-v2.css"
 
 const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark"]
@@ -180,6 +181,40 @@ const AppearanceSection: Component<{ controller: AppearanceSettingsController }>
             value={(size) => String(size)}
             label={(size) => language.t(`settings.general.row.chatTextSize.option.${size}` as "settings.general.row.chatTextSize.option.14")}
             onSelect={(size) => size && settings.appearance.setFontSize(size)}
+          />
+        </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.row.chatFont.title")}
+          description={language.t("settings.general.row.chatFont.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-chat-font"
+            options={[...CHAT_FONTS]}
+            current={settings.appearance.chatFont()}
+            placement="bottom-end"
+            gutter={6}
+            value={(font) => font}
+            label={(font) => language.t(`session.chatFont.${font}` as "session.chatFont.sans")}
+            onSelect={(font) => font && settings.appearance.setChatFont(font)}
+          />
+        </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.row.chatSpacing.title")}
+          description={language.t("settings.general.row.chatSpacing.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-chat-spacing"
+            options={[...CHAT_SPACINGS]}
+            current={settings.appearance.chatSpacing()}
+            placement="bottom-end"
+            gutter={6}
+            value={(spacing) => spacing}
+            label={(spacing) => language.t(`session.chatSpacing.${spacing}` as "session.chatSpacing.default")}
+            onSelect={(spacing) => spacing && settings.appearance.setChatSpacing(spacing)}
           />
         </SettingsRowV2>
 

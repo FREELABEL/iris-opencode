@@ -202,7 +202,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1))] text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1)*var(--chat-leading-scale,1))] [font-family:var(--chat-font-family,var(--font-family-sans))] text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
             // With dictation the waveform's lane is reserved all the time — 30px below the text instead
             // of 8 — so a take starting never moves the text or grows the composer.
             classList={{
@@ -235,7 +235,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
           {/* Live words are the prompt's value, so they hide this like typed text does (#189543, #189546). */}
           <Show when={!props.controller.value()}>
             <div
-              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1))] text-v2-text-text-faint"
+              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1)*var(--chat-leading-scale,1))] [font-family:var(--chat-font-family,var(--font-family-sans))] text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
             >
               {view.placeholder?.() ??
