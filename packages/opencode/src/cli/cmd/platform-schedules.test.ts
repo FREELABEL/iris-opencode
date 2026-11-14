@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { latestExecId, pickFreshExecution, isExecutionObserved, timeSince } from "./platform-schedules"
+import { latestExecId, pickFreshExecution, isExecutionObserved, timeSince, parseListenerEvent, parseListenerFilters } from "./platform-schedules"
 
 // latestExecId — baseline before triggering
 test("latestExecId: returns the max id, 0 for empty/odd input", () => {
@@ -58,4 +58,21 @@ test("timeSince: empty for missing or unparseable input, never a wrong number", 
   expect(timeSince(null)).toBe("")
   expect(timeSince(undefined)).toBe("")
   expect(timeSince("not-a-date")).toBe("")
+})
+
+// create --on (#187532)
+test("parseListenerEvent: the source ends at the first dot, the event may hold more", () => {
+  expect(parseListenerEvent("github.pull_request.opened")).toEqual({ source: "github", event: "pull_request.opened" })
+  expect(parseListenerEvent("github.push")).toEqual({ source: "github", event: "push" })
+})
+
+test("parseListenerEvent: refuses anything without both halves", () => {
+  for (const bad of ["github", ".push", "github.", ""]) expect(parseListenerEvent(bad)).toBeNull()
+})
+
+test("parseListenerFilters: keeps an = in the value, refuses a pair with no key", () => {
+  expect(parseListenerFilters(["repository.full_name=a/b", "ref=x=y"])).toEqual({ "repository.full_name": "a/b", ref: "x=y" })
+  expect(parseListenerFilters([])).toEqual({})
+  expect(parseListenerFilters(["=x"])).toBeNull()
+  expect(parseListenerFilters(["novalue"])).toBeNull()
 })

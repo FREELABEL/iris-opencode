@@ -615,7 +615,9 @@ export const AuthLoginCommand = cmd({
           // Validate token against API
           const apiBase = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
           try {
-            const res = await fetch(`${apiBase}/api/v1/me`, {
+            // /api/v1/cli/auth/me answers {user_id, email}; /api/v1/me does not exist (404), so
+            // every --token login failed here (#187775).
+            const res = await fetch(`${apiBase}/api/v1/cli/auth/me`, {
               headers: { Authorization: `Bearer ${args.token}`, Accept: "application/json" },
               signal: AbortSignal.timeout(10_000),
             })
@@ -624,7 +626,7 @@ export const AuthLoginCommand = cmd({
               return
             }
             const data = (await res.json()) as any
-            const userId = args.userId ?? data?.data?.id ?? data?.id
+            const userId = args.userId ?? data?.user_id ?? data?.data?.user_id ?? data?.data?.id ?? data?.id
             if (!userId) {
               prompts.log.error("Token valid but could not resolve user ID")
               return

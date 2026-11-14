@@ -10,9 +10,9 @@ import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask, TIMEOUT_EXIT } from "./hive-script-result"
 import { CliUsageError } from "../json-error"
 import { currentDelegationOrigin } from "./hive-delegation-origin"
-import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
+import { buildHiveRunBody, ENDED_STATUSES, dispatchableConnection, hiveRunScript, queuedReport, statusLine, stoppedWaitingNote, type CreatedTask } from "./hive-run-body"
 import { busyOverrideHint } from "./hive-task-create"
-import { listEnvelope, listFooter } from "./pagination-args"
+import { listEnvelope, listFooter, wholeNumberError, rejectFieldErrors } from "./pagination-args"
 
 // ============================================================================
 // iris hive nodes / run
@@ -35,6 +35,8 @@ export interface HiveNode {
   capabilities?: Record<string, unknown>
   max_concurrent?: number
   active_tasks?: number
+  /** Why a node with free slots is refusing work, e.g. "CPU at 97%" (#192109). */
+  busy_reason?: string | null
   total_tasks_completed?: number
   last_heartbeat_at?: string | null
   last_ip?: string | null
@@ -290,6 +292,7 @@ const HiveNodesListCommand = cmd({
 
       const cv = views.byIndex[nodes.indexOf(n)]
       const cvText = cv.text.replace("<name>", n.name)
+      if (n.busy_reason) console.log(`    ${UI.Style.TEXT_WARNING}not taking work: ${n.busy_reason}${UI.Style.TEXT_NORMAL}`)
       console.log(`    ${dim("daemon commit:")} ${cv.behind || cv.drift ? `${UI.Style.TEXT_WARNING}${cvText}${UI.Style.TEXT_NORMAL}` : cvText}`)
       const ver = (n as any).daemon_version
       const caps = (n as any).bridge_capabilities
@@ -447,6 +450,7 @@ const HiveNodesShowCommand = cmd({
     console.log(`${bold(node.name)}  ${statusBadge(node.connection_status)}`)
     console.log(`  ${dim("id:")}                ${node.id}`)
     console.log(`  ${dim("active tasks:")}      ${node.active_tasks ?? 0} / ${node.max_concurrent ?? "?"}`)
+    if (node.busy_reason) console.log(`  ${dim("not taking work:")}   ${UI.Style.TEXT_WARNING}${node.busy_reason}${UI.Style.TEXT_NORMAL}`)
     console.log(`  ${dim("completed total:")}   ${node.total_tasks_completed ?? 0}`)
     console.log(`  ${dim("last heartbeat:")}    ${timeAgo(node.last_heartbeat_at)}`)
     if (node.last_ip) console.log(`  ${dim("last ip:")}           ${node.last_ip}`)
@@ -656,7 +660,7 @@ const HiveRunCommand = cmd({
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
       .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
       .option("timeout", {
-        describe: "task timeout in seconds (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
+        describe: "task timeout in seconds, 30 to 3600 (default 300 — a repo build or pre-push hook routinely exceeds 60; use --queue for jobs longer than that)",
         type: "number",
         default: 300,
       })
@@ -676,6 +680,8 @@ const HiveRunCommand = cmd({
       .option("no-fail-fast", { describe: "run every statement even after one fails (no `set -e`)", type: "boolean", default: false })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 30, max: 3600 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
@@ -708,14 +714,18 @@ const HiveRunCommand = cmd({
     // "run these three checks, report all three") could stop after the first
     // non-zero exit with no indication why (#182005).
     const failFast = argv["fail-fast"] !== false && !argv["no-fail-fast"]
+    const { nodeOs } = await import("./platform-hive-runner")
+    const windows = nodeOs(node) === "win32"
     if (failFast && !command.startsWith("#!") && !argv.json) {
-      console.log(dim("→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable"))
+      console.log(
+        dim(
+          windows
+            ? "→ Windows node: cmd.exe has no `set -e`, so every line runs — join commands with && to stop at the first failure"
+            : "→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable",
+        ),
+      )
     }
-    const script = command.startsWith("#!")
-      ? command
-      : failFast
-        ? `#!/bin/bash\nset -e\n${command}`
-        : `#!/bin/bash\n${command}`
+    const script = hiveRunScript(command, { failFast, windows })
     const title = (argv.title as string | undefined) ?? `iris hive run: ${command.slice(0, 60)}`
 
     const priority = argv.priority as number | undefined

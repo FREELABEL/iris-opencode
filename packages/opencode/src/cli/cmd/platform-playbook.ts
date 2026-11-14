@@ -3119,7 +3119,7 @@ const PlaybookAvailableCommand = cmd({
   },
 })
 
-const PlaybookInstallCommand = cmd({
+export const PlaybookInstallCommand = cmd({
   command: "install <name>",
   aliases: ["pull"],
   describe: "download a published playbook (to ~/.iris/playbooks by default), sync it to .claude/skills/ for Claude Code and the IRIS app, and — with --target — write the native format for Cursor, Codex or Gemini CLI",

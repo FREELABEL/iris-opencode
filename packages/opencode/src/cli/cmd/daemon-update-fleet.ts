@@ -9,7 +9,7 @@ import { apiBase, isSha, parseDaemonVersion, resolveRef, short } from "./daemon-
  * is a child of the daemon it is about to restart, so the swap + restart + verify run in a
  * detached process after a delay, once this task has reported back.
  */
-export function remoteUpdateScript(sha: string, o: { force?: boolean; dryRun?: boolean; delaySec?: number; healthTimeoutSec?: number } = {}): string {
+export function remoteUpdateScript(sha: string, o: { force?: boolean; dryRun?: boolean; delaySec?: number; healthTimeoutSec?: number; windows?: boolean } = {}): string {
   if (!isSha(sha)) throw new Error(`refusing to dispatch a non-commit ref: ${sha}`)
   const flags = [
     "--ref",
@@ -18,6 +18,15 @@ export function remoteUpdateScript(sha: string, o: { force?: boolean; dryRun?: b
     ...(o.force ? ["--force"] : []),
     ...(o.healthTimeoutSec ? ["--health-timeout", String(o.healthTimeoutSec)] : []),
   ].join(" ")
+  // A Windows node runs the task as a .cmd file through cmd.exe (#192109): the same checks, in batch.
+  if (o.windows)
+    return [
+      'set "IRIS=%USERPROFILE%\\.iris\\bin\\iris.exe"',
+      'if not exist "%IRIS%" (echo no iris CLI on this node 1>&2 & exit /b 3)',
+      '"%IRIS%" daemon update --help 2>&1 | findstr /C:"--detach-restart" >nul || (echo this node\'s iris CLI has no "daemon update" yet - update it first: iris hive run ^<node^> "iris update" 1>&2 & exit /b 4)',
+      `"%IRIS%" daemon update ${flags}`,
+      "exit /b %errorlevel%",
+    ].join("\n")
   return [
     "#!/bin/bash",
     "set -e",

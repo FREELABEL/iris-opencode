@@ -1,3 +1,4 @@
+import { listAllAgents } from "./agent-list-all"
 import { cmd } from "./cmd"
 import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
@@ -304,19 +305,18 @@ const AgentsListCommand = cmd({
  * tokenized matcher used elsewhere. Returns the numeric ID, or null (having
  * printed the reason) on no/ambiguous match.
  */
-async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+export async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
   const numeric = Number(idOrQuery)
   if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
 
   const query = String(idOrQuery)
-  const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
-  if (!res.ok) {
+  const all = await listAllAgents<any>(userId)
+  if (!all.ok) {
     if (!json) prompts.log.error("Could not look up agents by name")
     process.exitCode = 1
     return null
   }
-  const raw = (await res.json()) as { data?: any[] }
-  const matches = (raw?.data ?? []).filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
+  const matches = all.rows.filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
 
   if (matches.length === 0) {
     if (json) await writeJson({ error: `No agent matched "${query}"` })
@@ -2005,9 +2005,13 @@ const AgentsDesktopSyncCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { process.exitCode = 1; return }
 
-    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
-    if (!(await handleApiError(res, "List agents"))) { process.exitCode = 1; return }
-    const agents = firstArray(((await res.json()) as any)?.data)
+    const all = await listAllAgents<any>(userId)
+    if (!all.ok) {
+      prompts.log.error(`List agents failed: ${all.error}`)
+      process.exitCode = 1
+      return
+    }
+    const agents = all.rows
 
     const only = args.agent
       ? new Set(String(args.agent).split(",").map((x) => Number(x.trim())).filter(Number.isInteger))

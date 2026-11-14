@@ -24,6 +24,9 @@ import {
   describeLast,
   insideDaemonService,
   systemdServiceOf,
+  preflight,
+  windowsStartScript,
+  windowsStopScript,
   type LocalState,
 } from "./daemon-update"
 import { describeNodeCommit, remoteUpdateScript, waitForNodeCommit } from "./daemon-update-fleet"
@@ -327,5 +330,70 @@ describe("where the detached restart helper runs", () => {
     expect(describeLast({ status: "restarting-new", at: "2026-10-28T11:50:00Z", deadline_s: 330 }, now).text).toContain("HELPER DIED during \"restarting-new\"")
     expect(describeLast({ status: "restart-scheduled", at: "2026-10-28T11:59:50Z", deadline_s: 70 }, now).final).toBe(false)
     expect(describeLast(null, now).final).toBe(false)
+  })
+})
+
+describe("Windows (#192109)", () => {
+  const tree = () => {
+    const d = mkdtempSync(join(tmpdir(), "du-win-"))
+    mkdirSync(join(d, "lib"))
+    writeFileSync(join(d, "daemon.js"), "module.exports = 1\n")
+    writeFileSync(join(d, "lib", "version-manifest.js"), "module.exports = {}\n")
+    writeFileSync(join(d, "daemonctl"), "if then fi fi (\n") // not valid bash
+    return d
+  }
+  const withPlatform = <T>(p: string | undefined, fn: () => T): T => {
+    const was = process.env.IRIS_PLATFORM_OVERRIDE
+    if (p) process.env.IRIS_PLATFORM_OVERRIDE = p
+    else delete process.env.IRIS_PLATFORM_OVERRIDE
+    try {
+      return fn()
+    } finally {
+      if (was === undefined) delete process.env.IRIS_PLATFORM_OVERRIDE
+      else process.env.IRIS_PLATFORM_OVERRIDE = was
+    }
+  }
+
+  test("pre-flight does not run bash on Windows: daemonctl is not the restart path there", () => {
+    const d = tree()
+    try {
+      expect(withPlatform("win32", () => preflight(d, "node")).join("\n")).not.toContain("bash -n daemonctl")
+      if (process.platform !== "win32") expect(withPlatform("linux", () => preflight(d, "node")).join("\n")).toContain("bash -n daemonctl")
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  })
+
+  test("stop kills the daemon's node process and waits for the task — never Stop-ScheduledTask", () => {
+    const s = windowsStopScript()
+    expect(s).toContain("Stop-Process")
+    expect(s).toContain("daemon\\.js")
+    expect(s).toContain("'IRIS Hive Node', 'IRIS Hive Daemon'")
+    // Ending the task would take the update helper (the daemon's child) down with it.
+    expect(s).not.toContain("Stop-ScheduledTask")
+  })
+
+  test("start runs the first IRIS task that exists, after it stops reporting Running; none = exit 3", () => {
+    const s = windowsStartScript(["IRIS Hive Node", "Bob's task"])
+    expect(s).toContain("@('IRIS Hive Node', 'Bob''s task')")
+    expect(s.indexOf("-eq 'Running'")).toBeLessThan(s.indexOf("Start-ScheduledTask"))
+    expect(s).toContain("exit 3")
+  })
+
+  test("the --node update script for a Windows node is batch, not bash", () => {
+    const s = remoteUpdateScript(B, { delaySec: 15, windows: true })
+    expect(s).not.toContain("#!/bin/bash")
+    expect(s).not.toContain("set -e")
+    expect(s).toContain('%USERPROFILE%\\.iris\\bin\\iris.exe')
+    expect(s).toContain('findstr /C:"--detach-restart"')
+    expect(s).toContain(`daemon update --ref ${B} --detach-restart --restart-delay 15`)
+    expect(s).toContain("exit /b %errorlevel%")
+    expect(remoteUpdateScript(B, {})).toContain("#!/bin/bash")
+  })
+
+  test("the restart helper on Windows is a detached process", () => {
+    const plan = decideLaunch({ platform: "win32", cgroup: "", unit: "u", uid: 0, gid: 0, userScopeWorks: () => false, sudoScopeWorks: () => false })
+    expect(plan.kind).toBe("setsid")
+    expect(plan.reason).toContain("win32")
   })
 })

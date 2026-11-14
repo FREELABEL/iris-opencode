@@ -116,16 +116,21 @@ export namespace PermissionNext {
   export const ask = fn(
     Request.partial({ id: true }).extend({
       ruleset: Ruleset,
+      // #192114. A private session does not inherit an earlier "always".
+      ignoreApproved: z.boolean().optional(),
+      // #192114. Nobody on the event stream: refuse now rather than wait forever.
+      unattended: z.boolean().optional(),
     }),
     async (input) => {
       const s = await state()
-      const { ruleset, ...request } = input
+      const { ruleset, ignoreApproved, unattended, ...request } = input
       for (const pattern of request.patterns ?? []) {
-        const rule = evaluate(request.permission, pattern, ruleset, s.approved)
+        const rule = evaluate(request.permission, pattern, ruleset, ignoreApproved ? [] : s.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny")
           throw new DeniedError(ruleset.filter((r) => Wildcard.match(request.permission, r.permission)))
         if (rule.action === "ask") {
+          if (unattended) throw new UnattendedError(request.permission)
           const id = input.id ?? Identifier.ascending("permission")
           return new Promise<void>((resolve, reject) => {
             const info: Request = {
@@ -268,6 +273,14 @@ export namespace PermissionNext {
   export class RejectedError extends Error {
     constructor() {
       super(`The user rejected permission to use this specific tool call.`)
+    }
+  }
+
+  /** Needs approval and nobody can give it. Refused, never allowed, never left waiting. */
+  export class UnattendedError extends RejectedError {
+    constructor(permission: string) {
+      super()
+      this.message = `Permission refused: ${permission} needs approval and nobody is connected to give it.`
     }
   }
 

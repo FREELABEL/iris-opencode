@@ -353,6 +353,11 @@ function collectCommands(): Entry[] {
     // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
     // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
     const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
+    // A product declares its children as `subcommands: [A, B]` and productCommand() registers
+    // them, so they never appear as `.command(...)`: every door of `iris lexicon` was missing.
+    const productChildren = (b.body.match(/subcommands:\s*\[([^\]]*)\]/)?.[1] ?? "")
+      .split(",").map((n) => n.trim()).filter(Boolean)
+    childNames.push(...productChildren)
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
@@ -576,7 +581,18 @@ const TERMS: Record<string, string[]> = {
   // "which command should I use" found atlas use / genesis / deliver:carousel — never `intent`,
   // the command that answers exactly that (#186677).
   intent: ["which command", "what command", "which tool", "what tool", "what should i run", "what do i run", "pick a command", "choose a command", "tool selection", "in plain english", "natural language"],
-  memory: ["remember", "recall", "knowledge base", "rag"],
+  memory: [
+    "remember", "recall", "knowledge base", "rag",
+    // #192223: how an owner asks the company memory a question.
+    "everything my business knows", "everything we know", "what did we promise", "company brain", "second brain", "search my notes",
+  ],
+  // #192223: plain questions from a "one screen for my business" evaluation that found nothing,
+  // although each answer existed. Phrases, not channel names: "whatsapp" alone is a send.
+  "atlas:comms": ["one feed", "every message", "all my messages", "unified inbox", "all channels", "messages in one place", "conversation history"],
+  "leads stats": ["funnel", "funnel stage", "by stage", "conversion rate", "how many leads", "deals by stage"],
+  broadcast: ["all my agents", "every agent", "one instruction", "tell everyone", "announce to", "the whole team"],
+  "mint import": ["bank statement", "bank statements", "profit and loss", "card statement"],
+  "hive inventory": ["what machines", "machines i own", "my machines", "compute i own", "my hardware", "what can my machines run", "free slots"],
   bug: ["issue", "report a problem", "defect", "ticket"],
   // "reply to … in my email" saw only iMessage and `sites reply` (#188613): nothing tied a person's
   // email words to the `mail` / `gmail` commands. `email` itself is the NEWSLETTER command — a list,
