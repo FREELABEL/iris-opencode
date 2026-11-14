@@ -6,9 +6,7 @@
  *   fl-api responses - RECORDED, from that fl-api test (test/fixture/reachr-review/fl-api-recorded.json).
  *   email, Instagram - not reached from here. The CLI only ever talks to fl-api.
  *
- * `iris reachr drafts` (#191989) doesn't exist yet. Those cases are test.failing, not skipped: they pass
- * while the command is missing and go RED the day it exists, so they can't be forgotten or stay green
- * by accident. When that happens, drop `.failing` and drive the exit check for real.
+ * `iris reachr drafts` (#191989) drives the same server. The exit check runs for real against production.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { join } from "path"
@@ -16,6 +14,7 @@ import fs from "fs/promises"
 import os from "os"
 import recorded from "../fixture/reachr-review/fl-api-recorded.json"
 import capabilities from "../../capabilities.json"
+import { parsePace, parseWhen } from "../../src/cli/cmd/platform-reachr-drafts"
 
 const PKG = join(import.meta.dir, "../..")
 const CLI = join(PKG, "src/index.ts")
@@ -126,8 +125,8 @@ describe("sending is its own action", () => {
   }, 60_000)
 })
 
-/** pending #191989. The exit check in the epic, one command at a time. */
-describe("iris reachr drafts (pending #191989)", () => {
+/** The exit check in the epic, one command at a time. */
+describe("iris reachr drafts (#191989)", () => {
   const names = (capabilities as any).entries.map((c: any) => c.name as string)
 
   test("the capability index is readable, so the cases below fail for the right reason", () => {
@@ -135,8 +134,24 @@ describe("iris reachr drafts (pending #191989)", () => {
   })
 
   for (const sub of ["create", "list", "edit", "approve", "hold", "schedule", "wait", "check", "audit"]) {
-    test.failing(`pending #191989: reachr drafts ${sub} exists`, () => {
+    test(`reachr drafts ${sub} exists`, () => {
       expect(names.some((n: string) => n.startsWith(`reachr drafts ${sub}`))).toBe(true)
     })
   }
+})
+
+describe("reachr drafts time and pace", () => {
+  test("a pace is one spacing or a range, and a backwards range is refused", () => {
+    expect(parsePace("5m")).toEqual({ min: 300, max: 300 })
+    expect(parsePace("3m-5m")).toEqual({ min: 180, max: 300 })
+    expect(parsePace("5m-3m")).toBeNull()
+    expect(parsePace("soon")).toBeNull()
+  })
+
+  test("a send time we can't read is null, never a guess", () => {
+    expect(parseWhen("+1m", 0)).toBe("1970-01-01T00:01:00.000Z")
+    expect(parseWhen("2026-11-02T09:07:00-06:00")).toBe("2026-11-02T15:07:00.000Z")
+    expect(parseWhen("monday-ish")).toBeNull()
+    expect(parseWhen("+soon")).toBeNull()
+  })
 })

@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
-import { fleet, rowsFromNodes } from "./platform-hive-models"
+import { fleet, inferenceChecks, rowsFromNodes, type InferenceCheck } from "./platform-hive-models"
 
 /**
  * `iris hive inventory` — the machines you own as one planning answer (#191914).
@@ -31,11 +31,11 @@ export interface InventoryNode {
 const num = (v: unknown) => (typeof v === "number" ? v : null)
 
 /** Pure, so it is tested without a fleet. */
-export function inventoryFromNodes(raw: any[], now = Date.now()) {
+export function inventoryFromNodes(raw: any[], now = Date.now(), checks?: InferenceCheck[] | null) {
   const nodes: InventoryNode[] = raw.map((n) => {
     const hw = n?.hardware_profile ?? {}
     const online = n?.connection_status === "online" || n?.connection_status === "busy"
-    const rows = rowsFromNodes([n], now)
+    const rows = rowsFromNodes([n], now, checks)
     const max = num(n?.max_concurrent)
     const active = num(n?.active_tasks)
     return {
@@ -86,7 +86,8 @@ export const HiveInventoryCommand = cmd({
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
-    const { nodes, summary } = inventoryFromNodes(await fleet(userId))
+    const [raw, checks] = await Promise.all([fleet(userId), inferenceChecks(userId)])
+    const { nodes, summary } = inventoryFromNodes(raw, Date.now(), checks)
     if (argv.json) return void (await writeJson({ nodes, summary }))
     console.log()
     if (!nodes.length) return void console.log(dim("  No machines yet. Connect one: iris how-to view hive-dispatch"))

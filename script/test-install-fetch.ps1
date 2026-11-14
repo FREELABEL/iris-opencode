@@ -40,6 +40,13 @@ check "reports it was NOT an update"  ($r.Updated -eq $false)
 check "daemon.js landed"              (Test-Path (Join-Path $dir "daemon.js"))
 check "index.js landed"               (Test-Path (Join-Path $dir "index.js"))
 check "package.json landed"           (Test-Path (Join-Path $dir "package.json"))
+# #192109: the manifest the daemon reads to report its commit, from the archive's own commit.
+$manifestPath = Join-Path $dir ".iris-daemon-version.json"
+$manifest = if (Test-Path $manifestPath) { Get-Content $manifestPath -Raw | ConvertFrom-Json } else { $null }
+$sha = if (Test-Path (Join-Path $dir ".iris-commit")) { (Get-Content (Join-Path $dir ".iris-commit") -Raw).Trim() } else { $null }
+check "the version manifest is written"  ($manifest -ne $null)
+check "...with the archive's commit"     ($manifest -and $sha -and $manifest.commit -eq $sha)
+check "...listing daemon.js by hash"      ($manifest -and $manifest.files.'daemon.js' -match '^[0-9a-f]{64}$')
 
 ""
 "CASE 2 — update over an existing install, preserving machine state"
@@ -57,7 +64,12 @@ check "succeeds"                            ($r2.Ok -eq $true)
 check "reports it WAS an update"            ($r2.Updated -eq $true)
 check "node_modules survived"               (Test-Path (Join-Path $dir "node_modules/marker.txt"))
 check "daemon.log survived"                 ((Get-Content (Join-Path $dir "daemon.log")) -eq "historic log line")
-check "an old .git is left alone"           (Test-Path (Join-Path $dir ".git/HEAD"))
+# #192109: a .git from an old clone install no longer describes these files, and `iris daemon
+# update` trusts .git over the manifest. Kept, but moved out of the bridge.
+check "an old .git is moved out of the bridge" (-not (Test-Path (Join-Path $dir ".git")))
+$gitBackup = Get-ChildItem -Path (Split-Path $dir -Parent) -Directory -Filter ((Split-Path $dir -Leaf) + ".git-*") | Select-Object -First 1
+check "...and kept beside it, intact"       ($gitBackup -and (Test-Path (Join-Path $gitBackup.FullName "HEAD")))
+if ($gitBackup) { Remove-Item $gitBackup.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 check "stale repo files ARE cleaned up"     (-not (Test-Path (Join-Path $dir "stale-source-file.js")))
 check "daemon.js still present"             (Test-Path (Join-Path $dir "daemon.js"))
 

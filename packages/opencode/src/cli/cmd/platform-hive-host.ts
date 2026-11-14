@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { dim, bold, success, highlight, requireAuth, requireUserId, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { createInterface } from "readline"
@@ -399,6 +400,8 @@ const HostRunCommand = cmd({
           "Every run is logged to ~/.iris/hive-host-audit.jsonl.",
       ),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 1 })
+    if (rejectFieldErrors(timeoutError ? { timeout: [timeoutError] } : null, argv.json)) return
     const vm = String(argv.vm)
     const command = [...((argv.command as string[] | undefined) ?? []), ...(((argv as any)["--"] as string[] | undefined) ?? [])]
       .map(String)

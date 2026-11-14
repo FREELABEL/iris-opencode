@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { buildPostBody, publishRows, statusRows, resolveSubmitted, exitCodeFor, requestIds } from "./platform-post"
+import { buildPostBody, TRIAL_SHARE_MODES, publishRows, statusRows, resolveSubmitted, exitCodeFor, requestIds } from "./platform-post"
 import { at, connectedTargets, findBrand, type AccountsMatrix } from "./platform-social"
 
 // Shape of GET /api/v1/social-media/accounts, trimmed from a real response (2026-10-11).
@@ -175,5 +175,37 @@ describe("handles (#188876)", () => {
     expect(at("@freelabelnet")).toBe("@freelabelnet")
     expect(at("@@x")).toBe("@x")
     expect(at(null)).toBe("")
+  })
+})
+
+describe("iris post --trial (#192312)", () => {
+  const base = { platforms: ["instagram"], brand: "freelabel", video: "https://cdn/r.mp4", caption: "hi" }
+
+  test("a bare --trial shares with followers if it performs", () => {
+    const r = buildPostBody({ ...base, trial: "" })
+    expect("error" in r ? r.error : r.body.share_mode).toBe("TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED")
+  })
+
+  test("--trial never keeps it to non-followers", () => {
+    const r = buildPostBody({ ...base, trial: "never" })
+    expect("error" in r ? r.error : r.body.share_mode).toBe("TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS")
+  })
+
+  test("without --trial nothing changes", () => {
+    const r = buildPostBody(base)
+    expect("error" in r ? r.error : r.body.share_mode).toBeUndefined()
+  })
+
+  test("refuses what upload-post would silently post as a regular Reel", () => {
+    const err = (i: Parameters<typeof buildPostBody>[0]) => { const r = buildPostBody(i); return "error" in r ? r.error : null }
+    expect(err({ ...base, trial: "sometimes" })).toContain("if-liked")
+    expect(err({ ...base, video: undefined, images: ["https://cdn/a.jpg"], trial: "" })).toContain("--video")
+    expect(err({ ...base, platforms: ["x"], trial: "" })).toContain("instagram")
+    expect(err({ ...base, mediaType: "stories", trial: "" })).toContain("Story")
+  })
+
+  test("every value maps to a share_mode fl-api accepts", () => {
+    const accepted = ["TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED", "TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS"]
+    for (const v of Object.values(TRIAL_SHARE_MODES)) expect(accepted).toContain(v)
   })
 })

@@ -15,7 +15,7 @@ import * as prompts from "./clack"
 import { dim, bold, success, irisFetch, handleApiError, requireAuth, requireUserId } from "./iris-api"
 import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { AGENT_HASH, sealAgent, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
+import { AGENT_HASH, sealAgent, sealDefinition, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
 import { revokedIds, readCouples, writeCouples, nodeKey, couplesPath, actLogPath, kineticDir, nodeIsLocked, currentActor, trustedIssuers, trustIssuer, untrustIssuer, issuerKeyPath, markRevoked, sigVerifier, recentActs, currentRunId } from "./kinetic-store"
 import { generateIssuer, signCouple, verifyCoupleSig, issuerFingerprint } from "./kinetic-sign"
 import { unknownVerbs, knownVerbs, BODY_CLASSES } from "./kinetic-bodies"
@@ -68,9 +68,8 @@ const SealCommand = cmd({
       const body = (await res.json()) as { data?: any }
       const a = body?.data ?? body
       if (!a?.id) { console.error("Agent not found"); process.exitCode = 1; return }
-      // Seal the DEFINITION, not the envelope: ids, timestamps and counters change without the
-      // agent changing, and a hash that moves on its own would revoke couples at random.
-      definition = { name: a.name, model: a.model, instructions: a.instructions ?? a.prompt ?? null, tools: a.tools ?? a.config?.tools ?? null, config: a.config ?? null }
+      // Seal the DEFINITION, not the envelope — one shared function, see sealDefinition.
+      definition = sealDefinition(a)
       label = String(a.name ?? `agent-${a.id}`)
     } else {
       console.error("Give --agent <id|name> or --file <definition.json>.")

@@ -1,5 +1,5 @@
 {
-  "version": "2026.08.12-agreements-and-design-standard",
+  "version": "2026.11.02-run-a-case-in-lexicon",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -21,10 +21,22 @@
       "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
     },
     {
+      "src": "how-to/run-a-case-in-lexicon.md",
+      "dest": "how-to/run-a-case-in-lexicon.md",
+      "managed": true,
+      "purpose": "Lawyer-facing path through a matter: intake, conflicts, engagement, signature, chronology, demand."
+    },
+    {
       "src": "how-to/agreements-and-signing.md",
       "dest": "how-to/agreements-and-signing.md",
       "managed": true,
       "purpose": "NDAs, BAAs, multi-party signing, and gating access on an executed agreement. Distinct from payment-gate-contracts, which sells rather than gates."
+    },
+    {
+      "src": "how-to/move-a-mixxx-rig.md",
+      "dest": "how-to/move-a-mixxx-rig.md",
+      "managed": true,
+      "purpose": "Move a Mixxx DJ rig (controller mappings + audio routing) between Macs via `iris app-config` or by hand with Atlas files, the mixxx-rig dataset and atlas pull/push."
     },
     {
       "src": "how-to/atlas-datasets.md",
@@ -37,6 +49,12 @@
       "dest": "how-to/desktop-atlas-offline-copy.md",
       "managed": true,
       "purpose": "Open Atlas boards instantly and read them offline in IRIS Desktop: where the copy lives, the patient-data rule, and how to turn it off."
+    },
+    {
+      "src": "how-to/iris-drives.md",
+      "dest": "how-to/iris-drives.md",
+      "managed": true,
+      "purpose": "Catalog your drives (iris drives): find any file without plugging the drive in, catch sensitive files on unencrypted drives, encrypt them, and keep two copies of camera cards."
     },
     {
       "src": "how-to/atlas-local-copy.md",
@@ -282,7 +300,7 @@
       "src": "how-to/public-url-for-a-local-port.md",
       "dest": "how-to/public-url-for-a-local-port.md",
       "managed": true,
-      "purpose": "Give something running on your machine a public https URL (<name>.t.heyiris.io), encrypted to the machine, that closes when you stop."
+      "purpose": "Give something running on your machine a public https URL (<name>.hivemesh.net), encrypted to the machine, that closes when you stop."
     },
     {
       "src": "how-to/your-own-domain.md",
@@ -489,6 +507,12 @@
       "purpose": "Send a message or a work item to another person's agent inbox, and read your own. Covers the two halves people conflate — `hive accept` grants trust, `hive connect` makes the machine reachable — plus handoffs, the single-use invite code, and least-privilege access on org-owned machines."
     },
     {
+      "src": "how-to/hive-script-sharing.md",
+      "dest": "how-to/hive-script-sharing.md",
+      "managed": true,
+      "purpose": "Share a Hive script with a board: push it, share or publish it (project / unlisted / public), and teammates find it with `iris scripts list --shared` and run it by slug. Covers `# iris: runs-on=`, versions and `@N`, author/slug when two people share the same slug, unshare/unpublish (which do not un-send), and what members can see — running sends the source to their machine."
+    },
+    {
       "src": "how-to/integration-tenancy.md",
       "dest": "how-to/integration-tenancy.md",
       "managed": true,
@@ -511,6 +535,12 @@
       "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "managed": true,
       "purpose": "Runnable SOP for the Hive + Tailscale secure mesh — onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
+    },
+    {
+      "src": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "dest": "playbooks/mixxx-rig/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Runnable SOP for moving a Mixxx DJ rig (#193298): preflight (profile, CoreMIDI ports, CoreAudio devices) → a person approves → `iris app-config export|apply mixxx --bloq <id>` → verify from mixxx.log (controller opened, engine and audio stream started, no controller-script errors). Companion to the move-a-mixxx-rig how-to, which shows the by-hand Atlas commands."
     },
     {
       "src": "how-to/article-evals.md",
@@ -649,6 +679,24 @@
       "dest": "how-to/agent-pause-watch-takeover.md",
       "managed": true,
       "purpose": "Watch an agent's live step and tool calls (CLI and Desktop Agents > Live), take over and hand back with an instruction, pause/resume/stop in every lane."
+    },
+    {
+      "src": "how-to/public-form-to-private-dataset.md",
+      "dest": "how-to/public-form-to-private-dataset.md",
+      "managed": true,
+      "purpose": "Let a public form add records to a private dataset: iris datasets public-submit enable/test/show/disable, honeypot, server reference, form page public and staff page gated."
+    },
+    {
+      "src": "how-to/personal-sign-in-links.md",
+      "dest": "how-to/personal-sign-in-links.md",
+      "managed": true,
+      "purpose": "Let one named person open a gated page without the emailed code: iris pages access-link, single use, expiry, list and revoke, never grants a role."
+    },
+    {
+      "src": "how-to/run-ad-campaigns.md",
+      "dest": "how-to/run-ad-campaigns.md",
+      "managed": true,
+      "purpose": "Run an ad campaign on your own board: iris campaigns setup/create/add-creative/approve/reject/request-changes/list; who decided when; approving never publishes."
     },
     {
       "src": "how-to/dataset-webhooks.md",

@@ -70,15 +70,24 @@ export function findRunner(home: string, env: Record<string, string | undefined>
  */
 export const RELAY_MIN_NODE = 20
 
+/** The major version in `node -p process.versions.node` output ("20.11.1\n" → 20), or null. */
+export function nodeMajor(out: string): number | null {
+  const m = /^\s*v?(\d+)\.\d+/.exec(out)
+  return m ? Number(m[1]) : null
+}
+
 const probeNode = (bin: string): number | null => {
   const r = spawnSync(bin, ["-p", "process.versions.node"], { encoding: "utf8", timeout: 5000 })
-  return r.status === 0 ? Number(String(r.stdout).split(".")[0]) : null
+  return r.status === 0 ? nodeMajor(String(r.stdout)) : null
 }
 
 /**
- * A Node that can run the relay runner: IRIS_NODE, then the installer's own runtime
- * (~/.iris/runtime/node-*, the same place daemonctl looks), then nvm's newest, then PATH and the
- * usual locations. The first at RELAY_MIN_NODE or newer wins; an older one is skipped, not used.
+ * A Node that can run the relay runner: IRIS_NODE, then a Node dropped next to IRIS
+ * (~/.iris/node20/bin/node, any ~/.iris/node*, newest first — what iris-hive-001 has, #192752), then
+ * the installer's own runtime (~/.iris/runtime/node-*, the same place daemonctl looks), then nvm's
+ * newest, then PATH and the usual locations. The first at RELAY_MIN_NODE or newer wins; an older one
+ * is skipped, not used. `serve on` records the winner in inference.json so the daemon restarts the
+ * tunnel with it, not with whatever `node` its own PATH has.
  */
 export function findNode(
   home: string,
@@ -89,10 +98,11 @@ export function findNode(
   if (env.IRIS_NODE) candidates.push(env.IRIS_NODE)
   const newestFirst = (dir: string, re: RegExp, bin: (v: string) => string) => {
     try {
-      const vs = readdirSync(dir).filter((v) => re.test(v)).sort((a, b) => cmpVersion(b.replace(/^node-/, ""), a.replace(/^node-/, "")))
+      const vs = readdirSync(dir).filter((v) => re.test(v)).sort((a, b) => cmpVersion(b.replace(/^node-?/, ""), a.replace(/^node-?/, "")))
       for (const v of vs) candidates.push(bin(v))
     } catch {}
   }
+  newestFirst(join(home, ".iris"), /^node-?v?\d+/, (v) => join(home, ".iris", v, "bin", "node"))
   newestFirst(join(home, ".iris", "runtime"), /^node-v?\d+/, (v) => join(home, ".iris", "runtime", v, "bin", "node"))
   newestFirst(join(home, ".nvm", "versions", "node"), /^v\d+/, (v) => join(home, ".nvm", "versions", "node", v, "bin", "node"))
   candidates.push("node", "/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node")
