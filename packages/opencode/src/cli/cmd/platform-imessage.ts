@@ -5,7 +5,7 @@ import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle, confirmOutgoing } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
-import { routerSend, describeSend } from "./comms-send"
+import { routerSend, describeSend, routerFailureKind } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
 import { firstArray } from "../../util/array"
 import { emitJsonError } from "./iris-api"
@@ -500,20 +500,43 @@ const ImessageSendCommand = cmd({
     // resolvedLeadId is set when resolution went through the CRM, which is what earns the send
     // full outreach attribution instead of a bare handle row.
     {
+      // #193288: this wait used to be silent and unbounded — the router waits on the bridge on
+      // the sending Mac (up to ~15 s per call, plus the daemon confirming in chat.db), and the
+      // screen showed only "Resolved …" until it came back, if it came back.
+      const rs = prompts.spinner()
+      rs.start(`Sending via the comms router to ${handle}… (this can take up to ${ROUTER_TIMEOUT_MS / 1000}s)`)
       const routed = await routerSend({
         toLeadId: resolvedLeadId,
         toHandle: resolvedLeadId ? undefined : handle,
         channel: "imessage",
         message: cleanMessage,
         origin: "cli.reachr",
+        timeoutMs: ROUTER_TIMEOUT_MS,
       })
 
       if (routed.ok && routed.sent) {
+        rs.stop(success("Sent"))
         prompts.log.info(describeSend(routed))
         console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
         prompts.outro("Done")
         return
       }
+
+      // Only send again locally when the router never attempted it — otherwise a slow or
+      // unconfirmed send becomes two messages in the recipient's thread.
+      const kind = routerFailureKind(routed)
+      if (kind === "unconfirmed") {
+        rs.stop("Not confirmed", 1)
+        return notConfirmed(
+          `${routed.error ?? "The comms router did not confirm the send"}. The message to ${handle} may still go out — ` +
+            `check the conversation in Messages before sending it again.`,
+        )
+      }
+      if (kind === "failed") {
+        rs.stop("Failed", 1)
+        return notSent(`${routed.error ?? "The send failed"} — not retried locally, it would go through the same Messages account.`)
+      }
+      rs.stop("Router unavailable", 1)
 
       // Falling back to the local AppleScript path keeps the operator able to send when the API
       // is unreachable — but it is announced, because an unlogged send is a real gap and the
@@ -570,6 +593,9 @@ end tell`
     }
   },
 })
+
+/** fl-api waits up to 15 s per bridge call (resolve, then send) and the daemon confirms for ≤ 8 s. */
+const ROUTER_TIMEOUT_MS = 45_000
 
 /** #193288: a send that did not happen exits 1 — never 0 with a "Sent"-shaped message. */
 function notSent(message: string): void {
