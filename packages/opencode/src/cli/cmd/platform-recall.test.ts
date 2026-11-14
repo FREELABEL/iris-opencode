@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { sessionHitLines } from "./platform-recall"
+import { recallCalls, sessionHitLines } from "./platform-recall"
 
 // #191223 — recall now returns Desktop + CLI sessions from every machine the caller owns.
 describe("sessionHitLines", () => {
@@ -21,5 +21,18 @@ describe("sessionHitLines", () => {
     expect(title).toBe("Session")
     expect(where).toBe("    unknown machine · codex · abc")
     expect(open).toBe("    read: iris sessions read abc")   // no machine known: the server asks each one
+  })
+})
+
+// #191306 — the summary made recall answer in 5.0 s instead of 0.55 s; hits now come first.
+describe("recallCalls", () => {
+  test("a person gets the hits without waiting for the summary, then the summary", () => {
+    expect(recallCalls({ json: false, summarize: true })).toEqual({ first: false, thenSummary: true })
+  })
+  test("--no-summarize makes one fast call", () => {
+    expect(recallCalls({ json: false, summarize: false })).toEqual({ first: false, thenSummary: false })
+  })
+  test("--json stays one call with the summary in it, for scripts", () => {
+    expect(recallCalls({ json: true, summarize: true })).toEqual({ first: true, thenSummary: false })
   })
 })

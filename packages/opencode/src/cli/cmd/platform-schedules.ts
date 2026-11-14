@@ -4,6 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { firstArray } from "../../util/array"
+import { rejectBadPagination, pageInfo, slicePage, type PageInfo, listEnvelope, listFooter, commandWith } from "./pagination-args"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -12,6 +13,17 @@ import { firstArray } from "../../util/array"
 // ============================================================================
 
 /** Highest execution id in a list (the baseline before we trigger a new run). */
+/**
+ * What `iris schedules toggle` should set. With no flag it FLIPS the current status — it used to always
+ * enable, so "toggle" on a running schedule re-enabled it (2026-10-29, the SOM follow-up batch).
+ */
+export function toggleTarget(current: string | null | undefined, flags: { enable?: boolean; disable?: boolean }): "scheduled" | "paused" {
+  if (flags.disable) return "paused"
+  if (flags.enable) return "scheduled"
+  const running = ["scheduled", "active", "running", "pending"].includes(String(current ?? "").toLowerCase())
+  return running ? "paused" : "scheduled"
+}
+
 export function latestExecId(runs: any[]): number {
   if (!Array.isArray(runs) || runs.length === 0) return 0
   return Math.max(...runs.map((r) => Number(r?.id) || 0))
@@ -101,6 +113,24 @@ function taskLabel(s: Record<string, any>): string {
   return data.task_type ?? data.type ?? s.task_name ?? ""
 }
 
+/** "github.pull_request.opened" → source + event. The source never has a dot; events may. */
+export function parseListenerEvent(on: string): { source: string; event: string } | null {
+  const dot = on.indexOf(".")
+  if (dot <= 0 || dot === on.length - 1) return null
+  return { source: on.slice(0, dot), event: on.slice(dot + 1) }
+}
+
+/** ["action=opened", "repository.full_name=a/b"] → an object, or null if any is malformed. */
+export function parseListenerFilters(pairs: string[]): Record<string, string> | null {
+  const out: Record<string, string> = {}
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=")
+    if (eq <= 0) return null
+    out[pair.slice(0, eq)] = pair.slice(eq + 1)
+  }
+  return out
+}
+
 function executionEnv(s: Record<string, any>): { label: string; icon: string } {
   const data = s.data ?? {}
   const taskName = String(s.task_name ?? "")
@@ -165,21 +195,70 @@ function printSchedule(s: Record<string, any>, showCountdown = true): void {
 // Subcommands
 // ============================================================================
 
+/** fl-api ScheduledJobController::MAX_PER_PAGE — the largest page `schedules list` may ask for. */
+export const SCHEDULES_MAX_PER_PAGE = 200
+
+/**
+ * Query for `schedules list` (#191851). Paging goes to the server unless a client-side filter
+ * (--active / --overdue) is on: those must see every row before a page is cut, or page 1 of
+ * `--overdue` would be "the overdue rows among the first 50", not the first 50 overdue rows.
+ * Without `page` fl-api returns the whole list, which is what the filters need.
+ */
+export function schedulesListParams(a: {
+  limit: number
+  page: number
+  agentId?: number
+  clientSideFilter: boolean
+}): URLSearchParams {
+  const params = new URLSearchParams()
+  if (!a.clientSideFilter) {
+    params.set("page", String(a.page))
+    params.set("per_page", String(a.limit))
+  }
+  if (a.agentId) params.set("agent_id", String(a.agentId))
+  return params
+}
+
+/**
+ * Cut the requested page out of what the server sent. When fl-api paged (meta present) its rows
+ * ARE the page. Otherwise — a client-side filter, or a server from before #191851 that ignored
+ * `page` and sent all 967 rows — the page is sliced here, so `--limit` is honoured either way.
+ */
+export function pageSchedules<T>(
+  data: Record<string, any> | null | undefined,
+  rows: T[],
+  page: number,
+  limit: number,
+): { rows: T[]; pagination: PageInfo & { paged_by: "server" | "client" } } {
+  const meta = data?.meta
+  if (meta && typeof meta === "object" && Number.isFinite(Number(meta.total))) {
+    const info = pageInfo(Number(meta.page ?? page), Number(meta.per_page ?? limit), Number(meta.total), rows.length)
+    return { rows, pagination: { ...info, paged_by: "server" } }
+  }
+  const sliced = slicePage(rows, page, limit)
+  return { rows: sliced, pagination: { ...pageInfo(page, limit, rows.length, sliced.length), paged_by: "client" } }
+}
+
 const SchedulesListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list scheduled jobs",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "results per page", type: "number", default: 50 })
-      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("limit", { describe: `results per page (1-${SCHEDULES_MAX_PER_PAGE})`, type: "number", default: 50 })
+      .option("page", { alias: "p", describe: "page number (1-based)", type: "number", default: 1 })
       .option("active", { describe: "show only active/scheduled/running jobs (hide completed one-offs)", type: "boolean", default: false })
       .option("overdue", { describe: "show only overdue schedules", type: "boolean", default: false })
       .option("latest", { describe: "include latest execution result for each job", type: "boolean", default: false })
       .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("listeners", { describe: "show only event listeners (see create --on)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
+    // Before auth or any request: a bad --limit/--page is a usage error (#191851). Used to be
+    // ignored and all 967 schedules (~946 KB) came back.
+    if (rejectBadPagination(args, { maxLimit: SCHEDULES_MAX_PER_PAGE })) return
+
     UI.empty()
     prompts.intro("◈  IRIS Schedules")
 
@@ -193,8 +272,13 @@ const SchedulesListCommand = cmd({
     spinner.start("Loading schedules…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit), page: String(args.page) })
-      if (args["agent-id"]) params.set("agent_id", String(args["agent-id"]))
+      const clientSideFilter = Boolean(args.active || args.overdue || args.listeners)
+      const params = schedulesListParams({
+        limit: args.limit,
+        page: args.page,
+        agentId: args["agent-id"],
+        clientSideFilter,
+      })
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${params}`)
       const ok = await handleApiError(res, "List schedules")
@@ -209,7 +293,18 @@ const SchedulesListCommand = cmd({
       // `schedules list --overdue` during a scheduler failure is exactly when
       // you most need to be told the scheduler is the cause, and that filter
       // would otherwise leave a suspiciously tidy list with no explanation.
-      const schedulerHealth = assessScheduler(allSchedules)
+      // When the server paged (#191851) this response is one page, so assess the live
+      // (status=scheduled) set instead — fetched unpaged, it is small (30 rows in prod).
+      let healthRows: any[] = allSchedules
+      if (data?.meta && Number(data.meta.total) > allSchedules.length) {
+        try {
+          const hp = new URLSearchParams({ status: "scheduled" })
+          if (args["agent-id"]) hp.set("agent_id", String(args["agent-id"]))
+          const hRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${hp}`)
+          if (hRes.ok) healthRows = firstArray(((await hRes.json()) as any)?.data)
+        } catch {}
+      }
+      const schedulerHealth = assessScheduler(healthRows)
 
       // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
       if (args.active) {
@@ -217,6 +312,10 @@ const SchedulesListCommand = cmd({
           const status = String(s.status ?? "").toLowerCase()
           return ["scheduled", "running", "paused", "active", "enabled"].includes(status)
         })
+      }
+
+      if (args.listeners) {
+        schedules = schedules.filter((s: any) => s.trigger_type === "listener")
       }
 
       // --overdue: only show schedules past their next_run_at
@@ -227,6 +326,12 @@ const SchedulesListCommand = cmd({
           return new Date(String(s.next_run_at)).getTime() < now
         })
       }
+
+      // Cut the page (server already did unless a client-side filter is on, or the server
+      // predates #191851 and ignored `page`).
+      const paged = pageSchedules(clientSideFilter ? null : data, schedules, args.page, args.limit)
+      schedules = paged.rows
+      const pagination = { ...paged.pagination, max_per_page: SCHEDULES_MAX_PER_PAGE }
 
       // Resolve bloq names in one batch
       const bloqIds = [...new Set(schedules.map((s: any) => s.bloq_id).filter(Boolean))]
@@ -261,27 +366,25 @@ const SchedulesListCommand = cmd({
         await Promise.all(execPromises)
       }
 
-      const totalCount = data?.total ?? data?.meta?.total ?? schedules.length
-      const filterLabel = [args.active && "active", args.overdue && "overdue"].filter(Boolean).join(", ")
-      const pageLabel = totalCount > schedules.length ? ` — page ${args.page}/${Math.ceil(totalCount / args.limit)}` : ""
+      // The list contract (#191863): one envelope for --json, one footer for humans.
+      const listCmd = commandWith("schedules list", { active: args.active, overdue: args.overdue, listeners: args.listeners, latest: args.latest, "agent-id": args["agent-id"] })
+      const contract = (rows: any[]) =>
+        listEnvelope(
+          { rows, total: pagination.total, page: pagination.page, perPage: pagination.per_page, lastPage: pagination.last_page, hasMore: pagination.has_more },
+          { resource: "schedules", command: listCmd },
+        )
+
+      const filterLabel = [args.active && "active", args.overdue && "overdue", args.listeners && "listeners"].filter(Boolean).join(", ")
+      const pageLabel = pagination.last_page > 1 ? ` — page ${pagination.page}/${pagination.last_page} of ${pagination.total}` : ""
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
       if (args.json) {
         // Machine consumers need the degradation too — a monitoring script that
         // only reads the rows would have missed the June outage exactly as the
         // humans did.
-        if (schedulerHealth) {
-          await writeJson({ degraded: [schedulerHealth], schedules: schedules.map((s: any) => ({
-            id: s.id,
-            name: s.name ?? s.title ?? s.task_name,
-            status: s.status,
-            next_run_at: s.next_run_at,
-            last_run_at: s.last_run_at,
-          })) })
-          prompts.outro("Done")
-          return
-        }
-        await writeJson(schedules.map((s: any) => ({
+        // An object, not a bare array (#191851): the page a caller got and whether there is more
+        // has to travel with the rows, or an agent cannot page.
+        const rows = schedules.map((s: any) => ({
           id: s.id,
           name: s.name ?? s.title ?? s.task_name,
           status: s.status,
@@ -294,7 +397,15 @@ const SchedulesListCommand = cmd({
           next_run_at: s.next_run_at,
           time_until: timeUntil(s.next_run_at),
           last_run_at: s.last_run_at,
-        })))
+        }))
+        await writeJson({
+          ...(schedulerHealth ? { degraded: [schedulerHealth] } : {}),
+          ...contract(rows),
+          // Deprecated (#191863): the v1.5.25 shape. Same rows as `data`, same facts as `meta`.
+          // Kept so scripts written against 1.5.25 keep working; read data/meta instead.
+          schedules: rows,
+          pagination,
+        })
         prompts.outro("Done")
         return
       }
@@ -302,7 +413,8 @@ const SchedulesListCommand = cmd({
       printDegradations([schedulerHealth])
 
       if (schedules.length === 0) {
-        prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
+        const footer = listFooter(contract(schedules).meta, "schedules")
+        prompts.log.warn(args.active && pagination.total === 0 ? `${footer} Use without --active to see all.` : footer)
         prompts.outro("Done")
         return
       }
@@ -420,14 +532,8 @@ const SchedulesListCommand = cmd({
       }
 
       // Pagination hints
-      const total = data?.total ?? data?.meta?.total ?? schedules.length
-      const lastPage = Math.ceil(total / args.limit)
       console.log()
-      if (lastPage > 1) {
-        console.log(`  ${dim(`Page ${args.page}/${lastPage} (${total} total)`)}`)
-        if (args.page < lastPage) console.log(`  ${dim(`iris schedules list --page=${args.page + 1} — next page`)}`)
-        if (args.page > 1) console.log(`  ${dim(`iris schedules list --page=${args.page - 1} — previous page`)}`)
-      }
+      console.log(`  ${dim(listFooter(contract(schedules).meta, "schedules"))}`)
       prompts.outro(
         `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
       )
@@ -857,22 +963,37 @@ const SchedulesInspectCommand = cmd({
 
 const SchedulesToggleCommand = cmd({
   command: "toggle <id>",
-  describe: "enable or disable a schedule",
+  describe: "pause or resume a schedule (no flag flips the current status)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
-      .option("disable", { describe: "disable the schedule", type: "boolean", default: false })
+      .option("disable", { describe: "pause the schedule", type: "boolean", default: false })
+      .option("enable", { describe: "resume the schedule", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
-    const action = args.disable ? "Disable" : "Enable"
-    prompts.intro(`◈  ${action} Schedule #${args.id}`)
+    if (args.enable && args.disable) { prompts.log.error("Pass --enable or --disable, not both."); process.exitCode = 1; return }
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
+
+    // With no flag this used to ENABLE every time, so "toggle" on a live schedule re-enabled it
+    // (2026-10-29). Read the current status and flip it.
+    let current: string | null = null
+    if (!args.enable && !args.disable) {
+      try {
+        const cur = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
+        const cb = (await cur.json()) as any
+        current = cb?.data?.status ?? cb?.status ?? null
+      } catch { current = null }
+      if (current === null) { prompts.log.error(`Could not read schedule #${args.id}'s status. Use --enable or --disable.`); process.exitCode = 1; return }
+    }
+    const target = toggleTarget(current, { enable: !!args.enable, disable: !!args.disable })
+    const action = target === "paused" ? "Disable" : "Enable"
+    prompts.intro(`◈  ${action} Schedule #${args.id}${current ? dim(` (was ${current})`) : ""}`)
 
     const spinner = prompts.spinner()
     spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
@@ -884,11 +1005,11 @@ const SchedulesToggleCommand = cmd({
       // the schedule kept firing (#179802). The API now accepts is_active as an alias too, so
       // both are sent: `status` is correct, `is_active` keeps older backends working.
       const endpoint = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`
-      const wanted = args.disable ? "paused" : "scheduled"
+      const wanted = target
 
       const res = await irisFetch(endpoint, {
         method: "PUT",
-        body: JSON.stringify({ status: wanted, is_active: !args.disable }),
+        body: JSON.stringify({ status: wanted, is_active: wanted !== "paused" }),
       })
       const ok = await handleApiError(res, `${action} schedule`)
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
@@ -948,7 +1069,6 @@ const SchedulesCreateCommand = cmd({
         describe: "job type",
         type: "string",
         choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow", "browser_workflow", "agentic_browser"],
-        demandOption: true,
       })
       .option("frequency", {
         describe: "run frequency",
@@ -957,6 +1077,8 @@ const SchedulesCreateCommand = cmd({
         default: "daily",
       })
       .option("agent", { describe: "agent ID (required — used for scheduling)", type: "number", demandOption: true })
+      .option("on", { describe: "run the agent when this event arrives instead of on a schedule, e.g. github.pull_request.opened", type: "string" })
+      .option("filter", { describe: "only events where this payload field matches: key=value (repeatable; with --on)", type: "array", string: true })
       .option("name", { describe: "job name/task_name", type: "string" })
       .option("prompt", { describe: "task prompt (for agent_task type)", type: "string" })
       .option("time", { describe: "time of day to run (HH:MM, 24h)", type: "string", default: "09:00" })
@@ -981,13 +1103,65 @@ const SchedulesCreateCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Create Schedule: ${args.type}`)
+    prompts.intro(args.on ? `◈  Create Listener: ${args.on}` : `◈  Create Schedule: ${args.type}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
+
+    // #187532 — an event listener, not a schedule: no frequency, and the result is a URL to hand
+    // to the provider. That URL is the credential, so it is printed here and nowhere else.
+    if (args.on) {
+      const event = parseListenerEvent(args.on)
+      const filters = parseListenerFilters((args.filter ?? []) as string[])
+      if (!event || !filters) {
+        prompts.log.error(!event ? "--on takes <source>.<event>, e.g. github.pull_request.opened" : "--filter takes key=value")
+        prompts.outro("Done")
+        return
+      }
+      if (!args.prompt) {
+        prompts.log.error("--prompt is required with --on: it is what the agent is told to do with the event")
+        prompts.outro("Done")
+        return
+      }
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/listeners`, {
+        method: "POST",
+        body: JSON.stringify({
+          agent_id: args.agent,
+          source_integration: event.source,
+          event_type: event.event,
+          prompt: args.prompt,
+          task_name: args.name ?? `On ${args.on}`,
+          filters,
+          ...(args["max-runs"] ? { max_runs: args["max-runs"] } : {}),
+        }),
+      })
+      const body = (await res.json().catch(() => ({}))) as any
+      if (!res.ok) {
+        prompts.log.error(body.message ?? `HTTP ${res.status}`)
+        if (Array.isArray(body.supported)) prompts.log.info(`Supported: ${body.supported.join(", ") || "none for this source"}`)
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+      if (args.json) {
+        console.log(JSON.stringify(body, null, 2))
+        return
+      }
+      prompts.log.success(`Listener #${body.listener?.id} created for agent ${args.agent}`)
+      console.log(`  Webhook URL (treat it like a password; anyone with it can fire this agent):`)
+      console.log(`  ${body.webhook_url}`)
+      prompts.outro(`Paste that URL into ${event.source}'s webhook settings.`)
+      return
+    }
+    if (!args.type) {
+      prompts.log.error("--type is required, or --on <source>.<event> for an event listener")
+      prompts.outro("Done")
+      process.exitCode = 1
+      return
+    }
 
     // Parse params JSON
     let params: Record<string, unknown> = {}

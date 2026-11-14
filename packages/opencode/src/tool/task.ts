@@ -1,3 +1,5 @@
+import { Egress } from "@/permission/egress"
+import { Provider } from "@/provider/provider"
 import { Tool } from "./tool"
 import DESCRIPTION from "./task.txt"
 import z from "zod"
@@ -42,6 +44,20 @@ export const TaskTool = Tool.define("task", async () => {
 
       const agent = await Agent.get(params.subagent_type)
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
+      // A subagent pinned to a hosted model carries this session's context to it (#192114). A normal
+      // session carries on; a local or private one is asked first.
+      const parentUrl = (ctx.extra?.model as { api?: { url?: string } } | undefined)?.api?.url
+      if (agent.model && (Egress.isPrivate() || Egress.isLocalUrl(parentUrl))) {
+        const pinned = await Provider.getModel(agent.model.providerID, agent.model.modelID)
+        const provider = await Provider.getProvider(agent.model.providerID).catch(() => undefined)
+        if (!Egress.isLocalUrl(provider?.options?.baseURL ?? pinned.api.url))
+          await ctx.ask({
+            permission: "subagent_model",
+            patterns: [`${agent.model.providerID}/${agent.model.modelID}`],
+            always: ["*"],
+            metadata: { subagent_type: params.subagent_type },
+          })
+      }
       const session = await iife(async () => {
         if (params.session_id) {
           const found = await Session.get(params.session_id).catch(() => {})

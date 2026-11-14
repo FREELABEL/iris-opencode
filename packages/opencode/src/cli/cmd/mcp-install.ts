@@ -28,6 +28,12 @@ export const McpInstallCommand = cmd({
         default: false,
         describe: "machine-readable output",
       })
+      // #193064: what Desktop's "Use IRIS in…" reads. Reports, writes nothing.
+      .option("status", {
+        type: "boolean",
+        default: false,
+        describe: "show each client (detected? IRIS registered?) and change nothing",
+      })
       // boolean-negation is disabled globally (src/index.ts), so `--no-trust` is NOT the
       // negation of `--trust` — it must be its own literal flag or the parser rejects the
       // exact spelling the help text advertises (#184593, same defect in 6 places).
@@ -42,6 +48,28 @@ export const McpInstallCommand = cmd({
         describe: "folder to trust for Gemini instead of the current directory",
       }),
   async handler(args) {
+    if (args.status) {
+      const clients = await Promise.all(
+        McpClients.all().map(async (c) => ({
+          id: c.id,
+          label: c.label,
+          path: c.configPath,
+          detected: c.detected,
+          registered: await McpClients.isWired(c).catch(() => false),
+        })),
+      )
+      const binary = McpClients.stableIrisBinary() ?? null
+      if (args.json) {
+        process.stdout.write(JSON.stringify({ binary, clients }, null, 2) + "\n")
+        return
+      }
+      for (const c of clients) {
+        const mark = c.registered ? "✓" : c.detected ? "○" : "·"
+        const state = c.registered ? "registered" : c.detected ? "detected, not registered" : "not detected"
+        UI.println(`${mark} ${c.label} ${UI.Style.TEXT_DIM}${state}\n    ${c.path}`)
+      }
+      return
+    }
     // Never write a path that will disappear (#190590): a binary run from a temporary folder with
     // no stable install behind it gets a refusal, not a config entry that breaks every session.
     const bin = McpClients.stableIrisBinary()

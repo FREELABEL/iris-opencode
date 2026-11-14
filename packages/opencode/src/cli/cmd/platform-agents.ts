@@ -1,13 +1,16 @@
+import { listAllAgents } from "./agent-list-all"
 import { cmd } from "./cmd"
 import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { rejectBadPagination } from "./pagination-args"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, PUBLIC_SITE, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
+import { AgentsInstallCommand, AgentsPacksCommand } from "./platform-agents-packs"
 import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
@@ -124,6 +127,9 @@ function printAgent(a: Record<string, unknown>): void {
 // Subcommands
 // ============================================================================
 
+/** Mirrors fl-api AgentController::listSpec max_per_page. */
+export const AGENTS_LIST_MAX_LIMIT = 500
+
 const AgentsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -142,6 +148,9 @@ const AgentsListCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    // --limit 0 came back as 25 rows and --page 0 as page 1, each labelled as what was asked
+    // for. The server clamps per_page at 500 (AgentController::listSpec) (#191862).
+    if (rejectBadPagination(args, { maxLimit: AGENTS_LIST_MAX_LIMIT })) return
     if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents") }
 
     const token = await requireAuth()
@@ -218,8 +227,12 @@ const AgentsListCommand = cmd({
         await writeJson(
           buildListEnvelope(projectFields(agents, LIST_FIELDS.agents), {
             total,
-            limit: agents.length,
+            // The page size asked for, not the rows on this page — on the last page those differ.
+            limit: args.limit,
+            // Without it page 2+ reports current_page 1 and from/to of page 1 (#191863).
+            page: args.page,
             resource: "agents",
+            command: "agents list",
           }),
         )
         return
@@ -292,19 +305,18 @@ const AgentsListCommand = cmd({
  * tokenized matcher used elsewhere. Returns the numeric ID, or null (having
  * printed the reason) on no/ambiguous match.
  */
-async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+export async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
   const numeric = Number(idOrQuery)
   if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
 
   const query = String(idOrQuery)
-  const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
-  if (!res.ok) {
+  const all = await listAllAgents<any>(userId)
+  if (!all.ok) {
     if (!json) prompts.log.error("Could not look up agents by name")
     process.exitCode = 1
     return null
   }
-  const raw = (await res.json()) as { data?: any[] }
-  const matches = (raw?.data ?? []).filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
+  const matches = all.rows.filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
 
   if (matches.length === 0) {
     if (json) await writeJson({ error: `No agent matched "${query}"` })
@@ -1993,9 +2005,13 @@ const AgentsDesktopSyncCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { process.exitCode = 1; return }
 
-    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
-    if (!(await handleApiError(res, "List agents"))) { process.exitCode = 1; return }
-    const agents = firstArray(((await res.json()) as any)?.data)
+    const all = await listAllAgents<any>(userId)
+    if (!all.ok) {
+      prompts.log.error(`List agents failed: ${all.error}`)
+      process.exitCode = 1
+      return
+    }
+    const agents = all.rows
 
     const only = args.agent
       ? new Set(String(args.agent).split(",").map((x) => Number(x.trim())).filter(Number.isInteger))
@@ -2056,7 +2072,7 @@ const AgentsDesktopSyncCommand = cmd({
 
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign, pause/resume/stop",
+  describe: "manage IRIS platform agents — install packs, pull, push, diff, CRUD, assign, pause/resume/stop",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -2086,6 +2102,8 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsJoinCommand)
       .command(AgentsLeaveCommand)
       .command(AgentsExportCommand)
+      .command(AgentsPacksCommand)
+      .command(AgentsInstallCommand)
       .command(AgentsBenchCommand)
       .command(AgentsDesktopSyncCommand)
       .demandCommand(),

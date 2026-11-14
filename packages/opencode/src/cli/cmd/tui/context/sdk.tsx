@@ -5,12 +5,13 @@ import { batch, onCleanup, onMount } from "solid-js"
 
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
-  init: (props: { url: string; directory?: string }) => {
+  init: (props: { url: string; headers?: Record<string, string>; directory?: string }) => {
     const abort = new AbortController()
     const sdk = createOpencodeClient({
       baseUrl: props.url,
       signal: abort.signal,
       directory: props.directory,
+      headers: props.headers,
     })
 
     const emitter = createGlobalEmitter<{
@@ -70,6 +71,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       abort.abort()
     })
 
-    return { client: sdk, event: emitter, url: props.url }
+    // A browser has no header to send: the server turns auth_token into a same-origin cookie.
+    const basic = props.headers?.Authorization?.replace(/^Basic\s+/, "")
+    const webUrl = basic ? `${props.url.replace(/\/+$/, "")}/iris?auth_token=${encodeURIComponent(basic)}` : props.url
+    return { client: sdk, event: emitter, url: props.url, webUrl }
   },
 })

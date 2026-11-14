@@ -18,7 +18,8 @@ import { join } from "path"
  * not an open model server. Then `hive/<model>` works anywhere IRIS takes a model: the CLI,
  * Desktop, agents, the OpenAI-compatible API — at $0, on your hardware.
  *
- * Phase 1 is owner only: nobody else's requests reach your machine.
+ * Owner only by default: nobody else's requests reach your machine. `share on <connection>` lets
+ * one connected person use them as `hive/@<you>/<model>` (#192752).
  */
 
 export const DEFAULT_INFERENCE_PORT = 3290
@@ -32,6 +33,18 @@ export interface InferenceSettings {
   models: string[] | null
   /** The model to use when a request must stay on your machines (PHI with phi-local on). */
   default_model: string | null
+  /**
+   * The Node (≥ 20) the tunnel was started with, and the tunnel itself — written only once `serve on`
+   * opened it, cleared by `serve off`. The daemon restarts a dead tunnel from exactly these (#192752).
+   */
+  node?: string | null
+  tunnel?: ServingTunnel | null
+}
+
+export interface ServingTunnel {
+  name: string
+  runner: string
+  zones: string[]
 }
 
 export const settingsPath = (home = homedir()) => join(home, ".iris", "inference.json")
@@ -66,14 +79,34 @@ export interface ModelRow {
   model: string
   node: string
   serving: boolean
+  /** True only after a real check through the tunnel succeeded, never from the machine's report. */
   reachable: boolean
   why?: string
+  state?: string
+  checked_at?: string | null
+  model_server_tested?: boolean
+}
+
+/** One machine, checked by the server through its tunnel: GET /api/v6/nodes/inference-status (#192146). */
+export interface InferenceCheck {
+  node_id: string
+  state: string
+  ok: boolean
+  reason: string
+  checked_at: string | null
+  model_server_tested: boolean
 }
 
 const FRESH_MS = 180_000
 
-/** One row per (node, model) from the fleet's node detail. Pure, so it is tested without a fleet. */
-export function rowsFromNodes(nodes: any[], now = Date.now()): ModelRow[] {
+/**
+ * One row per (node, model) from the fleet's node detail. Pure, so it is tested without a fleet.
+ *
+ * A heartbeat is the machine's opinion of itself: it cannot see its own tunnel from outside. So a
+ * row is reachable only when `checks` holds a passing check for that machine. Without one it says
+ * so, rather than repeating the report as fact.
+ */
+export function rowsFromNodes(nodes: any[], now = Date.now(), checks?: InferenceCheck[] | null): ModelRow[] {
   const out: ModelRow[] = []
   for (const n of nodes) {
     const llm = n?.local_llm
@@ -88,18 +121,184 @@ export function rowsFromNodes(nodes: any[], now = Date.now()): ModelRow[] {
       else if (!online) why = "machine offline"
       else if (!inf?.url) why = "no tunnel URL yet"
       else if (!fresh) why = "report is stale"
-      out.push({ model: m, node: String(n?.name ?? n?.id ?? "?"), serving, reachable: serving && online && !!inf?.url && fresh, why })
+      const check = checks?.find((c) => String(c.node_id) === String(n?.id))
+      const reported = serving && online && !!inf?.url && fresh
+      if (reported && !check) why = "reported by the machine, not tested"
+      else if (reported && check && !check.ok) why = `${check.state}: ${check.reason}`
+      else if (reported && check && !check.model_server_tested) why = check.reason
+      out.push({
+        model: m,
+        node: String(n?.name ?? n?.id ?? "?"),
+        serving,
+        reachable: reported && check?.ok === true,
+        why,
+        ...(reported && check ? { state: check.state, checked_at: check.checked_at, model_server_tested: check.model_server_tested } : {}),
+      })
     }
   }
   return out.sort((a, b) => a.model.localeCompare(b.model) || a.node.localeCompare(b.node))
 }
 
-async function fleet(userId: number): Promise<any[]> {
+export async function fleet(userId: number): Promise<any[]> {
   const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
   const body: any = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
   return body.nodes || body.data || []
 }
+
+/** Each serving machine, checked through its tunnel. null when the server cannot say (it is older, or unreachable). */
+export async function inferenceChecks(userId: number): Promise<InferenceCheck[] | null> {
+  try {
+    const res = await hiveFetch(`/api/v6/nodes/inference-status?user_id=${userId}`)
+    if (!res.ok) return null
+    const body: any = await res.json().catch(() => null)
+    return Array.isArray(body?.data) ? body.data : null
+  } catch {
+    return null
+  }
+}
+
+/** "checked 12s ago", for a row the server tested. */
+export function checkedAgo(at: string | null | undefined, now = Date.now()): string {
+  const t = at ? Date.parse(at) : NaN
+  if (Number.isNaN(t)) return ""
+  const s = Math.max(0, Math.round((now - t) / 1000))
+  return s < 60 ? `checked ${s}s ago` : `checked ${Math.round(s / 60)}m ago`
+}
+
+/**
+ * Sharing your machines' models with someone you are connected to (#192752, phase 2).
+ *
+ * Directional: each person shares THEIR OWN machines. The server keeps the list on the connection
+ * (permissions.inference_sharers) and only lets you add or remove yourself. The person you share
+ * with uses `hive/@<your user id>/<model>` — and can be read by you, so they are told so.
+ */
+export const INFERENCE_SHARERS = "inference_sharers"
+
+export interface ShareState {
+  id: string
+  peer: string
+  peerUserId: number | null
+  active: boolean
+  iShare: boolean
+  theyShare: boolean
+}
+
+/** Pure: who shares with whom on each connection, from `GET /api/v6/nodes/connections`. */
+export function shareStates(conns: any[], me: number): ShareState[] {
+  return conns.map((c) => {
+    const sharers = (Array.isArray(c?.permissions?.[INFERENCE_SHARERS]) ? c.permissions[INFERENCE_SHARERS] : []).map(Number)
+    const peerUserId = c?.peer_user_id != null ? Number(c.peer_user_id) : null
+    return {
+      id: String(c?.id ?? ""),
+      peer: String(c?.peer_name ?? (peerUserId != null ? `user ${peerUserId}` : "pending invite")),
+      peerUserId,
+      active: c?.status === "active" && peerUserId != null,
+      iShare: sharers.includes(me),
+      theyShare: peerUserId != null && sharers.includes(peerUserId),
+    }
+  })
+}
+
+/** Pure: the connection a person means, by full id, unique id prefix, or peer name. */
+export function pickConnection(states: ShareState[], ref: string): ShareState | { error: string } {
+  const r = ref.trim().toLowerCase()
+  const hits = states.filter((s) => s.id.toLowerCase() === r || s.id.toLowerCase().startsWith(r) || s.peer.toLowerCase() === r)
+  if (hits.length === 1) return hits[0]
+  if (!hits.length) return { error: `no connection matches "${ref}" — see them with: iris hive models share` }
+  return { error: `"${ref}" matches ${hits.length} connections — use more of the id` }
+}
+
+/** Models other people share with you, from the gateway's model list (entries carrying `shared_by`). */
+export async function sharedWithMe(): Promise<any[]> {
+  try {
+    const res = await hiveFetch(`/api/v6/openai/models`)
+    if (!res.ok) return []
+    const body: any = await res.json().catch(() => null)
+    return (Array.isArray(body?.data) ? body.data : []).filter((m: any) => m?.shared_by != null)
+  } catch {
+    return []
+  }
+}
+
+async function connections(userId: number): Promise<any[]> {
+  const res = await hiveFetch(`/api/v6/nodes/connections?user_id=${userId}`)
+  const body: any = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body?.error || body?.message || `HTTP ${res.status}`)
+  return body.connections || []
+}
+
+const ShareCommand = cmd({
+  command: "share [state] [connection]",
+  describe: "share this account's serving machines with someone you are connected to (on), stop (off), or see who shares what",
+  builder: (yargs) =>
+    yargs
+      .positional("state", { type: "string", choices: ["on", "off"] })
+      .positional("connection", { type: "string", describe: "connection id (or its start), or the person's name" })
+      .option("yes", { type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false })
+      .option("user-id", { type: "number" })
+      .example("$0 hive models share", "who you share with, and who shares with you")
+      .example("$0 hive models share on 01a1b2", "let that person run models on your serving machines")
+      .example('$0 run -m iris/hive/@<their user id>/llama3.2:3b "…"', "use a model someone shares with you"),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const states = shareStates(await connections(userId), userId)
+
+    if (!argv.state) {
+      const shared = await sharedWithMe()
+      if (argv.json) return void (await writeJson({ connections: states, shared_with_you: shared }))
+      console.log()
+      if (!states.length) {
+        console.log(dim("  No connections yet. Invite someone: iris hive invite   ·   accept one: iris hive accept <code>"))
+        return
+      }
+      for (const s of states)
+        console.log(
+          `  ${s.active ? success("●") : dim("○")} ${bold(s.peer.padEnd(24))} ${dim(s.id.slice(0, 8))}  you share: ${s.iShare ? success("on") : dim("off")}   they share: ${s.theyShare ? success("on") : dim("off")}${s.active ? "" : dim("  (not active)")}`,
+        )
+      console.log()
+      if (shared.length) {
+        console.log(bold("  Shared with you"))
+        for (const m of shared) console.log(`    ${bold(String(m.id).replace(/^iris\//, ""))}  ${dim(String(m.name ?? ""))}`)
+        console.log(dim(`  Use one: iris run -m <id> "…"   ·   the owner can read what you send`))
+      } else console.log(dim("  Nobody is sharing a serving machine with you right now."))
+      return
+    }
+
+    const pick = pickConnection(states, String(argv.connection ?? ""))
+    if ("error" in pick) {
+      console.log(`\n${highlight("✗")} ${argv.connection ? pick.error : "say which connection — see them with: iris hive models share"}`)
+      process.exitCode = 1
+      return
+    }
+    const share = argv.state === "on"
+    if (share && !argv.yes) {
+      console.log()
+      console.log(`${highlight("!")} ${bold(`${pick.peer} will be able to run models on your serving machines.`)}`)
+      console.log(dim("  You can read every prompt they send, and it runs at your electricity. Patient data is refused on shared machines."))
+      const ok = await prompts.confirm({ message: `Share with ${pick.peer}?`, initialValue: true })
+      if (ok !== true) return void console.log(dim("\n  Not shared."))
+    }
+    const res = await hiveFetch(`/api/v6/nodes/connections/${pick.id}/inference?user_id=${userId}`, {
+      method: "POST",
+      body: JSON.stringify({ share }),
+    })
+    const body: any = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const why = res.status === 404 ? "this IRIS server does not support sharing yet (it needs #192752 deployed)" : body?.message || body?.error || `HTTP ${res.status}`
+      console.log(`\n${highlight("✗")} could not change sharing: ${why}`)
+      process.exitCode = 1
+      return
+    }
+    if (!share) return void console.log(`\n${success("✓")} ${pick.peer} can no longer run models on your machines`)
+    console.log(`\n${success("●")} shared with ${bold(pick.peer)}`)
+    console.log(dim(`  They use: iris run -m iris/hive/@${userId}/<model> "…"   ·   see what you serve: iris hive models`))
+    if (!readSettings().enabled) console.log(warn("  ! this machine is not serving. Start: ") + bold("iris hive models serve on"))
+  },
+})
 
 const ListCommand = cmd({
   command: "$0",
@@ -115,7 +314,8 @@ const ListCommand = cmd({
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
-    const rows = rowsFromNodes(await fleet(userId))
+    const [nodes, checks] = await Promise.all([fleet(userId), inferenceChecks(userId)])
+    const rows = rowsFromNodes(nodes, Date.now(), checks)
     if (argv.json) return void (await writeJson(rows.map((r) => ({ id: `hive/${r.model}`, ...r }))))
     console.log()
     if (!rows.length) {
@@ -125,7 +325,7 @@ const ListCommand = cmd({
     }
     for (const r of rows)
       console.log(
-        `  ${r.reachable ? success("●") : dim("○")} ${bold(`hive/${r.model}`.padEnd(34))} ${r.node.padEnd(22)} ${r.reachable ? success("serving") : dim(r.why ?? "")}`,
+        `  ${r.reachable ? success("●") : dim("○")} ${bold(`hive/${r.model}`.padEnd(34))} ${r.node.padEnd(22)} ${r.reachable ? `${success("serving")} ${dim([checkedAgo(r.checked_at), r.why].filter(Boolean).join(" · "))}` : dim([r.why, checkedAgo(r.checked_at)].filter(Boolean).join(" · "))}`,
       )
     const local = readSettings()
     console.log()
@@ -136,6 +336,13 @@ const ListCommand = cmd({
           : "  This machine is not serving. Start: iris hive models serve on",
       ),
     )
+    const shared = await sharedWithMe()
+    if (shared.length) {
+      console.log()
+      console.log(bold("  Shared with you"))
+      for (const m of shared) console.log(`    ${bold(String(m.id).replace(/^iris\//, "").padEnd(34))} ${dim(String(m.name ?? ""))}`)
+    }
+    console.log(dim("  Share yours with someone you are connected to: iris hive models share"))
   },
 })
 
@@ -159,7 +366,8 @@ const ServeCommand = cmd({
       return
     }
     if (argv.state === "off") {
-      writeSettings({ ...s, enabled: false })
+      // Off first, then the tunnel record: the daemon must never restart what the owner just stopped.
+      writeSettings({ ...s, enabled: false, tunnel: null })
       const closed = stopRelayTunnelBg(name)
       console.log(`\n${success("✓")} this machine no longer serves its models${closed ? dim(` — tunnel ${name} closed`) : ""}`)
       console.log(dim("  The gateway stops routing here on the next heartbeat (within a minute)."))
@@ -187,7 +395,8 @@ const ServeCommand = cmd({
     const models = argv.models ? String(argv.models).split(",").map((m) => m.trim()).filter(Boolean) : null
     // The endpoint first, so the tunnel's own reachability check finds something listening.
     const default_model = argv.default ? String(argv.default) : s.default_model
-    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url, default_model })
+    // No tunnel record until this run has opened one, so the daemon cannot start a second copy meanwhile.
+    writeSettings({ ...s, enabled: true, port, max_concurrent: Number(argv["max-concurrent"]) || 2, models, url: s.url, default_model, tunnel: null })
     const t = await startRelayTunnelBg(name, port)
     if (!t.ok) {
       console.log(`\n${highlight("✗")} the endpoint is on, but the tunnel did not open: ${t.error}`)
@@ -195,9 +404,9 @@ const ServeCommand = cmd({
       process.exitCode = 1
       return
     }
-    writeSettings({ ...readSettings(), url: t.url })
+    writeSettings({ ...readSettings(), url: t.url, node: t.node, tunnel: { name, runner: t.runner, zones: t.zones } })
     console.log(`\n${success("●")} serving at ${bold(t.url)}${t.already ? dim(" (tunnel was already open)") : ""}`)
-    console.log(dim("  The daemon picks this up within 15 s and reports it on its next heartbeat."))
+    console.log(dim(`  The daemon picks this up within 15 s, reports it on its next heartbeat, and restarts the tunnel with ${t.node} if it stops.`))
     console.log(dim("  Then: iris hive models   ·   use one: --model hive/<model>   ·   stop: iris hive models serve off"))
   },
 })
@@ -252,7 +461,7 @@ const PhiLocalCommand = cmd({
 
 export const HiveModelsCommand = cmd({
   command: "models",
-  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on|off, phi-local on|off",
-  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand).command(PhiLocalCommand),
+  describe: "models your machines serve to your IRIS gateway (hive/<model>) — list, serve on|off, share, phi-local on|off",
+  builder: (yargs) => yargs.command(ListCommand).command(ServeCommand).command(ShareCommand).command(PhiLocalCommand),
   handler: () => {},
 })

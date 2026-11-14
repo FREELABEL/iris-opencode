@@ -162,7 +162,9 @@ function collectBlocks(dir: string): BlockIndex {
     // only `cmd(` silently dropped the first product built on the new helper from the
     // index — the command resolved for a human typing `iris lexicon` and did not exist
     // for any agent reading capabilities.json, which is the worse of the two failures.
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
+    // `(?:Export)?`: a group DEFINED as `export const HiveHostCommandExport = cmd({…})` was never
+    // collected, so `iris hive host` and every subcommand were missing from the index.
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -351,6 +353,11 @@ function collectCommands(): Entry[] {
     // `HiveFilesCommand`, which resolved to a DIFFERENT command of that name in the parent's own
     // file — so `iris hive fs` and its subcommands were missing and `hive files` indexed twice.
     const childNames = [...b.body.matchAll(/\.command\((?:reg\(|withAccessFooter\()?([A-Za-z0-9_]+(?:Command|Group|Cmd)(?:Export)?)\b/g)].map((m) => m[1])
+    // A product declares its children as `subcommands: [A, B]` and productCommand() registers
+    // them, so they never appear as `.command(...)`: every door of `iris lexicon` was missing.
+    const productChildren = (b.body.match(/subcommands:\s*\[([^\]]*)\]/)?.[1] ?? "")
+      .split(",").map((n) => n.trim()).filter(Boolean)
+    childNames.push(...productChildren)
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
@@ -542,6 +549,16 @@ const TERMS: Record<string, string[]> = {
   leads: ["crm", "contacts", "prospects", "pipeline", "find people", "find customers", "customers", "outreach", "cold email", "email them", "book calls", "book a call", "sales", "lead generation"],
   agents: ["ai agent", "assistant", "bot"],
   hive: ["compute node", "distributed", "remote machine", "fleet", "daemon"],
+  // `hive host run` / `hive vpn connect` (#179098): plain asks reached neither.
+  "hive host run": ["run a command on", "remote command", "on a remote host", "on my server", "azure vm", "check a service"],
+  "hive vpn connect": ["remote desktop", "rdp"],
+  // How people ask for `hive fs` (#187956). Its name holds no word they type, so "move files" ranked
+  // the PEER `hive files` 2nd and `hive fs` 10th, and "copy file to another machine" missed it.
+  "hive fs": [
+    "move files", "move a file", "copy files", "copy a file", "copy file", "send a file", "send files", "send file",
+    "transfer files", "transfer a file", "file transfer", "upload a file", "another machine", "other machine",
+    "other computer", "my computers", "between machines", "stream a backup", "database backup", "dump to",
+  ],
   // #191176 — your own machines' models, served to your gateway (hive/<model>).
   "hive models": ["serve my models", "local models", "ollama", "my gpu", "my own gpu", "self-hosted model", "run models on my machine", "gpu marketplace"],
   // #191163 — IRIS as the ACP client: run another coding agent from IRIS, and keep it steerable.
@@ -564,7 +581,18 @@ const TERMS: Record<string, string[]> = {
   // "which command should I use" found atlas use / genesis / deliver:carousel — never `intent`,
   // the command that answers exactly that (#186677).
   intent: ["which command", "what command", "which tool", "what tool", "what should i run", "what do i run", "pick a command", "choose a command", "tool selection", "in plain english", "natural language"],
-  memory: ["remember", "recall", "knowledge base", "rag"],
+  memory: [
+    "remember", "recall", "knowledge base", "rag",
+    // #192223: how an owner asks the company memory a question.
+    "everything my business knows", "everything we know", "what did we promise", "company brain", "second brain", "search my notes",
+  ],
+  // #192223: plain questions from a "one screen for my business" evaluation that found nothing,
+  // although each answer existed. Phrases, not channel names: "whatsapp" alone is a send.
+  "atlas:comms": ["one feed", "every message", "all my messages", "unified inbox", "all channels", "messages in one place", "conversation history"],
+  "leads stats": ["funnel", "funnel stage", "by stage", "conversion rate", "how many leads", "deals by stage"],
+  broadcast: ["all my agents", "every agent", "one instruction", "tell everyone", "announce to", "the whole team"],
+  "mint import": ["bank statement", "bank statements", "profit and loss", "card statement"],
+  "hive inventory": ["what machines", "machines i own", "my machines", "compute i own", "my hardware", "what can my machines run", "free slots"],
   bug: ["issue", "report a problem", "defect", "ticket"],
   // "reply to … in my email" saw only iMessage and `sites reply` (#188613): nothing tied a person's
   // email words to the `mail` / `gmail` commands. `email` itself is the NEWSLETTER command — a list,

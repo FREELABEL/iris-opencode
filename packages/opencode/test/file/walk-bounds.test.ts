@@ -65,6 +65,23 @@ describe("Ripgrep.files / walkArgs", () => {
   })
 })
 
+// macOS only: off macOS nothing is pruned, so there is nothing to see.
+describe.if(process.platform === "darwin")("macOS pruning survives a catch-all pattern", () => {
+  test("`**/*` does not re-open Library/Containers (excludes must be the LAST globs)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "walk-mac-"))
+    try {
+      const box = path.join(dir, "u", "Library", "Containers", "com.example.app", "Data")
+      await fs.mkdir(box, { recursive: true })
+      await fs.writeFile(path.join(box, "secret.txt"), "x")
+      await fs.writeFile(path.join(dir, "visible.txt"), "x")
+      const files = await Array.fromAsync(Ripgrep.files({ cwd: dir, glob: ["**/*"] }))
+      expect(files).toEqual(["visible.txt"])
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("Ripgrep.bound — budget and Stop kill the process", () => {
   test("the budget kills it and reports the cutoff", async () => {
     const proc = Bun.spawn(["sleep", "30"])

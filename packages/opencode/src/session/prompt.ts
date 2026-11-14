@@ -40,6 +40,8 @@ import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
+import { Egress } from "@/permission/egress"
+import { Config } from "@/config/config"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { iife } from "@/util/iife"
@@ -244,14 +246,22 @@ export namespace SessionPrompt {
     log.info("cancel", { sessionID })
     const s = state()
     const match = s[sessionID]
-    if (!match) return
-    match.abort.abort()
-    for (const item of match.callbacks) {
-      item.reject()
+    if (match) {
+      match.abort.abort()
+      for (const item of match.callbacks) {
+        item.reject()
+      }
+      delete s[sessionID]
+      SessionStatus.set(sessionID, { type: "idle" })
     }
-    delete s[sessionID]
-    SessionStatus.set(sessionID, { type: "idle" })
-    return
+    // #191784: aborting does not reach a permission ask parked inside a tool, so the request
+    // would stay pending (listed, still answerable) and the tool would never finish. Reject
+    // them explicitly — after the abort, so the tool ends as aborted rather than as a user
+    // reject. Subagent sessions are covered by the cascade: the task tool's abort listener
+    // calls cancel() for the child session.
+    PermissionNext.rejectSession(sessionID).catch((error) =>
+      log.error("reject pending permissions on cancel failed", { sessionID, error }),
+    )
   }
 
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {
@@ -397,7 +407,12 @@ export namespace SessionPrompt {
             await PermissionNext.ask({
               ...req,
               sessionID: sessionID,
-              ruleset: PermissionNext.merge(taskAgent.permission, session.permission ?? []),
+              ...(await guardedRules({
+                req,
+                agent: taskAgent,
+                session,
+                model,
+              })),
             })
           },
         }
@@ -631,6 +646,36 @@ export namespace SessionPrompt {
     return Provider.defaultModel()
   }
 
+  /**
+   * The rules for one tool call, with the local/private egress guard applied (#192114). Every
+   * `ctx.ask` for a tool call comes through here, so a tool cannot forget it.
+   */
+  async function guardedRules(input: {
+    req: { permission: string; patterns: string[] }
+    agent: Agent.Info
+    session: Session.Info
+    model: Provider.Model
+  }) {
+    const base = PermissionNext.merge(input.agent.permission, input.session.permission ?? [])
+    const provider = await Provider.getProvider(input.model.providerID).catch(() => undefined)
+    const mode = Egress.mode({ modelUrl: provider?.options?.baseURL ?? input.model.api.url })
+    if (mode === "normal") return { ruleset: base }
+    return {
+      ruleset: Egress.tighten({
+        mode,
+        permission: input.req.permission,
+        patterns: input.req.patterns,
+        ruleset: base,
+        explicit: PermissionNext.merge(
+          Egress.explicitRules(await Config.get(), input.agent.name),
+          input.session.permission ?? [],
+        ),
+      }),
+      ignoreApproved: mode === "private" && Egress.sendsDataOut(input.req.permission),
+      unattended: Egress.sendsDataOut(input.req.permission) && Egress.unattended(),
+    }
+  }
+
   async function resolveTools(input: {
     agent: Agent.Info
     model: Provider.Model
@@ -670,10 +715,13 @@ export namespace SessionPrompt {
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          ...(await guardedRules({ req, agent: input.agent, session: input.session, model: input.model })),
         })
       },
     })
+
+    const guardProvider = await Provider.getProvider(input.model.providerID).catch(() => undefined)
+    const guardMode = Egress.mode({ modelUrl: guardProvider?.options?.baseURL ?? input.model.api.url })
 
     for (const item of await ToolRegistry.tools(input.model.providerID)) {
       const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
@@ -694,6 +742,9 @@ export namespace SessionPrompt {
               args,
             },
           )
+          // A plugin tool does not ask for itself. On a local or private session it must (#192114).
+          if (guardMode !== "normal" && !Egress.asksForItself(item.id))
+            await ctx.ask({ permission: item.id, patterns: ["*"], always: ["*"], metadata: {} })
           const result = await item.execute(args, ctx)
           await Plugin.trigger(
             "tool.execute.after",

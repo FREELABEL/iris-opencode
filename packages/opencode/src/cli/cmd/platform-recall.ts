@@ -33,6 +33,17 @@ export function sessionHitLines(s: SessionHit): [string, string, string | null] 
   return [(s.title ?? "Session").replace(/\s+/g, " ").trim(), `    ${where}`, open]
 }
 
+/**
+ * Which calls recall makes (#191306). The summary is a model call: measured 2026-10-27 it made the
+ * API answer in 5.0 s (median) instead of 0.55 s, so the hits waited ~4.4 s for a paragraph. A
+ * person now gets the hits first and the summary after; --json keeps one call, summary included,
+ * because a script reads the whole answer at once. No hits means nothing to summarize.
+ */
+export function recallCalls(o: { json: boolean; summarize: boolean }): { first: boolean; thenSummary: boolean } {
+  if (o.json) return { first: o.summarize, thenSummary: false }
+  return { first: false, thenSummary: o.summarize }
+}
+
 export const PlatformRecallCommand = cmd({
   command: "recall <query..>",
   aliases: ["search-memory"],
@@ -59,31 +70,29 @@ export const PlatformRecallCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Recall: ${bold(query)}`)
 
-    const qs = new URLSearchParams({
-      q: query,
-      user_id: String(userId),
-      days: String(args.days),
-      limit: String(args.limit),
-      summarize: args.summarize && !args["no-summarize"] ? "1" : "0",
-    })
-    if (args.agent) qs.set("agent_id", args.agent)
+    const wantSummary = !!args.summarize && !args["no-summarize"]
+    const plan = recallCalls({ json: !!args.json, summarize: wantSummary })
+    const ask = async (summarize: boolean) => {
+      const qs = new URLSearchParams({
+        q: query,
+        user_id: String(userId),
+        days: String(args.days),
+        limit: String(args.limit),
+        summarize: summarize ? "1" : "0",
+      })
+      if (args.agent) qs.set("agent_id", args.agent)
+      const res = await irisFetch(`/api/v6/recall?${qs.toString()}`, {}, IRIS_API)
+      if (!(await handleApiError(res, "Recall"))) return null
+      return (await res.json()) as any
+    }
 
-    const res = await irisFetch(`/api/v6/recall?${qs.toString()}`, {}, IRIS_API)
-    const ok = await handleApiError(res, "Recall")
-    if (!ok) { prompts.outro("Done"); return }
-
-    const data = (await res.json()) as any
+    const data = await ask(plan.first)
+    if (!data) { prompts.outro("Done"); return }
 
     if (args.json) {
       await writeJson(data)
       prompts.outro("Done")
       return
-    }
-
-    if (data?.summary) {
-      printDivider()
-      console.log(`  ${bold("Summary")}`)
-      console.log(`  ${data.summary}`)
     }
 
     const renderBucket = (label: string, items: any[]) => {
@@ -111,6 +120,15 @@ export const PlatformRecallCommand = cmd({
         console.log(`  ${dim(where)}`)
         if (open) console.log(`  ${dim(open)}`)
       }
+    }
+
+    // The summary after the hits, so they are on screen while the model writes (#191306).
+    if (plan.thenSummary && (data?.count ?? 0) > 0) {
+      const spinner = prompts.spinner()
+      spinner.start("Summarizing…")
+      const withSummary = await ask(true).catch(() => null)
+      spinner.stop(withSummary?.summary ? "Summary" : "No summary this time")
+      if (withSummary?.summary) console.log(`  ${withSummary.summary}`)
     }
 
     printDivider()

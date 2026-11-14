@@ -12,7 +12,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
   },
   atlas: {
     name: "Atlas OS",
-    description: "Ledger, staff, inventory, meetings, brand kit, deals",
+    description: "Ledger, staff, inventory, meetings, brand kit, deals, drives",
     order: 2,
   },
   knowledge: {
@@ -97,6 +97,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "atlas:brand-kit": "atlas",
   "atlas:comms": "atlas",
   "atlas:datasets": "atlas",
+  drives: "atlas",
   onboarding: "atlas",
   "atlas:projections": "atlas",
   "good-deals": "atlas",
@@ -132,6 +133,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   copycat: "pages",
   reel: "pages",
   "editorial": "pages",
+  campaigns: "pages",
   remotion: "pages",
   release: "pages",
   "cloud:upload": "pages",
@@ -144,6 +146,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   workflows: "agents",
   schedules: "agents",
   monitor: "agents",
+  status: "agents",
   personality: "agents",
   recall: "knowledge",
   home: "integrations",
@@ -184,6 +187,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // Communication
   msg: "communication",
   obs: "communication",
+  "app-config": "communication",
   phone: "communication",
   voice: "communication",
   download: "communication",

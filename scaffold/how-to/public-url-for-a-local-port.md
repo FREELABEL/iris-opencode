@@ -9,7 +9,7 @@ duration_min: 5
 ## What this does
 
 Gives a site or app running on your machine (say `localhost:3000`) a public **https** address
-like `https://my-demo.t.heyiris.io` that anyone can open — to show a client a preview, test a
+like `https://my-demo.hivemesh.net` that anyone can open — to show a client a preview, test a
 webhook, or share a demo.
 
 It is encrypted all the way to **your** machine. The connection passes through the IRIS relay,
@@ -34,7 +34,7 @@ You are asked to confirm, because the address is reachable by **anyone on the in
 first time you use a name, getting its certificate takes about 30 seconds. Then:
 
 ```
-● https://your-machine-3000.t.heyiris.io → localhost:3000
+● https://your-machine-3000.hivemesh.net → localhost:3000
   public for 1h or until Ctrl-C
 ```
 
@@ -46,7 +46,7 @@ Press **Ctrl-C** to close it. It also closes by itself after `--for` (default 1 
 iris hive tunnel 3000 --name acme-preview
 ```
 
-→ `https://acme-preview.t.heyiris.io`. The name is yours until you release it: nobody else can
+→ `https://acme-preview.hivemesh.net`. The name is yours until you release it: nobody else can
 use it, and next time it opens straight away with the certificate it already has.
 
 **3. Keep it open after the command ends (only when you mean it)**
