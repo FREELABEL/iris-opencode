@@ -760,7 +760,7 @@ SELF_PANES.add("comms-inbox")
 // Agents › Running (#192855) reads the engine's sessions for itself.
 SELF_PANES.add("agent-runs")
 // Outreach (#193487) draws and fetches for itself.
-for (const p of ["outreach-today", "outreach-campaigns", "outreach-scripts"]) SELF_PANES.add(p)
+for (const p of ["outreach-today", "outreach-campaigns", "outreach-scripts", "outreach-audiences"]) SELF_PANES.add(p)
 
 interface SubView {
   id: string
@@ -898,6 +898,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "today", label: "Today", pane: "outreach-today", path: () => `/iris/comms`, default: true, countOf: "outreach" },
     { id: "campaigns", label: "Campaigns", pane: "outreach-campaigns", path: () => `/iris/outreach/campaigns` },
     { id: "scripts", label: "Scripts", pane: "outreach-scripts", path: () => `/iris/outreach/strategies` },
+    // #193533: build a segment — filters with counts, its members. The agent's segment_* tools edit the same draft.
+    { id: "audiences", label: "Audiences", pane: "outreach-audiences", path: () => `/iris/outreach/segments/draft` },
     { id: "inbox", label: "Inbox", pane: "comms-inbox", path: () => `/iris/comms`, goto: { surface: "inbox", sub: "messages" } },
     { id: "leads", label: "Leads", pane: "leads-crm", path: (b) => `/iris/leads/${b}`, goto: { surface: "leads", sub: "all" } },
   ],
@@ -1233,6 +1235,7 @@ const PANEL_HINTS: Record<string, string> = {
   "integrations/add": "Connect a new account (Gmail, Slack, …)",
   lexicon: "Lexicon — legal cases: engagement letters, fee agreements and releases out for signature",
   "lexicon/agreements": "Agreements on a case: what is awaiting signature, executed or revoked — raise, issue, revoke",
+  "outreach/audiences": "Build an audience: a segment's filters with how many leads each leaves, and its members. outreach_show + segment_* tools edit it live",
 }
 
 export const IRIS_PANEL_CATALOG: readonly {
@@ -4481,10 +4484,14 @@ export function SessionIrisTab() {
             <Match when={pane() === "reachr"}>
               <IrisReachrReview doFetch={doFetch} />
             </Match>
-            <Match when={pane() === "outreach-today" || pane() === "outreach-campaigns" || pane() === "outreach-scripts"}>
+            <Match when={pane() === "outreach-today" || pane() === "outreach-campaigns" || pane() === "outreach-scripts" || pane() === "outreach-audiences"}>
               <IrisOutreach
                 doFetch={doFetch}
-                view={pane() === "outreach-campaigns" ? "campaigns" : pane() === "outreach-scripts" ? "scripts" : "today"}
+                view={pane() === "outreach-campaigns" ? "campaigns" : pane() === "outreach-scripts" ? "scripts" : pane() === "outreach-audiences" ? "audiences" : "today"}
+                onShow={(v) => chooseSub(v, "outreach")}
+                bloqId={activeBloq()}
+                boards={() => (settled(bloqs)?.bloqs ?? []).map((b) => ({ id: b.id, name: b.name }))}
+                listen={(fn) => serverSDK().event.listen(fn as any)}
                 onOpenLead={(id) => {
                   requestLeadOpen(id)
                   chooseSurface("leads")

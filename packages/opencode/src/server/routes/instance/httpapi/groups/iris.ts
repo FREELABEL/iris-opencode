@@ -1743,6 +1743,16 @@ const ReachrResponse = Schema.Struct({
   data: Schema.Unknown,
 }).annotate({ identifier: "IrisReachrResponse" })
 
+/** One Audiences filter (#193533). The value's type follows the key; segments.ts checks it. */
+const SegmentFilterBody = Schema.Struct({ key: Schema.String, value: Schema.Unknown })
+const SegmentDraftChange = Schema.Struct({
+  bloq: Schema.Number,
+  filters: Schema.optional(Schema.Array(SegmentFilterBody)),
+  name: Schema.optional(Schema.String),
+  reset: Schema.optional(Schema.Boolean),
+  load: Schema.optional(Schema.Number),
+})
+
 /*
  * The people inbox (#192688) — conversations with leads from fl-api's comms log. EVERY FIELD THE
  * PANEL READS IS DECLARED: Schema strips what it was not told about, silently (PR #459).
@@ -2020,6 +2030,13 @@ export const IrisPaths = {
   outreachCampaigns: `${root}/outreach/campaigns`,
   outreachAudience: `${root}/outreach/campaigns/:campaignID/audience`,
   outreachStrategies: `${root}/outreach/strategies`,
+  outreachSegments: `${root}/outreach/segments`,
+  outreachSegmentDraft: `${root}/outreach/segments/draft`,
+  outreachSegmentDraftSave: `${root}/outreach/segments/draft/save`,
+  outreachSegmentPreview: `${root}/outreach/segments/preview`,
+  outreachSegmentMembers: `${root}/outreach/segments/:segmentID/members`,
+  outreachSegmentFind: `${root}/outreach/segments/find`,
+  outreachCampaignTarget: `${root}/outreach/campaigns/:campaignID/segment`,
   agreements: `${root}/agreements`,
   agreement: `${root}/agreements/:agreementID`,
   agreementIssue: `${root}/agreements/:agreementID/issue`,
@@ -4262,6 +4279,65 @@ export const IrisApi = HttpApi.make("iris").add(
         query: { bloq: Schema.optional(Schema.String) },
         success: described(ReachrResponse, "Outreach strategies (scripts) on those boards, with the campaigns that run each"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachStrategies", summary: "List outreach scripts" })),
+      // Audiences (#193533–#193535): fl-api segments (D3 #193484) and the one draft the panel and the
+      // agent's segment_* tools share. Nothing here sends a message.
+      HttpApiEndpoint.get("outreachSegments", IrisPaths.outreachSegments, {
+        query: { bloq: Schema.NumberFromString },
+        success: described(ReachrResponse, "The board's saved segments"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegments", summary: "List a board's segments" })),
+      HttpApiEndpoint.get("outreachSegmentDraft", IrisPaths.outreachSegmentDraft, {
+        query: { bloq: Schema.optional(Schema.NumberFromString) },
+        success: described(ReachrResponse, "The draft segment on that board, or (no board) the one changed last; null when there is none"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.outreachSegmentDraft",
+          summary: "Read the draft segment",
+          description: "A draft that matches its saved segment re-reads it, so an edit from the CLI shows up on the next read.",
+        }),
+      ),
+      HttpApiEndpoint.put("outreachSegmentDraftChange", IrisPaths.outreachSegmentDraft, {
+        payload: SegmentDraftChange,
+        success: described(ReachrResponse, "The draft after the change"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentDraftChange", summary: "Change the draft segment" })),
+      HttpApiEndpoint.post("outreachSegmentDraftSave", IrisPaths.outreachSegmentDraftSave, {
+        payload: Schema.Struct({ bloq: Schema.Number, name: Schema.optional(Schema.String) }),
+        success: described(ReachrResponse, "The draft, saved as a segment on fl-api"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentDraftSave", summary: "Save the draft as a segment" })),
+      HttpApiEndpoint.post("outreachSegmentPreview", IrisPaths.outreachSegmentPreview, {
+        payload: Schema.Struct({ bloq: Schema.Number, filters: Schema.Array(SegmentFilterBody) }),
+        success: described(ReachrResponse, "Each filter's step (before/known/unknown/matched), in fl-api's order, and the first 25 members. Saves nothing."),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentPreview", summary: "Preview a segment" })),
+      HttpApiEndpoint.get("outreachSegmentMembers", IrisPaths.outreachSegmentMembers, {
+        params: { segmentID: Schema.NumberFromString },
+        query: { page: Schema.optional(Schema.NumberFromString) },
+        success: described(ReachrResponse, "One page of a saved segment's members"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.outreachSegmentMembers", summary: "A segment's members" })),
+      HttpApiEndpoint.post("outreachSegmentFind", IrisPaths.outreachSegmentFind, {
+        payload: Schema.Struct({
+          bloq: Schema.Number,
+          post_url: Schema.optional(Schema.String),
+          urls: Schema.optional(Schema.Array(Schema.String)),
+          limit: Schema.optional(Schema.Number),
+        }),
+        success: described(ReachrResponse, "How many leads were added to the board"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.outreachSegmentFind",
+          summary: "Find people and add them as leads",
+          description: "`iris reachr scrape <bloq> … --write` on this computer: a post's commenters or the people on public pages. Adds leads; sends nothing.",
+        }),
+      ),
+      HttpApiEndpoint.post("outreachCampaignTarget", IrisPaths.outreachCampaignTarget, {
+        params: { campaignID: Schema.NumberFromString },
+        payload: Schema.Struct({ segment_id: Schema.NullOr(Schema.Number) }),
+        success: described(ReachrResponse, "The campaign's segment after the change"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.outreachCampaignTarget",
+          summary: "Point a campaign at a segment",
+          description: "The campaign's next run draws from the segment. Nothing is sent by this call.",
+        }),
+      ),
       HttpApiEndpoint.post("leadsApi", IrisPaths.leadsApi, {
         payload: Schema.Struct({
           op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness"]),
