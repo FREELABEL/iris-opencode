@@ -48,6 +48,7 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformRadarCommand, PeersDeprecatedCommand } from "./cli/cmd/platform-radar"
 import { PlatformReelCommand } from "./cli/cmd/platform-reel"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -120,6 +121,7 @@ import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { HomeCommand } from "./cli/cmd/platform-home"
 import { BuzzCommand } from "./cli/cmd/platform-buzz"
+import { MeshCommand } from "./cli/cmd/platform-mesh"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAndroidCommand } from "./cli/cmd/platform-android"
 import { PlatformOrgCommand } from "./cli/cmd/platform-org"
@@ -132,6 +134,7 @@ import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformMeetingsCommand } from "./cli/cmd/platform-meetings"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformAdCampaignsCommand } from "./cli/cmd/platform-ad-campaigns"
+import { PlatformMarketingCommand } from "./cli/cmd/platform-marketing"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
@@ -388,6 +391,7 @@ const cli = yargs(rawArgs)
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(BuzzCommand))
+  .command(reg(MeshCommand))
   .command(reg(McpCommand))
   .command(reg(A2aCommand))
   .command(reg(MarketplaceCommand))
@@ -431,6 +435,8 @@ const cli = yargs(rawArgs)
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformRadarCommand))
+  .command(reg(PeersDeprecatedCommand)) // hidden: the pre-rename name, prints one line then runs radar
   .command(reg(PlatformReelCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
@@ -525,6 +531,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMeetingsCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformAdCampaignsCommand))
+  .command(reg(PlatformMarketingCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDiscordCommand))

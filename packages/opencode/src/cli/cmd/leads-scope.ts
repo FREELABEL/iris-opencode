@@ -115,6 +115,13 @@ export type ListRequestOptions = {
   tags?: string[]
   minPrice?: number
   maxPrice?: number
+  /** #193510/#193511/#193512/#193514 — the lead fields import writes. */
+  title?: string
+  product?: string
+  segment?: string
+  externalId?: string
+  /** Only leads whose name is not verified (an Apollo "Va***s" name). Sent as name_verified=0. */
+  unverifiedNames?: boolean
   /**
    * #191736 — paging. `cursor` continues a keyset walk (the server's next_cursor);
    * `paginate: "cursor"` starts one; `page` is the server's OFFSET page (1-based).
@@ -149,7 +156,11 @@ export type ListRequest = {
 export function buildListRequest(o: ListRequestOptions): ListRequest {
   const sortKey = o.sort && LIST_SORTS[o.sort] ? o.sort : "activity"
   const { sortBy, sortDirection, orderingLabel } = LIST_SORTS[sortKey]
-  const hidesProspected = !o.all && !o.status && !o.search
+  // A filter on a field (title, product, segment, external id, unverified names) is as
+  // deliberate as a search: an imported lead may well be Prospected, and hiding it would make
+  // `--external-id apollo:x` say "no such lead" about a lead that exists.
+  const fieldFilter = Boolean(o.title || o.product || o.segment || o.externalId || o.unverifiedNames)
+  const hidesProspected = !o.all && !o.status && !o.search && !fieldFilter
   // #191736 — a page of a walk is shown in the server's order. Banding re-sorts a window, and
   // a window re-sorted per page is not one order across pages: the bands would restart on
   // every page and the walk would no longer be the book in order.
@@ -168,6 +179,11 @@ export function buildListRequest(o: ListRequestOptions): ListRequest {
   for (const t of o.tags ?? []) if (t.trim()) params.append("tag[]", t.trim())
   if (o.minPrice !== undefined) params.set("price_bid_min", String(o.minPrice))
   if (o.maxPrice !== undefined) params.set("price_bid_max", String(o.maxPrice))
+  if (o.title) params.set("title", o.title)
+  if (o.product) params.set("product", o.product)
+  if (o.segment) params.set("segment", o.segment)
+  if (o.externalId) params.set("external_id", o.externalId)
+  if (o.unverifiedNames) params.set("name_verified", "0")
   if (o.cursor) params.set("cursor", o.cursor)
   else if (o.paginate === "cursor") params.set("pagination", "cursor")
   else if (o.page) params.set("page", String(o.page))
@@ -284,11 +300,25 @@ export function leadDisplayName(l: Record<string, unknown>): string {
  * #191693 — an empty FILTERED result is not an empty book: say what matched nothing instead
  * of "Create one". (An unknown status never gets here; the server rejects it with the valid list.)
  */
-export function emptyListMessage(o: { status?: string; search?: string; bloqId?: number }): { warn: string; hint: string } {
+export function emptyListMessage(o: {
+  status?: string
+  search?: string
+  bloqId?: number
+  title?: string
+  product?: string
+  segment?: string
+  externalId?: string
+  unverifiedNames?: boolean
+}): { warn: string; hint: string } {
   const parts: string[] = []
   if (o.status) parts.push(`status "${o.status}"`)
   if (o.search) parts.push(`search "${o.search}"`)
   if (o.bloqId) parts.push(`bloq ${o.bloqId}`)
+  if (o.title) parts.push(`title "${o.title}"`)
+  if (o.product) parts.push(`product ${o.product}`)
+  if (o.segment) parts.push(`segment "${o.segment}"`)
+  if (o.externalId) parts.push(`external id ${o.externalId}`)
+  if (o.unverifiedNames) parts.push("unverified names")
   if (parts.length) return { warn: `No leads match ${parts.join(", ")}`, hint: "Widen the filter, or: iris leads list --all" }
   return { warn: "No leads found", hint: "Create one: iris leads create" }
 }
@@ -343,4 +373,32 @@ export function mergeResponders(lists: Array<Array<Record<string, any>>>, limit:
   for (const list of lists) for (const l of list) if (l && !byId.has(l.id) && leadHasReplied(l)) byId.set(l.id, l)
   const t = (l: Record<string, any>) => parseServerTime(l.replied_at ?? l.updated_at)?.getTime() ?? 0
   return [...byId.values()].sort((a, b) => t(b) - t(a)).slice(0, limit)
+}
+
+/**
+ * #193510–#193514 — a server that does not know a filter ignores it and returns the whole
+ * book, so `--product iris-kinetic` would list every lead as if it were Kinetic. Check each
+ * returned row against the filters asked for and drop the ones that do not match; the caller
+ * says so loudly. `title` matches as a case-insensitive substring (the server may match
+ * more loosely; it may not match LESS), the rest exactly.
+ */
+export function checkFieldFilters(
+  rows: any[],
+  o: { title?: string; product?: string; segment?: string; externalId?: string; unverifiedNames?: boolean },
+): { kept: any[]; ignored: string[] } {
+  const tests: { flag: string; ok: (r: any) => boolean }[] = []
+  const eq = (a: unknown, b: string) => String(a ?? "").trim().toLowerCase() === b.trim().toLowerCase()
+  if (o.title) tests.push({ flag: "--title", ok: (r) => String(r?.title ?? "").toLowerCase().includes(o.title!.toLowerCase()) })
+  if (o.product) tests.push({ flag: "--product", ok: (r) => eq(r?.product, o.product!) })
+  if (o.segment) tests.push({ flag: "--segment", ok: (r) => eq(r?.segment, o.segment!) })
+  if (o.externalId) tests.push({ flag: "--external-id", ok: (r) => String(r?.external_id ?? "") === o.externalId })
+  if (o.unverifiedNames) tests.push({ flag: "--unverified-names", ok: (r) => r?.name_verified === false || r?.name_verified === 0 || r?.name_verified === "0" })
+  if (tests.length === 0) return { kept: rows, ignored: [] }
+  const ignored = new Set<string>()
+  const kept = rows.filter((r) => {
+    let pass = true
+    for (const t of tests) if (!t.ok(r)) { ignored.add(t.flag); pass = false }
+    return pass
+  })
+  return { kept, ignored: [...ignored] }
 }

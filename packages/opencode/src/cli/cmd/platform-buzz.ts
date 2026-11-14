@@ -72,6 +72,39 @@ export function resolveIrisPath(
 }
 
 /**
+ * Where a bare `iris` must live for Buzz's own lookup to find it. Buzz resolves a runtime
+ * command through PATH, a fixed list of dirs that includes ~/.local/bin, and `zsh -l -c` —
+ * which reads ~/.zshenv, not ~/.zshrc, so installs that only edited ~/.zshrc are invisible to
+ * it (block/buzz discovery.rs common_binary_paths, discovery/login_shell.rs). That lookup is the
+ * one the built-in IRIS entry uses, and once Buzz lists IRIS itself it skips our custom file.
+ *
+ * `existing` is what is at the link path now: undefined = nothing, null = a real file,
+ * a string = a symlink and its target. Anything already there is left alone.
+ */
+export function localBinLinkPlan(
+  irisPath: string,
+  home: string,
+  platform: string,
+  existing: string | null | undefined,
+): { action: "create" | "ok" | "leave" | "skip"; link: string } {
+  const link = path.join(home, ".local", "bin", "iris")
+  if (platform === "win32") return { action: "skip", link }
+  if (existing === undefined) return { action: "create", link }
+  if (existing === irisPath) return { action: "ok", link }
+  return { action: "leave", link }
+}
+
+function readExisting(p: string): string | null | undefined {
+  let st: fs.Stats
+  try {
+    st = fs.lstatSync(p)
+  } catch {
+    return undefined
+  }
+  return st.isSymbolicLink() ? fs.readlinkSync(p) : null
+}
+
+/**
  * Turn what a community admin shares into the link the Buzz desktop app acts on.
  * Accepts the relay's invite page (`https://<host>/invite/<code>`) or an existing
  * `buzz://join?...` link. Buzz joins via `buzz://join?relay=<ws(s)://host>&code=<code>`
@@ -282,8 +315,21 @@ const SetupCommand = cmd({
       return
     }
 
+    const plan = localBinLinkPlan(irisPath, os.homedir(), process.platform, readExisting(path.join(os.homedir(), ".local", "bin", "iris")))
+    if (plan.action === "create") {
+      try {
+        fs.mkdirSync(path.dirname(plan.link), { recursive: true })
+        fs.symlinkSync(irisPath, plan.link)
+      } catch (e) {
+        prompts.log.warn(`Could not link ${plan.link} → ${irisPath}: ${(e as Error).message}`)
+      }
+    }
+
     printDivider()
     prompts.log.success(`${before === body ? "Already set up" : before ? "Updated" : "Added"}: ${bold(file)}`)
+    if (plan.action === "create") prompts.log.info(`Linked ${plan.link} → ${irisPath} so Buzz's own lookup finds IRIS`)
+    if (plan.action === "leave")
+      prompts.log.warn(`${plan.link} already exists and is not a link to ${irisPath} — left it alone`)
     prompts.log.info(`Buzz will run: ${irisPath} acp`)
     prompts.log.info(
       [

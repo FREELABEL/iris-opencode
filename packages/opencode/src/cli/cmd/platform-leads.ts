@@ -1,6 +1,7 @@
 import {
   buildListRequest,
   buildSegmentFilters,
+  checkFieldFilters,
   describeListScope,
   emptyListMessage,
   leadDisplayName,
@@ -16,6 +17,8 @@ import {
 } from "./leads-scope"
 import { analyzeJson, dmLedger, dmTrend, inPeriod, messagesHeader, messagesInPeriod, sentHeadline, type AnalyzePeriod, type SentMessage } from "./leads-analyze"
 import { cmd } from "./cmd"
+import { LEAD_PRODUCTS, leadFieldsFromFlags } from "./leads-import"
+import { LeadsImportCommand } from "./platform-leads-import"
 import { PulseCheckCommand, PulseSourcesCommand, pulseCheckOptions, runPulseCheck } from "./platform-pulse-check"
 import { readAtlasDiary } from "./pulse-check-sweep"
 import { fetchLeadCalendarEvents, type Channel, type ContactQuery } from "./pulse-contact-script"
@@ -24,6 +27,7 @@ import { summariseOutgoing, collectOutgoing, healOutgoing, type OutgoingReport }
 import { probeBridge } from "./platform-mail"
 import { refreshLeadComms } from "./platform-atlas-comms"
 import { productCommand } from "./product-command"
+import { LeadsPromoteCommand } from "./platform-leads-promote"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -165,7 +169,11 @@ function printLead(l: Record<string, unknown>): void {
     bloqIds.length > 0
       ? `  ${dim(bloqIds.map((id: unknown, i: number) => `bloq:${id}${bloqNames[i] ? ` (${bloqNames[i]})` : ""}`).join(", "))}`
       : ""
-  console.log(`  ${id}  ${name}${company}${status}${bloqLabel}`)
+  // #193510/#193512 — who they are and which product they are a prospect for.
+  const title = l.title ? `  ${String(l.title)}` : ""
+  const product = l.product ? `  ${dim(`[${String(l.product)}]`)}` : ""
+  const unverified = l.name_verified === false || l.name_verified === 0 ? `  ${dim("(name not verified)")}` : ""
+  console.log(`  ${id}  ${name}${unverified}${title}${company}${product}${status}${bloqLabel}`)
   if (l.email) console.log(`    ${dim("✉")} ${email}`)
 }
 
@@ -295,6 +303,12 @@ const LeadsListCommand = cmd({
       .option("tag", { describe: "only leads with this tag (repeat for any of several)", type: "string", array: true })
       .option("min-price", { describe: "only leads with deal value (price_bid) at least this", type: "string" })
       .option("max-price", { describe: "only leads with deal value (price_bid) at most this", type: "string" })
+      // #193510–#193514 — the fields `leads import` writes
+      .option("title", { describe: "only leads whose job title contains this", type: "string" })
+      .option("product", { describe: "only leads for this product", type: "string", choices: LEAD_PRODUCTS })
+      .option("segment", { describe: "only leads in this segment (e.g. contractors-tx)", type: "string" })
+      .option("external-id", { describe: "the lead with this source id (e.g. apollo:5f3a…)", type: "string" })
+      .option("unverified-names", { describe: "only leads whose name is partly hidden / not verified", type: "boolean", default: false })
       // #191736 — a way past the first page
       .option("cursor", { describe: "continue from a previous page's next cursor", type: "string" })
       .option("page", { describe: "page number (offset paging; --cursor is stable while leads change)", type: "string" })
@@ -379,6 +393,11 @@ const LeadsListCommand = cmd({
         tags: (args.tag ?? []).map(String),
         minPrice: parsedMin.value,
         maxPrice: parsedMax.value,
+        title: args.title,
+        product: args.product,
+        segment: args.segment,
+        externalId: args["external-id"],
+        unverifiedNames: Boolean(args["unverified-names"]),
       }
       // A plain run of an explicit --sort is already one order, so ask for it as the first page
       // of a cursor walk: the footer can then say exactly how to get the next page. The default
@@ -422,6 +441,16 @@ const LeadsListCommand = cmd({
         data = (await res.json()) as typeof data
       }
       let leads: any[] = firstArray(data?.data)
+      // A server that does not know a field filter returns everything; never present that as
+      // a filtered answer. Drop the rows that do not match and say which filter was ignored.
+      const fieldCheck = checkFieldFilters(leads, listOptions)
+      if (fieldCheck.ignored.length) {
+        const dropped = leads.length - fieldCheck.kept.length
+        const msg = `the server did not apply ${fieldCheck.ignored.join(", ")} — ${dropped} non-matching row(s) dropped from this page, so the total below is NOT the filtered total. The lead filters need the fl-api release that adds them.`
+        if (args.json) process.stderr.write(`[leads list] ${msg}\n`)
+        else prompts.log.warn(msg)
+        leads = fieldCheck.kept
+      }
       const nextCursor = typeof data?.next_cursor === "string" ? data.next_cursor : null
       const nextPage =
         parsedPage.value && typeof data?.last_page === "number" && parsedPage.value < data.last_page ? parsedPage.value + 1 : null
@@ -519,6 +548,11 @@ const LeadsListCommand = cmd({
         "min-price": args["min-price"],
         "max-price": args["max-price"],
         sort: args.sort === "activity" ? undefined : args.sort,
+        title: args.title,
+        product: args.product,
+        segment: args.segment,
+        "external-id": args["external-id"],
+        "unverified-names": args["unverified-names"] || undefined,
       }) + (args.tag ?? []).map((t) => ` ${commandWith("", { tag: String(t) }).trim()}`).join("")
       const apiTotal = typeof data?.total === "number" ? data.total : typeof data?.meta?.total === "number" ? data.meta.total : null
       const usesCursor = !allPages && (Boolean(args.cursor) || nextCursor !== null || (!parsedPage.value && !request.reorderByStatus))
@@ -561,7 +595,16 @@ const LeadsListCommand = cmd({
           prompts.outro(`View them: ${dim("iris leads list --all")}`)
         } else {
           // #191693 — a filtered empty result is not an empty book.
-          const empty = emptyListMessage({ status: args.status, search: args.search, bloqId: args["bloq-id"] })
+          const empty = emptyListMessage({
+            status: args.status,
+            search: args.search,
+            bloqId: args["bloq-id"],
+            title: args.title,
+            product: args.product,
+            segment: args.segment,
+            externalId: args["external-id"],
+            unverifiedNames: Boolean(args["unverified-names"]),
+          })
           prompts.log.warn(empty.warn)
           prompts.outro(dim(empty.hint))
         }
@@ -802,11 +845,16 @@ const LeadsGetCommand = cmd({
       printKV("Name", l.name ?? `${l.first_name ?? ""} ${l.last_name ?? ""}`.trim())
       printKV("Email", l.email)
       printKV("Phone", l.phone)
+      printKV("Title", l.title)
       printKV("Company", l.company)
       printKV("Website", l.website)
       printKV("Status", l.status)
       printKV("Stage", l.stage)
       printKV("Source", l.source)
+      printKV("Product", l.product)
+      printKV("Segment", l.segment)
+      printKV("External ID", l.external_id)
+      if (l.name_verified === false || l.name_verified === 0) printKV("Name", "NOT verified — partly hidden (e.g. Apollo); enrich before writing to them")
       printKV("Bid", l.price_bid ? `$${l.price_bid}` : undefined)
       // #191738 — shown in the reader's local time; --json keeps the API's ISO value.
       printKV("Created", formatLocalTime(l.created_at))
@@ -1196,6 +1244,12 @@ const LeadsCreateCommand = cmd({
       .option("bid", { describe: "deal amount — counts toward board pipeline value", type: "number" })
       .option("mrr", { describe: "monthly recurring revenue", type: "number" })
       .option("notes", { describe: "initial note to attach", type: "string" })
+      // #193510/#193511/#193512/#193514 — who they are, the source's own id, which product
+      .option("title", { describe: "job title (e.g. Superintendent, Capture Manager)", type: "string" })
+      .option("external-id", { describe: "the source's own id, unique per board (e.g. apollo:5f3a…)", type: "string" })
+      .option("product", { describe: "which product they are a prospect for", type: "string", choices: LEAD_PRODUCTS })
+      .option("segment", { describe: "segment (e.g. contractors-tx, robotics-founders)", type: "string" })
+      .option("name-verified", { describe: "the name is real and complete (--no-name-verified for a partly hidden name)", type: "boolean" })
       .option("bloq-id", { describe: "board (bloq) this lead belongs to — required; prompted for when interactive", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
@@ -1207,6 +1261,15 @@ const LeadsCreateCommand = cmd({
 
     const token = await requireAuth()
     if (!token) {
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+
+    const extra = leadFieldsFromFlags(args)
+    if (!extra.ok) {
+      if (isJson) console.log(JSON.stringify({ error: extra.error }))
+      else prompts.log.error(extra.error)
+      process.exitCode = 1
       if (!isJson) prompts.outro("Done")
       return
     }
@@ -1294,6 +1357,9 @@ const LeadsCreateCommand = cmd({
       // impossible to clear.
       if (args.bid !== undefined) payload.price_bid = args.bid
       if (args.mrr !== undefined) payload.mrr_amount = args.mrr
+      // #193514 — a masked name ("Juan Va***s") is never a verified one.
+      if (String(name).includes("*") && extra.fields.name_verified === undefined) extra.fields.name_verified = false
+      Object.assign(payload, extra.fields)
       // Store additional emails in contact_info.emails array
       if (args.emails) {
         const extras = String(args.emails)
@@ -1345,7 +1411,9 @@ const LeadsCreateCommand = cmd({
       }
 
       if (isJson) {
-        await writeJson(l)
+        const missing = Object.keys(extra.fields).filter((k) => l[k] === undefined || l[k] === null)
+        await writeJson(missing.length ? { ...l, fields_not_saved: missing } : l)
+        if (missing.length) process.exitCode = 1
         return
       }
 
@@ -1371,7 +1439,19 @@ const LeadsCreateCommand = cmd({
       printKV("Company", l.company ?? dim("none"))
       printKV("Source", l.source ?? args.source ?? dim("none"))
       printKV("Status", l.status)
+      // Read back what the server SAVED, not what was sent: a server without these columns
+      // drops them silently, and the operator must see that here, not in a later list.
+      const notSaved: string[] = []
+      for (const [k, sent] of Object.entries(extra.fields)) {
+        const label = k === "external_id" ? "External ID" : k === "name_verified" ? "Name verified" : k[0].toUpperCase() + k.slice(1)
+        printKV(label, l[k] ?? dim("not saved"))
+        if (l[k] === undefined || l[k] === null || (k === "name_verified" ? Boolean(l[k]) !== sent : String(l[k]) !== String(sent))) notSaved.push(k)
+      }
       printDivider()
+      if (notSaved.length) {
+        prompts.log.error(`The server did not save: ${notSaved.join(", ")}. The lead exists without them (needs the fl-api release that adds these fields).`)
+        process.exitCode = 1
+      }
 
       prompts.outro(dim(`iris leads get ${l.id}`))
     } catch (err) {
@@ -1731,6 +1811,12 @@ const LeadsUpdateCommand = cmd({
       .option("stage", { describe: "pipeline stage", type: "string" })
       .option("bid", { describe: "price bid amount", type: "number" })
       .option("mrr", { describe: "monthly recurring revenue amount", type: "number" })
+      // #193510/#193511/#193512/#193514 — who they are, the source's own id, which product
+      .option("title", { describe: "job title (e.g. Superintendent, Capture Manager)", type: "string" })
+      .option("external-id", { describe: "the source's own id, unique per board (e.g. apollo:5f3a…)", type: "string" })
+      .option("product", { describe: "which product they are a prospect for", type: "string", choices: LEAD_PRODUCTS })
+      .option("segment", { describe: "segment (e.g. contractors-tx, robotics-founders)", type: "string" })
+      .option("name-verified", { describe: "the name is real and complete (--no-name-verified for a partly hidden name)", type: "boolean" })
       .option("revenue-type", {
         describe: "revenue type",
         type: "string",
@@ -1792,6 +1878,15 @@ const LeadsUpdateCommand = cmd({
     if (args.mrr !== undefined) payload.mrr_amount = args.mrr
     if (args["revenue-type"]) payload.revenue_type = args["revenue-type"]
     if (args["payment-method"]) payload.payment_method = args["payment-method"]
+    const extra = leadFieldsFromFlags(args)
+    if (!extra.ok) {
+      if (isJson) console.log(JSON.stringify({ error: extra.error }))
+      else prompts.log.error(extra.error)
+      process.exitCode = 1
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+    Object.assign(payload, extra.fields)
     // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
     // Merge order: existing ci first, then any in-progress payload.contact_info, then the updated key —
     // so other keys (whatsapp_groups, emails) are preserved when flags are combined.
@@ -1941,8 +2036,9 @@ const LeadsUpdateCommand = cmd({
       }
 
       if (isJson) {
-        await writeJson({ ...l, attached_bloq_id: attachedBloq, attach_error: attachError })
-        if (attachError) process.exitCode = 1
+        const missing = Object.keys(extra.fields).filter((k) => l[k] === undefined || l[k] === null)
+        await writeJson({ ...l, attached_bloq_id: attachedBloq, attach_error: attachError, ...(missing.length ? { fields_not_saved: missing } : {}) })
+        if (attachError || missing.length) process.exitCode = 1
         return
       }
 
@@ -1952,6 +2048,16 @@ const LeadsUpdateCommand = cmd({
       printKV("ID", l.id)
       printKV("Name", l.name)
       printKV("Status", l.status)
+      const notSaved: string[] = []
+      for (const [k, sent] of Object.entries(extra.fields)) {
+        const label = k === "external_id" ? "External ID" : k === "name_verified" ? "Name verified" : k[0].toUpperCase() + k.slice(1)
+        printKV(label, l[k] ?? dim("not saved"))
+        if (l[k] === undefined || l[k] === null || (k === "name_verified" ? Boolean(l[k]) !== sent : String(l[k]) !== String(sent))) notSaved.push(k)
+      }
+      if (notSaved.length) {
+        prompts.log.error(`The server did not save: ${notSaved.join(", ")} (needs the fl-api release that adds these fields).`)
+        process.exitCode = 1
+      }
       // Print the association, so "did it attach?" is answered by the output rather than by
       // a follow-up `leads get`. Silence here is what made the original bug survivable.
       if (attachedBloq !== null) printKV("Attached bloq", attachedBloq)
@@ -11653,6 +11759,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsGetCommand)
       .command(LeadsSearchCommand)
       .command(LeadsCreateCommand)
+      .command(LeadsImportCommand)
       .command(LeadsUpdateCommand)
       .command(LeadsLinkWhatsappCommand)
       .command(LeadsPullCommand)
@@ -11703,6 +11810,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsAnalyzeCommand)
       .command(LeadsTagCommand)
       .command(LeadsUntagCommand)
+      .command(LeadsPromoteCommand)
       .demandCommand(),
   async handler() {},
 })

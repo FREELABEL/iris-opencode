@@ -33,13 +33,22 @@ import {
   round, todayIso, splitRef, DRIVES_BOARD_NAMES, DRIVES_BOARD_DESCRIPTION, DRIVES_DATASETS,
   TSV_HEADER_SHA, CHECKSUM_CHOICES, type Checksums, liveDriveFields, copyIndex, copiesReport, copiesLine,
   type ManifestRow, normalizeExcludes, kindOf, SENSITIVE, BUNDLES, APP_BUNDLES, sha256File, bundleMembers,
-  bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport,
+  bundleHashFromLines, utcIso, meterFields, usageReport, type UsageReport, movedRows,
 } from "./drives-core"
 import { runRemoteGet, liveRemoteDeps, SERVE_MARK, type ServeReply } from "./drives-remote"
+import {
+  driveLetterOf, isDriveRoot, normalizeScanArg, windowsDisk, windowsMountOf, findDriveRecord, encryptionState,
+  encryptionWord, unreadableHint, serialKey, lsblkMountsFor,
+} from "./drives-windows"
 import { nameMatches } from "./hive-tailscale"
 import { fetchNodes } from "./platform-hive-nodes"
 import { metered, exitDrives, type DrivesRun } from "./drives-telemetry"
 import { Installation } from "../../installation"
+import { type VaultCatalog, driveAlertRows, statfsOf, copyWord, catchupLine } from "./vault-replicas"
+import { fmtDays } from "./vault-auto"
+import { runKeep, vaultCopiesBySha, type KeepDeps } from "./drives-keep"
+import { keepVault, putToTargets } from "./platform-vault"
+import { keptAlerts, missingDays, type ReplicaRow } from "./vault-drives"
 
 const KIND_CHOICES = ["backup-drive", "media-drive", "archive-folder", "other"] as const
 const IMPORT_CHUNK = 500
@@ -129,6 +138,8 @@ export function pickDrivesBoard(boards: Array<{ id: number; name: string; is_own
  * The board this account's drives live on. `create` (scan only): make the board if there is none,
  * and make sure its three datasets exist — "already exists" counts as done.
  */
+export const VAULT_DATASETS = new Set(["drive-vaults", "drive-kept"])
+
 export async function resolveDrivesBoard(
   api: BoardApi,
   opts: { override?: number; create: boolean },
@@ -141,7 +152,8 @@ export async function resolveDrivesBoard(
     id = await api.createBoard(DRIVES_BOARD_NAMES[0], DRIVES_BOARD_DESCRIPTION)
     created = true
   }
-  if (opts.create) for (const d of DRIVES_DATASETS) await api.createDataset(d.slug, d.name, d.fields, id)
+  // The vault datasets (#193363) are made the first time a vault records a copy, not by a scan.
+  if (opts.create) for (const d of DRIVES_DATASETS) if (!VAULT_DATASETS.has(d.slug)) await api.createDataset(d.slug, d.name, d.fields, id)
   return { id, created }
 }
 
@@ -178,13 +190,15 @@ async function signedIn(): Promise<number> {
 export type Facts = {
   node: string
   filesystem: string
-  encrypted: boolean
+  /** null = could not tell (Windows without a BitLocker answer); never reported as "not encrypted" */
+  encrypted: boolean | null
   label: string
   size_gb: number | null
   used_gb: number | null
 }
 
 function isMountPoint(p: string): boolean {
+  if (process.platform === "win32") return isDriveRoot(p)
   if (process.platform === "linux") return sh("findmnt", "-no", "TARGET", "--target", p) === p
   if (p === "/") return true
   try {
@@ -212,14 +226,27 @@ function macMountOf(p: string): string | null {
   return m ? m[1] : null
 }
 
-/** (drive id, facts) — UUID for a real filesystem, dir:<host>:<path> for a plain folder. */
+/** (drive id, facts) — UUID (Windows: volume serial) for a real filesystem, dir:<host>:<path> for a plain folder. */
 export function identify(p: string, label?: string): [string, Facts] {
   const host = os.hostname()
   const mount = isMountPoint(p)
   let driveId: string
   const facts: Facts = { node: host, filesystem: "?", encrypted: false, label: "", size_gb: null, used_gb: null }
 
-  if (process.platform === "darwin") {
+  if (process.platform === "win32") {
+    // #193360: id = the volume serial, so a new drive letter is still the same drive (drives-windows.ts).
+    const letter = driveLetterOf(p)
+    const d = letter ? windowsDisk(letter, sh) : null
+    facts.filesystem = d?.filesystem ?? "?"
+    facts.encrypted = d?.bitlocker ?? null // a folder inherits its volume's BitLocker state
+    if (mount && d?.serial) {
+      driveId = `fs:${d.serial}`
+      facts.label = label || d.label || p
+    } else {
+      driveId = `dir:${host}:${p}`
+      facts.label = label || path.basename(p) || p
+    }
+  } else if (process.platform === "darwin") {
     if (mount) {
       const d = diskFactsFromPlist(diskutilPlist(p) ?? {})
       driveId = driveIdFromDisk(d)
@@ -250,7 +277,8 @@ export function identify(p: string, label?: string): [string, Facts] {
     }
   }
   if (mount) {
-    const st = fs.statfsSync(p)
+    // df, not fs.statfsSync: Bun's statfs is wrong on macOS (#193363, see statfsOf).
+    const st = statfsCompat(p)
     facts.size_gb = round((st.blocks * st.bsize) / 1e9, 1)
     facts.used_gb = round(((st.blocks - st.bfree) * st.bsize) / 1e9, 1)
   }
@@ -269,6 +297,7 @@ export function resolveMount(driveId: string): string | null {
   }
   if (driveId.startsWith("fs:")) {
     const uuid = driveId.slice(3)
+    if (process.platform === "win32") return windowsMountOf(driveId, sh)
     if (process.platform === "darwin") {
       // diskutil prints UUIDs uppercase; Atlas holds them lowercase (see diskFactsFromPlist).
       const d = diskFactsFromPlist(diskutilPlist(uuid.toUpperCase()) ?? diskutilPlist(uuid) ?? {})
@@ -277,9 +306,19 @@ export function resolveMount(driveId: string): string | null {
     const dev = sh("blkid", "-U", uuid)
     let mp = sh("findmnt", "-no", "TARGET", "-S", `UUID=${uuid}`).split("\n").filter(Boolean)
     if (!mp.length && dev) mp = sh("findmnt", "-no", "TARGET", dev).split("\n").filter(Boolean)
+    if (!mp.length && serialKey(driveId)) mp = lsblkMountsFor(driveId, sh("lsblk", "-rno", "UUID,MOUNTPOINT"))
     return mp[0] ?? null
   }
   return null
+}
+
+/** statfs numbers; where Bun's statfs is broken (macOS: bsize 0), df's, so a Mac drive does not read as full. */
+export function statfsCompat(p: string, statfs: (p: string) => fs.StatsFs = (x) => fs.statfsSync(x), df = statfsOf): { bavail: number; bsize: number; blocks: number; bfree: number } {
+  const st = statfs(p)
+  if (Number(st.bsize) > 0) return { bavail: Number(st.bavail), bsize: Number(st.bsize), blocks: Number(st.blocks), bfree: Number(st.bfree) }
+  const s = df(p)
+  if (s) return { bavail: s.free, bsize: 1, blocks: s.size, bfree: s.free }
+  return { bavail: 0, bsize: 0, blocks: 0, bfree: 0 }
 }
 
 const online = (d: any) => resolveMount(String(d.external_id)) != null
@@ -404,13 +443,6 @@ async function cachedManifest(userId: number, bloq: number, drive: any): Promise
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-function unreadableHint(): string {
-  return process.platform === "darwin"
-    ? "macOS refused access. The usual cause: the app running this command (Terminal, iTerm, VS Code or IRIS) does not have Full Disk Access.\n" +
-        "     Open System Settings → Privacy & Security → Full Disk Access, switch it on for that app, quit and reopen the app, then scan again."
-    : "re-run as a user that can read them (sudo for a drive formatted on a Mac)"
-}
-
 /** "3.0 TB" / "512.4 GB" — decimal units, as the drive's own box says. */
 export function formatSize(bytes: number): string {
   if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
@@ -421,11 +453,13 @@ export function formatSize(bytes: number): string {
 const plural = (n: number, one: string, many = one + "s") => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
 
 /** The one line a client reads after a scan (#192974). Developer detail is behind --verbose. */
-export function scanSummary(s: { label: string; files: number; bytes: number; folders: number; sensitive: number; encrypted: boolean }): string {
+export function scanSummary(s: { label: string; files: number; bytes: number; folders: number; sensitive: number; encrypted: boolean | null }): string {
   const head = `Cataloged '${s.label}': ${plural(s.files, "file")} · ${formatSize(s.bytes)} · ${plural(s.folders, "project folder")}`
   if (!s.sensitive) return `${head} · no sensitive files`
   return `${head} · ${plural(s.sensitive, "sensitive file")} ` +
-    (s.encrypted ? "(drive encrypted — contained)" : "(drive NOT encrypted — run: iris drives list to review)")
+    (s.encrypted === true ? "(drive encrypted — contained)"
+      : s.encrypted === false ? "(drive NOT encrypted — run: iris drives list to review)"
+      : "(could not tell whether the drive is encrypted — run: iris drives list to review)")
 }
 
 const HOWTO = "Step by step, including how to encrypt a drive: iris how-to view iris-drives"
@@ -451,7 +485,7 @@ const ScanCommand = cmd({
       .option("dry-run", { type: "boolean", default: false, describe: "scan and show the result, send nothing to your account" })
       .option("verbose", { type: "boolean", default: false, describe: "also print the drive id, the local file list's path and each Atlas write" })
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac (see your drives with: ls /Volumes)")
-      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example("$0 drives scan E:\\", "catalog a drive on Windows (type it without quotes)")
       .example('$0 drives scan ~/Projects --label "Client projects" --kind archive-folder', "catalog a folder on this computer")
       .example('$0 drives scan /Volumes/Backup --exclude Personal/Family --exclude Taxes', "keep private folders out — never opened, remembered next time")
       .example("$0 drives scan /Volumes/Backup --checksums all", "hash every file, so every copy is counted by content (slow on big drives)")
@@ -461,7 +495,8 @@ const ScanCommand = cmd({
     const verbose = args.verbose === true
     const detail = (line: string) => { if (verbose) console.log(line) }
     const dryRun = args["dry-run"] === true
-    const root = fs.existsSync(String(args.path)) ? fs.realpathSync(String(args.path)) : path.resolve(String(args.path))
+    const arg = normalizeScanArg(String(args.path)) // #193360: `"E:\"` reaches us as `E:"` from Command Prompt
+    const root = fs.existsSync(arg) ? fs.realpathSync(arg) : path.resolve(arg)
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       console.error(`  Cannot see ${root} — is the drive plugged in?` + (process.platform === "darwin" ? " Your drives are listed by: ls /Volumes" : ""))
       return exitDrives(1)
@@ -479,20 +514,22 @@ const ScanCommand = cmd({
       userId = await signedIn()
       bloq = (await resolveDrivesBoard(liveBoardApi(userId), { override, create: false }).catch(() => null))?.id ?? null
     }
-    const [driveId, facts] = identify(root, args.label as string | undefined)
-    const out = path.join(STORE(), storeDirName(driveId))
-    fs.mkdirSync(out, { recursive: true })
+    let [driveId, facts] = identify(root, args.label as string | undefined)
     const today = todayIso()
 
     let remembered: string[] = []
     let previous: Record<string, any> | undefined
     if (bloq) {
       try {
-        for (const d of await atlasDrives(bloq)) {
-          if (d.external_id === driveId) {
-            previous = d
-            remembered = String(d.private_excluded ?? "").split("\n").filter((x) => x.trim())
-          }
+        // #193360: the same serial written by another OS (NTFS: 64-bit on Linux, 32-bit on Windows)
+        // is the same drive — keep its record and id rather than open a second card.
+        const records = await atlasDrives(bloq)
+        previous = findDriveRecord(records, driveId)
+        if (previous) driveId = String(previous.external_id)
+        // A drive scanned on Windows before #193360 was keyed by PC + letter: keep its private folders.
+        const legacy = records.find((d) => d.external_id === `dir:${facts.node}:${root}` && d.external_id !== driveId)
+        for (const d of [previous, legacy]) {
+          if (d) remembered.push(...String(d.private_excluded ?? "").split("\n").filter((x) => x.trim()))
         }
       } catch (e: any) {
         console.error(`  Could not read this drive's private-folder list from your account (${e?.message ?? e}).`)
@@ -502,9 +539,11 @@ const ScanCommand = cmd({
     } else if (dryRun) {
       console.log(warn("  Not checked against your account: folders made private from another computer are not applied to this dry run."))
     }
+    const out = path.join(STORE(), storeDirName(driveId))
+    fs.mkdirSync(out, { recursive: true })
     const exclude = [...new Set([...(args.exclude as string[]), ...remembered])].sort()
     console.log(`Scanning ${facts.label} (${root})`)
-    detail(`  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted ? "True" : "False"}`)
+    detail(`  id ${driveId} · ${facts.label} · ${facts.filesystem} · encrypted=${facts.encrypted == null ? "Unknown" : facts.encrypted ? "True" : "False"}`)
     if (exclude.length) console.log(`  Private folders skipped, never opened: ${exclude.length}`)
 
     const rollup = new Rollup(Number(args.depth))
@@ -529,13 +568,13 @@ const ScanCommand = cmd({
     if (facts.size_gb == null) facts.size_gb = facts.used_gb = round(rollup.total / 1e9, 1)
     detail(`  checksums (${checksums}): ${hashed.toLocaleString("en-US")} file(s) hashed`)
 
-    const status = facts.encrypted ? "contained" : "exposed"
+    const status = facts.encrypted === true ? "contained" : facts.encrypted === false ? "exposed" : "unknown"
     const driveRow: Record<string, any> = {
       external_id: driveId, label: facts.label, kind: args.kind, node: facts.node,
       filesystem: facts.filesystem, encrypted: facts.encrypted, size_gb: facts.size_gb,
       used_gb: facts.used_gb, files: rollup.files, folders: rollup.folders.size, sensitive_files: rollup.findings.length,
       last_scanned: today, manifest: "", private_excluded: exclude.join("\n"),
-      ...liveDriveFields(fs.statfsSync(root), facts.node, new Date()),
+      ...liveDriveFields(statfsCompat(root), facts.node, new Date()),
     }
     const folderRows = rollup.folderRows(driveId, facts.label)
     const findingRows = rollup.findingRows(driveId, facts.label, facts.encrypted, today)
@@ -558,7 +597,7 @@ const ScanCommand = cmd({
     detail(`  manifest: ${tsvPath}`)
     run.set({
       files_count: rollup.files, bytes_cataloged: rollup.total, folders_rows: folderRows.length,
-      findings_count: findingRows.length, sensitive_count: rollup.findings.length, encrypted: facts.encrypted,
+      findings_count: findingRows.length, sensitive_count: rollup.findings.length, encrypted: facts.encrypted ?? undefined,
       unreadable_folders_count: unreadable.length, dry_run: dryRun, checksums, kind: String(args.kind),
     })
     const summary = scanSummary({
@@ -571,14 +610,20 @@ const ScanCommand = cmd({
       return
     }
     // Findings no longer on the drive are CLOSED (status moved), not left saying "exposed".
+    // One import (upsert by external_id) per chunk, not one PATCH per row (#193368).
     try {
       const cur = new Set(findingRows.map((r) => r.external_id))
       const old = await atlasRecords("drive-findings", bloq, { drive_id: driveId })
       const gone = old.filter((r) => !cur.has(r.external_id) && r?.data?.status !== "moved")
-      for (const r of gone) {
-        await irisFetch(`/api/v1/atlas/datasets/drive-findings/${r.id}`, { method: "PATCH", body: JSON.stringify({ data: { status: "moved" } }) })
+      if (gone.length) {
+        const r = await importRows("drive-findings", bloq, movedRows(gone))
+        if (r.failed) {
+          console.log(warn(`  ${plural(r.failed, "sensitive file")} no longer on this drive could not be marked moved`))
+          process.exitCode = 1
+        }
+        const closed = gone.length - r.failed
+        if (closed) console.log(`  ${plural(closed, "sensitive file")} from the last scan ${closed === 1 ? "is" : "are"} no longer on this drive — marked moved`)
       }
-      if (gone.length) console.log(`  ${plural(gone.length, "sensitive file")} from the last scan ${gone.length === 1 ? "is" : "are"} no longer on this drive — marked moved`)
     } catch (e: any) {
       console.log(warn(`  Could not update the sensitive files found by the last scan: ${e?.message ?? e}`))
       process.exitCode = 1
@@ -769,22 +814,67 @@ const ListCommand = cmd({
       return exitDrives(1)
     }
     let connected = 0, unreadableFolders = 0
+    // #193363: kept files and vault copies, from the catalog. A board with neither has no such rows.
+    const cat = liveVaultCatalog(userId, bloq)
+    const [kept, reps] = await Promise.all([
+      cat.keptRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+      cat.replicaRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+    ])
+    const now = new Date()
+    const alerts = keptAlerts(kept, reps as ReplicaRow[], now)
     for (const d of drives) {
       const isOnline = online(d)
       if (isOnline) connected++
       unreadableFolders += Number(d.unreadable_folders) > 0 ? Number(d.unreadable_folders) : 0
       console.log(
         `${String(d.label).padEnd(24)} ${Number(d.files ?? 0).toLocaleString("en-US").padStart(9)} files  ${String(d.used_gb).padStart(8)} GB  ` +
-          `${(d.encrypted ? "encrypted" : "NOT encrypted").padEnd(13)} ${String(d.sensitive_files ?? 0).padStart(4)} sensitive  ` +
+          `${encryptionWord(d.encrypted).padEnd(13)} ${String(d.sensitive_files ?? 0).padStart(4)} sensitive  ` +
           `${(d.free_gb != null && d.free_gb !== "" ? `${d.free_gb} GB free` : "free ?").padStart(13)}  ` +
           `${isOnline ? "online" : "offline"}  scanned ${d.last_scanned}` +
           (d.last_seen_on ? ` · last seen on ${d.last_seen_on}` : "") +
           (Number(d.unreadable_folders) > 0 ? `  ${warn(`(${d.unreadable_folders} unreadable folder(s))`)}` : ""),
       )
+      for (const l of keptLines(d, alerts.get(String(d.external_id)), reps, now)) console.log(l)
     }
+    // The alert lives on the drive's own record too; written here only when it changed (a copy goes
+    // stale with time alone, so looking is when it is noticed).
+    const changed = driveAlertRows(drives, kept, reps as ReplicaRow[], now)
+    if (changed.length) await importRows("drives", bloq, changed).catch(() => {})
     run.set({ drives_count: drives.length, connected_count: connected, unreadable_folders_count: unreadableFolders })
   }),
 })
+
+/** Under a drive's line in `list`: its vault copies, and its kept files that are short of copies. */
+export function keptLines(d: any, a: ReturnType<typeof keptAlerts> extends Map<string, infer V> ? V | undefined : never, reps: any[], now: Date): string[] {
+  const out: string[] = []
+  const id = String(d.external_id)
+  const mine = reps.filter((r) => (r.drive_id === id || r.target === `drive:${id}`) && r.role !== "spare-retired")
+  if (mine.length) {
+    out.push(`  vault copies on it: ` + mine.map((r) => {
+      const w = copyWord(r, now)
+      const word = w === "missing" ? `missing — not verified for ${missingDays()}+ days` : w === "lost" ? `LOST — not verified for ${fmtDays(Number(r.lost_after_days) > 0 ? Number(r.lost_after_days) : 14)}+` : w
+      const c = catchupLine(r, now)
+      return `${r.vault_name ?? r.vault_id} ${word}${r.role === "spare" ? " (spare copy)" : ""}${r.last_verified_at ? ` (verified ${String(r.last_verified_at).slice(0, 10)})` : ""}${c ? ` · ${c}` : ""}`
+    }).join(" · "))
+    // #193363 follow-up: a lost copy here that could not be rebuilt says so, on the drive's own line.
+    for (const r of mine) if (r.heal_alert) out.push(warn(`  ⚠ ${r.vault_name ?? r.vault_id}: ${r.heal_alert}`))
+  }
+  if (a) {
+    if (!a.below.length) out.push(`  kept: ${a.kept} file(s), every one at its minimum copies`)
+    else {
+      out.push(warn(`  ⚠ kept: ${a.below.length} of ${a.kept} file(s) BELOW their minimum copies`))
+      for (const b of a.below.slice(0, 5)) {
+        const why = b.stale.map((k) => `${label(reps, k)} not verified for ${missingDays()}+ days`)
+        out.push(`     ${b.path} — ${b.copies}/${b.target} in vault ${b.vault}${why.length ? ` (${why.join(", ")})` : ""}`)
+      }
+      if (a.below.length > 5) out.push(`     … and ${a.below.length - 5} more`)
+      out.push(`     Plug the missing drive in and run: iris vault sync · or check: iris vault status <vault>`)
+    }
+  }
+  return out
+}
+
+const label = (reps: any[], k: string) => reps.find((r) => r.target === k)?.target_label ?? k.replace(/^(drive|machine):/, "")
 
 // ── copies: counted by content, across every drive (#192914) ──────────────────────
 
@@ -810,23 +900,37 @@ const CopiesCommand = cmd({
       results_count: report.known.length + report.unknown.length, drives_count: loaded.length,
       words_count: (args.words as string[]).length,
     })
-    console.log(formatCopies(report, limit).join("\n"))
+    // #193363: encrypted copies in vaults count too — by content, as the kept files record them.
+    const cat = liveVaultCatalog(userId, bloq)
+    const [kept, reps] = await Promise.all([
+      cat.keptRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+      cat.replicaRows().then((r) => r.map((x: any) => x?.data ?? x)).catch(() => [] as any[]),
+    ])
+    console.log(formatCopies(report, limit, vaultCopiesBySha(kept, reps as ReplicaRow[], new Date())).join("\n"))
   }),
 })
 
-export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8): string[] {
+export function formatCopies(report: ReturnType<typeof copiesReport>, limit = 8, vaults?: ReturnType<typeof vaultCopiesBySha>): string[] {
   const out: string[] = []
   const list = (rows: ManifestRow[], indent: string) => {
     for (const r of rows.slice(0, limit)) out.push(`${indent}${r.drive}: ${r.path}`)
     if (rows.length > limit) out.push(`${indent}… and ${rows.length - limit} more`)
   }
+  const kept = (sha: string, indent: string) => {
+    for (const v of vaults?.get(sha) ?? []) {
+      const flag = v.copies < v.target ? warn(` BELOW its minimum of ${v.target}`) : ` (minimum ${v.target})`
+      out.push(`${indent}+ ${plural(v.copies, "encrypted copy", "encrypted copies")} in vault ${v.vault}${flag}` +
+        (v.held.length ? `: ${v.held.join(", ")}` : "") + (v.stale.length ? ` · not counted: ${v.stale.join(", ")}` : ""))
+    }
+  }
   for (const k of report.known) {
     out.push(`${k.name} — ${copiesLine(k.versions)}`)
-    if (k.versions.length === 1) list(k.versions[0].copies, "  ")
+    if (k.versions.length === 1) { list(k.versions[0].copies, "  "); kept(k.versions[0].sha256, "  ") }
     else
       k.versions.forEach((v, i) => {
         out.push(`  version ${i + 1} (sha256 ${v.sha256.slice(0, 12)}…): ${plural(v.copies.length, "copy", "copies")}`)
         list(v.copies, "    ")
+        kept(v.sha256, "    ")
       })
   }
   if (report.unknown.length) {
@@ -969,7 +1073,7 @@ export async function runGet(a: GetArgs, deps: GetDeps): Promise<GetResult> {
   if (sensitiveKind && !a.confirm)
     return fail(
       1,
-      `${rel} is a sensitive file (${sensitiveKind}) on ${name}${drive.encrypted ? "" : ", and that drive is NOT encrypted"}.\n` +
+      `${rel} is a sensitive file (${sensitiveKind}) on ${name}${encryptionState(drive.encrypted) === true ? "" : encryptionState(drive.encrypted) === false ? ", and that drive is NOT encrypted" : ", and it is not known whether that drive is encrypted"}.\n` +
         `Copying it puts a second copy on this computer. If you mean to, add --confirm. The read is recorded either way.`,
     )
   if (a.serve && !isBundle) {
@@ -1050,6 +1154,33 @@ function liveGetDeps(userId: number, bloq: number): GetDeps {
   }
 }
 
+/**
+ * The Drives catalog as a vault sees it (#193363): which drives exist, which vault copy is where,
+ * which kept file is held by whom. null when this account has no Drives board yet.
+ */
+export async function openVaultCatalog(userId: number, bloqFlag?: unknown): Promise<{ bloq: number; cat: VaultCatalog } | null> {
+  const board = await resolveDrivesBoard(liveBoardApi(userId), { override: overrideBloq(bloqFlag), create: false })
+  if (!board) return null
+  return { bloq: board.id, cat: liveVaultCatalog(userId, board.id) }
+}
+
+export function liveVaultCatalog(userId: number, bloq: number): VaultCatalog {
+  const ensured = new Set<string>()
+  const optional404 = (e: any) => { if (/HTTP 404/.test(String(e?.message))) return []; throw e }
+  return {
+    drives: () => atlasDrives(bloq),
+    replicaRows: () => atlasRecords("drive-vaults", bloq).catch(optional404),
+    keptRows: () => atlasRecords("drive-kept", bloq).catch(optional404),
+    upsert: (schema, rows) => importRows(schema, bloq, rows),
+    ensure: async (slug) => {
+      if (ensured.has(slug)) return
+      const d = DRIVES_DATASETS.find((x) => x.slug === slug)
+      if (d) await liveBoardApi(userId).createDataset(d.slug, d.name, d.fields, bloq)
+      ensured.add(slug)
+    },
+  }
+}
+
 const GetCommand = cmd({
   command: "get <ref>",
   describe: "copy ONE file (or one project bundle, as .zip) off a drive — plugged into this computer or into another of your machines — checked, and recorded with your reason",
@@ -1100,6 +1231,56 @@ const GetCommand = cmd({
     }
     const remote = liveRemoteDeps(async () => (await fetchNodes(userId)) as any)
     return report(await runRemoteGet({ ...a, from, bloq }, { ...deps, ...remote }))
+  }),
+})
+
+const KeepCommand = cmd({
+  command: "keep <ref>",
+  describe: "keep a cataloged file or project folder safe: encrypted copies in a vault on your own drives and machines — counted, and flagged when too few are left",
+  builder: (y) =>
+    y
+      .positional("ref", { type: "string", demandOption: true, describe: "<drive>:<file or folder>, as iris drives find shows it" })
+      .option("vault", { type: "string", demandOption: true, describe: 'the vault to keep it in (made with: iris vault create <name> --on "<drive>,<drive>,this-machine")' })
+      .option("why", { type: "string", describe: "REQUIRED: why you are keeping it — saved with the record" })
+      .option("confirm", { type: "boolean", default: false, describe: "needed when it is, or a folder holds, a sensitive file (passwords, keys, database dumps)" })
+      .option("from", { type: "string", describe: "the machine the drive is plugged into — default: this one, else found for you" })
+      .option("json", { type: "boolean", default: false, describe: "one JSON result, for scripts and agents" })
+      .option("bloq", BLOQ_OPTION)
+      .example('$0 drives keep "Studio:Masters/Album 2025" --vault masters --why "only copy of the masters"', "a project folder: every file encrypted into the vault's copies")
+      .example('$0 drives keep "Client projects:Acme/contract.pdf" --vault clients --why "signed contract"', "one file")
+      .example('$0 drives keep "Old site:app/.env" --vault clients --why "rotate later" --confirm', "a sensitive file needs --confirm")
+      .epilogue("Exit codes: 0 kept · 1 refused or failed · 2 drive not connected anywhere · 3 moved since the last scan · 4 the machine with the drive is not answering · 5 a copy did not match (sha256). " + HOWTO),
+  handler: metered("keep", async (args: any, run: DrivesRun) => {
+    const json = args.json === true
+    const report = async (r: { code: number; out: string[]; err: string[]; kept?: any[] }) => {
+      run.set({ results_count: r.kept?.length ?? 0, bytes_copied: (r.kept ?? []).reduce((n, k) => n + Number(k.bytes ?? 0), 0) })
+      if (json) console.log(JSON.stringify({ ok: r.code === 0, code: r.code, ...(r.err.length ? { error: r.err.join("\n") } : {}), kept: r.kept ?? [] }, null, 2))
+      else {
+        for (const l of r.out) console.log(l)
+        for (const l of r.err) console.error(`  ${l}`)
+      }
+      if (r.code) return exitDrives(r.code)
+    }
+    if (!String(args.why ?? "").trim())
+      return report({ code: 1, out: [], err: ['--why is required: say why you are keeping this, e.g. --why "the only copy of the master". It goes on the record.'] })
+    const userId = await signedIn()
+    const bloq = await requireDrivesBoard(liveBoardApi(userId), overrideBloq(args.bloq), { create: false })
+    const get = liveGetDeps(userId, bloq)
+    const remote = liveRemoteDeps(async () => (await fetchNodes(userId)) as any)
+    const deps: KeepDeps = {
+      ...get,
+      resolveMount,
+      vault: async (name) => (await keepVault(name)) as any,
+      put: async (v, files) => putToTargets(v as any, files, { bloq, "user-id": userId }) as any,
+      remoteGet: (a) => runRemoteGet(a, { ...get, ...remote }),
+      catalogFiles: async (driveId) => {
+        const drive = (await atlasDrives(bloq)).find((d) => String(d.external_id) === driveId)
+        const text = drive ? await cachedManifest(userId, bloq, drive) : null
+        return text ? parseTsv(text).map((r) => ({ path: r.path, bytes: Number(r.bytes), sha256: r.sha256 })) : null
+      },
+      catalog: liveVaultCatalog(userId, bloq),
+    }
+    return report(await runKeep({ ref: String(args.ref), vault: String(args.vault), why: args.why, confirm: args.confirm === true, from: args.from ? String(args.from) : undefined, bloq }, deps))
   }),
 })
 
@@ -1225,11 +1406,12 @@ export const PlatformDrivesCommand = cmd({
       .command(ListCommand)
       .command(CopiesCommand)
       .command(GetCommand)
+      .command(KeepCommand)
       .command(ServeCommand)
       .command(UsageCommand)
-      .demandCommand(1, "Specify: scan, find, path, list, copies, get, usage")
+      .demandCommand(1, "Specify: scan, find, path, list, copies, get, keep, usage")
       .example("$0 drives scan /Volumes/Footage", "catalog a drive on a Mac")
-      .example('$0 drives scan "E:\\"', "catalog a drive on Windows")
+      .example("$0 drives scan E:\\", "catalog a drive on Windows")
       .example("$0 drives scan ~/Projects --label \"Client projects\"", "catalog a folder")
       .example("$0 drives scan /Volumes/Backup --exclude Personal", "a private folder: never opened, remembered next time")
       .example("$0 drives find mix stems", "which drive has it — plugged in or not")
@@ -1238,6 +1420,7 @@ export const PlatformDrivesCommand = cmd({
       .example("$0 drives copies final mix", "how many identical copies exist, and on which drives")
       .example('$0 drives get "Client projects:Acme/brief.pdf" --to ~/Desktop --why "send to client"', "copy one file off a plugged-in drive — recorded in your Drives board")
       .example('$0 drives get "Studio:Stems/kick.wav" --to ~/Desktop --why "mixdown"', "the drive is plugged in at another of your machines: fetched over your Hive")
+      .example('$0 drives keep "Studio:Masters" --vault masters --why "only copy"', "encrypted copies on your own drives and machines, counted and flagged when too few")
       .example("$0 drives usage", "drives, files and TB cataloged, encrypted storage, scans and copies this month")
       .epilogue(HOWTO),
   async handler() {},

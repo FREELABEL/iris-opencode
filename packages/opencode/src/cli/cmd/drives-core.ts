@@ -21,6 +21,8 @@ export const STORE = () => path.join(os.homedir(), ".iris", "drives")
 export const SKIP_DIRS = new Set([
   ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", "lost+found",
   "System Volume Information", "$RECYCLE.BIN", ".DocumentRevisions-V100", ".git", "node_modules",
+  // A vault replica (#193363): encrypted chunks, counted through the vault, never cataloged as files.
+  "_IRIS_VAULT",
 ])
 /**
  * macOS leaves suffixed copies of its own system folders (".DocumentRevisions-V100-bad",
@@ -49,11 +51,24 @@ export const KINDS: Array<[string, RegExp]> = [
 export const SENSITIVE = new Set(["credential", "db-dump"])
 export const LIBRARY = /(^|\/)(vendor|node_modules|tests?|testdata|spec|system\/core|libs?)\//i
 /** Framework classes; the real credentials were config.php / database.php (case matters). */
-export const CLASSFILE = new Set(["Config.php", "Database.php"])
+export const CLASSFILE = new Set(["Config.php", "Database.php", "Env.php", "Configuration.php"])
+/**
+ * #193365: the credential files that hide under another name (config.envr.php was copied without
+ * --confirm). Same pattern as CREDENTIAL_VARIANTS in drive_scan.py; change one, change both.
+ */
+export const CREDENTIAL_VARIANTS = new RegExp(
+  String.raw`(^|/)(config\.[^/]+\.php|([^/]*\.)?env\.php|configuration\.php|\.envrc` +
+    String.raw`|settings\.local\.(php|py|ya?ml|toml|ini|conf|cfg|env)|local_settings\.py|settings_local\.py` +
+    String.raw`|secrets\.(json|ya?ml|toml|env|ini|conf|cfg|properties|xml|txt)|[^/]+\.credentials|\.git-credentials` +
+    String.raw`|\.aws/credentials|\.netrc|\.pgpass|\.htpasswd|local\.settings\.json)$`,
+  "i",
+)
+/** A variant shipped as a template (phpMyAdmin's config.sample.inc.php, config.default.php) is not a secret. */
+export const SAMPLE = /(^|[._-])(example|sample|dist|default|template|tpl|stub)([._-]|$)/i
 
 export function kindOf(rel: string): string {
   for (const [k, rx] of KINDS) {
-    if (rx.test(rel)) {
+    if (rx.test(rel) || (k === "credential" && CREDENTIAL_VARIANTS.test(rel) && !SAMPLE.test(path.posix.basename(rel)))) {
       if (k === "credential" && (LIBRARY.test(rel) || CLASSFILE.has(path.posix.basename(rel)))) return "code"
       return k
     }
@@ -501,14 +516,20 @@ export class Rollup {
         sensitive_files: f.sensitive,
       }))
   }
-  findingRows(driveId: string, label: string, encrypted: boolean, today: string) {
-    const status = encrypted ? "contained" : "exposed"
+  /** encrypted null = could not tell (#193360): status left empty, never "exposed" on a guess */
+  findingRows(driveId: string, label: string, encrypted: boolean | null, today: string) {
+    const status = encrypted === true ? "contained" : encrypted === false ? "exposed" : null
     return this.findings.map((x) => ({
       external_id: `${driveId}:${x.path}`, drive_id: driveId, drive_label: label,
       path: x.path, kind: x.kind, size_kb: x.size_kb, drive_encrypted: encrypted,
       status, found: today,
     }))
   }
+}
+
+/** Stale findings as import rows: the stored row, status moved. Same rows drive_scan.py sends (moved_rows). */
+export function movedRows(gone: ReadonlyArray<{ external_id: string; data?: Record<string, any> }>): Array<Record<string, any>> {
+  return gone.map((r) => ({ ...(r.data ?? {}), external_id: String(r.external_id), status: "moved" }))
 }
 
 export function todayIso(): string {
@@ -541,11 +562,15 @@ export const DRIVES_BOARD_DESCRIPTION =
  * (copied verbatim from its heredocs). Change one, change both — the two must build the same board.
  */
 export const DRIVES_DATASETS: Array<{ slug: string; name: string; fields: any[] }> = [
-  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"},{"key":"free_gb","type":"number","label":"Free (GB)"},{"key":"last_seen_on","type":"text","label":"Last seen on"},{"key":"last_seen_at","type":"datetime","label":"Last seen at"},{"key":"scan_count","type":"number","label":"Scans (all time)"},{"key":"scan_month","type":"text","label":"Scan month"},{"key":"scans_in_month","type":"number","label":"Scans that month"},{"key":"last_scan_ms","type":"number","label":"Last scan took (ms)"},{"key":"files_cataloged","type":"number","label":"Files cataloged"},{"key":"bytes_cataloged","type":"number","label":"Bytes cataloged"},{"key":"manifest_bytes","type":"number","label":"Encrypted file list (bytes)"},{"key":"scanned_by_version","type":"text","label":"Scanned by"}]`) },
+  { slug: "drives", name: "Drives", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Drive ID"},{"key":"label","type":"text","label":"Name"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"backup-drive","value":"backup-drive"},{"label":"media-drive","value":"media-drive"},{"label":"archive-folder","value":"archive-folder"},{"label":"other","value":"other"}]},{"key":"node","type":"text","label":"Machine"},{"key":"filesystem","type":"text","label":"Filesystem"},{"key":"encrypted","type":"boolean","label":"Encrypted"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"used_gb","type":"number","label":"Used (GB)"},{"key":"files","type":"number","label":"Files"},{"key":"folders","type":"number","label":"Project folders"},{"key":"sensitive_files","type":"number","label":"Sensitive files"},{"key":"unreadable_folders","type":"number","label":"Unreadable folders"},{"key":"last_scanned","type":"date","label":"Last scanned"},{"key":"manifest","type":"text","label":"Manifest on machine"},{"key":"manifest_key","type":"text","label":"Manifest key","visibility":"private"},{"key":"private_excluded","type":"text","label":"Private folders (never opened)"},{"key":"free_gb","type":"number","label":"Free (GB)"},{"key":"last_seen_on","type":"text","label":"Last seen on"},{"key":"last_seen_at","type":"datetime","label":"Last seen at"},{"key":"scan_count","type":"number","label":"Scans (all time)"},{"key":"scan_month","type":"text","label":"Scan month"},{"key":"scans_in_month","type":"number","label":"Scans that month"},{"key":"last_scan_ms","type":"number","label":"Last scan took (ms)"},{"key":"files_cataloged","type":"number","label":"Files cataloged"},{"key":"bytes_cataloged","type":"number","label":"Bytes cataloged"},{"key":"manifest_bytes","type":"number","label":"Encrypted file list (bytes)"},{"key":"scanned_by_version","type":"text","label":"Scanned by"},{"key":"kept_files","type":"number","label":"Kept files"},{"key":"kept_below_target","type":"number","label":"Kept files below minimum copies"},{"key":"copies_alert","type":"text","label":"Copies alert"},{"key":"vault_replicas","type":"text","label":"Vault copies on this drive"},{"key":"vault_alert","type":"text","label":"Vault copy alert"},{"key":"vault_catchup","type":"text","label":"Last vault catch-up"}]`) },
   { slug: "drive-folders", name: "Drive folders", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Folder ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"folder","type":"text","label":"Folder"},{"key":"main_kind","type":"enum","label":"Mostly","options":[{"label":"video","value":"video"},{"label":"audio","value":"audio"},{"label":"image","value":"image"},{"label":"project","value":"project"},{"label":"code","value":"code"},{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"},{"label":"document","value":"document"},{"label":"archive","value":"archive"},{"label":"other","value":"other"}]},{"key":"files","type":"number","label":"Files"},{"key":"size_gb","type":"number","label":"Size (GB)"},{"key":"kinds","type":"text","label":"Kinds"},{"key":"newest","type":"date","label":"Newest file"},{"key":"sensitive_files","type":"number","label":"Sensitive files"}]`) },
   { slug: "drive-findings", name: "Drive findings", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Finding ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"kind","type":"enum","label":"Kind","options":[{"label":"db-dump","value":"db-dump"},{"label":"credential","value":"credential"}]},{"key":"size_kb","type":"number","label":"Size (KB)"},{"key":"drive_encrypted","type":"boolean","label":"Drive encrypted"},{"key":"status","type":"enum","label":"Status","options":[{"label":"exposed","value":"exposed"},{"label":"contained","value":"contained"},{"label":"moved","value":"moved"}]},{"key":"found","type":"date","label":"Found"}]`) },
   // One row per `iris drives get`: who read which file, from which machine, why, and what it hashed to.
   { slug: "drive-reads", name: "Drive reads", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Read ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"bytes","type":"number","label":"Bytes"},{"key":"sha256","type":"text","label":"SHA-256"},{"key":"read_by","type":"text","label":"Read by"},{"key":"read_on","type":"text","label":"Read on (machine)"},{"key":"purpose","type":"text","label":"Why"},{"key":"at","type":"datetime","label":"At"}]`) },
+  // #193363: one row per vault copy (a drive or a machine) — verified, pending, failing, when last seen.
+  { slug: "drive-vaults", name: "Drive vault copies", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Replica ID"},{"key":"vault_id","type":"text","label":"Vault ID"},{"key":"vault_name","type":"text","label":"Vault"},{"key":"target","type":"text","label":"Target"},{"key":"target_kind","type":"enum","label":"Target kind","options":[{"label":"drive","value":"drive"},{"label":"machine","value":"machine"}]},{"key":"target_label","type":"text","label":"Held on"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"status","type":"enum","label":"Status","options":[{"label":"ok","value":"ok"},{"label":"partial","value":"partial"},{"label":"pending","value":"pending"},{"label":"no-room","value":"no-room"},{"label":"failing","value":"failing"}]},{"key":"blobs_held","type":"number","label":"Chunks held"},{"key":"blobs_wanted","type":"number","label":"Chunks wanted"},{"key":"manifest_seq","type":"number","label":"Manifest seq"},{"key":"replicas","type":"number","label":"Minimum copies"},{"key":"source_node","type":"text","label":"Created on"},{"key":"last_verified_at","type":"datetime","label":"Last verified"},{"key":"last_verified_on","type":"text","label":"Verified from"},{"key":"note","type":"text","label":"Note"},{"key":"role","type":"text","label":"Role"},{"key":"replaces","type":"text","label":"Stands in for"},{"key":"healed_at","type":"datetime","label":"Rebuilt at"},{"key":"returned_at","type":"datetime","label":"Lost copy returned"},{"key":"retired_at","type":"datetime","label":"Retired at"},{"key":"heal_alert","type":"text","label":"Heal alert"},{"key":"lost_after_days","type":"number","label":"Lost after (days)"},{"key":"last_catchup","type":"text","label":"Last catch-up"},{"key":"last_catchup_at","type":"datetime","label":"Caught up at"},{"key":"vault_policy","type":"text","label":"Vault settings (places, spares, lost-after)"}]`) },
+  // #193363: one row per file kept in a vault with `iris drives keep`: where it came from, its content id, who holds a copy.
+  { slug: "drive-kept", name: "Kept files", fields: JSON.parse(String.raw`[{"key":"external_id","type":"text","label":"Kept ID"},{"key":"drive_id","type":"text","label":"Drive ID"},{"key":"drive_label","type":"text","label":"Drive"},{"key":"path","type":"text","label":"Path"},{"key":"kept_from","type":"text","label":"Kept as part of"},{"key":"vault_id","type":"text","label":"Vault ID"},{"key":"vault_name","type":"text","label":"Vault"},{"key":"vault_path","type":"text","label":"Path in vault"},{"key":"content_id","type":"text","label":"Content ID"},{"key":"sha256","type":"text","label":"SHA-256"},{"key":"bytes","type":"number","label":"Bytes"},{"key":"target_copies","type":"number","label":"Minimum copies"},{"key":"copies","type":"number","label":"Copies"},{"key":"held_by","type":"text","label":"Held by"},{"key":"status","type":"enum","label":"Status","options":[{"label":"safe","value":"safe"},{"label":"below","value":"below"},{"label":"removed","value":"removed"}]},{"key":"kept_by","type":"text","label":"Kept by"},{"key":"kept_on","type":"text","label":"Kept on (machine)"},{"key":"purpose","type":"text","label":"Why"},{"key":"at","type":"datetime","label":"At"},{"key":"checked_at","type":"datetime","label":"Copies checked"}]`) },
 ]
 
 // ── copies (#192914) ─────────────────────────────────────────────────────────────
