@@ -12,6 +12,7 @@ import { createStore, produce } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { usePromptStash } from "./stash"
+import { createDictation, dictationBar, formatDictationClock } from "./dictate"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useCommandDialog } from "../dialog-command"
@@ -65,6 +66,24 @@ export function Prompt(props: PromptProps) {
   const sync = useSync()
   const dialog = useDialog()
   const toast = useToast()
+  // Voice → prompt. The recorder is shared with `iris listen`; only the drawing differs.
+  const dictation = createDictation({
+    onText: (text) => {
+      // Insert rather than replace: dictation is for ADDING to what you were already
+      // typing, and silently discarding a half-written prompt would be unrecoverable.
+      const needsSpace = input.plainText.length > 0 && !/\s$/.test(input.plainText)
+      input.insertText((needsSpace ? " " : "") + text)
+      input.focus()
+    },
+    // OpenTUI repaints on input and on request, not on signal change — without this the
+    // indicator freezes at 00:00 for the whole recording.
+    // Without this the level bar repaints ~3x/sec on incidental renders; with it, at the
+    // 10Hz the meter is sampled at. Measured, see dictate.ts.
+    onFrame: () => renderer.requestRender(),
+    onNotice: (message, kind) => {
+      toast.show({ variant: kind === "warn" ? "warning" : kind, message })
+    },
+  })
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -173,6 +192,16 @@ export function Prompt(props: PromptProps) {
           if (!input.focused) return
           submit()
           dialog.clear()
+        },
+      },
+      {
+        title: "Dictate (voice → prompt)",
+        value: "prompt.dictate",
+        keybind: "input_dictate",
+        category: "Prompt",
+        onSelect: async (dialog) => {
+          dialog.clear()
+          await dictation.toggle()
         },
       },
       {
@@ -935,6 +964,18 @@ export function Prompt(props: PromptProps) {
               <text fg={highlight()}>
                 {store.mode === "shell" ? "Shell" : Locale.titlecase(local.agent.current().name)}{" "}
               </text>
+              <Show when={dictation.active()}>
+                <box flexDirection="row" gap={1}>
+                  <text fg={theme.error}>●</text>
+                  <text fg={theme.textMuted}>{formatDictationClock(dictation.elapsed())}</text>
+                  <text fg={dictation.level() > 0.92 ? theme.error : theme.success}>
+                    {dictationBar(dictation.level())}
+                  </text>
+                </box>
+              </Show>
+              <Show when={dictation.transcribing()}>
+                <text fg={theme.textMuted}>transcribing…</text>
+              </Show>
               <Show when={store.mode === "normal"}>
                 <box flexDirection="row" gap={1}>
                   <text flexShrink={0} fg={keybind.leader ? theme.textMuted : theme.text}>

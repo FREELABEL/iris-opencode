@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -83,7 +84,7 @@ const ListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const items: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
       spinner.stop(`${items.length} product(s)`)
 
       if (items.length === 0) { prompts.log.warn("No products found"); prompts.outro("Done"); return }
@@ -228,8 +229,6 @@ const UpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Product #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
     if (args.title) payload.title = args.title
@@ -239,10 +238,10 @@ const UpdateCommand = cmd({
     if (args.quantity !== undefined) payload.quantity = args.quantity
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --price, --photo, or --quantity")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --title, --description, --price, --photo, or --quantity")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

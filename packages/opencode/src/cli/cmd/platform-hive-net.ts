@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { dim, bold, success } from "./iris-api"
+import { dim, bold, success, writeJson } from "./iris-api"
 import { execSync, spawnSync, spawn } from "child_process"
 import { networkInterfaces } from "os"
 
@@ -208,7 +208,7 @@ const HiveScanCommand = cmd({
     )
 
     if (argv.json) {
-      console.log(JSON.stringify({ ...net, devices: entries }, null, 2))
+      await writeJson({ ...net, devices: entries })
       return
     }
 
@@ -291,7 +291,7 @@ const HiveProbeCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -349,7 +349,7 @@ const HiveSshCommand = cmd({
         [
           "-o", "ConnectTimeout=3",
           "-o", "BatchMode=yes",
-          "-o", "StrictHostKeyChecking=no",
+          "-o", "StrictHostKeyChecking=accept-new",
           "-o", "PreferredAuthentications=publickey",
           `${u}@${ip}`,
           "echo SSH_OK",

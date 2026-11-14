@@ -5,18 +5,18 @@ import { McpClients } from "../../mcp/clients"
 
 /**
  * `iris mcp install` — idempotently register `iris mcp serve` into detected MCP
- * client configs (Claude Code, Claude Desktop, Cursor, opencode, project
- * .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no login
- * shell) can resolve it. Closes bug #150264.
+ * client configs (Claude Code, Claude Desktop, Cursor, Gemini CLI, opencode,
+ * project .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no
+ * login shell) can resolve it. Closes bug #150264.
  */
 export const McpInstallCommand = cmd({
   command: "install",
-  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, opencode, ...)",
+  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, Gemini CLI, opencode, ...)",
   builder: (yargs) =>
     yargs
       .option("client", {
         type: "string",
-        describe: "wire only this client (claude-code|claude-desktop|cursor|opencode|project)",
+        describe: "wire only this client (claude-code|claude-desktop|cursor|gemini|opencode|project)",
       })
       .option("all", {
         type: "boolean",
@@ -27,6 +27,15 @@ export const McpInstallCommand = cmd({
         type: "boolean",
         default: false,
         describe: "machine-readable output",
+      })
+      .option("trust", {
+        type: "boolean",
+        default: true,
+        describe: "add the working folder to Gemini's trusted list (--no-trust to skip)",
+      })
+      .option("trust-path", {
+        type: "string",
+        describe: "folder to trust for Gemini instead of the current directory",
       }),
   async handler(args) {
     const bin = McpClients.irisBinary()
@@ -91,6 +100,31 @@ export const McpInstallCommand = cmd({
       const icon = r.action === "error" ? "✗" : r.action === "unchanged" ? "○" : "✓"
       const label = r.action === "error" ? `failed — ${(r as any).error}` : r.action
       prompts.log.info(`${icon} ${r.client.label} ${UI.Style.TEXT_DIM}${label}\n    ${UI.Style.TEXT_DIM}${r.client.configPath}`)
+    }
+
+    // Registering the server is only half a Gemini install. Gemini disables EVERY
+    // MCP server in a folder it does not trust and calls it "Disabled", so without
+    // a trust entry the user sees a clean success here and then no IRIS tools at
+    // all. Do it for them — a client should not have to hand-edit JSON, and a
+    // placeholder path in documentation WILL be pasted verbatim (it was).
+    if (results.some((r) => r.client.id === "gemini" && r.action !== "error") && args.trust !== false) {
+      const target = (args["trust-path"] as string) || process.cwd()
+      try {
+        const t = await McpClients.trustFolderForGemini(target)
+        if (t.action === "added") {
+          prompts.log.info(`✓ Trusted ${UI.Style.TEXT_HIGHLIGHT}${t.folder}${UI.Style.TEXT_NORMAL} for Gemini ${UI.Style.TEXT_DIM}(inherited by subfolders)`)
+        } else if (t.action === "already-trusted") {
+          prompts.log.info(`○ ${UI.Style.TEXT_DIM}${t.folder} is already trusted for Gemini`)
+        } else {
+          // Trusting $HOME would trust every folder the user will ever have.
+          prompts.log.warn(
+            `Not trusting your home directory for Gemini — that would trust everything.\n` +
+              `    Re-run from your projects folder, or: ${UI.Style.TEXT_HIGHLIGHT}iris mcp install --client gemini --trust-path ~/sites${UI.Style.TEXT_NORMAL}`,
+          )
+        }
+      } catch (e) {
+        prompts.log.warn(`Could not write Gemini's trusted-folders file: ${e instanceof Error ? e.message : String(e)}`)
+      }
     }
 
     const changed = results.filter((r) => r.action === "created" || r.action === "updated").length

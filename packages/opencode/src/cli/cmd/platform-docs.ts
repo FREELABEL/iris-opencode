@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 
 // Google Docs integration — fetch doc content via iris-api's execute-direct endpoint
 
@@ -128,7 +128,7 @@ const DocsFetchCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ title: doc.title, content: doc.content, doc_id: docId }, null, 2))
+      await writeJson({ title: doc.title, content: doc.content, doc_id: docId })
       return
     }
 

@@ -13,11 +13,11 @@ import {
   printDivider,
   printKV,
   FL_API,
-  IRIS_API,
-} from "./iris-api"
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+  IRIS_API, writeJson } from "./iris-api"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs"
 import { join } from "path"
-import { execFileSync } from "child_process"
+import { spawnSync, execFileSync } from "child_process"
+import { ensureYtDlp } from "./download"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -146,7 +146,7 @@ const ProfilesListCommand = cmd({
       spinner.stop(`${profiles.length} profile(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(profiles, null, 2))
+        await writeJson(profiles)
       } else {
         if (!Array.isArray(profiles) || profiles.length === 0) {
           prompts.log.info("No profiles found.")
@@ -207,7 +207,7 @@ const ProfilesGetCommand = cmd({
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(p, null, 2))
+      await writeJson(p)
     } else {
       console.log()
       console.log(`  ${dim("pk:")} ${bold(String(p.pk))}`)
@@ -384,7 +384,7 @@ const UploadCommand = cmd({
       createSpinner.stop("Created")
 
       if (args.json) {
-        console.log(JSON.stringify(created, null, 2))
+        await writeJson(created)
       } else {
         console.log()
         console.log(`  ${dim("id:")} ${bold(String(created.id))}`)
@@ -472,8 +472,10 @@ const ListCommand = cmd({
     const listSpinner = prompts.spinner()
     listSpinner.start("Loading...")
     try {
-      const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-      const res = await irisFetch(`/api/v1/${typeSlug}?${params}`)
+      // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+      const res = await irisFetch(`${base}?${params}`)
       const ok = await handleApiError(res, "list content")
       if (!ok) { listSpinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
@@ -482,7 +484,7 @@ const ListCommand = cmd({
       listSpinner.stop(`${total} ${args.type}(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
       } else if (!Array.isArray(items) || items.length === 0) {
         prompts.log.info(`No ${args.type}s found.`)
       } else {
@@ -520,8 +522,10 @@ const GetCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Loading...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "get content")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
@@ -529,7 +533,7 @@ const GetCommand = cmd({
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(item, null, 2))
+      await writeJson(item)
     } else {
       console.log()
       console.log(`  ${dim("id:")} ${bold(String(item.id))}`)
@@ -575,8 +579,10 @@ const DeleteCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Deleting...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`, { method: "DELETE" })
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, { method: "DELETE" })
     const ok = await handleApiError(res, "delete")
     spinner.stop(ok ? "Deleted" : "Failed", ok ? 0 : 1)
     prompts.outro("Done")
@@ -602,18 +608,22 @@ const SearchCommand = cmd({
       // Fall back to individual type searches
       spinner.stop("Searching per type...")
       const results: any[] = []
-      for (const type of ["videos", "articles", "tracks"]) {
-        const r = await irisFetch(`/api/v1/${type}?search=${encodeURIComponent(args.query)}&per_page=5`)
+      // Same fix as everywhere else in this file: the per-type fallback used a pluralised
+      // path that fl-api does not serve, so this fallback ALWAYS returned nothing — which
+      // is why `content search` reported "No results." for a title that was demonstrably
+      // live on a profile. A silent empty is the worst failure mode for a search.
+      for (const type of ["video", "article", "track"]) {
+        const r = await irisFetch(`/api/v1/content/${type}?search=${encodeURIComponent(args.query)}&per_page=5`)
         if (r.ok) {
           const b = (await r.json()) as any
           const items = b?.data?.data ?? b?.data ?? []
           if (Array.isArray(items)) {
-            for (const item of items) results.push({ ...item, _type: type.slice(0, -1) })
+            for (const item of items) results.push({ ...item, _type: type })
           }
         }
       }
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       } else if (results.length === 0) {
         prompts.log.info("No results.")
       } else {
@@ -626,7 +636,7 @@ const SearchCommand = cmd({
       const body = (await res.json()) as any
       spinner.stop("Done")
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
       } else {
         const items = body?.data ?? body
         if (!Array.isArray(items) || items.length === 0) {
@@ -662,8 +672,10 @@ const PullCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Fetching...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "pull")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
@@ -704,8 +716,10 @@ const PushCommand = cmd({
     const local = JSON.parse(readFileSync(filepath, "utf8"))
     const spinner = prompts.spinner()
     spinner.start("Pushing...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`, {
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, {
       method: "PUT",
       body: JSON.stringify({
         title: local.title,
@@ -747,8 +761,10 @@ const DiffCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Fetching remote...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "diff")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
@@ -970,7 +986,7 @@ const EventImportFromIgCommand = cmd({
       printDivider()
 
       if (args["dry-run"]) {
-        if (args.json) { console.log(JSON.stringify(scraped, null, 2)) }
+        if (args.json) { await writeJson(scraped) }
         prompts.outro(dim("Dry run -- no event created"))
         return
       }
@@ -1010,7 +1026,7 @@ const EventImportFromIgCommand = cmd({
       spinner2.stop(`${success("Created")}: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -1087,7 +1103,7 @@ const EventUpdateFlyerCommand = cmd({
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images }, null, 2))
+          await writeJson({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images })
         }
         prompts.outro(dim("Dry run -- no changes made"))
         return
@@ -1116,7 +1132,7 @@ const EventUpdateFlyerCommand = cmd({
       spinner2.stop(`${success("Updated")} event #${eventId} with flyer${galleryCount}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -1154,6 +1170,209 @@ const EventSubCommand = cmd({
 // Root Command
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// ingest-channel — a creator's back catalogue as an agent training corpus
+// ---------------------------------------------------------------------------
+
+interface ChannelVideo {
+  id: string
+  title: string
+  date: string
+  duration: number
+  views: number
+  likes: number
+  comments: number
+}
+
+const num = (v: string): number => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Enumerate a channel's catalogue with the per-video performance metrics. */
+function fetchChannelCatalogue(ytdlp: string, url: string, limit?: number): ChannelVideo[] {
+  const args = [
+    "--skip-download",
+    "--no-warnings",
+    "--ignore-errors",
+    ...(limit ? ["--playlist-end", String(limit)] : []),
+    "--print",
+    "%(id)s%(title)s%(upload_date)s%(duration)s%(view_count)s%(like_count)s%(comment_count)s",
+    url,
+  ]
+  const r = spawnSync(ytdlp, args, { encoding: "utf8", timeout: 900_000, maxBuffer: 64 * 1024 * 1024 })
+  return (r.stdout || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, title, date, duration, views, likes, comments] = line.split("")
+      return {
+        id,
+        title: title ?? "",
+        date: date && date !== "NA" ? date : "",
+        duration: num(duration),
+        views: num(views),
+        likes: num(likes),
+        comments: num(comments),
+      }
+    })
+    .filter((v) => v.id && v.id !== "NA")
+}
+
+/** Strip WebVTT timing/markup down to plain prose. */
+function vttToText(vtt: string): string {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (let line of vtt.split("\n")) {
+    line = line.trim()
+    if (!line) continue
+    if (line.startsWith("WEBVTT") || line.startsWith("Kind:") || line.startsWith("Language:")) continue
+    if (line.includes("-->") || /^\d+$/.test(line)) continue
+    line = line.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim()
+    if (!line || seen.has(line)) continue
+    seen.add(line)
+    out.push(line)
+  }
+  return out.join(" ").replace(/\s+/g, " ").trim()
+}
+
+/** Pull a video's auto-captions and return them as plain text (null when absent). */
+function fetchTranscript(ytdlp: string, videoId: string, workDir: string): string | null {
+  const outTpl = join(workDir, "%(id)s.%(ext)s")
+  spawnSync(
+    ytdlp,
+    [
+      "--skip-download",
+      "--no-warnings",
+      "--ignore-errors",
+      "--write-auto-subs",
+      "--write-subs",
+      "--sub-lang",
+      "en.*",
+      "--sub-format",
+      "vtt",
+      "-o",
+      outTpl,
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ],
+    { encoding: "utf8", timeout: 300_000 },
+  )
+  const hit = readdirSync(workDir).find((f) => f.startsWith(videoId) && f.endsWith(".vtt"))
+  if (!hit) return null
+  const text = vttToText(readFileSync(join(workDir, hit), "utf8"))
+  return text.length > 0 ? text : null
+}
+
+const IngestChannelCommand = cmd({
+  command: "ingest-channel <url>",
+  aliases: ["channel-corpus"],
+  describe: "ingest a creator's whole back catalogue into a bloq as an agent training corpus",
+  builder: (yargs: any) =>
+    yargs
+      .positional("url", { describe: "channel or playlist URL", type: "string", demandOption: true })
+      .option("bloq", { alias: "b", describe: "target bloq ID (required)", type: "number", demandOption: true })
+      .option("limit", { describe: "only the N most recent videos", type: "number" })
+      .option("no-transcripts", { describe: "metadata only, skip caption pulls", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`◈  Ingest channel into Bloq #${args.bloq}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const ytdlp = ensureYtDlp()
+    if (!ytdlp) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Reading the catalogue…")
+    const videos = fetchChannelCatalogue(ytdlp, args.url, args.limit)
+    if (videos.length === 0) {
+      sp.stop("No videos found — check the URL is a channel or playlist", 1)
+      prompts.outro("Done")
+      return
+    }
+    sp.stop(`${success("✓")} ${videos.length} video(s)`)
+
+    const workDir = join(process.cwd(), `.iris-channel-${Date.now()}`)
+    mkdirSync(workDir, { recursive: true })
+
+    // Performance table first — the questions creators actually ask are comparative
+    // ("which episodes worked and why"), and that needs numbers, not just prose.
+    const sorted = [...videos].sort((a, b) => (a.date < b.date ? 1 : -1))
+    const totalViews = videos.reduce((s, v) => s + v.views, 0)
+    const median = [...videos].map((v) => v.views).sort((a, b) => a - b)[Math.floor(videos.length / 2)] ?? 0
+    const best = [...videos].sort((a, b) => b.views - a.views)[0]
+
+    let md = `# Channel corpus — ${args.url}\n\n`
+    md += `Ingested ${new Date().toISOString().slice(0, 10)} · ${videos.length} videos · `
+    md += `${totalViews} total views · median ${median} · best "${best?.title}" at ${best?.views}\n\n`
+    md += `| Date | Title | Runtime | Views | Likes | Comments |\n|---|---|---|---|---|---|\n`
+    for (const v of sorted) {
+      const d = v.date ? `${v.date.slice(0, 4)}-${v.date.slice(4, 6)}-${v.date.slice(6, 8)}` : "—"
+      md += `| ${d} | ${v.title.replace(/\|/g, "/")} | ${Math.round(v.duration / 60)}m | ${v.views} | ${v.likes} | ${v.comments} |\n`
+    }
+    const perfPath = join(workDir, "channel-performance.md")
+    writeFileSync(perfPath, md)
+
+    const uploads: string[] = [perfPath]
+
+    if (!args["no-transcripts"]) {
+      let done = 0
+      let missing = 0
+      const tsp = prompts.spinner()
+      tsp.start(`Pulling transcripts 0/${videos.length}…`)
+      for (const v of videos) {
+        // Prefer existing captions over paid transcription — free, instant, and for a
+        // 20-episode back catalogue the difference is minutes vs hours (#178766).
+        const text = fetchTranscript(ytdlp, v.id, workDir)
+        done++
+        tsp.message(`Pulling transcripts ${done}/${videos.length}…`)
+        if (!text) { missing++; continue }
+        const d = v.date ? v.date : "unknown"
+        const safe = v.title.replace(/[^a-zA-Z0-9]+/g, "-").slice(0, 60).replace(/^-|-$/g, "")
+        const p = join(workDir, `${d}_${safe || v.id}.txt`)
+        writeFileSync(p, `${v.title}\nhttps://youtu.be/${v.id}\nViews: ${v.views}\n\n${text}`)
+        uploads.push(p)
+      }
+      tsp.stop(`${success("✓")} ${done - missing} transcript(s)${missing ? dim(` · ${missing} without captions`) : ""}`)
+    }
+
+    const usp = prompts.spinner()
+    let ok = 0
+    let failed = 0
+    for (const [i, p] of uploads.entries()) {
+      const filename = p.split("/").pop() as string
+      usp.start(`Uploading ${i + 1}/${uploads.length} ${dim(filename)}…`)
+      try {
+        const fd = new FormData()
+        fd.append("file", new Blob([new Uint8Array(readFileSync(p))]), filename)
+        fd.append("user_id", String(userId))
+        fd.append("bloq_id", String(args.bloq))
+        const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+          body: fd,
+        })
+        if (res.ok) ok++
+        else failed++
+      } catch { failed++ }
+    }
+    usp.stop(`${success("✓")} ${ok} file(s) ingested${failed ? ` · ${failed} failed` : ""}`, failed ? 1 : 0)
+
+    try { rmSync(workDir, { recursive: true, force: true }) } catch {}
+
+    printDivider()
+    printKV("Videos", String(videos.length))
+    printKV("Files ingested", String(ok))
+    printKV("Bloq", String(args.bloq))
+    prompts.outro(dim(`iris bloqs get ${args.bloq}`))
+  },
+})
+
 export const PlatformContentCommand = cmd({
   command: "content",
   aliases: ["ct"],
@@ -1163,6 +1382,7 @@ export const PlatformContentCommand = cmd({
       .command(EventSubCommand)
       .command(ProfilesCommand)
       .command(UploadCommand)
+      .command(IngestChannelCommand)
       .command(ListCommand)
       .command(GetCommand)
       .command(DeleteCommand)

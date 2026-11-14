@@ -10,11 +10,14 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
-const COMPOSIO_KEY = "ak_c2m5Q0Av7lOHYK9NPTCn"
+// No hardcoded fallback: a stale key silently 401s every Composio call (bug
+// #165864/#164644). Read from env; empty key degrades gracefully (helpers below
+// swallow the failed fetch and return null / an error result).
+const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? ""
 
 interface Asset {
   id: string | null
@@ -73,7 +76,7 @@ async function listCanvaAssets(query = ""): Promise<Asset[]> {
   const result = await composioExecute("CANVA_LIST_USER_DESIGNS", accountId, params)
   if (!(result?.successful || result?.successfull)) return []
   const data = result.data?.response_data ?? result.data ?? {}
-  const items: any[] = data.items ?? data.designs ?? []
+  const items: any[] = firstArray(data.items, data.designs)
   return items.map((i) => ({
     id: i.id ?? null,
     name: i.title ?? i.name ?? "Untitled",
@@ -89,7 +92,7 @@ async function listDriveAssets(query = ""): Promise<Asset[]> {
     const result = await executeIntegrationCall("google-drive", "search_files", {
       query: query || "logo OR brand OR icon",
     })
-    const files: any[] = result?.files ?? result?.data ?? []
+    const files: any[] = firstArray(result?.files, result?.data)
     return files.map((f) => ({
       id: f.id ?? null,
       name: f.name ?? f.title ?? "Untitled",
@@ -132,7 +135,7 @@ const ListCommand = cmd({
     const assets = await listAssetsForSource(String(args.from), String(args.query ?? ""))
     spinner.stop(`${assets.length} asset(s)`)
 
-    if (args.json) { console.log(JSON.stringify({ source: args.from, assets, count: assets.length }, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson({ source: args.from, assets, count: assets.length }); prompts.outro("Done"); return }
 
     if (assets.length === 0) {
       prompts.log.warn(`No assets found on ${args.from}.`)
@@ -197,9 +200,9 @@ const PullCommand = cmd({
 
     if (args["dry-run"]) {
       if (args.json) {
-        console.log(JSON.stringify({ dry_run: true, source: args.from, brand_kit: brandKit, counts: {
+        await writeJson({ dry_run: true, source: args.from, brand_kit: brandKit, counts: {
           logos: brandKit.logos.length, images: brandKit.images.length, templates: brandKit.templates.length, other: brandKit.other.length,
-        } }, null, 2))
+        } })
       } else {
         prompts.log.warn("DRY RUN — nothing saved")
         console.log(`  ${dim("Logos:")} ${brandKit.logos.length}  ${dim("Images:")} ${brandKit.images.length}  ${dim("Templates:")} ${brandKit.templates.length}  ${dim("Other:")} ${brandKit.other.length}`)
@@ -228,7 +231,8 @@ const PullCommand = cmd({
         const noteId = data?.data?.id ?? data?.id
         console.log(`  ${success("✓")} Brand kit saved to lead #${leadId}${noteId ? " (note #" + noteId + ")" : ""}`)
       } else if (bloqId) {
-        const res = await irisFetch(`/api/v1/bloqs/${bloqId}/items`, {
+        const userId = (await requireUserId()) ?? 193
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items`, {
           method: "POST",
           body: JSON.stringify({
             title: `Brand Kit — ${args.from} — ${new Date().toLocaleDateString()}`,
@@ -280,7 +284,7 @@ const ExportCommand = cmd({
     })
     if (result?.successful || result?.successfull) {
       spinner.stop(success("Export job started"))
-      console.log(JSON.stringify(result.data?.response_data ?? result.data ?? {}, null, 2))
+      await writeJson(result.data?.response_data ?? result.data ?? {})
     } else {
       spinner.stop("Failed", 1)
       prompts.log.error(`Export failed: ${result?.error ?? "unknown"}`)

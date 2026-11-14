@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: beginner
+tags: [community, curation, music]
+duration_min: 8
+---
 # How to: Curate producers and instrumentals on the Community tab
 
 ## What this does

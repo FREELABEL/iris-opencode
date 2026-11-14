@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, requireUserId, bold, dim } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, bold, dim, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris event — single command that codifies the FFAT recipe (BET 2)
@@ -308,7 +308,7 @@ const ListCmd = cmd({
     const body = await res.json() as { data?: { campaigns?: any[] } }
     const events = (body.data?.campaigns ?? []).filter((c) => c.ends_at)
 
-    if (args.json) { console.log(JSON.stringify(events, null, 2)); return }
+    if (args.json) { await writeJson(events); return }
 
     if (events.length === 0) { prompts.log.info("No event campaigns yet — try `iris event create`"); return }
 

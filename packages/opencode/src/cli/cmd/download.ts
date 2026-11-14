@@ -3,18 +3,52 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, bold, highlight, dim } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, writeFileSync, statSync } from "fs"
+import { existsSync, writeFileSync, statSync, renameSync, unlinkSync } from "fs"
 import { join } from "path"
 
-function which(bin: string): string | null {
+export function which(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const p = r.stdout.trim()
   return p && r.status === 0 ? p : null
 }
 
-function ensureYtDlp(): string | null {
+/** Days after which a yt-dlp build is considered stale enough to break YouTube. */
+const YTDLP_STALE_DAYS = 90
+
+/**
+ * Warn when yt-dlp is old enough that YouTube extraction silently degrades.
+ *
+ * yt-dlp versions are date-stamped (YYYY.MM.DD[.HHMMSS]). Once a build is a few months
+ * behind, YouTube's player/n-challenge has rotated past it: unauthenticated it falls back
+ * to the legacy muxed 360p format 18, and WITH cookies the JS challenge solver fails
+ * outright and returns no video formats at all — while the download still exits 0. That
+ * silently caps every clip this platform publishes at 360p (#178722, recurrence of
+ * #152290). Warn loudly instead of shipping a degraded artifact.
+ */
+export function warnIfYtDlpStale(ytdlp: string): void {
+  try {
+    const out = spawnSync(ytdlp, ["--version"], { encoding: "utf8", timeout: 15_000 })
+    const raw = (out.stdout || "").trim()
+    const m = raw.match(/^(\d{4})\.(\d{2})\.(\d{2})/)
+    if (!m) return
+    const built = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    const ageDays = Math.floor((Date.now() - built) / 86_400_000)
+    if (ageDays < YTDLP_STALE_DAYS) return
+    prompts.log.warn(
+      `yt-dlp ${raw} is ${ageDays} days old — YouTube downloads may silently drop to 360p ` +
+        `or return no formats at all.\n  Upgrade:  pip3 install --upgrade yt-dlp   (or: brew upgrade yt-dlp)`,
+    )
+  } catch {
+    // Never let a version probe block a download.
+  }
+}
+
+export function ensureYtDlp(): string | null {
   let ytdlp = which("yt-dlp")
-  if (ytdlp) return ytdlp
+  if (ytdlp) {
+    warnIfYtDlpStale(ytdlp)
+    return ytdlp
+  }
   prompts.log.info("Installing yt-dlp...")
   spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
   ytdlp = which("yt-dlp")
@@ -47,7 +81,7 @@ async function downloadFile(
   outPath: string,
   formatSpec: string,
   mergeFormat?: string,
-  opts?: { quality?: number; section?: string },
+  opts?: { quality?: number; section?: string; extractAudio?: string },
 ): Promise<{ ok: boolean; error?: string; timedOut?: boolean }> {
   // Cap resolution when --quality is set: rewrite the height-agnostic default into a
   // height-bounded selector so a 6h source isn't pulled at 1080p when 720p will do (#137385).
@@ -62,6 +96,11 @@ async function downloadFile(
     // Only pull the requested minutes instead of the whole multi-hour file.
     ...(opts?.section ? ["--download-sections", opts.section] : []),
     ...(mergeFormat ? ["--merge-output-format", mergeFormat] : []),
+    // Strip the video stream for audio artifacts. Without -x, a source that offers no
+    // audio-only format (e.g. YouTube serving only the muxed format 18) falls through
+    // the selector to the muxed file, and we write a byte-identical copy of the mp4
+    // under a .m4a name — an "audio" file containing an h264 stream (#178765).
+    ...(opts?.extractAudio ? ["-x", "--audio-format", opts.extractAudio] : []),
   ]
 
   // Stream yt-dlp's own progress/errors when the user asked for logs — otherwise a
@@ -104,6 +143,116 @@ async function downloadFile(
     error = last?.error?.message || "yt-dlp failed — re-run with --print-logs to see why"
   }
   return { ok: false, error, timedOut }
+}
+
+export interface AudioTags {
+  title?: string
+  artist?: string
+  album?: string
+}
+
+/**
+ * Rewrite an MP3's ID3 title/artist/album in place, stream-copying so nothing is
+ * re-encoded and the embedded album art (an attached picture stream) is preserved.
+ *
+ * Used to override the messy tags yt-dlp derives from the YouTube upload
+ * (e.g. "Dai Dai (Official Video)" / "…, FIFA") with clean Spotify metadata.
+ * Best-effort: on any ffmpeg failure the original file is left untouched.
+ */
+function retagMp3(ffmpeg: string, path: string, tags: AudioTags): boolean {
+  const meta: string[] = []
+  if (tags.title) meta.push("-metadata", `title=${tags.title}`)
+  if (tags.artist) meta.push("-metadata", `artist=${tags.artist}`)
+  if (tags.album) meta.push("-metadata", `album=${tags.album}`)
+  if (meta.length === 0) return false
+
+  const tmp = `${path}.retag.mp3`
+  const r = spawnSync(
+    ffmpeg,
+    ["-y", "-i", path, "-map", "0", "-c", "copy", "-id3v2_version", "3", ...meta, tmp],
+    { stdio: "pipe", timeout: 60_000 },
+  )
+  if (r.status === 0 && existsSync(tmp)) {
+    renameSync(tmp, path)
+    return true
+  }
+  if (existsSync(tmp)) {
+    try { unlinkSync(tmp) } catch {}
+  }
+  return false
+}
+
+/**
+ * Download a single track's audio as a tagged MP3 via yt-dlp.
+ *
+ * `target` may be a direct URL or a yt-dlp search term (e.g. `ytsearch1:artist title`),
+ * which is what `iris discover playlist` uses — Spotify URLs are not downloadable, so we
+ * match each track on YouTube by "artist title". Reuses the same cookie-retry + timeout +
+ * real-error-surfacing pattern as downloadFile(), plus `-x --audio-format mp3` and metadata
+ * embedding so the resulting file is DJ-ready (ID3 title/artist + embedded album art).
+ *
+ * `outBase` is the output path WITHOUT extension; yt-dlp writes `<outBase>.mp3` after the
+ * ffmpeg post-processor runs. Returns that final path on success. When `tags` is provided,
+ * the YouTube-derived ID3 tags are overwritten with those clean values (art preserved).
+ */
+export async function downloadAudioMp3(
+  ytdlp: string,
+  target: string,
+  outBase: string,
+  tags?: AudioTags,
+): Promise<{ ok: boolean; error?: string; path?: string }> {
+  const finalPath = `${outBase}.mp3`
+  const baseArgs = [
+    "-x",
+    "--audio-format", "mp3",
+    "--audio-quality", "0", // 0 = best (~320kbps)
+    "--embed-thumbnail",
+    "--embed-metadata",
+    "--no-playlist",
+    "-o", `${outBase}.%(ext)s`,
+    "--no-warnings",
+  ]
+
+  const argv = process.argv
+  const verbose =
+    argv.includes("--print-logs") ||
+    argv.includes("--log-level=DEBUG") ||
+    (argv.includes("--log-level") && (argv[argv.indexOf("--log-level") + 1] || "").toUpperCase() === "DEBUG")
+  const stdio: any = verbose ? ["ignore", "inherit", "inherit"] : "pipe"
+
+  // Cookies help when a match is age-gated; fall through to no-cookies last.
+  const attempts = [
+    ...["chrome", "firefox", "safari"].map((b) => [...baseArgs, "--cookies-from-browser", b, target]),
+    [...baseArgs, target],
+  ]
+
+  let last: ReturnType<typeof spawnSync> | null = null
+  for (const a of attempts) {
+    const dl = spawnSync(ytdlp, a, { stdio, timeout: 300_000, encoding: "utf8" })
+    last = dl
+    if (dl.status === 0 && existsSync(finalPath)) {
+      // Replace YouTube-derived tags with clean Spotify metadata when provided.
+      if (tags) {
+        const ffmpeg = which("ffmpeg")
+        if (ffmpeg) retagMp3(ffmpeg, finalPath, tags)
+      }
+      return { ok: true, path: finalPath }
+    }
+  }
+
+  const timedOut = (last?.error as any)?.code === "ETIMEDOUT" || last?.signal === "SIGTERM"
+  const stderr = typeof last?.stderr === "string" ? last.stderr.trim() : ""
+  let error: string
+  if (timedOut) {
+    error = "yt-dlp timed out after 300s"
+  } else if (stderr) {
+    error = stderr.split("\n").filter(Boolean).pop() || stderr
+  } else if (verbose) {
+    error = "yt-dlp failed (see output above)"
+  } else {
+    error = last?.error?.message || "no YouTube match found (re-run with --print-logs for details)"
+  }
+  return { ok: false, error }
 }
 
 /**
@@ -382,11 +531,13 @@ export const PlatformDownloadCommand = cmd({
       const sp = prompts.spinner()
       sp.start("Downloading audio...")
 
+      // -x guarantees the artifact is audio-only even when the source has no
+      // audio-only format and the selector falls through to a muxed stream (#178765).
       const r = await downloadFile(
         ytdlp, url, audioPath,
         "bestaudio[ext=m4a]/bestaudio/best",
         undefined,
-        { section: args.section as string | undefined },
+        { section: args.section as string | undefined, extractAudio: "m4a" },
       )
 
       if (r.ok && existsSync(audioPath)) {

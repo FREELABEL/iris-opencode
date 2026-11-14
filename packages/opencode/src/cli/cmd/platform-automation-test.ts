@@ -9,8 +9,7 @@ import {
   printKV,
   dim,
   bold,
-  success,
-} from "./iris-api"
+  success, writeJson } from "./iris-api"
 import {
   requestAutomationCreate,
   type AutomationCreateInput,
@@ -595,7 +594,7 @@ export const PlatformAutomationTestCommand = cmd({
       const msg = err instanceof Error ? err.message : String(err)
       results = { test_mode: mode, success: false, error: msg }
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       } else {
         prompts.log.error(`Test failed: ${msg}`)
       }
@@ -604,7 +603,7 @@ export const PlatformAutomationTestCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(results, null, 2))
+      await writeJson(results)
     } else {
       displayResults(results)
       prompts.outro(results.success ? "Done" : "Failed")

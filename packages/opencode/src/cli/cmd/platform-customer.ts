@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL as SHARED_BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL as SHARED_BRIDGE_URL, getBridgeToken, writeJson } from "./iris-api"
 
 // Customer onboarding pipeline — one command to create bloq + agent + heartbeat + page
 
@@ -222,7 +222,7 @@ const CustomerSetupCommand = cmd({
     console.log()
 
     if (args.json) {
-      console.log(JSON.stringify({ lead_id: leadId, bloq_id: bloqId, agent_id: agentId, model, briefing_time: briefingTime }, null, 2))
+      await writeJson({ lead_id: leadId, bloq_id: bloqId, agent_id: agentId, model, briefing_time: briefingTime })
     }
 
     prompts.outro(`${success("✓")} ${company} onboarded`)
@@ -266,7 +266,7 @@ const CustomerStatusCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        await writeJson(leads)
         prompts.outro("Done")
         return
       }
@@ -310,7 +310,7 @@ const CustomerStatusCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ lead, checklist: getChecklist(lead) }, null, 2))
+      await writeJson({ lead, checklist: getChecklist(lead) })
       prompts.outro("Done")
       return
     }
@@ -485,7 +485,7 @@ const CustomerPulseCommand = cmd({
       results.notes = (lead.notes || []).slice(0, 5).map((n: any) => ({
         id: n.id, type: n.activity_type, date: n.created_at, preview: (n.content || "").slice(0, 200),
       }))
-      console.log(JSON.stringify(results, null, 2))
+      await writeJson(results)
       prompts.outro("Done")
       return
     }

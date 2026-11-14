@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
 import { homedir } from "os"
 import { join } from "path"
@@ -99,7 +99,7 @@ const ExchangeListCommand = cmd({
     sp?.stop(`${data.total} listing(s)`)
 
     if (argv.json) {
-      console.log(JSON.stringify(data.listings, null, 2))
+      await writeJson(data.listings)
       return
     }
 
@@ -222,7 +222,7 @@ const ExchangePostCommand = cmd({
     sp?.stop(success(`Listed: ${dollars(l.bounty_cents)} bounty`))
 
     if (argv.json) {
-      console.log(JSON.stringify(l, null, 2))
+      await writeJson(l)
       return
     }
 
@@ -274,7 +274,7 @@ const ExchangeShowCommand = cmd({
     const l = data.listing
 
     if (argv.json) {
-      console.log(JSON.stringify(l, null, 2))
+      await writeJson(l)
       return
     }
 
@@ -379,7 +379,7 @@ const ExchangeClaimCommand = cmd({
     sp?.stop(success(data.message || "Claimed"))
 
     if (argv.json) {
-      console.log(JSON.stringify(data.listing, null, 2))
+      await writeJson(data.listing)
       return
     }
 
@@ -441,7 +441,7 @@ const ExchangeSubmitCommand = cmd({
     const data = (await res.json()) as { listing: any; message: string }
     sp?.stop(success(data.message || "Submitted"))
 
-    if (argv.json) { console.log(JSON.stringify(data.listing, null, 2)); return }
+    if (argv.json) { await writeJson(data.listing); return }
     console.log(dim("  Poster will be notified to verify."))
     prompts.outro("Done")
   },
@@ -513,7 +513,7 @@ const ExchangeVerifyCommand = cmd({
     const data = (await res.json()) as { listing: any; message: string }
     sp?.stop(success(data.message || (accepted ? "Accepted" : "Disputed")))
 
-    if (argv.json) { console.log(JSON.stringify(data.listing, null, 2)); return }
+    if (argv.json) { await writeJson(data.listing); return }
     if (accepted) {
       console.log(`  ${success("★".repeat(rating || 5))} Work accepted`)
     }
@@ -551,7 +551,7 @@ const ExchangeCancelCommand = cmd({
       return
     }
 
-    if (argv.json) { const data = await res.json(); console.log(JSON.stringify(data, null, 2)); return }
+    if (argv.json) { const data = await res.json(); await writeJson(data); return }
     console.log(success("  Listing cancelled."))
   },
 })
@@ -585,7 +585,7 @@ const ExchangeMineCommand = cmd({
     const claims = claimsRes.ok ? ((await claimsRes.json()) as any).listings || [] : []
 
     if (argv.json) {
-      console.log(JSON.stringify({ posts, claims }, null, 2))
+      await writeJson({ posts, claims })
       return
     }
 
@@ -661,7 +661,7 @@ const ExchangeReputationCommand = cmd({
     const rep = data.reputation
 
     if (argv.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 

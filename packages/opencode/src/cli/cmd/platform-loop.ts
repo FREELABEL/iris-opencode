@@ -1,13 +1,14 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, requireUserId, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, requireUserId, handleApiError, writeJson } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
   parsePlan,
   executeSkill,
   resolveArgs,
+  splitPlaybookArgv,
   type ExecuteOptions,
   type SkillResult,
 } from "../../skill/executor"
@@ -80,17 +81,11 @@ const LoopRunCommand = cmd({
 
       // Resolve args once (same shape as `playbook run`); reused every cycle.
       const positionalArgs = (args.skillArgs as string[] ?? [])
-      const flagArgs: Record<string, unknown> = {}
-      const cleanPositional: string[] = []
-      for (const a of positionalArgs) {
-        if (a.startsWith("--")) {
-          const eqIdx = a.indexOf("=")
-          if (eqIdx > 2) flagArgs[a.slice(2, eqIdx)] = a.slice(eqIdx + 1)
-          else flagArgs[a.slice(2)] = true
-        } else {
-          cleanPositional.push(a)
-        }
-      }
+      // #181577: this had its OWN copy of the parser, under a comment claiming it was the
+      // "same shape as `playbook run`". It was not — playbook run learned to bind a bare
+      // key=value and this never did, so `iris loop ads topic="..."` still passed
+      // topic="topic=..." into every cycle. Same parser now, by construction.
+      const { flagArgs, positional: cleanPositional } = splitPlaybookArgv(positionalArgs, plan.args)
 
       let resolvedArgs: Record<string, unknown>
       try {
@@ -151,7 +146,7 @@ const LoopRunCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ playbook: plan.name, until, max_cycles: maxCycles, met, cycles }, null, 2))
+        await writeJson({ playbook: plan.name, until, max_cycles: maxCycles, met, cycles })
         return
       }
 
@@ -239,7 +234,7 @@ const LoopScheduleCommand = cmd({
       const data = (await res.json()) as any
       const job = data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(job, null, 2)); return }
+      if (args.json) { await writeJson(job); return }
       spinner?.stop(success("Scheduled"))
       printDivider()
       printKV("Loop", args.name)

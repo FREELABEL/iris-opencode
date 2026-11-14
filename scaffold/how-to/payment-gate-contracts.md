@@ -1,3 +1,10 @@
+---
+category: CRM & Sales
+level: intermediate
+tags: [crm, contracts, payments, billing]
+duration_min: 12
+prerequisites: [lead-to-proposal]
+---
 # How to: Send a contract + invoice + payment gate to a lead
 
 ## What this does

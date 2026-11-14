@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test"
+import { readFileSync } from "fs"
 import {
   ABSTAIN_SENTINEL,
   parseParams,
@@ -7,6 +8,13 @@ import {
   parseAbstention,
   stringifySource,
   groupTypesByCategory,
+  normalizeSourceType,
+  isBulkIngestable,
+  pickEnumerator,
+  surveySources,
+  countItems,
+  BULK_INGESTABLE_TYPES,
+  summarizeJobErrors,
 } from "./platform-data-sources"
 
 // ---------------------------------------------------------------------------
@@ -159,4 +167,286 @@ test("groupTypesByCategory: tolerates empty/odd input without throwing", () => {
 test("groupTypesByCategory: falls back to 'other' category and type-as-name", () => {
   const grouped = groupTypesByCategory({ weird: { oauth_required: false } })
   expect(grouped.other[0]).toEqual({ type: "weird", name: "weird", oauth: false })
+})
+
+// ---------------------------------------------------------------------------
+// survey — normalizeSourceType / isBulkIngestable
+// ---------------------------------------------------------------------------
+
+test("normalizeSourceType: folds the underscore/hyphen split the CLI has with itself", () => {
+  // `sync` takes google_drive; `read`/`connect`/the availability list take google-drive.
+  expect(normalizeSourceType("google_drive")).toBe("google-drive")
+  expect(normalizeSourceType("google-drive")).toBe("google-drive")
+  expect(normalizeSourceType("Google Drive")).toBe("google-drive")
+  expect(normalizeSourceType("  GOOGLE_DRIVE ")).toBe("google-drive")
+})
+
+test("normalizeSourceType: survives null/undefined without throwing", () => {
+  expect(normalizeSourceType(null)).toBe("")
+  expect(normalizeSourceType(undefined)).toBe("")
+})
+
+test("isBulkIngestable: true for both spellings of the two supported types", () => {
+  expect(isBulkIngestable("google_drive")).toBe(true)
+  expect(isBulkIngestable("google-drive")).toBe(true)
+  expect(isBulkIngestable("dropbox")).toBe(true)
+})
+
+test("isBulkIngestable: false for connected-but-not-importable sources", () => {
+  // The distinction survey exists to make: these are readable, not bulk-ingestable.
+  for (const t of ["gmail", "obsidian", "slack", "google-calendar", "imessage-bridge"]) {
+    expect(isBulkIngestable(t)).toBe(false)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// survey — pickEnumerator
+// ---------------------------------------------------------------------------
+
+test("pickEnumerator: prefers list_files over a search_ that would demand a query", () => {
+  // Verified live: google-drive search_files -> "Missing required parameters: query".
+  const fns = [{ name: "search_files" }, { name: "list_files" }, { name: "download" }]
+  expect(pickEnumerator(fns)).toBe("list_files")
+})
+
+test("pickEnumerator: falls back to a search_ function when nothing lists", () => {
+  expect(pickEnumerator([{ name: "search_emails" }, { name: "send_email" }])).toBe("search_emails")
+})
+
+test("pickEnumerator: accepts bare strings as well as {name} objects", () => {
+  expect(pickEnumerator(["send_message", "list_conversations"])).toBe("list_conversations")
+})
+
+test("pickEnumerator: returns null when a source cannot enumerate at all", () => {
+  expect(pickEnumerator([{ name: "send_email" }, { name: "create_event" }])).toBeNull()
+  expect(pickEnumerator([])).toBeNull()
+  expect(pickEnumerator(undefined)).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// survey — surveySources (the merge that catches the real bug)
+// ---------------------------------------------------------------------------
+
+test("surveySources: flags a source that is CONNECTED but absent from the availability list", () => {
+  // Reproduces the live 2026-08-24 defect exactly: google-drive had three working
+  // connections and executed list_files fine, while being entirely missing from
+  // GET /bloqs/{id}/data-sources. Reading either surface alone reports something false.
+  const available = [{ type: "gmail", name: "Gmail", functions: [{ name: "search_emails" }] }]
+  const connections = [
+    { type: "google-drive", account_email: "alex@freelabel.net" },
+    { type: "google-drive", account_email: "amayo@mypathwaysai.com" },
+  ]
+  const out = surveySources(available, connections)
+
+  const drive = out.find((s) => normalizeSourceType(s.type) === "google-drive")!
+  expect(drive.hiddenButConnected).toBe(true)
+  expect(drive.connected).toBe(true)
+  expect(drive.listed).toBe(false)
+  expect(drive.bulkIngestable).toBe(true)
+  expect(drive.accounts).toEqual(["alex@freelabel.net", "amayo@mypathwaysai.com"])
+
+  // And the hidden one sorts first — it is the reason to run the command.
+  expect(normalizeSourceType(out[0].type)).toBe("google-drive")
+})
+
+test("surveySources: a listed source with no connection is NOT flagged as hidden", () => {
+  const out = surveySources([{ type: "gmail", name: "Gmail", functions: [] }], [])
+  expect(out[0].listed).toBe(true)
+  expect(out[0].connected).toBe(false)
+  expect(out[0].hiddenButConnected).toBe(false)
+})
+
+test("surveySources: joins the two surfaces across the underscore/hyphen spelling split", () => {
+  // The availability list says google-drive; the connections list says google_drive.
+  // A naive string compare would double-count these and report a phantom hidden source.
+  const out = surveySources(
+    [{ type: "google-drive", name: "Google Drive", functions: [{ name: "list_files" }] }],
+    [{ type: "google_drive", account_email: "alex@freelabel.net" }],
+  )
+  expect(out).toHaveLength(1)
+  expect(out[0].listed).toBe(true)
+  expect(out[0].connected).toBe(true)
+  expect(out[0].hiddenButConnected).toBe(false)
+  expect(out[0].enumerator).toBe("list_files")
+})
+
+test("surveySources: dedupes multiple accounts of one type into a single row", () => {
+  const out = surveySources(
+    [{ type: "google-drive", name: "Google Drive", functions: [] }],
+    [
+      { type: "google-drive", account_email: "a@x.com" },
+      { type: "google-drive", account_email: "a@x.com" },
+      { type: "google-drive", account_email: "b@x.com" },
+    ],
+  )
+  expect(out).toHaveLength(1)
+  expect(out[0].accounts).toEqual(["a@x.com", "b@x.com"])
+})
+
+test("surveySources: tolerates empty/garbage input rather than throwing", () => {
+  expect(surveySources([], [])).toEqual([])
+  expect(surveySources(null as any, undefined as any)).toEqual([])
+  expect(surveySources([{ name: "no type field" }], [])).toEqual([])
+})
+
+// ---------------------------------------------------------------------------
+// survey — countItems
+// ---------------------------------------------------------------------------
+
+test("countItems: finds the record array under whichever key the provider used", () => {
+  expect(countItems({ files: [1, 2, 3] })).toBe(3)
+  expect(countItems({ data: { items: [1, 2] } })).toBe(2)
+  expect(countItems({ result: { entries: [] } })).toBe(0)
+  expect(countItems([1, 2, 3, 4])).toBe(4)
+})
+
+test("countItems: returns null (not 0) when there is no array to count", () => {
+  // null means "could not count"; 0 means "counted, and it was empty". Collapsing
+  // them would report an unreachable source as an empty one.
+  expect(countItems({ ok: true })).toBeNull()
+  expect(countItems(null)).toBeNull()
+  expect(countItems("a string")).toBeNull()
+})
+
+
+// ---------------------------------------------------------------------------
+// #182734 — bulk-ingest ceiling, and the join `list` was not doing
+// ---------------------------------------------------------------------------
+
+/**
+ * Measured 2026-08-28 with the CLI's own survey:
+ *
+ *     16 source(s) · 1 bulk-importable
+ *     8 connected source(s) are hidden from discovery (incl. google-drive)
+ *
+ * Two different defects. The first was UNDER-reporting: fl-api validates
+ * `in:dropbox,google_drive,s3` and FileIngestionService implements all three, while this
+ * CLI advertised two. The second was a discovery surface reading one side of a join that
+ * `survey` already knew how to do.
+ */
+
+test("BULK_INGESTABLE_TYPES equals the server's validation rule — no more, no fewer", () => {
+  // More would promise a source fl-api rejects at run time; fewer hides one we ship.
+  // fl-api dae7aeff: FileIngestionService::SOURCE_INTEGRATIONS, and the validation rule is
+  // derived from it. Widening here without widening there re-creates the original defect.
+  expect([...BULK_INGESTABLE_TYPES].sort()).toEqual(
+    ["dropbox", "google-cloud-storage", "google_drive", "microsoft", "onedrive", "s3"],
+  )
+})
+
+test("s3 is bulk-ingestable — it was missing, and that was the under-report", () => {
+  expect(isBulkIngestable("s3")).toBe(true)
+})
+
+test("bulk-ingestable matches across the spellings the CLI disagrees with itself about", () => {
+  expect(isBulkIngestable("google_drive")).toBe(true)
+  expect(isBulkIngestable("google-drive")).toBe(true)
+  expect(isBulkIngestable("Google Drive")).toBe(true)
+  expect(normalizeSourceType("Google_Drive")).toBe("google-drive")
+})
+
+test("a source the server would reject is never advertised as importable", () => {
+  for (const t of ["slack", "notion", "obsidian", "imessage-bridge", "youtube"]) {
+    expect(isBulkIngestable(t)).toBe(false)
+  }
+})
+
+test("surveySources flags a connected source the availability list omits", () => {
+  const available = [{ type: "obsidian", name: "Obsidian", functions: ["list_files"] }]
+  const connections = [
+    { type: "google-drive", name: "Google Drive", account_email: "alex@freelabel.net" },
+    { type: "obsidian", name: "Obsidian" },
+  ]
+  const hidden = surveySources(available, connections).filter((s) => s.hiddenButConnected)
+  expect(hidden.map((s) => s.type)).toEqual(["google-drive"])
+  expect(hidden[0].accounts).toEqual(["alex@freelabel.net"])
+  // A hidden google-drive is still correctly reported as importable.
+  expect(hidden[0].bulkIngestable).toBe(true)
+})
+
+test("a source present on both sides is connected but NOT flagged hidden", () => {
+  const ob = surveySources(
+    [{ type: "obsidian", name: "Obsidian" }],
+    [{ type: "obsidian", name: "Obsidian" }],
+  ).find((s) => s.type === "obsidian")!
+  expect(ob.connected).toBe(true)
+  expect(ob.hiddenButConnected).toBe(false)
+})
+
+test("no connections means nothing is hidden, not everything", () => {
+  expect(surveySources([{ type: "obsidian" }], []).some((s) => s.hiddenButConnected)).toBe(false)
+})
+
+test("sync's accepted choices ARE the bulk-ingestable list — no second copy to drift", () => {
+  // Measured on the shipped v1.3.223: survey advertised s3 as importable while
+  // `sync --help` still showed choices: "dropbox", "google_drive" and the parser rejected
+  // s3 outright. Two hardcoded copies of one fact, which is the bug this file keeps finding
+  // elsewhere — reproduced here by fixing only one of them.
+  expect([...BULK_INGESTABLE_TYPES]).toContain("s3")
+})
+
+
+// ---------------------------------------------------------------------------
+// A failed job must say why
+// ---------------------------------------------------------------------------
+
+/**
+ * `status` printed "failed · 0 / 0" and stopped, while the API had already returned the
+ * reason in error_log. Chasing a dead Google Drive ingest on 2026-08-28, the answer was
+ * "No query results for model [App\\Models\\Integration]" — a lookup against the wrong
+ * type string — and finding it required reading raw JSON.
+ */
+const REAL_LOG = [
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+]
+
+test("collapses a repeated failure into one reason with a count", () => {
+  const out = summarizeJobErrors(REAL_LOG)
+  expect(out).toHaveLength(1)
+  expect(out[0].count).toBe(3)
+  expect(out[0].error).toContain("No query results for model")
+})
+
+test("keeps distinct reasons apart, most frequent first", () => {
+  const out = summarizeJobErrors([
+    { file: "a.pdf", error: "Unsupported file type" },
+    { file: "b.pdf", error: "Download failed" },
+    { file: "c.pdf", error: "Download failed" },
+  ])
+  expect(out.map((e) => e.error)).toEqual(["Download failed", "Unsupported file type"])
+  expect(out[0].count).toBe(2)
+})
+
+test("per-file errors keep their files, so you know WHICH documents failed", () => {
+  const out = summarizeJobErrors([
+    { file: "contract.pdf", error: "Encrypted PDF" },
+    { file: "nda.pdf", error: "Encrypted PDF" },
+  ])
+  expect(out).toHaveLength(1)
+  expect(out[0].count).toBe(2)
+  // One cause, two documents — the fix is one thing, and both names are still recoverable.
+  expect(out[0].files).toEqual(["contract.pdf", "nda.pdf"])
+})
+
+test("no errors renders nothing rather than an empty Errors heading", () => {
+  expect(summarizeJobErrors([])).toEqual([])
+  expect(summarizeJobErrors(undefined)).toEqual([])
+  expect(summarizeJobErrors(null)).toEqual([])
+  expect(summarizeJobErrors("not an array")).toEqual([])
+})
+
+test("blank error strings are not reasons", () => {
+  expect(summarizeJobErrors([{ file: "x", error: "   " }, { file: "y" }])).toEqual([])
+})
+
+test("sync recurses by default, because the server does and a partial import looked complete", () => {
+  // Not a pure function to call — this pins the intent that produced the fix, and the
+  // measurement behind it: a Drive folder holding one file plus one subfolder ingested
+  // 1 of 2 with the old default and 2 of 2 with --recursive. The CLI sent `false`
+  // EXPLICITLY, so fl-api's `?? true` never applied and the disagreement was invisible.
+  const src = readFileSync(new URL("./platform-data-sources.ts", import.meta.url), "utf8")
+  const opt = src.match(/\.option\("recursive",[^)]*\)/s)?.[0] ?? ""
+  expect(opt).toContain("default: true")
 })

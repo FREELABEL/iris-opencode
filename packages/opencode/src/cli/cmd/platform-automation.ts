@@ -11,8 +11,7 @@ import {
   bold,
   success,
   highlight,
-  isNonInteractive,
-} from "./iris-api"
+  isNonInteractive, writeJson } from "./iris-api"
 
 // ============================================================================
 // Endpoint constants — the real fl-api routes the V6 backend exposes.
@@ -252,7 +251,7 @@ const CreateCommand = cmd({
       }
       const automation = (await res.json()) as any
       if (args.json) {
-        console.log(JSON.stringify(automation, null, 2))
+        await writeJson(automation)
         return
       }
       const id = automation?.id ?? automation?.data?.id ?? "N/A"
@@ -319,7 +318,7 @@ const ExecuteCommand = cmd({
       const runId = run?.run_id ?? run?.data?.run_id
 
       if (args.json) {
-        console.log(JSON.stringify(run, null, 2))
+        await writeJson(run)
         if (args.wait && runId) {
           await pollUntilDone(String(runId), args.timeout as number, args.interval as number, true)
         }
@@ -411,7 +410,7 @@ const StatusCommand = cmd({
       const status = (await res.json()) as any
 
       if (args.json) {
-        console.log(JSON.stringify(status, null, 2))
+        await writeJson(status)
         return
       }
 
@@ -454,10 +453,12 @@ const StatusCommand = cmd({
         if (args.detailed && Array.isArray(results.tool_results)) {
           console.log()
           console.log(`  ${bold("Tool Results (detailed)")}`)
-          results.tool_results.forEach((tr: any, i: number) => {
+          // for..of rather than forEach: writeJson is awaited (#180735), and a sync callback
+          // cannot await — the payload would go out unflushed again.
+          for (const [i, tr] of results.tool_results.entries()) {
             console.log(`  ${highlight(`Call #${i + 1}:`)}`)
-            console.log(JSON.stringify(tr, null, 2))
-          })
+            await writeJson(tr)
+          }
         }
       }
 
@@ -550,7 +551,7 @@ const ListCommand = cmd({
       }
       const result = (await res.json()) as any
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
       const automations = result?.data ?? []
@@ -616,7 +617,7 @@ const RunsCommand = cmd({
       }
       const result = (await res.json()) as any
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
       const runs = result?.data ?? []
@@ -766,4 +767,15 @@ export const PlatformAutomationCommand = cmd({
       .command(DeleteCommand)
       .demandCommand(1),
   async handler() {},
+})
+
+// The top-level `iris automation` verb, kept working and marked for what it is.
+//
+// P0b: `automation` and `workflows` were two trees over the same /v1/workflows family,
+// and a user had no way to tell which to reach for. The tree now lives under `workflows`;
+// this stays so nobody's script breaks, with a describe that says where it went. Renaming
+// a user-facing verb is hard to walk back — deprecate in help first, remove on evidence.
+export const PlatformAutomationAliasCommand = cmd({
+  ...PlatformAutomationCommand,
+  describe: "deprecated — use `iris workflows automation`",
 })

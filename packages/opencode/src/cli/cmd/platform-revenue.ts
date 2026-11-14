@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 function fmtMoney(n: unknown): string {
   return `$${Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -27,7 +27,7 @@ const RevenueDashboardCommand = cmd({
     if (!(await handleApiError(res, "Revenue dashboard"))) return
 
     const data = await res.json().catch(() => ({}))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     const g = data.goals ?? {}
     const r = data.reality ?? {}
@@ -110,7 +110,7 @@ const RevenueGoalCommand = cmd({
       if (!(await handleApiError(res, "Get goals"))) return
       const data = await res.json().catch(() => ({}))
       const g = data.goals ?? {}
-      if (args.json) { console.log(JSON.stringify(g, null, 2)); return }
+      if (args.json) { await writeJson(g); return }
       console.log("")
       console.log(bold("  Revenue Goal"))
       printDivider()
@@ -129,7 +129,7 @@ const RevenueGoalCommand = cmd({
     const res = await irisFetch("/api/v1/revenue/goals", { method: "POST", body: JSON.stringify(payload) })
     if (!(await handleApiError(res, "Set goals"))) return
     const data = await res.json().catch(() => ({}))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
     if (data.success) {
       prompts.log.success("Revenue goal updated")
       printKV("  Target MRR", fmtMoney(data.goals?.target_mrr))

@@ -1,7 +1,10 @@
 import { cmd } from "./cmd"
+import { OffersGroup } from "./offers"
+import { LicenceGroup } from "./licence"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { OutreachApproveGroup } from "./platform-outreach-approve"
 
 // ============================================================================
@@ -83,7 +86,7 @@ const OutreachListCommand = cmd({
     const templates = await fetchStrategies(args.bloqId, args.category as string | undefined)
 
     if (args.json) {
-      console.log(JSON.stringify(templates, null, 2))
+      await writeJson(templates)
       return
     }
 
@@ -117,7 +120,7 @@ const OutreachShowCommand = cmd({
     const strategy = await fetchStrategy(args.bloqId, args.id)
 
     if (args.json) {
-      console.log(JSON.stringify(strategy, null, 2))
+      await writeJson(strategy)
       return
     }
 
@@ -157,7 +160,7 @@ const OutreachCreateCommand = cmd({
     const created = body.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(created, null, 2))
+      await writeJson(created)
       return
     }
 
@@ -196,7 +199,7 @@ const OutreachUpdateCommand = cmd({
     const updated = body.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(updated, null, 2))
+      await writeJson(updated)
       return
     }
 
@@ -265,12 +268,16 @@ const OutreachApplyCommand = cmd({
 
 // ── Parent command ──
 
-export const PlatformOutreachCommand = cmd({
-  command: "outreach",
-  // `outreach-strategy` / `reachr-strategy` are kept as aliases of this canonical
-  // command (was a separate re-export file — removed to drop the redundant 3rd path).
-  aliases: ["reachr", "outreach-strategy", "reachr-strategy"],
-  describe: "manage outreach strategies — list, show, create, update, apply, delete",
+// Reachr is the product; outreach is what it does. As an alias, `iris reachr --help`
+// printed "iris outreach" (#181888 PROD-4). Canonical name flipped; `outreach` and both
+// *-strategy spellings remain aliases, so nothing already written down breaks.
+export const PlatformOutreachCommand = productCommand({
+  name: "reachr",
+  aliases: ["outreach", "outreach-strategy", "reachr-strategy"],
+  purpose: "Reachr — outreach strategies: list, show, create, update, apply, delete",
+  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send", "offer", "offers", "pricing", "licence", "license", "seat"],
+  howtos: ["comms-router", "outreach-campaign"],
+  playbooks: ["som-outreach"],
   builder: (yargs) =>
     yargs
       .command(OutreachListCommand)
@@ -280,6 +287,9 @@ export const PlatformOutreachCommand = cmd({
       .command(OutreachDeleteCommand)
       .command(OutreachApplyCommand)
       .command(OutreachApproveGroup)
+      // The offer is the thing the sequence carries. Mounted here as well as at the top level so
+      // neither audience has to know where it "really" lives — see offers.ts.
+      .command(OffersGroup)
+      .command(LicenceGroup)
       .demandCommand(),
-  async handler() {},
 })

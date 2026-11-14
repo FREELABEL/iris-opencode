@@ -1,3 +1,10 @@
+---
+category: Getting Started
+level: intermediate
+tags: [cli, mcp, agents, integration]
+duration_min: 12
+prerequisites: [iris-login]
+---
 # How to: Drive IRIS from Claude Code (bring-your-own orchestrator)
 
 ## What this does

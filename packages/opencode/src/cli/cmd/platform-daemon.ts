@@ -29,8 +29,10 @@ function getBridgeCtl(): string | null {
 }
 
 function getInstallHint(): string {
-  if (process.platform === "win32") return "irm https://heyiris.io/install-code.ps1 | iex"
-  return "curl -fsSL https://heyiris.io/install-code | bash"
+  // `iris daemon install`, NOT the CLI installer. This used to return the install-code
+  // one-liner, which installs the CLI and does nothing for the daemon — so every
+  // "Daemon not installed" message named a fix that could not fix it.
+  return "iris daemon install"
 }
 
 function runCtl(ctl: string, action: string): string {
@@ -293,6 +295,57 @@ const DaemonRegisterCommand = cmd({
   },
 })
 
+const DaemonInstallCommand = cmd({
+  command: "install",
+  describe: "install the Hive daemon on this machine",
+  builder: (y) =>
+    y.option("key", { type: "string", describe: "node key (otherwise registered interactively later)" }),
+  async handler(args) {
+    // This verb did not exist, and its absence was load-bearing.
+    //
+    // `iris daemon start/status/register` all reported "Daemon not installed" and pointed at
+    // getInstallHint() — which returns the CLI installer. That does NOT install the daemon;
+    // the daemon has its own installer at /install-daemon. So the error named a fix that
+    // could not work, and a client spent 2026-08-31 discovering the real one by hand.
+    //
+    // Non-interactive on purpose: the desktop app spawns commands with NO TTY, so anything
+    // that prompts fails silently there. That is the same constraint that makes `auth login`
+    // impossible to shell out to from the app.
+    if (getDaemonCtl()) {
+      prompts.log.info("Daemon already installed. Use `iris daemon status` to check it.")
+      return
+    }
+
+    const url = "https://heyiris.io/install-daemon"
+    prompts.log.info(`Installing the Hive daemon from ${url}`)
+    const keyArg = args.key ? ` --key ${String(args.key).replace(/[^A-Za-z0-9_-]/g, "")}` : ""
+
+    try {
+      // Pipe to bash rather than downloading to a temp file: matches the documented one-liner,
+      // and keeps the daemon installer the single source of truth for its own steps.
+      const out = execSync(`curl -fsSL ${url} | bash -s --${keyArg} 2>&1`, {
+        timeout: 300000,
+        maxBuffer: 32 * 1024 * 1024,
+      })
+        .toString()
+        .trim()
+      if (out) console.log(out)
+    } catch (e: any) {
+      const detail = (e?.stdout?.toString() || e?.stderr?.toString() || e?.message || "").trim()
+      prompts.log.error("Daemon install failed.")
+      if (detail) console.log(detail.split("\n").slice(-20).join("\n"))
+      return
+    }
+
+    // Installed is not working — verify, the way a human would.
+    if (!getDaemonCtl()) {
+      prompts.log.error("Install reported success but the daemon control script is still missing.")
+      return
+    }
+    prompts.log.info(`${success("✓")} Daemon installed. Next: ${bold("iris daemon register")}`)
+  },
+})
+
 const DaemonPassthroughCommand = cmd({
   command: "* [args..]",
   describe: false as any,
@@ -339,6 +392,7 @@ export const PlatformDaemonCommand = cmd({
       .command(DaemonRestartCommand)
       .command(DaemonLogsCommand)
       .command(DaemonRunsCommand)
+      .command(DaemonInstallCommand)
       .command(DaemonRegisterCommand)
       .command(DaemonPassthroughCommand)
       .strict(false),

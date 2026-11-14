@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { getBySlug, createPageFromJson } from "./platform-pages"
 import { profileFromBrand, rebrandJsonContent } from "./rebrand"
+import { firstArray } from "../../util/array"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
@@ -19,7 +20,7 @@ async function resolveSite(idOrSlug: string): Promise<any | null> {
   }
   const listRes = await pagesFetch("/api/v1/sites?per_page=100")
   if (!listRes.ok) return null
-  const sites: any[] = ((await listRes.json()) as any).data ?? []
+  const sites: any[] = firstArray(((await listRes.json()) as any).data)
   const match = sites.find((s) => s.slug === idOrSlug)
   if (!match) return null
   const res = await pagesFetch(`/api/v1/sites/${match.id}`)
@@ -50,7 +51,7 @@ const ListCmd = cmd({
       sp.stop(`${sites.length} site(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(sites, null, 2))
+        await writeJson(sites)
         prompts.outro("Done")
         return
       }
@@ -93,7 +94,7 @@ const ShowCmd = cmd({
       sp.stop(String(site.name))
 
       if (args.json) {
-        console.log(JSON.stringify(site, null, 2))
+        await writeJson(site)
         prompts.outro("Done")
         return
       }
@@ -163,7 +164,7 @@ const ConfigCmd = cmd({
       sp.stop(success("Updated"))
 
       if (args.json) {
-        console.log(JSON.stringify(settings, null, 2))
+        await writeJson(settings)
       } else {
         printDivider()
         const ne = settings.notification_emails ?? []
@@ -179,7 +180,7 @@ const ConfigCmd = cmd({
       sp.stop("Settings")
 
       if (args.json) {
-        console.log(JSON.stringify(settings, null, 2))
+        await writeJson(settings)
       } else {
         printDivider()
         const ne = settings.notification_emails ?? []
@@ -234,7 +235,7 @@ const CreateCmd = cmd({
     const site = ((await res.json()) as any).data ?? {}
     sp.stop(success(`Created site #${site.id}`))
 
-    if (args.json) { console.log(JSON.stringify(site, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(site); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", site.id)
     printKV("Name", site.name)
@@ -315,7 +316,7 @@ const NavCmd = cmd({
     const isEdit = args.set || args.add || args.remove !== undefined
     if (!isEdit) {
       sp.stop(`${navItems.length} item(s)`)
-      if (args.json) { console.log(JSON.stringify(navItems, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(navItems); prompts.outro("Done"); return }
       printDivider()
       if (!navItems.length) console.log(dim("  (none)"))
       navItems.forEach((it, i) =>
@@ -357,7 +358,7 @@ const NavCmd = cmd({
     })
     if (!(await handleApiError(putRes, "Update nav"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
     sp.stop(success(`Saved ${navItems.length} item(s) — member pages purged`))
-    if (args.json) console.log(JSON.stringify(navItems, null, 2))
+    if (args.json) await writeJson(navItems)
     prompts.outro("Done")
   },
 })
@@ -387,7 +388,7 @@ const CloneCmd = cmd({
     try {
       const sourceSite = await resolveSite(String(args.source))
       if (!sourceSite) { sp.stop("Source site not found", 1); prompts.outro("Done"); return }
-      const pages: any[] = sourceSite.pages ?? []
+      const pages: any[] = firstArray(sourceSite.pages)
       if (!pages.length) { sp.stop("Source site has no pages", 1); prompts.outro("Done"); return }
 
       let target
@@ -475,6 +476,217 @@ const CloneCmd = cmd({
 })
 
 // ============================================================================
+// Inbox — contact-form enquiries for a site (#178203)
+// ============================================================================
+
+function contactOf(s: any): string {
+  return s.email || s.user_email || s.phone || s.user_phone || "—"
+}
+
+// store() JSON-encodes extra form fields into `content`; render it readably.
+function bodyOf(s: any): string {
+  const raw = String(s.content ?? "")
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.entries(parsed)
+        .filter(([, v]) => v !== null && v !== "" && typeof v !== "object")
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(" · ")
+    }
+  } catch { /* plain text body */ }
+  return raw
+}
+
+function whenOf(iso?: string | null): string {
+  if (!iso) return ""
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.round(diff / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.round(hrs / 24)}d ago`
+}
+
+const InboxCmd = cmd({
+  command: "inbox <site>",
+  describe: "read contact-form enquiries for a site (--thread for the full comms thread)",
+  builder: (y) =>
+    y
+      .positional("site", { describe: "site id or slug", type: "string", demandOption: true })
+      .option("thread", { describe: "show the comms thread (inbound + replies) instead of raw submissions", type: "boolean", default: false })
+      .option("limit", { describe: "max rows", type: "number", default: 25 })
+      .option("search", { describe: "filter by name, email or body", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const asJson = args.json as boolean
+    if (!asJson) prompts.intro("◈  Site Inbox")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = asJson ? null : prompts.spinner()
+    sp?.start("Resolving site…")
+
+    const site = await resolveSite(String(args.site))
+    if (!site) {
+      sp?.stop("Not found", 1)
+      prompts.log.error(`No site matched "${args.site}".`)
+      prompts.outro("Done")
+      return
+    }
+
+    const params = new URLSearchParams({ per_page: String(args.limit) })
+    if (args.search) params.set("search", String(args.search))
+
+    const path = args.thread
+      ? `/api/v1/sites/${site.id}/comms?per_page=${args.limit}`
+      : `/api/v1/sites/${site.id}/submissions?${params}`
+
+    sp?.start(args.thread ? "Loading thread…" : "Loading enquiries…")
+    const res = await pagesFetch(path)
+
+    if (!res.ok) {
+      sp?.stop("Failed", 1)
+      // 403 here means the signed-in user does not own this site — say so plainly rather
+      // than printing an empty inbox, which reads as "no enquiries".
+      if (res.status === 403) prompts.log.error("You do not have access to this site's inbox.")
+      else await handleApiError(res, "Site inbox")
+      prompts.outro("Done")
+      return
+    }
+
+    const body = (await res.json()) as any
+    const rows: any[] = firstArray(body.data)
+    const total = body.meta?.total ?? rows.length
+
+    if (asJson) {
+      await writeJson({ site: { id: site.id, name: site.name, slug: site.slug }, total, rows })
+      return
+    }
+
+    sp?.stop(`${total} ${args.thread ? "message(s)" : "enquiry(ies)"} — ${bold(String(site.name ?? site.slug))}`)
+    printDivider()
+
+    if (!rows.length) {
+      // An empty THREAD is not the same as an empty inbox: only submissions received after
+      // the comms mirror shipped are threaded, so a site with years of enquiries shows zero
+      // messages. Say that plainly instead of printing "nothing yet", which reads as
+      // "nobody has ever contacted you".
+      if (args.thread) {
+        let priorCount = 0
+        try {
+          const subs = await pagesFetch(`/api/v1/sites/${site.id}/submissions?per_page=1`)
+          if (subs.ok) priorCount = ((await subs.json()) as any).meta?.total ?? 0
+        } catch { /* best effort — the notice below still stands */ }
+
+        if (priorCount > 0) {
+          console.log(dim(`  No threaded messages yet — but this site has ${bold(String(priorCount))}${dim(" submission(s).")}`))
+          console.log(dim("  Only enquiries received after the comms mirror shipped are threaded;"))
+          console.log(dim("  earlier ones are not backfilled yet."))
+          console.log()
+          console.log(dim(`  See them with: iris sites inbox ${args.site}`))
+        } else {
+          console.log(dim("  No messages yet."))
+        }
+      } else {
+        console.log(dim("  Nothing yet."))
+        console.log()
+        console.log(dim(`  Public intake: POST /v1/public/form/submissions with page_id from this site.`))
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    for (const r of rows) {
+      if (args.thread) {
+        const inbound = r.direction === "inbound"
+        const arrow = inbound ? "\x1b[36m←\x1b[0m" : "\x1b[32m→\x1b[0m"
+        const who = inbound ? (r.from_identifier ?? "—") : (Array.isArray(r.to_identifiers) ? r.to_identifiers[0] : "—")
+        console.log(`  ${arrow} ${bold(String(who))}  ${dim(`${r.channel} · ${whenOf(r.sent_at)}`)}`)
+        if (r.subject) console.log(`      ${dim(String(r.subject))}`)
+        console.log(`      ${String(r.body ?? "").split("\n").join("\n      ").slice(0, 400)}`)
+        console.log()
+      } else {
+        console.log(`  ${dim(`#${r.id}`)}  ${bold(String(r.user_name || "—"))}  ${highlight(contactOf(r))}  ${dim(whenOf(r.created_at))}`)
+        const preview = bodyOf(r)
+        if (preview) console.log(`      ${dim(preview.slice(0, 220))}`)
+        if (r.page?.title) console.log(`      ${dim(`via ${r.page.title}`)}`)
+        console.log()
+      }
+    }
+
+    console.log(dim(`  iris sites inbox ${args.site} --thread   ·   iris sites reply ${args.site} <submission-id> "<message>"`))
+    prompts.outro("Done")
+  },
+})
+
+const ReplyCmd = cmd({
+  command: "reply <site> <submission-id> <message>",
+  describe: "reply to a contact-form enquiry (sends + logs on the comms thread)",
+  builder: (y) =>
+    y
+      .positional("site", { describe: "site id or slug", type: "string", demandOption: true })
+      .positional("submission-id", { describe: "submission id from `sites inbox`", type: "number", demandOption: true })
+      .positional("message", { describe: "the reply body (quote it)", type: "string", demandOption: true })
+      .option("subject", { describe: "email subject line", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const asJson = args.json as boolean
+    if (!asJson) prompts.intro("◈  Reply")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = asJson ? null : prompts.spinner()
+    sp?.start("Resolving site…")
+
+    const site = await resolveSite(String(args.site))
+    if (!site) {
+      sp?.stop("Not found", 1)
+      prompts.log.error(`No site matched "${args.site}".`)
+      prompts.outro("Done")
+      return
+    }
+
+    sp?.start("Sending…")
+    const res = await pagesFetch(`/api/v1/sites/${site.id}/comms/reply`, {
+      method: "POST",
+      body: JSON.stringify({
+        submission_id: Number(args["submission-id"]),
+        message: String(args.message),
+        ...(args.subject ? { subject: String(args.subject) } : {}),
+      }),
+    })
+
+    const body = (await res.json().catch(() => ({}))) as any
+
+    if (!res.ok) {
+      sp?.stop("Failed", 1)
+      if (res.status === 403) prompts.log.error("You do not have access to this site's inbox.")
+      else if (res.status === 404) prompts.log.error("That submission does not belong to this site.")
+      else if (res.status === 422) prompts.log.error(String(body.message ?? "Cannot send — no reachable channel."))
+      else await handleApiError(res, "Reply")
+      prompts.outro("Done")
+      return
+    }
+
+    if (asJson) {
+      await writeJson(body)
+      return
+    }
+
+    const sent = body.data ?? {}
+    sp?.stop(`${success("✓")} Sent via ${bold(String(sent.channel ?? "email"))}`)
+    printDivider()
+    printKV("Site", String(site.name ?? site.slug))
+    printKV("Submission", String(args["submission-id"]))
+    if (sent.comm_id) printKV("Logged as", `comm #${sent.comm_id}`)
+    printDivider()
+    prompts.outro(dim(`iris sites inbox ${args.site} --thread`))
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -491,6 +703,8 @@ export const PlatformSitesCommand = cmd({
       .command(DetachCmd)
       .command(NavCmd)
       .command(ConfigCmd)
+      .command(InboxCmd)
+      .command(ReplyCmd)
       .demandCommand(),
   async handler() {},
 })

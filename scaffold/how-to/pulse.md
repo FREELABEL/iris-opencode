@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: beginner
+tags: [crm, pulse, reporting]
+duration_min: 10
+---
 # How to: use Pulse — the readiness engine that proves IRIS is delivering
 
 ## What this does
@@ -117,18 +123,18 @@ Output:
 
 ```
 ID      Name                  Pulse  Billing     $/mo      Next Due     Days   Paid
-#16387  Andrew Escher         87     Active      $50       2026-06-01   25d    $50
-#16388  Javier Fuentes        51     Active      $102.50   2026-05-18   11d    $39
-#75     Christiaan Cilliers   54     NO SUB      $250      --           --     $0
-#20829  Hector Fuentes        17     No Gate     --        --           --     $0
+#10001  A. Whitfield          87     Active      $50       2026-06-01   25d    $50
+#10024  M. Delacroix          51     Active      $102.50   2026-05-18   11d    $39
+#10038  T. Vasquez            54     NO SUB      $250      --           --     $0
+#10061  K. Nakamura           17     No Gate     --        --           --     $0
 
 Billing
-MRR: $309.47  |  Total Collected: $1,852.10
+MRR: $1,240.00  |  Total Collected: $9,600.00
 4 active subs  |  0 past due
 
 10 NOT ON STRIPE
-  !  #75   Christiaan Cilliers  https://heyiris.io/proposal/e368...
-  !  #418  Haroon               https://heyiris.io/proposal/4340...
+  !  #75   T. Vasquez  https://heyiris.io/proposal/<token>...
+  !  #418  Haroon               https://heyiris.io/proposal/<token>...
 ```
 
 ### Billing status meanings
@@ -152,7 +158,7 @@ MRR: $309.47  |  Total Collected: $1,852.10
 
 ```bash
 iris leads pulse-all --json | jq '.summary'
-# { "mrr": 309.47, "totalCollected": 1852.10, "activeSubs": 4, "pastDue": 0, "notOnStripe": [...] }
+# { "mrr": 1240.00, "totalCollected": 9600.00, "activeSubs": 4, "pastDue": 0, "notOnStripe": [...] }
 
 # Find leads with active subs
 iris leads pulse-all --json | jq '.rows[] | select(.billingStatus == "active") | {id, name, monthlyAmount, nextPaymentDate}'
@@ -200,10 +206,10 @@ iris leads pulse-all --prepare
 Output per lead:
 
 ```
-#20119  Carrington Smurl  51/100  Pending
+#10061  K. Nakamura      51/100  Pending
         Tasks: 32 overdue · 72 pending · 0 done  |  Reqs: 0/2 passing  |  0/8 KB  |  mtg 90
-        1. iris leads kb 20119 --generate
-        2. iris leads requirements run 20119
+        1. iris leads kb 10061 --generate
+        2. iris leads requirements run 10061
         3. iris leads content-engine create 20119
 ```
 

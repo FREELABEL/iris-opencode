@@ -1,3 +1,10 @@
+---
+category: Finance
+level: beginner
+tags: [investments, opportunities, discover]
+duration_min: 8
+prerequisites: [crowdfunding-opportunities]
+---
 # How to: Capture investment interest on opportunities
 
 ## What this does

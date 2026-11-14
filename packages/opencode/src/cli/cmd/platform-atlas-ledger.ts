@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Ledger CLI — Transactions + Accounts (Track 1)
@@ -55,11 +56,11 @@ const TxListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/transactions?${p}`)
       const ok = await handleApiError(res, "List transactions"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data?.data ?? body?.data ?? []
+      const rows: any[] = firstArray(body?.data?.data, body?.data)
       const total = body?.data?.total ?? rows.length
       spinner.stop(`${rows.length} of ${total}`)
 
-      if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
       if (rows.length === 0) { prompts.log.warn("No transactions"); prompts.outro("Done"); return }
 
       printDivider()
@@ -147,7 +148,7 @@ const TxShowCommand = cmd({
     const res = await irisFetch(`/api/v1/atlas/transactions/${args.id}`)
     const ok = await handleApiError(res, "Show"); if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data
-    if (args.json) { console.log(JSON.stringify(data, null, 2)) } else {
+    if (args.json) { await writeJson(data) } else {
       for (const [k, v] of Object.entries(data ?? {})) {
         if (v != null && typeof v !== "object") console.log(`  ${dim(k + ":")} ${v}`)
       }
@@ -188,7 +189,7 @@ const TxSummaryCommand = cmd({
     const res = await irisFetch(`/api/v1/atlas/transactions/summary?${p}`)
     const ok = await handleApiError(res, "Summary"); if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
     console.log(`  ${bold("Revenue:")}  ${fmtCents(data?.total_revenue_cents)}`)
@@ -254,8 +255,8 @@ const AccListCommand = cmd({
 
     const res = await irisFetch(`/api/v1/atlas/accounts?${p}`)
     const ok = await handleApiError(res, "List accounts"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) { prompts.log.warn("No accounts"); prompts.outro("Done"); return }
 
     printDivider()
@@ -313,8 +314,8 @@ const AccTreeCommand = cmd({
     if (args.bloq != null) p.set("bloq_id", String(args.bloq))
     const res = await irisFetch(`/api/v1/atlas/accounts/tree?${p}`)
     const ok = await handleApiError(res, "Tree"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
 
     function printNode(n: any, depth = 0) {
       const indent = "  ".repeat(depth + 1)
@@ -337,7 +338,7 @@ const AccShowCommand = cmd({
     const res = await irisFetch(`/api/v1/atlas/accounts/${args.id}`)
     const ok = await handleApiError(res, "Show"); if (!ok) return
     const data = ((await res.json()) as any)?.data
-    if (args.json) { console.log(JSON.stringify(data, null, 2)) } else {
+    if (args.json) { await writeJson(data) } else {
       for (const [k, v] of Object.entries(data ?? {})) {
         if (v != null && typeof v !== "object") console.log(`  ${dim(k + ":")} ${v}`)
       }

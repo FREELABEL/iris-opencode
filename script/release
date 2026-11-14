@@ -1,5 +1,150 @@
 #!/usr/bin/env bash
+#
+# Cut a release.
+#
+# This used to be `gh workflow run publish.yml`, and publish.yml is committed as
+# publish.yml.disabled — so the obvious entry point for cutting a release had not worked for
+# some time. It failed loudly (HTTP 404, exit 1) rather than silently, but a release script
+# that cannot release is still a release script that cannot release, and the working procedure
+# lived only in somebody's head.
+#
+# The working path is: bump packages/opencode/package.json, commit, push, then push a SINGLE
+# v* tag. release.yml triggers on `push: tags: v*`. Pushing tags in bulk with `--tags` does not
+# reliably fire it, which is why the tag is pushed by full ref on its own.
+#
+# Usage:  script/release [patch|minor|major]   (default: patch)
+#         script/release patch --dry-run
 
-BUMP_TYPE=${1:-patch}
+set -euo pipefail
 
-gh workflow run publish.yml -f bump="$BUMP_TYPE"
+BUMP_TYPE="${1:-patch}"
+DRY_RUN=""
+for arg in "$@"; do [ "$arg" = "--dry-run" ] && DRY_RUN=1; done
+
+case "$BUMP_TYPE" in
+  patch|minor|major) ;;
+  *) echo "usage: script/release [patch|minor|major] [--dry-run]"; exit 1 ;;
+esac
+
+cd "$(dirname "$0")/.."
+PKG="packages/opencode/package.json"
+
+# ── Refuse on anything that would make the release not match the source ──────────────────────
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$BRANCH" != "main" ]; then
+  # `dev` is a decoy default branch; work ships from main by direct push.
+  echo "Refusing: on '$BRANCH', releases are cut from 'main'."
+  exit 1
+fi
+
+# A dirty tree matters more here than usual: this repo is a SHARED checkout with several agents
+# working in it, so uncommitted files are routinely not yours. The tag would capture HEAD and
+# quietly exclude them, which is correct — but you should know that before tagging, not after.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Refusing: working tree is dirty. The tag captures HEAD, so uncommitted work will NOT ship."
+  git status --short
+  exit 1
+fi
+
+git fetch -q origin main
+if [ -n "$(git log --oneline origin/main..HEAD)" ]; then
+  echo "Refusing: local commits are not pushed. Push them first so the tag matches origin."
+  git log --oneline origin/main..HEAD
+  exit 1
+fi
+if [ -n "$(git log --oneline HEAD..origin/main)" ]; then
+  echo "Refusing: origin/main is ahead. Pull first, or you will release stale code."
+  exit 1
+fi
+
+# ── Typecheck, because CI does not ──────────────────────────────────────────────────────────
+#
+# release.yml runs neither tests nor typecheck, and the typecheck workflow itself was not
+# executing at all (#180527). Until that is proven healthy, this is the only gate standing
+# between a type error and a published binary. Not the full suite: it is knowingly ~214 red,
+# and a gate that is always red is one nobody reads.
+echo "→ typecheck"
+(cd packages/opencode && bun run typecheck)
+
+# ── Work out the next version ───────────────────────────────────────────────────────────────
+
+# The RELEASE LINE is the tags, not package.json (#183470).
+#
+# This used to read package.json alone. That file had drifted to 1.3.233 while the tags were
+# already at v1.3.235, so the "next" patch was v1.3.234 — long taken — and the collision only
+# surfaced at push time, after the bump commit had been pushed. A local tag check is not enough
+# either: a fresh worktree has no tags until it fetches them, so the check passes and lies.
+#
+# Fetch tags, take the highest EXISTING release tag, and refuse if package.json is behind it —
+# a drifted package.json is itself worth knowing about rather than silently routing around.
+git fetch -q --tags origin || true
+
+PKG_VERSION=$(grep -m1 '"version"' "$PKG" | sed 's/.*"version": "\([^"]*\)".*/\1/')
+# MOST RECENTLY TAGGED, not highest-numbered. This repo is a fork, and it carries old
+# upstream tags — v1.18.23 and v1.4.x — that sort ABOVE the live IRIS line of 1.3.x. Picking
+# the highest number proposed v1.18.24 and would have jumped the CLI eleven minor versions.
+# The release line is whatever was cut last, which is a date question, not a number one.
+# Excludes desktop-v* and vscode-v*, which also begin with 'v'.
+LATEST_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' 'refs/tags/v[0-9]*.[0-9]*.[0-9]*' | head -1 | sed 's/^v//')
+CURRENT="${LATEST_TAG:-$PKG_VERSION}"
+
+if [ -n "$LATEST_TAG" ] && [ "$PKG_VERSION" != "$LATEST_TAG" ]; then
+  echo "note: package.json says ${PKG_VERSION}, latest release tag is v${LATEST_TAG}."
+  echo "      Versioning from the TAG. package.json will be set to the new version."
+fi
+
+IFS=. read -r MA MI PA <<< "$CURRENT"
+case "$BUMP_TYPE" in
+  major) NEXT="$((MA + 1)).0.0" ;;
+  minor) NEXT="${MA}.$((MI + 1)).0" ;;
+  patch) NEXT="${MA}.${MI}.$((PA + 1))" ;;
+esac
+
+if git rev-parse -q --verify "refs/tags/v${NEXT}" >/dev/null; then
+  echo "Refusing: tag v${NEXT} already exists."
+  exit 1
+fi
+
+echo
+echo "  current : ${CURRENT}"
+echo "  next    : ${NEXT}  (${BUMP_TYPE})"
+echo "  commits : $(git log --oneline "v${CURRENT}..HEAD" 2>/dev/null | wc -l | tr -d ' ') since v${CURRENT}"
+echo
+
+if [ -n "$DRY_RUN" ]; then
+  echo "Dry run — nothing was changed."
+  exit 0
+fi
+
+read -r -p "Cut v${NEXT}? [y/N] " reply
+[ "$reply" = "y" ] || { echo "Aborted."; exit 0; }
+
+# ── Ship ────────────────────────────────────────────────────────────────────────────────────
+
+sed -i '' "s/\"version\": \"${CURRENT}\"/\"version\": \"${NEXT}\"/" "$PKG" 2>/dev/null \
+  || sed -i "s/\"version\": \"${CURRENT}\"/\"version\": \"${NEXT}\"/" "$PKG"
+
+# bun.lock records the workspace package's version too, and this script used to bump only
+# package.json — so every release left the lockfile one version further behind. By v1.3.180 it
+# still said 1.3.162: eighteen releases of drift, silent because nothing reads it until some
+# unrelated `bun install` rewrites it and shows up as a mystery diff in an unrelated commit.
+# --lockfile-only resyncs without touching node_modules.
+bun install --lockfile-only >/dev/null
+
+git add "$PKG" bun.lock
+git commit -q -m "chore(release): v${NEXT}"
+git push origin main
+
+git tag -a "v${NEXT}" -m "IRIS Code v${NEXT}"
+# By full ref, on its own — a bulk `--tags` push does not reliably trigger release.yml.
+git push origin "refs/tags/v${NEXT}"
+
+echo
+echo "Tagged v${NEXT}. Watch the build:"
+echo "  gh run watch \$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+echo
+echo "Then verify on the COMPILED binary, not from source — --compile bundles static imports"
+echo "(the capability index among them), so source and the shipped artifact can disagree:"
+echo "  gh release download v${NEXT} -p 'iris-darwin-arm64.zip' && unzip -q iris-darwin-arm64.zip"
+echo "  ./iris --version"

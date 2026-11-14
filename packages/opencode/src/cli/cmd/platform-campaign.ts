@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { existsSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
@@ -156,7 +156,7 @@ const CampaignCreateCommand = cmd({
     // 1. Create Board (Bloq)
     spinner.start("Creating board...")
     try {
-      const bloqRes = await irisFetch(`/api/v1/users/${userId}/bloqs`, {
+      const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
         method: "POST",
         body: JSON.stringify({
           name: campaignName,
@@ -426,7 +426,7 @@ const CampaignListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ campaigns, source }, null, 2))
+      await writeJson({ campaigns, source })
       prompts.outro("Done")
       return
     }

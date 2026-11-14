@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL } from "./iris-api"
+import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL, writeJson } from "./iris-api"
 
 const BRIDGE_BASE = BRIDGE_URL
 
@@ -66,7 +66,7 @@ const InstagramInboxCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       if (data.account) prompts.log.info(dim(`Account: @${data.account}`))
       printDivider()
@@ -117,7 +117,7 @@ const InstagramScrapeCommand = cmd({
       const data = await res.json()
       if (sp) sp.stop("Done")
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       if (data.caption) console.log(`  ${bold("Caption:")} ${data.caption.slice(0, 300)}${data.caption.length > 300 ? "..." : ""}`)

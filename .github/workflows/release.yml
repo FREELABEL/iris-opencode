@@ -56,9 +56,22 @@ jobs:
         with:
           path: ~/.bun
           key: ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('package.json') }}-${{ hashFiles('bun.lockb', 'bun.lock') }}
+          # Pin the restore to the SAME package.json hash (i.e. same bun version).
+          # A loose `macOS-arm64-bun-` prefix previously restored a stale ~/.bun that
+          # held an older bun, overwriting the version setup-bun just installed and
+          # breaking `bun run script/build.ts` ("requires bun@X, but you are using bun@Y").
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-bun-
+            ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('package.json') }}-
 
+      # macos-15-intel arrives close to full, and `bun install` is enough to take it to zero:
+      # v1.3.181 failed twice with "0.0 GB free" while the SAME runner label built the desktop
+      # app fine. The build script's disk guard was right to refuse — a build that dies part way
+      # through leaves a half-written dist that looks real — so free the space instead of
+      # weakening the guard.
+      #
+      # Xcode is deliberately NOT removed: this job codesigns the binary. Simulator runtimes and
+      # caches are several GB and nothing here touches them. Never fails the build — if cleanup
+      # breaks, the disk guard still stops us honestly.
       - name: Install dependencies
         run: bun install
 
@@ -80,6 +93,40 @@ jobs:
         env:
           OPENCODE_VERSION: ${{ steps.version.outputs.version }}
           OPENCODE_CHANNEL: latest
+
+      # The compiled binary must be able to answer a discovery query before we ship it.
+      #
+      # v1.3.156 shipped `iris find` with its capability index loaded by filesystem path.
+      # `bun build --compile` bundles static imports but NOT files merely read with fs at
+      # runtime, so the index existed nowhere in the artifact: it worked under
+      # `bun run src/index.ts` (the only surface anyone tested) and failed on every install.
+      #
+      # Run from `/` so a stray capabilities.json in the build tree cannot fake a pass, and
+      # assert on RESULTS rather than the exit code — the broken build printed an error and
+      # exited 1, which a plain `--version` check sails straight past.
+      - name: Smoke test — capability discovery in the compiled binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `--single` can emit more than one binary for the same os/arch — on Linux it
+          # builds both glibc and `-musl`. Picking blindly ran the musl binary on a glibc
+          # runner and died with "cannot execute: required file not found" (exit 127), which
+          # looks exactly like a real discovery failure. Prefer the plain native variant and
+          # fall back only if nothing else was built.
+          cd packages/opencode/dist
+          BIN=$(ls -d opencode-*/bin/iris 2>/dev/null | grep -v -- '-musl' | grep -v -- '-baseline' | head -1 || true)
+          [ -n "$BIN" ] || BIN=$(ls -d opencode-*/bin/iris | head -1)
+          BIN="$(pwd)/$BIN"
+          cd - >/dev/null
+          echo "testing: $BIN"
+          OUT=$(cd / && "$BIN" find "genesis bespoke html page" --json)
+          echo "$OUT" | head -20
+          if ! echo "$OUT" | grep -q '"matched": [1-9]'; then
+            echo "::error::Compiled binary cannot search capabilities — discovery is dead in this build. Refusing to release."
+            exit 1
+          fi
+          echo "ok — discovery reachable from the compiled binary"
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
@@ -131,24 +178,62 @@ jobs:
     continue-on-error: true
     timeout-minutes: 45
     steps:
+      # CROSS_REPO_PAT expired on 2026-08-20 (a 90-day token minted 2026-05-22) and every
+      # release from v1.3.192 onward built no desktop app — ELEVEN of them — because this
+      # job is continue-on-error, so its red X neither gated anything nor said anything.
+      # "Bad credentials" from the checkout step is indistinguishable at a glance from any
+      # other cross-repo failure, so the job became a permanently-red light nobody reads:
+      # it could no longer tell "Electron broke" from "the token died".
+      #
+      # Check the credential FIRST and say so in the run summary. When the token is dead
+      # the remaining steps skip cleanly rather than cascading, so a red build-desktop
+      # once again means a genuine desktop-build failure.
+      - name: Preflight — is CROSS_REPO_PAT alive?
+        id: pat
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.CROSS_REPO_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/FREELABEL/fl-elon-web-ui)
+          if [ "$code" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "CROSS_REPO_PAT is valid (HTTP $code)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Desktop build skipped::CROSS_REPO_PAT cannot read FREELABEL/fl-elon-web-ui (HTTP $code) — rotate it, then: gh secret set CROSS_REPO_PAT --repo FREELABEL/iris-opencode"
+            {
+              echo "### Desktop build SKIPPED"
+              echo ""
+              echo "\`CROSS_REPO_PAT\` cannot read \`FREELABEL/fl-elon-web-ui\` (HTTP $code) — expired or revoked."
+              echo "The CLI binaries are unaffected; only the Electron desktop app was not built."
+              echo ""
+              echo "Fix: mint a PAT with \`repo\` scope, then"
+              echo "\`gh secret set CROSS_REPO_PAT --repo FREELABEL/iris-opencode\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout elon-web-ui
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
           repository: FREELABEL/fl-elon-web-ui
           token: ${{ secrets.CROSS_REPO_PAT }}
 
       - name: Setup Node.js
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install frontend dependencies
+        if: steps.pat.outputs.ok == 'true'
         run: npm ci --engine-strict=false
         env:
           npm_config_engine_strict: false
 
       - name: Generate static Nuxt build
+        if: steps.pat.outputs.ok == 'true'
         run: NUXT_TELEMETRY_DISABLED=1 npx nuxt generate
         env:
           # Raise V8 heap — the full elon static generate (pdfjs-dist etc.) blows
@@ -160,20 +245,25 @@ jobs:
           NUXT_TARGET: static
 
       - name: Copy web assets to Electron
+        if: steps.pat.outputs.ok == 'true'
         run: npx cap copy @capacitor-community/electron
 
       - name: Install Electron dependencies
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm ci
 
       - name: Build Electron TypeScript
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm run build
 
       - name: Package desktop app
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm run electron:pack
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release archive
+        if: steps.pat.outputs.ok == 'true'
         run: |
           cd electron/dist
           if [ -d "mac-arm64" ]; then
@@ -184,10 +274,264 @@ jobs:
           ls -la ../*.zip 2>/dev/null || echo "No zip created"
 
       - name: Upload desktop artifact
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: IRIS-app-darwin-${{ matrix.arch }}
           path: electron/IRIS-app-darwin-*.zip
+          if-no-files-found: warn
+
+  # Builds the OTHER desktop app: the native Tauri shell in packages/desktop (a rebrand of
+  # upstream anomalyco/opencode's own desktop client), NOT the Electron/SaaS-wrapper app built
+  # above. These are two unrelated products that happen to share the "IRIS desktop app" name —
+  # see bloq #503 item #182113 for the full writeup of why both exist.
+  #
+  # macOS signing + NOTARIZATION is now wired (see the Build step below): when the APPLE_*
+  # repo secrets exist, `tauri build` Developer-ID-signs and notarizes the app, so Gatekeeper
+  # stops reporting it as "damaged" on Apple Silicon. Apple Developer Program membership was
+  # renewed 2026-08-26 (Team ID F23Q2DQNLA, Account Holder Alexander Mayo) — bloq #503 DESK-03.
+  # Windows remains UNSIGNED (no Windows code-signing cert yet; SmartScreen warns). This job is
+  # optional and non-blocking, same as build-desktop.
+  build-desktop-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+            oc_target: opencode-darwin-arm64
+            arch: arm64
+          - os: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            oc_target: opencode-darwin-x64
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Stamp the desktop app version
+        # tauri.conf.json reads its version from packages/desktop/package.json, and NOTHING
+        # ever updated that file -- so every Tauri build ever shipped called itself 1.1.3
+        # regardless of the release tag. A client's crash screen reporting "Version: 1.1.3"
+        # sent us chasing an ancient install that did not exist; she was on the current build.
+        # A binary that cannot identify itself makes every field report undiagnosable.
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "$V"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          BIN=$(ls packages/opencode/dist/${{ matrix.oc_target }}/bin/iris)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
+          chmod +x packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
+
+      # Sign + NOTARIZE the macOS app when the APPLE_* secrets are present; otherwise fall back
+      # to ad-hoc signing (builds, but Gatekeeper flags it "damaged" on M1 — see bloq #503
+      # DESK-03). Empty secrets are UNSET (not exported as "") before invoking tauri, so the
+      # ad-hoc fallback still triggers instead of codesign dying with "no identity found"
+      # (the v1.3.205 failure). macOS runner default shell is bash, so `${!v}` indirect
+      # expansion works.
+      - name: Build IRIS desktop app (Tauri)
+        run: |
+          cd packages/desktop
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+          if [ -n "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Apple signing secrets present — codesign + notarize enabled."
+          else
+            echo "APPLE_CERTIFICATE unset — ad-hoc signing fallback (app will be flagged 'damaged' on M1)."
+          fi
+          # --bundles app ONLY. This used to be "app,dmg", and on 2026-08-27 the Intel
+          # release died with `error running bundle_dmg.sh` AFTER building a perfectly good
+          # .app -- so v1.3.214 shipped with no Intel build and the front page 404'd for
+          # every Intel Mac. The DMG was DISCARDED by the upload step anyway: the job was
+          # failing over an artifact nobody ever received. The DMG is now built in its own
+          # tolerant step below, where flakiness costs a warning instead of an architecture.
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app
+        env:
+          OPENCODE_CHANNEL: latest
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Zip the .app bundle
+        run: |
+          cd packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-tauri-darwin-${{ matrix.arch }}.zip
+
+      # Best effort, and non-fatal BY DESIGN: bundle_dmg.sh is flaky on hosted runners and a
+      # nice-to-have must never cost users an entire architecture. The Rust build is already
+      # cached in target/, so this only re-runs the bundling stage.
+      - name: Bundle the DMG (best effort)
+        continue-on-error: true
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles dmg \
+            || echo "::warning::DMG bundling failed — shipping the .app zip only"
+          SRC=$(ls src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
+          if [ -n "$SRC" ]; then
+            cp "$SRC" "src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg"
+            echo "DMG staged for upload"
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-darwin-${{ matrix.arch }}
+          path: |
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg
+          if-no-files-found: warn
+
+  # Windows leg of the Tauri desktop app, separate job (not a matrix entry above) because
+  # packaging differs enough (NSIS .exe output, no macOS bundle/zip step, bash via Git Bash
+  # rather than the default pwsh) to keep as its own linear job rather than branching the
+  # macOS job with conditionals. First proven working 2026-08-24 via desktop-test-build.yml —
+  # this is that same sequence, with the real release version instead of a hardcoded test one.
+  # Unsigned: no Windows code-signing cert exists for this repo (Alex's call — acceptable for
+  # now, see bloq #503 item #182113). Windows SmartScreen will warn on first run.
+  build-desktop-tauri-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Stamp the desktop app version
+        # tauri.conf.json reads its version from packages/desktop/package.json, and NOTHING
+        # ever updated that file -- so every Tauri build ever shipped called itself 1.1.3
+        # regardless of the release tag. A client's crash screen reporting "Version: 1.1.3"
+        # sent us chasing an ancient install that did not exist; she was on the current build.
+        # A binary that cannot identify itself makes every field report undiagnosable.
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "$V"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          BIN=$(ls packages/opencode/dist/opencode-windows-x64/bin/iris* | head -1)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-x86_64-pc-windows-msvc.exe
+
+      # NOTE: no `env:` block here either -- same reasoning as the macOS job above. No Windows
+      # code-signing cert exists for this repo yet; that's expected/fine as-is.
+      - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL must be set HERE, not only on the CLI step. The Tauri build runs
+        # vite (beforeBuildCommand), and packages/app/vite.js resolves the channel from this
+        # env var — DEFAULTING TO "dev" when unset. That default is why every desktop release
+        # shipped with a blue DEV badge in the titlebar. "latest" maps to "prod".
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+        env:
+          OPENCODE_CHANNEL: latest
+
+      - name: Rename installer to the IRIS-tauri-* convention
+        run: |
+          set -euo pipefail
+          SRC=$(ls packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
+          cp "$SRC" packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-windows-x64
+          path: packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
           if-no-files-found: warn
 
   release:
@@ -218,22 +562,84 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Drop Tauri desktop bundles before they reach the CLI release
+        # There are THREE paths that can attach an asset to a CLI release, and removing only
+        # the obvious one is not enough — v1.3.219 still shipped IRIS-tauri-darwin-arm64.zip
+        # after the explicit `desktop-tauri-assets` upload had already been removed, because
+        # this job downloads *all* artifacts and then publishes `artifacts/*.zip` wholesale.
+        #
+        # Those bundles are built from `main` (version 1.1.3, no 1.18 engine, no rebrand) and
+        # share asset names with the real desktop series. Publishing them here is what made
+        # heyiris.io serve the wrong app for a week; see the header of release-desktop.yml on
+        # iris/1.18.23. The desktop app ships as desktop-v*, and downloads resolve through
+        # heyiris.io/download/{platform}.
+        #
+        # IRIS-app-* (the Electron app) is a different product and stays.
+        run: |
+          shopt -s nullglob
+          doomed=(artifacts/IRIS-tauri-*)
+          if [ ${#doomed[@]} -gt 0 ]; then
+            printf 'not publishing on a CLI release: %s\n' "${doomed[@]}"
+            rm -f "${doomed[@]}"
+          else
+            echo "no Tauri bundles present"
+          fi
+
       - name: List artifacts
         run: ls -la artifacts/
 
+      # PUBLISH WHAT BUILT, FLAG WHAT DID NOT.
+      #
+      # This step used to `exit 1` on any missing asset, which meant ONE flaky
+      # runner discarded an otherwise-complete release for every platform. On
+      # 2026-08-17 the macos-latest/darwin-arm64 job was cancelled by the runner;
+      # linux-x64, linux-arm64, windows-x64, darwin-x64 and both desktop builds
+      # all succeeded, and none of them shipped. v1.3.186 had to be re-run by hand.
+      #
+      # The arithmetic is one-sided: a platform whose binary did not build gets
+      # nothing either way, so blocking the others buys that platform NOTHING and
+      # costs everyone else the release. What it must not do is ship silently —
+      # hence the annotation, the step summary, and the banner in the release notes.
+      #
+      # A build that produced NO required assets is still a hard failure. That is
+      # not a partial release, it is a broken one.
       - name: Verify required assets exist
+        id: assets
         run: |
           MISSING=""
+          PRESENT=""
           for required in iris-darwin-arm64.zip iris-darwin-x64.zip iris-linux-x64.tar.gz iris-linux-arm64.tar.gz; do
             if [ ! -f "artifacts/$required" ]; then
               MISSING="$MISSING $required"
+            else
+              PRESENT="$PRESENT $required"
             fi
           done
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required release assets:$MISSING"
+
+          if [ -z "$PRESENT" ]; then
+            echo "::error::No required assets built at all — refusing to publish an empty release."
             exit 1
           fi
-          echo "All required assets present"
+
+          if [ -n "$MISSING" ]; then
+            echo "::warning::PARTIAL RELEASE — these platforms did not build:$MISSING"
+            echo "### :warning: Partial release" >> $GITHUB_STEP_SUMMARY
+            echo "Missing platform builds:\`$MISSING\`" >> $GITHUB_STEP_SUMMARY
+            echo "Published anyway so the platforms that DID build are not blocked. Re-run this workflow to complete it." >> $GITHUB_STEP_SUMMARY
+            {
+              echo "missing<<EOF"
+              echo "> [!WARNING]"
+              echo "> **Partial release.** These platform builds did not complete and are NOT attached:"
+              echo ">"
+              for m in $MISSING; do echo "> - \`$m\`"; done
+              echo ">"
+              echo "> Users on those platforms should stay on the previous release until this is re-run."
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "All required assets present"
+            echo "missing=" >> $GITHUB_OUTPUT
+          fi
           # Desktop app artifacts are optional
           for optional in IRIS-app-darwin-arm64.zip IRIS-app-darwin-x64.zip; do
             if [ -f "artifacts/$optional" ]; then
@@ -249,8 +655,23 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: IRIS Code v${{ steps.version.outputs.version }}
           draft: false
-          prerelease: false
+          # A PARTIAL release must never become GitHub's "latest".
+          #
+          # The verify step above deliberately publishes when only some platforms built, so the
+          # ones that did are not blocked. That is the right call — but "latest" is what
+          # `iris update` resolves, so a partial release silently broke updates on the missing
+          # platform. v1.3.193 shipped Linux + Windows with both macOS builds cancelled, became
+          # latest, and every mac running `iris update` quietly stayed on 1.3.192. No error, no
+          # signal — the release notes said "stay on the previous release" and nothing enforced it.
+          #
+          # Marking it a prerelease enforces it mechanically: GitHub skips prereleases when
+          # resolving "latest", so macs keep updating to the last COMPLETE release while the
+          # partial one stays fetchable by tag. Re-run the workflow to complete it and it is
+          # promoted automatically on the next full build.
+          prerelease: ${{ steps.assets.outputs.missing != '' }}
           generate_release_notes: true
+          # Empty when everything built, so a complete release looks untouched.
+          body: ${{ steps.assets.outputs.missing }}
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
@@ -295,3 +716,55 @@ jobs:
           gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Same pattern as desktop-assets above, for the OTHER desktop app (build-desktop-tauri).
+  # Unsigned -- see that job's comment. Attach here, async, non-blocking, same as Electron.
+  desktop-tauri-assets:
+    needs: [build-desktop-tauri, build-desktop-tauri-windows, release]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: desktop-tauri
+          pattern: IRIS-tauri-*
+          merge-multiple: true
+
+      - name: Do NOT upload desktop assets to a CLI release
+        # This step used to `gh release upload` the IRIS-tauri-* bundles onto every CLI
+        # release. That is what broke desktop downloads for a week, and the mechanism is
+        # worth stating precisely because it produced no error anywhere:
+        #
+        #   - The desktop app ships from `iris/1.18.23` as `desktop-v1.18.x`, built by
+        #     .github/workflows/release-desktop.yml on that branch.
+        #   - This workflow ALSO builds packages/desktop, from `main` — version 1.1.3, without
+        #     the 1.18 engine port or the IRIS rebrand — and published it under the SAME asset
+        #     names onto the CLI release.
+        #   - GitHub has ONE "latest" per repo and /releases/latest/download/<asset> does not
+        #     fall back by asset name (measured 2026-08-28). CLI releases are cut far more
+        #     often, so they held that flag essentially always.
+        #
+        # Net effect: heyiris.io served the `main` desktop build continuously, every
+        # desktop promotion was silently reverted by the next CLI release, and the client
+        # reporting "the download still opens the old opencode" was correct every time.
+        #
+        # The build above stays — it is a useful compile check that packages/desktop still
+        # builds from main. Its output simply must not be published under names the desktop
+        # series owns. heyiris.io/download/{platform} resolves desktop-v* by tag prefix.
+        run: |
+          shopt -s nullglob
+          assets=(desktop-tauri/IRIS-tauri-*)
+          echo "Built ${#assets[@]} desktop artifact(s) as a compile check; not publishing them."
+          printf '  %s\n' "${assets[@]}"
+          echo "The desktop app ships from release-desktop.yml on iris/1.18.23 as desktop-v*."

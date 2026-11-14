@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
 
 // ============================================================================
 // LinkedIn CLI — LinkedIn outreach campaign management
@@ -52,7 +52,7 @@ const StatusCommand = cmd({
     const stats = data?.data || {}
 
     if ((args as any).json) {
-      console.log(JSON.stringify(stats, null, 2))
+      await writeJson(stats)
       return
     }
 

@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
+import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -288,12 +290,16 @@ const CommsListCommand = cmd({
     if (!res.ok) { await handleApiError(res, "List comms"); sp.stop("Failed", 1); prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const rows: any[] = data?.data?.data ?? data?.data ?? []
+    const rows: any[] = firstArray(data?.data?.data, data?.data)
     const total = data?.data?.total ?? rows.length
     sp.stop(`${rows.length} of ${total} comms for ${bold(resolved.lead.name || `Lead #${resolved.id}`)}`)
 
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) {
+      // An empty log is ambiguous: it means "nothing here" OR "the reader that
+      // fills this is dead". Only probe on the empty path — when there are rows
+      // the distinction does not arise and the latency would be wasted.
+      printDegradations([assessBridge(await probeBridge())])
       prompts.log.warn("No comms logged yet")
       prompts.log.info(`Ingest: ${dim(`iris atlas:comms ingest ${resolved.id} --channel gmail`)}`)
       prompts.log.info(`Log:    ${dim(`iris atlas:comms log ${resolved.id} --channel phone --message "Called, discussed pricing"`)}`)
@@ -320,18 +326,245 @@ const CommsListCommand = cmd({
 
 // ── ingest ──
 
+/**
+ * Can this lead plausibly have anything to ingest on this channel?
+ *
+ * Mirrors what the per-channel ingesters ACTUALLY look at rather than guessing — my first pass
+ * assumed iMessage meant "has a phone", but ingestImessage() also accepts an email (Apple ID) and
+ * an instagram handle, so a phone-only filter skipped leads that would have ingested fine.
+ * Sweeping a lead with no usable identifier is wasted work; skipping one that has a usable
+ * identifier is a silent gap, which is the bug this whole command exists to close.
+ */
+function leadHasHandleForChannel(lead: any, channel: string): boolean {
+  const has = (v: any) => String(v ?? "").trim() !== ""
+  const ci = lead?.contact_info ?? {}
+
+  if (["imessage", "whatsapp", "sms"].includes(channel)) {
+    return has(lead?.phone) || has(ci.phone) || has(lead?.email) || has(ci.email) || has(lead?.instagram)
+  }
+  if (["gmail", "gmail_api", "apple_mail"].includes(channel)) {
+    return has(lead?.email) || has(ci.email)
+  }
+  return false
+}
+
+/** Channels --all knows how to select leads for. */
+const SWEEPABLE_CHANNELS = ["imessage", "whatsapp", "sms", "gmail", "gmail_api", "apple_mail"]
+
+/**
+ * Every handle with iMessage traffic in the last `days`, newest first. ONE query.
+ *
+ * This is the pivot of the inverted sweep (#178647): ask the message store who has actually been
+ * talking, instead of asking the CRM who might have. Same SQL shape `imessage chats` already uses.
+ */
+function activeImessageHandles(days: number, cap: number): { identifier: string; count: number; last: string }[] {
+  // NOTE: the export is `query`; platform-imessage.ts imports it as `query as queryMessages`.
+  // Requiring `queryMessages` directly yields undefined, and the try/catch below would swallow
+  // the TypeError and report "no conversations" — a silent empty sweep. Caught by dry-running it.
+  const { query: queryMessages } = require("../lib/imessage")
+  const cutoff = Math.max(1, days) * 86400
+  const sql = `
+    SELECT c.chat_identifier, COUNT(m.rowid) as msg_count,
+           MAX(datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime')) as last_msg
+    FROM chat c
+    JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
+    JOIN message m ON cmj.message_id = m.rowid
+    WHERE m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoff}
+    GROUP BY c.chat_identifier
+    ORDER BY MAX(m.date) DESC
+    LIMIT ${Math.max(1, cap)};
+  `.replace(/\n/g, " ").trim()
+
+  try {
+    const raw = queryMessages(sql)
+    if (!raw) return []
+    return raw
+      .split("\n")
+      .map((line: string) => {
+        const [identifier, count, last] = line.split("|")
+        return { identifier: identifier ?? "", count: parseInt(count || "0"), last: last ?? "" }
+      })
+      .filter((h: any) => h.identifier && !/^chat\d+$/i.test(h.identifier))
+  } catch {
+    return []
+  }
+}
+
+/** Find the lead that owns this handle, or null. Matches on the last 10 digits for phones. */
+async function findLeadForHandle(handle: string): Promise<any | null> {
+  const digits = handle.replace(/\D/g, "")
+  const isPhone = digits.length >= 10
+  // Search by the last 10 digits so stored formats like "(972) 469-5970", "+19724695970" and
+  // "9724695970" all match the same person.
+  const term = isPhone ? digits.slice(-10) : handle
+
+  try {
+    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(term)}&per_page=5`)
+    if (!res.ok) return null
+    const body = (await res.json()) as any
+    const leads = body?.data?.data ?? body?.data ?? []
+    if (!Array.isArray(leads) || leads.length === 0) return null
+
+    if (!isPhone) return leads[0]
+
+    const tail = digits.slice(-10)
+    return (
+      leads.find((l: any) => {
+        const ld = String(l?.phone ?? l?.contact_info?.phone ?? "").replace(/\D/g, "")
+        return ld.length >= 10 && ld.slice(-10) === tail
+      }) ?? leads[0]
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Sweep every lead that has a usable handle for `channel` (#178647).
+ *
+ * The per-lead command has always worked; what was missing was any way to run it over the whole
+ * book, which meant the comms log could only ever be as current as the last time someone
+ * remembered to type a specific lead id. On the day this was written, 27 of 28 leads with iMessage
+ * history were more than a week stale and several were ~2 months behind — including our co-founder
+ * and the investor whose thread prompted the report.
+ *
+ * Deliberately sequential: this reads a local SQLite database and posts to the API per lead. Doing
+ * it in parallel would buy little and risks hammering both. One lead failing must never abort the
+ * sweep — a single unresolvable handle should not cost you the other 27.
+ */
+async function ingestAllLeads(channel: string, days: number, limit: number, dryRun: boolean): Promise<void> {
+  if (channel !== "imessage") {
+    prompts.log.error(
+      `--all currently supports only --channel imessage. It works by asking the local message store ` +
+        `who has been talking; other channels have no equivalent local index yet.`,
+    )
+    prompts.outro("Done")
+    return
+  }
+
+  const sp = prompts.spinner()
+  sp.start(`Reading conversations from the last ${days} days…`)
+
+  // ONE local query. The previous version walked the CRM instead — /api/v1/leads?per_page=500 —
+  // and filtered to leads with a handle. That fetched the NEWEST 500 leads (ids 28515..29022), so
+  // Richard (15743), Rashad (16750) and Flo (28165) were all outside the page and could never be
+  // swept. A scheduled job would have reported success daily while touching none of the stale
+  // records it existed to fix: silent success, the exact failure mode of the original bug.
+  const handles = activeImessageHandles(days, Math.max(limit * 4, 200))
+  if (handles.length === 0) {
+    sp.stop("No conversations in that window (or the message store is unreadable).")
+    prompts.outro("Done")
+    return
+  }
+
+  sp.stop(`${handles.length} active conversation(s)`)
+  sp.start("Matching conversations to leads…")
+
+  // Resolve handle -> lead. N is the number of ACTIVE handles, not the size of the CRM, and the
+  // conversations that have new messages are by definition the ones worth ingesting.
+  const byLead = new Map<number, { lead: any; handles: string[] }>()
+  const unmatched: string[] = []
+  for (const h of handles) {
+    const lead = await findLeadForHandle(h.identifier)
+    if (!lead?.id) { unmatched.push(h.identifier); continue }
+    const entry = byLead.get(lead.id) ?? { lead, handles: [] }
+    entry.handles.push(h.identifier)
+    byLead.set(lead.id, entry)
+  }
+
+  const targets = [...byLead.values()].slice(0, Math.max(1, limit))
+  sp.stop(`${targets.length} lead(s) matched · ${unmatched.length} unmatched handle(s)`)
+
+  if (dryRun) {
+    printDivider()
+    for (const t of targets) {
+      console.log(`  ${dim(String(t.lead.id).padStart(6))}  ${String(t.lead.name ?? t.lead.nickname ?? "?").slice(0, 32)}  ${dim(t.handles.join(", "))}`)
+    }
+    if (unmatched.length) {
+      console.log(`  ${dim(`unmatched (no lead): ${unmatched.slice(0, 8).join(", ")}${unmatched.length > 8 ? " …" : ""}`)}`)
+      console.log(`  ${dim("these are real conversations with nobody in the CRM — worth capturing as leads.")}`)
+    }
+    printDivider()
+    console.log(`  ${dim(`dry run — nothing ingested. Re-run without --dry-run to sweep ${targets.length} lead(s).`)}`)
+    prompts.outro("Done")
+    return
+  }
+
+  let totalNew = 0, totalSkipped = 0, failed = 0
+  printDivider()
+  for (const t of targets) {
+    const label = `${String(t.lead.id).padStart(6)}  ${String(t.lead.name ?? t.lead.nickname ?? "?").slice(0, 26)}`
+    try {
+      const items = ingestImessage(t.lead)
+      if (!items.length) { console.log(`  ${dim(label)}  ${dim("no messages")}`); continue }
+
+      const res = await irisFetch("/api/v1/atlas/comms/ingest", {
+        method: "POST",
+        body: JSON.stringify({ lead_id: t.lead.id, channel, items: items.map((i: any) => ({ ...i, channel: i.channel ?? channel })) }),
+      })
+      if (!res.ok) { failed++; console.log(`  ${dim(label)}  ${dim(`HTTP ${res.status}`)}`); continue }
+
+      const result = (await res.json()) as any
+      const data = result?.data ?? result
+      const n = Number(data?.new ?? 0), s = Number(data?.skipped ?? 0)
+      totalNew += n; totalSkipped += s
+      console.log(`  ${dim(label)}  ${n > 0 ? success(`${n} new`) : dim("0 new")}${s ? dim(`, ${s} known`) : ""}`)
+    } catch (e: any) {
+      // One bad lead must never end the sweep — the whole point of doing this in bulk.
+      failed++
+      console.log(`  ${dim(label)}  ${dim(`error: ${String(e?.message ?? e).slice(0, 60)}`)}`)
+    }
+  }
+  printDivider()
+  console.log(
+    `  Swept ${targets.length} lead(s) from ${handles.length} conversation(s): ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} already logged`)}` +
+      (failed ? dim(`  ·  ${failed} failed`) : "") +
+      (unmatched.length ? dim(`  ·  ${unmatched.length} handle(s) matched no lead`) : ""),
+  )
+  prompts.outro("Done")
+}
+
 const CommsIngestCommand = cmd({
-  command: "ingest <id>",
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  command: "ingest [id]",
   aliases: ["sync", "pull"],
-  describe: "ingest comms from a channel into the log (deduped)",
+  describe: "ingest comms from a channel into the log (deduped). --all sweeps every lead with a handle",
   builder: (y) =>
     y
-      .positional("id", { type: "string", describe: "lead ID or name", demandOption: true })
-      .option("channel", { type: "string", describe: "gmail|imessage|apple_mail (or 'all')", demandOption: true }),
+      .positional("id", { type: "string", describe: "lead ID or name (omit when using --all)" })
+      .option("channel", { type: "string", describe: "gmail|imessage|apple_mail (or 'all')", demandOption: true })
+      // #178647: without a bulk mode there is nothing to schedule, so the comms log was only ever
+      // as current as the last time a human remembered to run this for one specific lead. Measured
+      // on production the day this was added: 27 of 28 leads with iMessage history were more than
+      // a week stale, several by ~2 months, including our own co-founder.
+      .option("all", { type: "boolean", default: false, describe: "sweep every lead with an ACTIVE conversation (reads the message store, not the CRM)" })
+      .option("days", { type: "number", default: 30, describe: "with --all, how far back to look for active conversations" })
+      .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
+      .option("dry-run", { type: "boolean", default: false, describe: "with --all, list what would be swept and stop" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
     if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    // Ingest is the command a dead bridge hurts most: every bridge-backed
+    // reader below catches its own failure and returns an empty array, so the
+    // run reports "0 new" and exits 0. That is indistinguishable from a lead
+    // who genuinely has no messages. Say it up front, before the work.
+    const bridgeBacked = ["imessage", "apple_mail", "gmail", "discord", "slack", "whatsapp", "all"]
+    if (bridgeBacked.includes(String(args.channel).toLowerCase())) {
+      printDegradations([assessBridge(await probeBridge())])
+    }
+
+    if (args.all) {
+      await ingestAllLeads(String(args.channel).toLowerCase(), Number(args.days), Number(args.limit), Boolean(args["dry-run"]))
+      return
+    }
+
+    if (!args.id) {
+      prompts.log.error("Provide a lead id, or use --all to sweep every lead with a handle.")
+      prompts.outro("Done")
+      return
+    }
 
     const sp = prompts.spinner()
     sp.start("Resolving lead…")
@@ -490,7 +723,7 @@ const CommsSummaryCommand = cmd({
     const data = ((await res.json()) as any)?.data
     sp.stop(`${data?.total ?? 0} total comms`)
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     if (data?.first_contact) console.log(`  ${dim("First contact:")} ${data.first_contact}`)
     if (data?.last_contact) console.log(`  ${dim("Last contact:")}  ${data.last_contact}`)
@@ -510,6 +743,120 @@ const CommsSummaryCommand = cmd({
   },
 })
 
+/**
+ * Attachments — the files, not the words about them.
+ *
+ * The comms log records that a message HAD an attachment and stops there, so a
+ * document someone sent you was visible as a placeholder and unreachable as a
+ * file. Every search surface in the CLI then reported the topic had left no
+ * trail while the bytes sat on the disk. This is the verb that looks.
+ *
+ * `--out` is the ingest half: copying a file out of Messages' content-addressed
+ * store, under the name the sender gave it, is what turns "I know it exists"
+ * into something a person or an agent can actually open.
+ */
+const CommsAttachmentsCommand = cmd({
+  command: "attachments [id]",
+  aliases: ["files", "att"],
+  describe: "list and export files people sent you over iMessage (by lead, or --search across all)",
+  builder: (y) =>
+    y
+      .positional("id", { type: "string", describe: "lead ID or name (omit to search everything)" })
+      .option("search", { type: "string", aliases: ["s"], describe: "match the filename, case-insensitive" })
+      .option("days", { type: "number", default: 90, describe: "how far back to look" })
+      .option("limit", { type: "number", default: 50 })
+      .option("out", { type: "string", aliases: ["o"], describe: "copy the matching files into this directory" })
+      .option("include-links", { type: "boolean", default: false, describe: "also list Apple's rich-link payload rows" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Comms Attachments")
+
+    const imsg = require("../lib/imessage")
+    if (!imsg.isAvailable()) {
+      // Not "no attachments" — a different statement entirely, and the two need
+      // opposite responses.
+      prompts.log.error(imsg.diagnoseAccess())
+      prompts.outro("Done")
+      return
+    }
+
+    let handle: string | undefined
+    let who = "everyone"
+    if (args.id) {
+      if (!(await requireAuth())) { prompts.outro("Done"); return }
+      const resolved = await resolveLead(String(args.id))
+      if (!resolved) { prompts.log.error("Lead not found"); prompts.outro("Done"); return }
+      handle = resolved.lead?.phone ?? resolved.lead?.contact_info?.phone ?? resolved.lead?.email
+      if (!handle) {
+        prompts.log.error(`${resolved.lead?.name ?? `Lead #${resolved.id}`} has no phone or email on file, so there is no handle to match`)
+        prompts.outro("Done")
+        return
+      }
+      who = resolved.lead?.name || `Lead #${resolved.id}`
+    }
+
+    const sp = prompts.spinner()
+    sp.start("Reading Messages…")
+    const rows = imsg.listAttachments({
+      days: args.days,
+      limit: args.limit,
+      search: args.search,
+      handle,
+      includePluginPayloads: args["include-links"],
+    })
+    sp.stop(`${rows.length} attachment(s) from ${bold(who)} in the last ${args.days}d`)
+
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
+
+    if (rows.length === 0) {
+      prompts.log.info(dim("Nothing matched. Widen with --days, or drop --search."))
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    for (const a of rows) {
+      const size = a.bytes >= 1024 * 1024 ? `${(a.bytes / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(a.bytes / 1024))}KB`
+      // A row in the table is not a file on the disk. Say which one this is.
+      const state = a.onDisk ? "" : dim("  (not on disk)")
+      console.log(
+        `  ${dim(a.date.slice(0, 10))} ${directionArrow(a.from_me ? "outbound" : "inbound")} ${dim((a.handle ?? "").padEnd(18).slice(0, 18))} ${bold(a.name)} ${dim(size)}${state}`,
+      )
+    }
+    printDivider()
+
+    if (args.out) {
+      const { mkdirSync, copyFileSync, existsSync: exists } = require("fs")
+      const { join: pjoin, extname, basename } = require("path")
+      mkdirSync(String(args.out), { recursive: true })
+      let copied = 0
+      const skipped: string[] = []
+      const used = new Set<string>()
+      for (const a of rows) {
+        if (!a.onDisk) { skipped.push(a.name); continue }
+        // Two people can send `Scan.pdf`. Collisions are disambiguated rather
+        // than allowed to overwrite — a silent overwrite here loses a document.
+        let name = a.name
+        for (let n = 2; used.has(name.toLowerCase()) || exists(pjoin(String(args.out), name)); n++) {
+          const ext = extname(a.name)
+          name = `${basename(a.name, ext)} (${n})${ext}`
+        }
+        used.add(name.toLowerCase())
+        try { copyFileSync(a.path, pjoin(String(args.out), name)); copied++ } catch { skipped.push(a.name) }
+      }
+      prompts.log.success(`Copied ${success(String(copied))} file(s) → ${highlight(String(args.out))}`)
+      // Named, not summarised: "3 skipped" tells you nothing about which
+      // document you still do not have.
+      if (skipped.length) prompts.log.warn(`Not copied (${skipped.length}): ${skipped.slice(0, 8).join(", ")}${skipped.length > 8 ? "…" : ""}`)
+    } else {
+      prompts.log.info(dim(`Export:  iris atlas:comms attachments${args.id ? ` ${args.id}` : ""}${args.search ? ` --search "${args.search}"` : ""} --out ./inbox`))
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 // Parent command — registered as atlas:comms, aliased as leads:comms + comms
 // ============================================================================
@@ -517,13 +864,14 @@ const CommsSummaryCommand = cmd({
 export const PlatformAtlasCommsCommand = cmd({
   command: "atlas:comms",
   aliases: ["comms", "leads:comms"],
-  describe: "[Atlas OS] Unified lead communications log — ingest, view, search across all channels",
+  describe: "[Atlas OS] Unified lead communications log — ingest, view, search messages and attachments across all channels",
   builder: (yargs) =>
     yargs
       .command(CommsListCommand)
       .command(CommsIngestCommand)
       .command(CommsLogCommand)
       .command(CommsSummaryCommand)
-      .demandCommand(1, "specify a subcommand: list, ingest, log, summary"),
+      .command(CommsAttachmentsCommand)
+      .demandCommand(1, "specify a subcommand: list, ingest, attachments, log, summary"),
   async handler() {},
 })

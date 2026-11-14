@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight } from "./iris-api"
+import { dim, bold, success, highlight, writeJson } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, mkdirSync } from "fs"
 import { join, basename } from "path"
@@ -135,7 +135,7 @@ const HiveInboxListCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(items, null, 2))
+      await writeJson(items)
       return
     }
 
@@ -375,7 +375,7 @@ export const HiveInboxCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(items, null, 2))
+      await writeJson(items)
       return
     }
 

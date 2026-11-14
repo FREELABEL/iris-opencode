@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -49,7 +50,7 @@ const ListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const items: any[] = firstArray(raw?.data?.data, raw?.data)
       const total: number = raw?.data?.total ?? items.length
 
       spinner.stop(`${total} priced tutorial(s)`)

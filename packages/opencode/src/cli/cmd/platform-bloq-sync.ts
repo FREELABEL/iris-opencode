@@ -10,8 +10,8 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris bloq-sync — operate the Bloq ↔ cloud-storage sync feature from the CLI
@@ -41,8 +41,13 @@ import {
 // Pure helpers (unit-tested in platform-bloq-sync.test.ts)
 // ----------------------------------------------------------------------------
 
-/** Canonical provider ids the BloqSyncController accepts. */
-export const CANONICAL_PROVIDERS = ["google-drive", "dropbox"] as const
+/**
+ * Canonical provider ids the BloqSyncController accepts. Obsidian is push-only
+ * (export/trigger/unlink); the backend rejects it for folder browse/link, so those
+ * subcommands surface a clean API error rather than the CLI guessing. Mirrors
+ * BloqSyncService::EXPORT_PROVIDERS (#162666).
+ */
+export const CANONICAL_PROVIDERS = ["google-drive", "dropbox", "obsidian"] as const
 export type CanonicalProvider = (typeof CANONICAL_PROVIDERS)[number]
 
 /**
@@ -62,6 +67,7 @@ export function normalizeProvider(
   if (allowAll && v === "all") return "all"
   if (["google-drive", "googledrive", "gdrive", "drive", "google"].includes(v)) return "google-drive"
   if (["dropbox", "db", "drop"].includes(v)) return "dropbox"
+  if (["obsidian", "obs"].includes(v)) return "obsidian"
   return null
 }
 
@@ -128,9 +134,9 @@ const ProvidersCommand = cmd({
     prompts.intro("◈  Cloud Sync · Providers")
     const data = await call(args, "List providers", `/api/v1/bloqs/${args.bloqId}/sync/providers`)
     if (!data) return
-    const providers: any[] = data?.data?.providers ?? data?.providers ?? []
+    const providers: any[] = firstArray(data?.data?.providers, data?.providers)
     if (args.json) {
-      console.log(JSON.stringify(providers, null, 2))
+      await writeJson(providers)
       prompts.outro("Done")
       return
     }
@@ -169,7 +175,7 @@ const ConfigCommand = cmd({
     if (!data) return
     const cloudSync = data?.data?.cloud_sync ?? data?.cloud_sync ?? {}
     if (args.json) {
-      console.log(JSON.stringify(cloudSync, null, 2))
+      await writeJson(cloudSync)
       prompts.outro("Done")
       return
     }
@@ -216,7 +222,7 @@ const StatusCommand = cmd({
     if (!data) return
     const status = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       prompts.outro("Done")
       return
     }
@@ -276,7 +282,7 @@ const LinkCommand = cmd({
     if (!data) return
     const cloudSync = data?.data?.cloud_sync ?? data?.cloud_sync ?? {}
     if (args.json) {
-      console.log(JSON.stringify(cloudSync, null, 2))
+      await writeJson(cloudSync)
       prompts.outro("Done")
       return
     }
@@ -316,7 +322,7 @@ const UnlinkCommand = cmd({
     )
     if (!data) return
     if (args.json) {
-      console.log(JSON.stringify(data?.data ?? data, null, 2))
+      await writeJson(data?.data ?? data)
       prompts.outro("Done")
       return
     }
@@ -353,10 +359,10 @@ const BrowseCommand = cmd({
     const data = await call(args, "Browse folders", path)
     if (!data) return
     const payload = data?.data ?? data
-    const folders: any[] = payload?.folders ?? []
-    const files: any[] = payload?.files ?? []
+    const folders: any[] = firstArray(payload?.folders)
+    const files: any[] = firstArray(payload?.files)
     if (args.json) {
-      console.log(JSON.stringify({ folders, files }, null, 2))
+      await writeJson({ folders, files })
       prompts.outro("Done")
       return
     }
@@ -409,7 +415,7 @@ const TriggerCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -453,7 +459,7 @@ const RunNowCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -502,7 +508,7 @@ const ExportItemCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -545,7 +551,7 @@ const ImportCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -575,7 +581,7 @@ const DebugCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }

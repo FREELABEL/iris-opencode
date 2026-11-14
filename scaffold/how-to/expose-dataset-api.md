@@ -1,3 +1,10 @@
+---
+category: Data & Atlas
+level: advanced
+tags: [atlas, api, datasets, integration]
+duration_min: 12
+prerequisites: [atlas-datasets]
+---
 # How to: Expose Atlas dataset as a REST API
 
 ## What this does

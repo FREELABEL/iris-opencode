@@ -1,0 +1,95 @@
+{
+  "provider": {
+    "iris": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "IRIS",
+      "options": {
+        "baseURL": "https://freelabel.net/api/v6/openai",
+        "includeUsage": true,
+        "apiKey": "{env:IRIS_API_KEY}"
+      },
+      "models": {
+        "iris/iris-ai": {
+          "name": "Iris Ai",
+          "tools": true
+        },
+        "iris/iris-ai-reasoning": {
+          "name": "Iris Ai Reasoning",
+          "tools": true
+        },
+        "iris/grok-4.3": {
+          "name": "Grok 4.3",
+          "tools": true
+        },
+        "iris/gpt-4o-mini": {
+          "name": "Gpt 4O Mini",
+          "tools": true
+        },
+        "iris/gpt-4.1-nano": {
+          "name": "Gpt 4.1 Nano",
+          "tools": true
+        },
+        "iris/gpt-5-nano": {
+          "name": "Gpt 5 Nano",
+          "tools": true
+        },
+        "iris/gpt-5.4-nano": {
+          "name": "Gpt 5.4 Nano",
+          "tools": true
+        },
+        "iris/gpt-5.6-luna": {
+          "name": "Gpt 5.6 Luna",
+          "tools": true
+        },
+        "iris/gpt-5.6-terra": {
+          "name": "Gpt 5.6 Terra",
+          "tools": true
+        },
+        "iris/gpt-5.6-sol": {
+          "name": "Gpt 5.6 Sol",
+          "tools": true
+        },
+        "iris/big-pickle": {
+          "name": "Big Pickle",
+          "tools": true
+        },
+        "iris/deepseek-v4-flash": {
+          "name": "Deepseek V4 Flash",
+          "tools": true
+        },
+        "iris/mimo-v2.5": {
+          "name": "Mimo V2.5",
+          "tools": true
+        },
+        "iris/nemotron-3.5-lightning": {
+          "name": "Nemotron 3.5 Lightning",
+          "tools": true
+        },
+        "iris/hy3": {
+          "name": "Hy3",
+          "tools": true
+        },
+        "iris/mimo-v2.5-pro": {
+          "name": "Mimo V2.5 Pro",
+          "tools": true
+        },
+        "iris/kimi-k2.7-code": {
+          "name": "Kimi K2.7 Code",
+          "tools": true
+        },
+        "iris/glm-5.2": {
+          "name": "Glm 5.2",
+          "tools": true
+        },
+        "iris/kimi-k3": {
+          "name": "Kimi K3",
+          "tools": true
+        },
+        "iris/minimax-m3": {
+          "name": "Minimax M3",
+          "tools": true
+        }
+      }
+    }
+  }
+}

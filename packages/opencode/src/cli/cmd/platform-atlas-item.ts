@@ -11,7 +11,7 @@ import { executePublish, executePublishMany, executeMakePublic, executeMakePriva
 const AtlasItemPublishCommand = cmd({
   command: "publish <files..>",
   aliases: ["sync"],
-  describe: "publish markdown file(s) as public Atlas items (globs ok; re-run to sync)",
+  describe: "publish markdown file(s) as Atlas items (private by default — add --public for a shareable URL; globs ok; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("files", { describe: "one or more markdown (.md) files (e.g. ./docs/*.md)", type: "string", demandOption: true })
@@ -22,7 +22,11 @@ const AtlasItemPublishCommand = cmd({
       .option("password", { describe: "share behind a password (implies --public)", type: "string" })
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
       .option("private", { describe: "force private (override; default is already private)", type: "boolean", default: false })
+      .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
+      .option("update", { describe: "sync into this existing item ID instead of creating a new one (single file only)", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("force-public", { describe: "consent to making it PUBLIC — REQUIRED when there is no terminal", type: "boolean", default: false })
+      .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -68,6 +72,9 @@ const AtlasItemShareCommand = cmd({
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
       .option("password", { describe: "share behind a password", type: "string" })
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31", type: "string" })
+      .option("allowed-emails", { describe: "gate the link to these named, address-verified emails (required for PHI-classified items)", type: "array", string: true })
+      .option("allowed-domains", { describe: "gate the link to these bare domains, e.g. vanguard.com", type: "array", string: true })
+      .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {

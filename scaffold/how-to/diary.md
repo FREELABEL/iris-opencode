@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: beginner
+tags: [diary, markdown, cli]
+duration_min: 6
+---
 # How to: Daily diary — publish local markdown into your IRIS diary
 
 ## What this does

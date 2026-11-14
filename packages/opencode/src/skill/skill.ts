@@ -46,6 +46,11 @@ export namespace Skill {
 
   export const state = Instance.state(async () => {
     const skills: Record<string, Info> = {}
+    // Every match for a name, in scan order — not just the winner. A second
+    // PLAYBOOK.md/SKILL.md for the same name (a stray global copy, an old
+    // clone) silently shadows the real one; `get`/`all` only ever see the
+    // first, so nothing before this said the shadow existed at all.
+    const allMatches: Record<string, Info[]> = {}
 
     const addSkill = async (match: string) => {
       const md = await ConfigMarkdown.parse(match)
@@ -56,16 +61,19 @@ export namespace Skill {
       const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
       if (!parsed.success) return
 
+      const info: Info = {
+        name: parsed.data.name,
+        description: parsed.data.description,
+        location: match,
+      }
+      ;(allMatches[parsed.data.name] ??= []).push(info)
+
       // First-found wins (playbooks scanned before skills = playbook takes priority)
       if (skills[parsed.data.name]) {
         return
       }
 
-      skills[parsed.data.name] = {
-        name: parsed.data.name,
-        description: parsed.data.description,
-        location: match,
-      }
+      skills[parsed.data.name] = info
     }
 
     // Helper to scan a glob inside multiple directories
@@ -108,14 +116,26 @@ export namespace Skill {
       }
     }
 
-    return skills
+    return { skills, allMatches }
   })
 
   export async function get(name: string) {
-    return state().then((x) => x[name])
+    return state().then((x) => x.skills[name])
   }
 
   export async function all() {
-    return state().then((x) => Object.values(x))
+    return state().then((x) => Object.values(x.skills))
+  }
+
+  /** Every discovered location for `name`, in scan/priority order — [0] is the winner `get()` returns. */
+  export async function locations(name: string): Promise<Info[]> {
+    return state().then((x) => x.allMatches[name] ?? [])
+  }
+
+  /** Every name with more than one discovered location, i.e. a shadow copy exists somewhere. */
+  export async function duplicates(): Promise<Record<string, Info[]>> {
+    return state().then((x) =>
+      Object.fromEntries(Object.entries(x.allMatches).filter(([, v]) => v.length > 1)),
+    )
   }
 }

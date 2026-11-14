@@ -1,16 +1,30 @@
 import { describe, test, expect } from "bun:test"
+import { unlinkSync, existsSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 import {
   parseSteps,
   interpolate,
   interpolateInput,
+  interpolateStepHeaders,
+  playbookPaths,
+  resolveContainerPath,
   shellEscape,
   resolveArgs,
   validatePlan,
+  executeSkill,
+  getRun,
   type StepDef,
   type StepResult,
   type SkillPlan,
   type ArgDef,
 } from "./executor"
+
+/** Remove the on-disk checkpoint a test run created, so tests don't litter ~/.iris. */
+const cleanupRun = (runId: string) => {
+  const p = join(homedir(), ".iris", "skill-runs", `${runId}.json`)
+  if (existsSync(p)) unlinkSync(p)
+}
 
 // ============================================================================
 // HELPERS
@@ -22,6 +36,7 @@ const makeStep = (overrides: Partial<StepDef>): StepDef => ({
   condition: null, model: null, node: null,
   skillRef: null, skillArgs: null,
   workflowId: null, webhook: null, cron: null, input: null,
+  integrations: [],
   ...overrides,
 })
 
@@ -928,6 +943,49 @@ describe("validatePlan", () => {
     expect(issues.some((i) => i.message.includes("no steps"))).toBe(true)
   })
 
+  // The version-coercion trap (#182230). parsePlan collapses any `version` that
+  // is not EXACTLY the number 2 down to v1, and v1 parses zero steps — so a
+  // typo'd version shipped a playbook that validated clean and executed nothing.
+  // Silence is the bug here, so these assert an ERROR is raised.
+  test("errors when body has steps but version was coerced away from 2", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: 3, steps: [], bodyStepCount: 8 }
+    const issues = validatePlan(plan)
+    const err = issues.find((i) => i.level === "error" && i.message.includes("### step:"))
+    expect(err).toBeDefined()
+    expect(err!.message).toContain("version: 3")
+  })
+
+  test("errors when version is the STRING '2' rather than the number", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: "2", steps: [], bodyStepCount: 3 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.level === "error" && i.message.includes('version: "2"'))).toBe(true)
+  })
+
+  test("errors when the version field is missing entirely but steps exist", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: undefined, steps: [], bodyStepCount: 2 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("no version field"))).toBe(true)
+  })
+
+  // Must stay quiet for genuine v1 playbooks, or every prose skill turns red.
+  test("stays silent for a real v1 playbook with no step blocks", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: undefined, steps: [], bodyStepCount: 0 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.message.includes("### step:"))).toBe(false)
+  })
+
+  test("stays silent for a correct v2 playbook", () => {
+    const plan = {
+      ...basePlan,
+      version: 2 as const,
+      declaredVersion: 2,
+      steps: [makeStep({ id: "one", code: "echo hi" })],
+      bodyStepCount: 1,
+    }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.message.includes("### step:"))).toBe(false)
+  })
+
   test("errors on duplicate step IDs", () => {
     const step = makeStep({ id: "dup", code: "echo" })
     const plan = { ...basePlan, steps: [step, { ...step }] }
@@ -1829,10 +1887,12 @@ input:
     expect(result).toEqual({ count: 42, active: true, ratio: 3.14, zero: 0, neg: -1 })
   })
 
-  test("validatePlan: unknown mode doesn't error (falls to default)", () => {
+  test("validatePlan: unknown mode errors (used to silently fall through to default)", () => {
     const plan = { ...basePlan, steps: [makeStep({ id: "unk", mode: "invented-mode" as any, code: "x" })] }
     const issues = validatePlan(plan)
-    expect(issues.filter((i) => i.level === "error")).toHaveLength(0)
+    const modeErrors = issues.filter((i) => i.level === "error" && i.message.includes("Unrecognized mode"))
+    expect(modeErrors).toHaveLength(1)
+    expect(modeErrors[0].stepId).toBe("unk")
   })
 })
 
@@ -2096,5 +2156,325 @@ describe("STRESS: interpolateInput adversarial", () => {
     const original = JSON.parse(JSON.stringify(input))
     interpolateInput(input, { x: "replaced", y: "also" }, {})
     expect(input).toEqual(original)
+  })
+})
+
+// ############################################################################
+//
+//  HUMAN-IN-THE-LOOP: PAUSE & RESUME
+//
+//  A human step with no interactive handler must halt the run and persist a
+//  resumable checkpoint — never silently report success for work nobody did.
+//
+// ############################################################################
+
+describe("human-in-the-loop pause/resume", () => {
+  const hitlPlan: SkillPlan = {
+    ...basePlan,
+    name: "hitl-test",
+    steps: [
+      makeStep({ id: "before", mode: "shell", code: "echo BEFORE_RAN" }),
+      makeStep({ id: "approve", mode: "human", body: "Get written approval.", depends: "before" }),
+      makeStep({ id: "after", mode: "shell", code: "echo AFTER_RAN", depends: "approve" }),
+    ],
+  }
+
+  test("pauses at a human step when there is no interactive handler", async () => {
+    const result = await executeSkill(hitlPlan, {})
+    try {
+      expect(result.status).toBe("paused")
+      expect(result.steps["before"].status).toBe("success")
+      expect(result.steps["approve"].status).toBe("paused")
+      // The step after the human gate must NOT have run.
+      expect(result.steps["after"]).toBeUndefined()
+      expect(result.paused_on?.id).toBe("approve")
+      expect(result.paused_on?.instructions).toContain("Get written approval")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("does NOT pause when an interactive handler answers the step", async () => {
+    const result = await executeSkill(hitlPlan, {}, { onManualPrompt: async () => true })
+    try {
+      expect(result.status).toBe("completed")
+      expect(result.steps["after"].status).toBe("success")
+      expect(result.steps["after"].output).toContain("AFTER_RAN")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("persists a resumable paused checkpoint", async () => {
+    const result = await executeSkill(hitlPlan, {})
+    try {
+      const saved = getRun(result.run_id)
+      expect(saved).not.toBeNull()
+      expect(saved!.status).toBe("paused")
+      expect(saved!.current_step).toBe("approve")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("resume continues the SAME run and completes it", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id })
+    try {
+      // Same run id and original start time — one continuous history, not a new run.
+      expect(resumed.run_id).toBe(paused.run_id)
+      expect(resumed.started_at).toBe(paused.started_at)
+      expect(resumed.status).toBe("completed")
+      expect(resumed.steps["approve"].status).toBe("success")
+      expect(resumed.steps["after"].output).toContain("AFTER_RAN")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resume does not re-run steps that already succeeded", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const firstDuration = paused.steps["before"].duration_ms
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id })
+    try {
+      // Restored verbatim from the checkpoint rather than executed again.
+      expect(resumed.steps["before"].duration_ms).toBe(firstDuration)
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resume --skip marks the human step skipped and skips dependents", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id, resolvePaused: "skip" })
+    try {
+      expect(resumed.steps["approve"].status).toBe("skipped")
+      // Nothing may run on top of a human step that was never actually done.
+      expect(resumed.steps["after"].status).toBe("skipped")
+      expect(resumed.steps["after"].output).toContain("not met")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resuming an unknown run id throws", async () => {
+    await expect(executeSkill(hitlPlan, {}, { resumeRunId: "sk_doesnotexist" })).rejects.toThrow("not found")
+  })
+
+  test("resuming a run belonging to a different skill throws", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    try {
+      const otherPlan = { ...hitlPlan, name: "some-other-skill" }
+      await expect(executeSkill(otherPlan, {}, { resumeRunId: paused.run_id })).rejects.toThrow("belongs to skill")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("a plan with no human steps is unaffected", async () => {
+    const plain: SkillPlan = {
+      ...basePlan,
+      name: "plain-test",
+      steps: [makeStep({ id: "only", mode: "shell", code: "echo OK" })],
+    }
+    const result = await executeSkill(plain, {})
+    try {
+      expect(result.status).toBe("completed")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+})
+
+// ============================================================================
+// Container-relative paths
+// ============================================================================
+
+describe("playbook container paths", () => {
+  const LOC = "/home/u/.iris/playbooks/deploy/PLAYBOOK.md"
+  const ROOT = "/home/u/.iris/playbooks/deploy"
+
+  test("playbookPaths derives root, assets and file from the doc location", () => {
+    const p = playbookPaths(LOC)
+    expect(p.root).toBe(ROOT)
+    expect(p.assets).toBe(join(ROOT, "assets"))
+    expect(p.file).toBe(LOC)
+  })
+
+  test("${{playbook.root}} and ${{playbook.assets}} resolve", () => {
+    const out = interpolate("cat ${{playbook.assets}}/notes.md", {}, {}, { root: ROOT })
+    expect(out).toBe(`cat ${join(ROOT, "assets")}/notes.md`)
+  })
+
+  test("${{playbook.file}} points at PLAYBOOK.md", () => {
+    expect(interpolate("${{playbook.file}}", {}, {}, { root: ROOT })).toBe(join(ROOT, "PLAYBOOK.md"))
+  })
+
+  test("the namespace yields empty when no container is in scope", () => {
+    // A v1 playbook, or any caller that did not pass a root, must not crash —
+    // it just gets nothing, same as an unknown ${{args.x}}.
+    expect(interpolate("[${{playbook.root}}]", {}, {})).toBe("[]")
+  })
+
+  test("an arg cannot walk out of the container", () => {
+    expect(() =>
+      interpolate("cat ${{playbook.root}}/${{args.f}}", { f: "../../../.ssh/id_rsa" }, {}, { root: ROOT }),
+    ).toThrow(/escapes the playbook container/)
+  })
+
+  test("a harmless .. that stays inside is allowed", () => {
+    const out = interpolate("cat ${{playbook.assets}}/../README.md", {}, {}, { root: ROOT })
+    expect(out).toContain("README.md")
+  })
+
+  test("the 4th param still accepts a bare shellSafe boolean", () => {
+    // Existing call sites pass `isShell` positionally; that must keep working.
+    expect(interpolate("${{args.x}}", { x: "it's" }, {}, true)).toBe("it'\\''s")
+    expect(interpolate("${{args.x}}", { x: "it's" }, {}, false)).toBe("it's")
+  })
+
+  test("resolveContainerPath rejects escapes and accepts insiders", () => {
+    expect(resolveContainerPath(ROOT, "assets/x.png")).toBe(join(ROOT, "assets/x.png"))
+    expect(resolveContainerPath(ROOT, join(ROOT, "a/b"))).toBe(join(ROOT, "a/b"))
+    expect(() => resolveContainerPath(ROOT, "../other/x")).toThrow(/escapes/)
+    expect(() => resolveContainerPath(ROOT, "/etc/passwd")).toThrow(/escapes/)
+  })
+
+  test("interpolateInput threads the container into nested values", () => {
+    const out = interpolateInput({ a: { b: "${{playbook.root}}/x" } }, {}, {}, ROOT)
+    expect(out.a.b).toBe(`${ROOT}/x`)
+  })
+})
+
+test('validatePlan: "agent" is a REAL mode, not an unrecognized one', () => {
+  // The server's WalkthroughStructurer emits mode: agent for every step of a drafted
+  // playbook, on purpose — a step extracted by a model from audio must not be runnable
+  // on sight. It previously worked only by falling through the executor's default:
+  // case, so validation flagged every drafted playbook as broken. Declaring it keeps
+  // the behaviour and stops the false positive.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("Unrecognized mode"))).toHaveLength(0)
+})
+
+test('validatePlan: "agent" does not trip the default-manual warning either', () => {
+  // It is an explicit choice, not an omission — warning about it would be the same
+  // cry-wolf problem one level down.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("default"))).toHaveLength(0)
+})
+
+describe("step header interpolation (#182415)", () => {
+  const base: StepDef = {
+    id: "s1", title: "t", mode: "hive-script", body: "", code: "x", confirm: false,
+    depends: null, retry: 0, delay: 0, condition: null, model: null, node: null,
+    skillRef: null, skillArgs: null, workflowId: null, webhook: null, cron: null, input: null,
+  } as StepDef
+
+  /**
+   * `node: ${target}` reached the resolver as that literal string, so a hive step could not be
+   * pointed at a machine chosen at run time — no fleet reuse, no failover. Every hive playbook
+   * was pinned to one machine at authoring time.
+   *
+   * The BODY was interpolated all along, which is what made this hard to see: the same `${}`
+   * syntax worked three lines lower in the same step.
+   */
+  test("node: is interpolated from an argument", () => {
+    const out = interpolateStepHeaders({ ...base, node: "${{args.target}}" }, { target: "MacBookPro" }, {})
+    expect(out.node).toBe("MacBookPro")
+  })
+
+  test("node: can come from a previous step's output", () => {
+    const out = interpolateStepHeaders(
+      { ...base, node: "${{steps.pick.output}}" },
+      {},
+      { pick: { id: "pick", status: "success", output: "node-b", exit_code: 0, duration_ms: 1, attempts: 1 } as StepResult },
+    )
+    expect(out.node).toBe("node-b")
+  })
+
+  test("model: has the same gap and the same fix", () => {
+    const out = interpolateStepHeaders({ ...base, mode: "ai", model: "${{args.m}}" }, { m: "gpt-4o-mini" }, {})
+    expect(out.model).toBe("gpt-4o-mini")
+  })
+
+  test("skillArgs, workflowId, webhook and cron interpolate too", () => {
+    const out = interpolateStepHeaders(
+      { ...base, skillArgs: "${{args.a}}", workflowId: "${{args.w}}", webhook: "${{args.h}}", cron: "${{args.c}}" },
+      { a: "one", w: "wf-9", h: "https://example.test/hook", c: "0 9 * * *" },
+      {},
+    )
+    expect(out.skillArgs).toBe("one")
+    expect(out.workflowId).toBe("wf-9")
+    expect(out.webhook).toBe("https://example.test/hook")
+    expect(out.cron).toBe("0 9 * * *")
+  })
+
+  test("a literal header is returned unchanged", () => {
+    const out = interpolateStepHeaders({ ...base, node: "MacBookPro" }, { target: "other" }, {})
+    expect(out.node).toBe("MacBookPro")
+  })
+
+  test("nulls stay null — absence must not become the string 'null'", () => {
+    const out = interpolateStepHeaders({ ...base }, {}, {})
+    expect(out.node).toBeNull()
+    expect(out.model).toBeNull()
+    expect(out.cron).toBeNull()
+  })
+
+  test("the original step is not mutated", () => {
+    // Steps are reused across retries; mutating one would bake the first run's values in.
+    const step = { ...base, node: "${{args.target}}" }
+    interpolateStepHeaders(step, { target: "MacBookPro" }, {})
+    expect(step.node).toBe("${{args.target}}")
+  })
+
+  test("an unresolved reference does not silently blank the header", () => {
+    // interpolate() resolves an unknown name to "". For a BODY that is harmless; for
+    // `node:` it is not — an empty node reads downstream as "no node given" and dispatches
+    // to ANY machine, silently doing the opposite of what naming a node asks for.
+    const out = interpolateStepHeaders({ ...base, node: "${{args.nope}}" }, {}, {})
+    expect(out.node).not.toBe("")
+    expect(out.node).toBe("${{args.nope}}")
+  })
+})
+
+describe("validatePlan: dead interpolation references", () => {
+  const plan = (steps: Partial<StepDef>[]): SkillPlan => ({
+    name: "p", description: "d", version: 2, steps: steps.map((s, i) => ({
+      id: `s${i}`, title: "t", mode: "shell", body: "", code: null, confirm: false,
+      depends: null, retry: 0, delay: 0, condition: null, model: null, node: null,
+      skillRef: null, skillArgs: null, workflowId: null, webhook: null, cron: null,
+      input: null, ...s,
+    })) as StepDef[], args: {}, onError: "stop", timeout: 60,
+  } as SkillPlan)
+
+  /**
+   * A playbook written with `${args.x}` or `${x}` — single braces — validated CLEAN, then
+   * silently never resolved at run time. I wrote one that way myself and `iris playbook test`
+   * said "No issues found", which is the same defect this whole epic keeps finding: a check
+   * that cannot tell a correct playbook from one whose references are dead.
+   */
+  test("flags a single-brace reference that will never resolve", () => {
+    const issues = validatePlan(plan([{ code: "echo ${args.name}" }]))
+    expect(issues.some((i) => /\$\{/.test(i.message))).toBe(true)
+  })
+
+  test("flags it in a header field too", () => {
+    const issues = validatePlan(plan([{ mode: "hive-script", node: "${target}", code: "x" }]))
+    expect(issues.some((i) => /node/.test(i.message) || /\$\{/.test(i.message))).toBe(true)
+  })
+
+  test("correct ${{...}} syntax is NOT flagged", () => {
+    const issues = validatePlan(plan([{ code: "echo ${{args.name}}", node: "${{args.node}}" }]))
+    expect(issues.filter((i) => /interpolat/i.test(i.message)).length).toBe(0)
+  })
+
+  test("shell and JS template literals are left alone", () => {
+    // ${dir} inside a bash heredoc or a JS template string is not playbook interpolation.
+    // Flagging those would make the check noise, and a noisy check gets ignored.
+    const issues = validatePlan(plan([{ code: 'const p = `${process.env.HOME}/x`\nfor i; do echo "${i}"; done' }]))
+    expect(issues.filter((i) => /interpolat/i.test(i.message)).length).toBe(0)
   })
 })

@@ -10,14 +10,21 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
+| "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
+| "make it private", "don't publish it", "not visible", "share privately", "auth gate", "who can see this page", "unpublish", "lock it down" | `page-privacy.md` |
+| "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
+| "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
 | "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
 | "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
 | "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
 | "diary", "daily diary", "log my day", "publish my notes", "sync daily-diary", "journal", "what did I do" | `diary.md` |
+| "meeting", "call notes", "transcript", "wispr", "what did we agree", "action items from the call", "file this meeting" | `meetings.md` |
+| "share a bloq", "invite someone to a board", "give the client access", "scoped invite", "who can see this board", "revoke access", "what did I share", "keep this internal", "permissions" | `bloq-access-control.md` |
 | "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |
+| "certification", "course", "training", "quiz", "certify", "chapters", "slide deck for a course", "examinable", "who can be paid" | `certification-courses.md` |
 | "events", "venue", "stages", "set times", "vendors", "tickets" | `event-production.md` |
 | "discover page", "curate the discover page", "feature on discover", "what controls the homepage", "discover sections" | `discover.md` |
 | "investor interest", "invest in opportunity", "fund a gig", "shark tank", "dual-sided opportunity" | `discover-investments.md` |
@@ -48,9 +55,9 @@ Every recipe follows the same structure:
 
 ## Adding new recipes
 
-These files are managed by the IRIS installer and updated from `https://github.com/FREELABEL/iris-opencode/tree/dev/scaffold/how-to/`. To add a new recipe:
+These files are managed by the IRIS installer and updated from `https://github.com/FREELABEL/iris-opencode/tree/main/scaffold/how-to/`. To add a new recipe:
 
-1. Open a PR against `FREELABEL/iris-opencode` adding `scaffold/how-to/<your-recipe>.md`
+1. Open a PR against `FREELABEL/iris-opencode` (branch `main` — the installer fetches from main, not dev) adding `scaffold/how-to/<your-recipe>.md`
 2. Add an entry to `scaffold/manifest.json`
 3. Update this `README.md` with the user-intent mapping
 4. On next install (or `iris install --only-docs`), users get the new recipe

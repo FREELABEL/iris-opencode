@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import {
   getToken, listChannels, getMessages, searchMessages, listUsers,
   type SlackChannel,
@@ -50,7 +50,7 @@ const SlackListCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(channels, null, 2)); return }
+      if (args.json) { await writeJson(channels); return }
 
       printDivider()
       for (const ch of channels) {
@@ -107,7 +107,7 @@ const SlackReadCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       // Display oldest first
       const reversed = [...messages].reverse()
@@ -157,7 +157,7 @@ const SlackSearchCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       printDivider()
       for (const msg of messages) {
@@ -198,7 +198,7 @@ const SlackUsersCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(users, null, 2)); return }
+      if (args.json) { await writeJson(users); return }
 
       printDivider()
       for (const u of users) {

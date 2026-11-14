@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // bloq-ingest start <bloqId> <source> <path>
@@ -53,7 +54,7 @@ const IngestStartCommand = cmd({
       const job = data?.data ?? data
       spinner.stop(`${success("✓")} Job ${job.job_id ?? job.id}`)
 
-      if (args.json) { console.log(JSON.stringify(job, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(job); prompts.outro("Done"); return }
 
       printDivider()
       printKV("Job ID", job.job_id ?? job.id)
@@ -121,8 +122,8 @@ const IngestJobsCommand = cmd({
     const ok = await handleApiError(res, "List jobs")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const jobs: any[] = data?.data ?? data?.jobs ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(jobs, null, 2)); prompts.outro("Done"); return }
+    const jobs: any[] = firstArray(data?.data, data?.jobs, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(jobs); prompts.outro("Done"); return }
     printDivider()
     if (jobs.length === 0) console.log(`  ${dim("(no jobs)")}`)
     else for (const j of jobs) {
@@ -154,7 +155,7 @@ const IngestStatusCommand = cmd({
     const ok = await handleApiError(res, "Get status")
     if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data ?? (await res.json().catch(() => ({})))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("Status", data.status)
     printKV("Progress", data.progress_percent !== undefined ? `${data.progress_percent}%` : undefined)

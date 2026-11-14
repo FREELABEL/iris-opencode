@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Inventory CLI (Track 7)
@@ -41,10 +42,10 @@ const ListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/inventory?${p}`)
       const ok = await handleApiError(res, "List"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data?.data ?? body?.data ?? []
+      const rows: any[] = firstArray(body?.data?.data, body?.data)
       spinner.stop(`${rows.length} item(s)`)
 
-      if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
       if (rows.length === 0) { prompts.log.warn("No inventory"); prompts.outro("Done"); return }
 
       for (const item of rows) {
@@ -80,7 +81,7 @@ const ShowCommand = cmd({
     const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}`)
     const ok = await handleApiError(res, "Show"); if (!ok) return
     const data = ((await res.json()) as any)?.data
-    if (args.json) { console.log(JSON.stringify(data, null, 2)) } else {
+    if (args.json) { await writeJson(data) } else {
       for (const [k, v] of Object.entries(data ?? {})) {
         if (v != null && typeof v !== "object") console.log(`  ${dim(k + ":")} ${v}`)
       }
@@ -146,7 +147,6 @@ const UpdateCommand = cmd({
       .option("description", { type: "string" })
       .option("photo", { type: "string" }),
   async handler(args) {
-    const token = await requireAuth(); if (!token) return
     const body: Record<string, any> = {}
     if (args.name) body.name = args.name
     if (args.cost != null) body.unit_cost_cents = Math.round(Number(args.cost) * 100)
@@ -158,7 +158,8 @@ const UpdateCommand = cmd({
     if (args.retail != null) body.retail_price_cents = Math.round(Number(args.retail) * 100)
     if (args.description) body.description = args.description
     if (args.photo) body.photo = args.photo
-    if (Object.keys(body).length === 0) { console.log("Nothing to update"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "pass at least one field flag") }
+    const token = await requireAuth(); if (!token) return
 
     const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}`, { method: "PATCH", body: JSON.stringify(body) })
     await handleApiError(res, "Update")
@@ -215,8 +216,8 @@ const LowStockCommand = cmd({
 
     const res = await irisFetch(`/api/v1/atlas/inventory/low-stock?${p}`)
     const ok = await handleApiError(res, "Low stock"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) { prompts.log.info("No low-stock items"); prompts.outro("Done"); return }
 
     for (const item of rows) {
@@ -290,7 +291,7 @@ const SyncFromProductsCommand = cmd({
       console.log("")
 
       if (args.json) {
-        console.log(JSON.stringify(preview, null, 2))
+        await writeJson(preview)
         prompts.outro("Done"); return
       }
 

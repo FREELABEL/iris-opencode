@@ -6,6 +6,7 @@ import { NamedError } from "@opencode-ai/util/error"
 import { Log } from "../util/log"
 import { iife } from "@/util/iife"
 import { Flag } from "../flag/flag"
+import { pickLatestCliTag } from "./pick-release"
 
 declare global {
   const OPENCODE_VERSION: string
@@ -130,8 +131,26 @@ export namespace Installation {
   export async function upgrade(method: Method, target: string) {
     let cmd
 
-    if (isIris()) {
+    // Windows cannot use the bash updater below, for two independent reasons:
+    //   1. `process.platform === "win32"` fell through this ternary to "linux", so
+    //      `iris update` downloaded iris-linux-x64.tar.gz — a Linux ELF that cannot
+    //      execute on Windows. The correct asset (iris-windows-x64.zip) DOES exist.
+    //   2. Even with the right asset, the updater is a #!/bin/bash script shelling out
+    //      to curl/tar/chmod/lsof/nohup, none of which are on a stock Windows box.
+    // So the update silently fetched the wrong binary via a script that could not run.
+    // Found on a real Windows machine, 2026-08-25.
+    //
+    // Delegate to install.ps1 instead — already shipped and known-good: it resolves the
+    // correct Windows asset, extracts with Expand-Archive, fixes PATH, and honours
+    // $env:VERSION so a pinned target still works.
+    if (isIris() && process.platform === "win32") {
+      cmd = $`powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://heyiris.io/install-code.ps1 | iex"`.env({
+        ...process.env,
+        VERSION: target,
+      })
+    } else if (isIris()) {
       // IRIS: download binary directly from GitHub release (don't re-run full installer)
+      // win32 is handled above; this ternary is darwin-vs-linux only.
       const platform = process.platform === "darwin" ? "darwin" : "linux"
       const arch = process.arch === "arm64" ? "arm64" : "x64"
       const ext = platform === "linux" ? "tar.gz" : "zip"
@@ -342,12 +361,19 @@ fi
   export async function latest(installMethod?: Method) {
     // IRIS: check our own GitHub releases
     if (isIris()) {
-      return fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest")
+      // NOT /releases/latest — IRIS Desktop ships from this same repo and far more often, so
+      // that endpoint resolves to a `desktop-*` tag with no CLI binaries in it (#182693).
+      // Ask for the recent page and take the newest CLI-shaped tag.
+      return fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30")
         .then((res) => {
           if (!res.ok) throw new Error(res.statusText)
           return res.json()
         })
-        .then((data: any) => data.tag_name.replace(/^v/, ""))
+        .then((rows: any) => {
+          const tag = pickLatestCliTag(rows)
+          if (!tag) throw new Error("No CLI release found in the 30 most recent releases")
+          return tag.replace(/^v/, "")
+        })
     }
 
     const detectedMethod = installMethod || (await method())

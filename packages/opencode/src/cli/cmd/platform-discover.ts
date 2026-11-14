@@ -1,7 +1,10 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, writeJson } from "./iris-api"
+import { PlaylistCommand } from "./platform-discover-playlist"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Shape helpers — discover endpoints return heterogeneous shapes; coerce
@@ -65,11 +68,11 @@ const SponsorsListCommand = cmd({
       }
 
       const data = (await res.json()) as any
-      const sponsors: string[] = data?.data?.sponsors ?? []
+      const sponsors: string[] = firstArray(data?.data?.sponsors)
       spinner.stop(`${sponsors.length} sponsor(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify({ sponsors }, null, 2))
+        await writeJson({ sponsors })
         prompts.outro("Done")
         return
       }
@@ -290,9 +293,9 @@ const StreamersListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const streamers: string[] = data?.data?.streamers ?? []
+      const streamers: string[] = firstArray(data?.data?.streamers)
       spinner.stop(`${streamers.length} streamer(s)`)
-      if (args.json) { console.log(JSON.stringify({ streamers }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ streamers }); prompts.outro("Done"); return }
       printDivider()
       if (streamers.length === 0) { console.log(`  ${dim("No streamers configured")}`) }
       else { for (const s of streamers) console.log(`  ${bold(s)}  ${dim(`→ /@${s}`)}`) }
@@ -316,7 +319,7 @@ const StreamersAddCommand = cmd({
     spinner.start("Updating…")
     try {
       const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
-      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      let streamers: string[] = getRes.ok ? firstArray(((await getRes.json()) as any)?.data?.value) : []
       if (streamers.includes(args.username)) { spinner.stop(`${args.username} is already a streamer`); prompts.outro("Done"); return }
       streamers.push(args.username)
       const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
@@ -345,7 +348,7 @@ const StreamersRemoveCommand = cmd({
     spinner.start("Updating…")
     try {
       const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
-      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      let streamers: string[] = getRes.ok ? firstArray(((await getRes.json()) as any)?.data?.value) : []
       if (!streamers.includes(args.username)) { spinner.stop(`${args.username} is not a streamer`); prompts.outro("Done"); return }
       streamers = streamers.filter((s) => s !== args.username)
       const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
@@ -424,10 +427,10 @@ const ProducersListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const producers: string[] = data?.data?.producers ?? []
+      const producers: string[] = firstArray(data?.data?.producers)
       spinner.stop(`${producers.length} producer(s)`)
 
-      if (args.json) { console.log(JSON.stringify({ producers }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ producers }); prompts.outro("Done"); return }
 
       printDivider()
       if (producers.length === 0) console.log(`  ${dim("No producers configured")}`)
@@ -524,10 +527,10 @@ const InstrumentalsListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const instrumentals: any[] = data?.data?.instrumentals ?? []
+      const instrumentals: any[] = firstArray(data?.data?.instrumentals)
       spinner.stop(`${instrumentals.length} instrumental(s)`)
 
-      if (args.json) { console.log(JSON.stringify({ instrumentals }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ instrumentals }); prompts.outro("Done"); return }
 
       printDivider()
       if (instrumentals.length === 0) console.log(`  ${dim("No instrumentals curated")}`)
@@ -630,11 +633,11 @@ const ArtistsListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const artists: any[] = data?.data?.featuredArtists ?? []
+      const artists: any[] = firstArray(data?.data?.featuredArtists)
       const meta: any = data?.data?.curator ?? {}
       spinner.stop(`${artists.length} featured artist(s)`)
 
-      if (args.json) { console.log(JSON.stringify({ featuredArtists: artists, curator: meta }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ featuredArtists: artists, curator: meta }); prompts.outro("Done"); return }
 
       printDivider()
       if (meta.last_run_at) {
@@ -761,7 +764,7 @@ const BrandsListCommand = cmd({
       spinner.stop(`${keys.length} brand(s)${isCustom ? "" : " (defaults)"}`)
 
       if (args.json) {
-        console.log(JSON.stringify(brands, null, 2))
+        await writeJson(brands)
         prompts.outro("Done")
         return
       }
@@ -972,7 +975,7 @@ const LearningListCommand = cmd({
       spinner.stop(`${Object.keys(profiles).length} profile(s)${isCustom ? "" : " (defaults)"}`)
 
       if (args.json) {
-        console.log(JSON.stringify(profiles, null, 2))
+        await writeJson(profiles)
         prompts.outro("Done")
         return
       }
@@ -1162,7 +1165,7 @@ const SectionsListCommand = cmd({
       if (args.json) {
         const full: Record<string, boolean> = {}
         for (const s of SECTION_NAMES) full[s] = sections[s] !== false
-        console.log(JSON.stringify(full, null, 2))
+        await writeJson(full)
         prompts.outro("Done")
         return
       }
@@ -1303,15 +1306,15 @@ const StatusCommand = cmd({
 
       spinner.stop(success("Loaded"))
 
-      const sponsors: string[] = configData.sponsors ?? []
-      const streamers: string[] = configData.streamers ?? []
-      const producers: string[] = configData.producers ?? []
-      const instrumentals: any[] = configData.instrumentals ?? []
-      const featuredArtists: any[] = configData.featuredArtists ?? []
+      const sponsors: string[] = firstArray(configData.sponsors)
+      const streamers: string[] = firstArray(configData.streamers)
+      const producers: string[] = firstArray(configData.producers)
+      const instrumentals: any[] = firstArray(configData.instrumentals)
+      const featuredArtists: any[] = firstArray(configData.featuredArtists)
       const curator = configData.curator ?? {}
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           brands,
           featuredArtists,
           sponsors,
@@ -1321,7 +1324,7 @@ const StatusCommand = cmd({
           learning,
           sections,
           curator,
-        }, null, 2))
+        })
         prompts.outro("Done")
         return
       }
@@ -1461,7 +1464,7 @@ const StatsCommand = cmd({
       spinner.stop(success("Loaded"))
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           content: {
             videos: videosOk ? videoTotal : null,
             articles: articlesOk ? articleTotal : null,
@@ -1471,7 +1474,7 @@ const StatsCommand = cmd({
           monetization: { paid_tutorials: paidTutorials.length, tutorials: paidTutorials.map((t: any) => ({ title: t.title, price: t.price_usd, type: t.type })) },
           trending: trendingItems.slice(0, 5).map((t: any) => ({ title: t.title, views: t.views, profile: t.profile_name ?? t.name })),
           active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, views: Number(p.views ?? 0) })),
-        }, null, 2))
+        })
         prompts.outro("Done")
         return
       }
@@ -1662,7 +1665,7 @@ Return ONLY the JSON object, no markdown or explanation.`
       spinner.stop(success("Analysis complete"))
 
       if (args.json) {
-        console.log(JSON.stringify(suggestions, null, 2))
+        await writeJson(suggestions)
         prompts.outro("Done")
         return
       }
@@ -1673,7 +1676,7 @@ Return ONLY the JSON object, no markdown or explanation.`
       console.log(`  ${suggestions.summary ?? "No summary"}`)
       console.log()
 
-      const actions: any[] = suggestions.actions ?? []
+      const actions: any[] = firstArray(suggestions.actions)
       if (actions.length === 0) {
         console.log(`  ${dim("No changes suggested — page looks good!")}`)
         prompts.outro("Done")
@@ -2064,7 +2067,7 @@ const DiscoverFeedbackCommand = cmd({
     if (!token) { prompts.outro("Done"); return }
     const feedback = await readFeedback()
     const recent = feedback.slice(-(args.limit as number)).reverse()
-    if (args.json) { console.log(JSON.stringify(recent, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(recent); prompts.outro("Done"); return }
     if (recent.length === 0) { prompts.log.info("No feedback yet."); prompts.outro(dim("iris discover review")); return }
     printDivider()
     for (const f of recent) {
@@ -2129,7 +2132,7 @@ const PromosListCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
     const slots = await readPromos()
-    if (args.json) { console.log(JSON.stringify(slots, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(slots); prompts.outro("Done"); return }
     if (slots.length === 0) { prompts.log.info("No promoted slots yet."); prompts.outro(dim("iris discover promos add")); return }
     printDivider()
     for (const s of slots) {
@@ -2243,9 +2246,13 @@ const PromosCommand = cmd({
 // Root discover command
 // ============================================================================
 
-export const PlatformDiscoverCommand = cmd({
-  command: "discover",
-  describe: "manage the Discover page — status, curate, review/taste, promos, stats, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
+export const PlatformDiscoverCommand = productCommand({
+  name: "discover",
+  purpose:
+    "Discover — curate the public page: artists, promos, learning, sponsors and sections",
+  keywords: ["discover", "curate", "promo", "artist", "sponsor", "learning", "taste", "section", "playlist"],
+  howtos: ["discover", "learning-tutorials", "community-curation"],
+  playbooks: ["discover-publish"],
   builder: (yargs) =>
     yargs
       .command(StatusCommand)
@@ -2265,6 +2272,6 @@ export const PlatformDiscoverCommand = cmd({
       .command(BrandsCommand)
       .command(LearningCommand)
       .command(SectionsCommand)
+      .command(PlaylistCommand)
       .demandCommand(),
-  async handler() {},
 })

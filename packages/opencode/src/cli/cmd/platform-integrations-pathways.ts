@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 async function callPathways(userId: number, func: string, params: Record<string, unknown> = {}): Promise<any> {
   const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
@@ -15,6 +16,26 @@ async function callPathways(userId: number, func: string, params: Record<string,
   return res.json()
 }
 
+/**
+ * get_pipeline_summary returns { pipeline: [{stage, count, total_value}], totals: {cases, value, stages} }.
+ * We were reading data.total_cases / data.stages[].name / .value — none of which exist — so a system
+ * holding 2,156 cases and $17.2M reported "0 cases | $0". Normalise here so both callers agree, and
+ * keep the older field names as fallbacks in case the API shape moves back.
+ */
+function readPipeline(data: any): { cases: number; value: number; rows: Array<{ name: string; count: number; value: number }> } {
+  const raw: any[] = firstArray(data?.pipeline, data?.stages)
+  const rows = raw.map((r) => ({
+    name: r.stage ?? r.name ?? "Unknown",
+    count: Number(r.count ?? 0),
+    value: Number(r.total_value ?? r.value ?? 0),
+  }))
+  const cases = Number(data?.totals?.cases ?? data?.total_cases ?? rows.reduce((n, r) => n + r.count, 0))
+  const value = Number(data?.totals?.value ?? data?.total_value ?? rows.reduce((n, r) => n + r.value, 0))
+  return { cases, value, rows }
+}
+
+const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+
 const PathwaysAuditCommand = cmd({
   command: "audit",
   describe: "run financial audit on all cases — shows flagged cases needing attention",
@@ -23,6 +44,11 @@ const PathwaysAuditCommand = cmd({
       .option("stage", { type: "string", describe: "only audit cases in this stage" })
       .option("email", { type: "boolean", describe: "generate and display audit email" })
       .option("to", { type: "string", describe: "email recipient (default: rbaker@vanguardhcs.com)" })
+      .option("names", {
+        type: "boolean",
+        default: false,
+        describe: "show patient names instead of case IDs (PHI — off by default)",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("Pathways Audit") }
@@ -37,7 +63,7 @@ const PathwaysAuditCommand = cmd({
       if (args.stage) params.stage_filter = args.stage
       spinner.start("Auditing cases...")
       const data = await callPathways(userId, func, params)
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
       if (args.email) {
         if (!data.send) {
           spinner.stop(success(data.message || "All cases clean"))
@@ -64,10 +90,19 @@ const PathwaysAuditCommand = cmd({
         if (data.flagged_cases?.length > 0) {
           console.log()
           console.log(bold("  Cases needing attention:"))
+          // Default to the case ID, never the patient name. This output lands in terminal
+          // scrollback, screen-shares and recordings — it is the command most likely to be
+          // demoed on a client call, so PHI has to be opt-in rather than opt-out.
           for (const fc of data.flagged_cases) {
-            const name = fc.patient_name || fc.case_id || "?"
+            const label = args.names
+              ? (fc.patient_name || fc.case_id || "?")
+              : (fc.case_id || fc.seq_id || "?")
             const flags = (fc.flags || []).map((f: any) => f.message).join(", ")
-            console.log(`  ${dim("+")} ${name}: ${flags}`)
+            console.log(`  ${dim("+")} ${label}: ${flags}`)
+          }
+          if (!args.names) {
+            console.log()
+            console.log(dim("  Showing case IDs. Add --names to reveal patient names (PHI)."))
           }
         }
       }
@@ -103,7 +138,7 @@ const PathwaysSettleCommand = cmd({
       if (args.batch) {
         spinner.start(`Processing cases in "${args.stage}"...`)
         const data = await callPathways(userId, "batch_settle", { stage_filter: args.stage })
-        if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+        if (args.json) { await writeJson(data); return }
         spinner.stop(success(`${data.processed_count} cases settled (${data.skipped_count} skipped)`))
         for (const r of (data.results || [])) {
           console.log()
@@ -124,7 +159,7 @@ const PathwaysSettleCommand = cmd({
         if (!args.check) { prompts.log.error("--check <amount> is required"); prompts.outro("Done"); return }
         spinner.start(`Calculating settlement for ${args["case-id"]}...`)
         const data = await callPathways(userId, "calculate_settlement", { case_id: args["case-id"], check_amount: args.check })
-        if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+        if (args.json) { await writeJson(data); return }
         spinner.stop(success(`Settlement: ${data.reduction_percentage}% reduction`))
         console.log()
         printKV("Patient", data.patient_name || data.case_id)
@@ -165,11 +200,12 @@ const PathwaysPipelineCommand = cmd({
       if (args.stage) params.stage_filter = args.stage
       spinner.start("Fetching pipeline...")
       const data = await callPathways(userId, "get_pipeline_summary", params)
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
-      spinner.stop(success(`${data.total_cases || 0} cases | $${(data.total_value || 0).toLocaleString()}`))
+      if (args.json) { await writeJson(data); return }
+      const summary = readPipeline(data)
+      spinner.stop(success(`${summary.cases} cases | ${money(summary.value)}`))
       console.log()
-      for (const stage of (data.stages || [])) {
-        console.log(`  ${bold(stage.name)}: ${stage.count} cases — $${(stage.value || 0).toLocaleString()}`)
+      for (const stage of summary.rows) {
+        console.log(`  ${bold(stage.name)}: ${stage.count} cases — ${money(stage.value)}`)
       }
       console.log()
       prompts.outro("Done")
@@ -193,10 +229,13 @@ const PathwaysStatusCommand = cmd({
     if (!userId) return
     try {
       const data = await callPathways(userId, "get_pipeline_summary", {})
-      if (args.json) { console.log(JSON.stringify({ connected: true, ...data }, null, 2)); return }
+      if (args.json) { await writeJson({ connected: true, ...data }); return }
+      const summary = readPipeline(data)
       console.log(success("  Connected"))
-      printKV("Cases", `${data.total_cases || 0}`)
-      printKV("Pipeline Value", `$${(data.total_value || 0).toLocaleString()}`)
+      printKV("Cases", `${summary.cases}`)
+      printKV("Pipeline Value", money(summary.value))
+      printKV("Stages", `${summary.rows.length}`)
+      if (typeof data?.audit_flag_count === "number") printKV("Flagged", `${data.audit_flag_count} case(s)`)
       printKV("Functions", "17 available")
       console.log()
       console.log(dim("  iris integrations pathways audit"))

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -114,7 +114,7 @@ const ListCmd = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(partials.map((p: any) => ({ ...p, used_by: usage[p.slug] ?? [] })), null, 2))
+        await writeJson(partials.map((p: any) => ({ ...p, used_by: usage[p.slug] ?? [] })))
         prompts.outro("Done")
         return
       }
@@ -165,7 +165,7 @@ const ViewCmd = cmd({
       sp.stop(String(partial.label ?? partial.slug))
 
       if (args.json) {
-        console.log(JSON.stringify(partial, null, 2))
+        await writeJson(partial)
         prompts.outro("Done")
         return
       }
@@ -202,7 +202,7 @@ const GetCmd = cmd({
       process.exit(1)
     }
     if (!args.path) {
-      console.log(JSON.stringify(partial, null, 2))
+      await writeJson(partial)
       return
     }
     const value = getNestedValue(partial, args.path as string)
@@ -210,7 +210,7 @@ const GetCmd = cmd({
       console.error(`Path '${args.path}' not found in '${args.slug}'`)
       process.exit(1)
     }
-    if (typeof value === "object") console.log(JSON.stringify(value, null, 2))
+    if (typeof value === "object") await writeJson(value)
     else console.log(String(value))
   },
 })
@@ -436,7 +436,7 @@ const UsageCmd = cmd({
       sp.stop(`${pages.length} page(s) reference this partial`)
 
       if (args.json) {
-        console.log(JSON.stringify(pages, null, 2))
+        await writeJson(pages)
         prompts.outro("Done")
         return
       }

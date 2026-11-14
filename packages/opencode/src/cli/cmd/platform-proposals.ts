@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // Proposals Create — generate proposal from lead data + send
@@ -108,7 +108,7 @@ const ProposalsCreateCommand = cmd({
     if (!(await handleApiError(res, "Create proposal"))) return
     const data = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     if (!data.success) {
       if (data.error === "duplicate") {
@@ -183,7 +183,7 @@ const ProposalsStatusCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const status = result?.data ?? result
 
-    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+    if (args.json) { await writeJson(status); return }
 
     if (!status?.has_payment_gate) {
       prompts.log.info(`No proposal for lead #${leadId}`)
@@ -243,7 +243,7 @@ const ProposalsListCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const leads = result?.data ?? result ?? []
 
-    if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+    if (args.json) { await writeJson(leads); return }
 
     if (!Array.isArray(leads) || leads.length === 0) {
       prompts.log.info("No active proposals found")

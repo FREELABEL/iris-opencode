@@ -1,8 +1,9 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
 // Google Calendar integration via iris-api execute-direct endpoint
 // Replaces the old bridge-based macOS Calendar.app implementation
@@ -103,12 +104,23 @@ function formatDate(iso: string): string {
   }
 }
 
+/**
+ * Google returns start/end as OBJECTS — {dateTime, timeZone} for timed events, {date} for
+ * all-day ones — not as strings. This renderer assumed strings, so once events actually reached
+ * it the row printed "[object Object]" and .includes() threw. Normalise both shapes.
+ */
+function eventTime(v: any): string {
+  if (!v) return ""
+  if (typeof v === "string") return v
+  return v.dateTime || v.date || ""
+}
+
 function printEvent(ev: any): void {
-  const start = ev.start || ""
-  const end = ev.end || ""
+  const start = eventTime(ev.start)
+  const end = eventTime(ev.end)
   const time = start.includes("T")
     ? `${formatTime(start)} – ${formatTime(end)}`
-    : "All day"
+    : (start ? `${start} (all day)` : "All day")
   console.log(`  ${bold(time)}  ${ev.summary || "(no title)"}`)
   if (ev.location) console.log(`  ${dim("  " + ev.location)}`)
   if (ev.description) {
@@ -123,25 +135,66 @@ function printEvent(ev: any): void {
 const CalendarListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list upcoming calendar events",
+  describe: "list calendar events — future by default, past via --since or a negative --days",
   builder: (yargs) =>
     addAccountOptions(yargs)
-      .option("days", { type: "number", default: 7, describe: "look ahead N days" })
+      .option("days", { type: "number", default: 7, describe: "look ahead N days (negative looks BACK)" })
+      // #178634: every calendar read verb was present or future tense, so "what meeting did I
+      // have last Thursday" — one of the most common things anyone asks a calendar — was
+      // unanswerable. --since/--until mirror `iris imessage payments`, which already filters
+      // this way.
+      .option("since", { type: "string", describe: "start of window, YYYY-MM-DD (past allowed)" })
+      .option("until", { type: "string", describe: "end of window, YYYY-MM-DD" })
+      .option("search", { type: "string", alias: "q", describe: "filter by event title (case-insensitive)" })
       .option("limit", { type: "number", default: 20, describe: "max events" })
       .option("calendar", { type: "string", alias: "c", describe: "calendar ID (default: primary)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
     UI.empty()
-    prompts.intro(`◈  Calendar — Next ${args.days} days`)
 
+    // Resolve the window. Explicit --since/--until win; otherwise --days, which may be
+    // negative to look backwards.
     const now = new Date()
-    const end = new Date(now.getTime() + (args.days as number) * 86400000)
+    const dayMs = 86400000
+    const parseDay = (v: unknown, endOfDay = false): Date | undefined => {
+      if (typeof v !== "string" || !v.trim()) return undefined
+      const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? `${v.trim()}T${endOfDay ? "23:59:59" : "00:00:00"}` : v.trim())
+      return Number.isNaN(d.getTime()) ? undefined : d
+    }
+
+    const sinceArg = parseDay(args.since)
+    const untilArg = parseDay(args.until, true)
+    const days = (args.days as number) ?? 7
+
+    let start: Date
+    let end: Date
+    let label: string
+    if (sinceArg || untilArg) {
+      start = sinceArg ?? new Date(now.getTime() - 365 * dayMs)
+      end = untilArg ?? now
+      if (end < start) {
+        prompts.log.warn("--until is before --since — nothing can match that window.")
+        prompts.outro("Done")
+        return
+      }
+      label = `${start.toISOString().slice(0, 10)} → ${end.toISOString().slice(0, 10)}`
+    } else if (days < 0) {
+      start = new Date(now.getTime() + days * dayMs)
+      end = now
+      label = `Last ${Math.abs(days)} days`
+    } else {
+      start = now
+      end = new Date(now.getTime() + days * dayMs)
+      label = `Next ${days} days`
+    }
+
+    prompts.intro(`◈  Calendar — ${label}${args.search ? ` · "${args.search}"` : ""}`)
     let result: any
     try {
       result = await calExec("get_events", {
         max_results: args.limit,
-        time_min: now.toISOString(),
+        time_min: start.toISOString(),
         time_max: end.toISOString(),
         ...(args.calendar ? { calendar_id: args.calendar } : {}),
       }, getAccountOpts(args))
@@ -156,21 +209,32 @@ const CalendarListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
 
-    const events: any[] = result.events ?? []
+    // The Google Calendar API returns events at data.items; result.events does not exist and
+    // never did, so the human-readable list has ALWAYS printed "No events" while --json quietly
+    // returned them. Found 2026-08-02 with 5 real events in the window. Accept both shapes so a
+    // future response change cannot silently blank the list again.
+    let events: any[] = firstArray(result.events, result.data?.items, result.items)
+    if (args.search) {
+      const q = String(args.search).toLowerCase()
+      events = events.filter((e: any) =>
+        String(e.summary ?? e.title ?? "").toLowerCase().includes(q) ||
+        String(e.description ?? "").toLowerCase().includes(q),
+      )
+    }
     if (events.length === 0) {
-      prompts.log.info(`No events in the next ${args.days} days`)
+      prompts.log.info(`No events — ${label}${args.search ? ` matching "${args.search}"` : ""}`)
       prompts.outro("Done")
       return
     }
 
     let lastDate = ""
     for (const ev of events) {
-      const d = formatDate(ev.start)
+      const d = formatDate(eventTime(ev.start))
       if (d !== lastDate) {
         printDivider()
         console.log(`  ${bold(d)}`)
@@ -219,12 +283,16 @@ const CalendarTodayCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
 
-    const events: any[] = result.events ?? []
+    // Same shape bug the `list` fix caught: the Google Calendar API returns events at
+    // data.items, so `result.events` is always undefined and this printed "nothing on
+    // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
+    // a fix applied at one call site and not its siblings is a fix that looks done.
+    const events: any[] = firstArray(result.events, result.data?.items, result.items)
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar today")
       prompts.outro("Done")
@@ -271,12 +339,16 @@ const CalendarTomorrowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
 
-    const events: any[] = result.events ?? []
+    // Same shape bug the `list` fix caught: the Google Calendar API returns events at
+    // data.items, so `result.events` is always undefined and this printed "nothing on
+    // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
+    // a fix applied at one call site and not its siblings is a fix that looks done.
+    const events: any[] = firstArray(result.events, result.data?.items, result.items)
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar tomorrow")
       prompts.outro("Done")
@@ -333,7 +405,7 @@ const CalendarAddCommand = cmd({
       result = await calExec("create_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -342,7 +414,7 @@ const CalendarAddCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // don't let automation read a failed create as success (#155323)
       prompts.outro("Done")
       return
@@ -400,7 +472,7 @@ const CalendarUpdateCommand = cmd({
       result = await calExec("update_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -409,7 +481,7 @@ const CalendarUpdateCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -452,7 +524,7 @@ const CalendarDeleteCommand = cmd({
       result = await calExec("delete_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -461,7 +533,7 @@ const CalendarDeleteCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -535,7 +607,7 @@ const CalendarCalendarsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(cals, null, 2))
+      await writeJson(cals)
       prompts.outro("Done")
       return
     }
@@ -590,7 +662,7 @@ const CalendarFreeCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -601,7 +673,7 @@ const CalendarFreeCommand = cmd({
       return
     }
 
-    const slots: any[] = result.free_slots ?? []
+    const slots: any[] = firstArray(result.free_slots)
     if (slots.length === 0) {
       prompts.log.info("No free slots in that window — fully booked!")
       prompts.outro("Done")
@@ -655,7 +727,7 @@ const CalendarDefaultGetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -699,7 +771,7 @@ const CalendarDefaultSetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -762,7 +834,7 @@ const CalendarScheduleCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -774,7 +846,7 @@ const CalendarScheduleCommand = cmd({
     console.log()
 
     // Placed items
-    const placed: any[] = data.schedule ?? []
+    const placed: any[] = firstArray(data.schedule)
     if (placed.length > 0) {
       console.log(`  ${bold(`Placed: ${placed.length} items`)}`)
       printDivider()
@@ -793,7 +865,7 @@ const CalendarScheduleCommand = cmd({
     }
 
     // Unplaced items
-    const unplaced: any[] = data.could_not_place ?? []
+    const unplaced: any[] = firstArray(data.could_not_place)
     if (unplaced.length > 0) {
       console.log(`  ${bold(`Could not place: ${unplaced.length} items`)}`)
       for (const item of unplaced) {
@@ -846,7 +918,7 @@ const CalendarPrefsShowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -929,7 +1001,7 @@ const CalendarPrefsSetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -977,12 +1049,12 @@ const CalendarHabitsListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
 
-    const habits: any[] = data.habits ?? []
+    const habits: any[] = firstArray(data.habits)
     if (habits.length === 0) {
       prompts.log.info("No habits yet. Create one: iris calendar habits add \"Deep work\" --duration 90 --freq 5")
       prompts.outro("Done")
@@ -1053,7 +1125,7 @@ const CalendarHabitsAddCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -1126,7 +1198,7 @@ const CalendarAnalyticsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }

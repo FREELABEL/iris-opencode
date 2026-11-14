@@ -7974,6 +7974,11 @@
             "default": "ctrl+v",
             "type": "string"
           },
+          "input_dictate": {
+            "description": "Dictate: record voice into the prompt",
+            "default": "<leader>v",
+            "type": "string"
+          },
           "input_submit": {
             "description": "Submit input",
             "default": "return",

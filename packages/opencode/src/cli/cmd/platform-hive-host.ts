@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { dim, bold, success, highlight } from "./iris-api"
 import { spawnSync } from "child_process"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris hive host  —  provision a secure Windows RDP host (the QB/PHI box)
@@ -21,6 +22,32 @@ import { spawnSync } from "child_process"
 // First use case: VPN IRIS HIVE bloq #531 — a QuickBooks Desktop host on Azure,
 // reachable only over Tailscale, scoped to the Drex accounting team.
 // ============================================================================
+
+/**
+ * Emit the PowerShell instead of running it, for hosts Azure cannot reach.
+ *
+ * Everything here drives a VM through `az vm run-command`, which is excellent and only
+ * works on an Azure VM you own. The same steps are exactly what a physical Windows box in
+ * a back office needs — and for those there is currently no path at all, so the useful
+ * automation stops at the cloud boundary for no reason other than transport.
+ *
+ * The script is the portable part. Printing it turns "we cannot reach that machine" into
+ * "paste this into an elevated PowerShell on that machine", which is a one-time, auditable
+ * step someone is already sitting in front of during setup. Deliberately NOT a new remote
+ * exec path: adding WinRM or SSH credentials to reach a client's accounting host is a much
+ * bigger security decision than pasting a script you can read first.
+ */
+function printScript(title: string, ps: string, note?: string): void {
+  console.log()
+  console.log(bold(title))
+  console.log(dim("  Run in an ELEVATED PowerShell on that machine (Start → Windows PowerShell → Run as administrator)."))
+  if (note) console.log(dim(`  ${note}`))
+  console.log()
+  console.log(ps)
+  console.log()
+  console.log(dim("  Read it before you run it — it is printed rather than executed for exactly that reason."))
+  console.log()
+}
 
 // ── az CLI plumbing ──────────────────────────────────────────────────────────
 
@@ -74,13 +101,21 @@ const HostAddUserCommand = cmd({
   describe: "create a dedicated RDP Windows user on the VM (+ Remote Desktop group), one-time password",
   builder: (y) =>
     y
-      .positional("vm", { describe: "Azure VM name, e.g. qb-host-vanguard", type: "string", demandOption: true })
+      .positional("vm", { describe: "Azure VM name — or any label, with --print-script", type: "string", demandOption: true })
       .positional("user", { describe: "Windows username to create, e.g. haroon", type: "string", demandOption: true })
-      .option("resource-group", { alias: "g", describe: "Azure resource group", type: "string", demandOption: true })
-      .option("full-name", { describe: "display name for the account", type: "string" }),
+      .option("resource-group", { alias: "g", describe: "Azure resource group", type: "string" })
+      .option("full-name", { describe: "display name for the account", type: "string" })
+      .option("print-script", { describe: "print the PowerShell to run by hand — for machines Azure cannot reach", type: "boolean", default: false }),
   async handler(argv) {
-    requireAzOrExit()
-    const rg = String(argv["resource-group"])
+    const printOnly = Boolean(argv["print-script"])
+    if (!printOnly) {
+      requireAzOrExit()
+      if (!argv["resource-group"]) {
+        console.log(`${highlight("!")} --resource-group is required to run against an Azure VM (or use --print-script).`)
+        process.exit(1)
+      }
+    }
+    const rg = String(argv["resource-group"] ?? "")
     const vm = String(argv.vm)
     const user = String(argv.user).replace(/[^A-Za-z0-9._-]/g, "")
     const fullName = argv["full-name"] ? String(argv["full-name"]) : `${user} (Hive RDP)`
@@ -100,6 +135,17 @@ const HostAddUserCommand = cmd({
       `'STATUS='+$status`,
       `'TEMP_PASSWORD='+$pw`,
     ].join("\n")
+
+    if (printOnly) {
+      printScript(
+        `Create the dedicated RDP account "${user}" on ${vm}`,
+        ps,
+        "It prints TEMP_PASSWORD at the end. That password is one-time — Windows forces a change at first logon.",
+      )
+      console.log(dim("  Give the temporary password to that person directly, not over the same channel as the host address."))
+      console.log()
+      return
+    }
 
     console.log(`${dim("→")} creating Windows user ${bold(user)} on ${bold(vm)} ${dim("(via az run-command)…")}`)
     const r = azRunPS(rg, vm, ps)
@@ -126,13 +172,23 @@ const HostSetupCommand = cmd({
   describe: "install Tailscale on the VM and join the tailnet (headless, via auth key)",
   builder: (y) =>
     y
-      .positional("vm", { describe: "Azure VM name", type: "string", demandOption: true })
-      .option("resource-group", { alias: "g", describe: "Azure resource group", type: "string", demandOption: true })
+      .positional("vm", { describe: "Azure VM name — or any label, with --print-script", type: "string", demandOption: true })
+      .option("resource-group", { alias: "g", describe: "Azure resource group", type: "string" })
       .option("authkey", { describe: "Tailscale auth key (login.tailscale.com/admin/settings/keys)", type: "string", demandOption: true })
-      .option("hostname", { describe: "tailnet hostname (defaults to the VM name)", type: "string" }),
+      .option("hostname", { describe: "tailnet hostname (defaults to the VM name)", type: "string" })
+      .option("print-script", { describe: "print the PowerShell to run by hand — for machines Azure cannot reach", type: "boolean", default: false }),
   async handler(argv) {
-    requireAzOrExit()
-    const rg = String(argv["resource-group"])
+    const printOnly = Boolean(argv["print-script"])
+    // --print-script needs neither the az CLI nor a resource group: the whole point is a
+    // machine Azure does not know about. Requiring either would refuse the case it exists for.
+    if (!printOnly) {
+      requireAzOrExit()
+      if (!argv["resource-group"]) {
+        console.log(`${highlight("!")} --resource-group is required to run against an Azure VM (or use --print-script).`)
+        process.exit(1)
+      }
+    }
+    const rg = String(argv["resource-group"] ?? "")
     const vm = String(argv.vm)
     const authkey = String(argv.authkey)
     const hostname = argv.hostname ? String(argv.hostname) : vm
@@ -152,6 +208,17 @@ const HostSetupCommand = cmd({
       `Start-Sleep -Seconds 3`,
       `'TAILNET_IP='+(& $ts ip -4 | Select-Object -First 1)`,
     ].join("\n")
+
+    if (printOnly) {
+      printScript(
+        `Install Tailscale on ${vm} and join the tailnet as ${hostname}`,
+        ps,
+        "The auth key below is single-use and short-lived — mint a fresh one if this sits around.",
+      )
+      console.log(dim(`  Then, back here:  iris hive vpn status   ${dim("(the host should appear)")}`))
+      console.log()
+      return
+    }
 
     console.log(`${dim("→")} installing Tailscale on ${bold(vm)} + joining tailnet as ${bold(hostname)} ${dim("(this takes ~1 min)…")}`)
     const r = azRunPS(rg, vm, ps, 360)
@@ -231,7 +298,7 @@ const HostLockdownCommand = cmd({
     }
     const opensRdp = (r: any) => {
       const one = r?.destinationPortRange
-      const many: string[] = r?.destinationPortRanges ?? []
+      const many: string[] = firstArray(r?.destinationPortRanges)
       return one === "3389" || one === "*" || many.includes("3389") || many.includes("*")
     }
     const publicRdp = rules.filter(

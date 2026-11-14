@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
+import { assessScheduler, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -60,6 +62,38 @@ function timeUntil(dateStr: string | null | undefined): string {
   if (diff < 3600_000) return `${Math.round(diff / 60_000)}m`
   if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h`
   return `${Math.round(diff / 86400_000)}d`
+}
+
+/**
+ * How long ago a PAST timestamp was.
+ *
+ * timeUntil() counts down to a future moment, and its `diff < 0` branch returns the bare
+ * string "overdue" — correct for a next_run_at that has slipped, and useless for a run that
+ * already happened, because it discards the magnitude. Both run-history callers used to pass
+ * a past timestamp into it and render the resulting "overdue" as "just now", so EVERY
+ * completed run read as if it had finished seconds ago: `schedules list --latest` printed
+ * "just now" for 350 of 350 rows, and `schedules history` gave the same answer for runs 114
+ * days apart. The data was never wrong — `--json` carried correct timestamps throughout.
+ *
+ * Elapsed time is a different question from remaining time, so it gets its own function
+ * rather than a sign flag on that one. Keep them separate: a future timestamp asks "how
+ * long until", a past one asks "how long since", and conflating them is what produced a
+ * dashboard that could not tell a live schedule from one dead since May.
+ */
+export function timeSince(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const then = new Date(String(dateStr)).getTime()
+  if (isNaN(then)) return ""
+  const diff = Date.now() - then
+  // A clock skew or a timestamp a hair in the future is "just now", not a negative age.
+  if (diff < 60_000) return "just now"
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h ago`
+  if (diff < 30 * 86400_000) {
+    const days = diff / 86400_000
+    return `${days < 10 ? days.toFixed(1) : Math.round(days)}d ago`
+  }
+  return `${Math.round(diff / (30 * 86400_000))}mo ago`
 }
 
 function taskLabel(s: Record<string, any>): string {
@@ -167,7 +201,15 @@ const SchedulesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as Record<string, any>
-      let schedules: any[] = data?.data ?? []
+      const allSchedules: any[] = firstArray(data?.data)
+      let schedules: any[] = allSchedules
+
+      // Assess the scheduler against the UNFILTERED set (#180927). Doing it
+      // after --active/--overdue would let the filters hide the outage: running
+      // `schedules list --overdue` during a scheduler failure is exactly when
+      // you most need to be told the scheduler is the cause, and that filter
+      // would otherwise leave a suspiciously tidy list with no explanation.
+      const schedulerHealth = assessScheduler(allSchedules)
 
       // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
       if (args.active) {
@@ -191,7 +233,7 @@ const SchedulesListCommand = cmd({
       const bloqNames: Record<number, string> = {}
       if (bloqIds.length > 0) {
         try {
-          const bloqRes = await irisFetch(`/api/v1/users/${userId}/bloqs?ids=${bloqIds.join(",")}`)
+          const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs?ids=${bloqIds.join(",")}`)
           if (bloqRes.ok) {
             const bloqData = (await bloqRes.json()) as any
             for (const b of (bloqData?.data ?? bloqData ?? [])) {
@@ -225,7 +267,21 @@ const SchedulesListCommand = cmd({
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
       if (args.json) {
-        console.log(JSON.stringify(schedules.map((s: any) => ({
+        // Machine consumers need the degradation too — a monitoring script that
+        // only reads the rows would have missed the June outage exactly as the
+        // humans did.
+        if (schedulerHealth) {
+          await writeJson({ degraded: [schedulerHealth], schedules: schedules.map((s: any) => ({
+            id: s.id,
+            name: s.name ?? s.title ?? s.task_name,
+            status: s.status,
+            next_run_at: s.next_run_at,
+            last_run_at: s.last_run_at,
+          })) })
+          prompts.outro("Done")
+          return
+        }
+        await writeJson(schedules.map((s: any) => ({
           id: s.id,
           name: s.name ?? s.title ?? s.task_name,
           status: s.status,
@@ -238,10 +294,12 @@ const SchedulesListCommand = cmd({
           next_run_at: s.next_run_at,
           time_until: timeUntil(s.next_run_at),
           last_run_at: s.last_run_at,
-        })), null, 2))
+        })))
         prompts.outro("Done")
         return
       }
+
+      printDegradations([schedulerHealth])
 
       if (schedules.length === 0) {
         prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
@@ -349,9 +407,8 @@ const SchedulesListCommand = cmd({
               : exec.status === "failed"
               ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
               : dim(exec.status ?? "?")
-            const when = exec.completed_at
-              ? timeUntil(exec.completed_at) === "overdue" ? dim("just now") : dim(`${timeUntil(exec.completed_at)} ago`)
-              : ""
+            const whenAgo = timeSince(exec.completed_at)
+            const when = whenAgo ? dim(whenAgo) : ""
             const model = exec.model_used ? dim(`[${exec.model_used}]`) : ""
             const tokens = exec.tokens_used ? dim(`${Number(exec.tokens_used).toLocaleString()} tok`) : ""
             const preview = String(exec.response_preview ?? exec.response ?? "").replace(/\n/g, " ").slice(0, 70)
@@ -411,7 +468,7 @@ const SchedulesGetCommand = cmd({
       const s = raw.task_name ? raw : (raw.data ?? raw)
 
       if (args.json) {
-        console.log(JSON.stringify(s, null, 2))
+        await writeJson(s)
         return
       }
 
@@ -568,7 +625,7 @@ const SchedulesHistoryCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = data?.data ?? []
+      const runs: any[] = firstArray(data?.data)
       spinner.stop(`${runs.length} run(s)`)
 
       if (runs.length === 0) {
@@ -578,7 +635,7 @@ const SchedulesHistoryCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(runs, null, 2))
+        await writeJson(runs)
         prompts.outro("Done")
         return
       }
@@ -591,8 +648,8 @@ const SchedulesHistoryCommand = cmd({
           : statusColor(String(r.status ?? "?"))
 
         const when = r.completed_at ?? r.started_at ?? r.created_at
-        const ago = when ? timeUntil(String(when)) : ""
-        const agoStr = ago === "overdue" ? dim("just now") : ago ? dim(`${ago} ago`) : ""
+        const ago = when ? timeSince(String(when)) : ""
+        const agoStr = ago ? dim(ago) : ""
 
         console.log()
         printDivider()
@@ -712,7 +769,7 @@ const SchedulesInspectCommand = cmd({
       spinner.stop(bold(schedule.task_name ?? `Schedule #${args.id}`))
 
       if (args.json) {
-        console.log(JSON.stringify({ schedule, agent }, null, 2))
+        await writeJson({ schedule, agent })
         prompts.outro("Done")
         return
       }
@@ -821,14 +878,58 @@ const SchedulesToggleCommand = cmd({
     spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
 
     try {
-      // toggle via PUT update with is_active flag
+      // Send `status`, which is the field the API has always actually read. This command used
+      // to send only `is_active` — a field the controller did not know — so the write fell
+      // through, the job saved unchanged, a 200 came back, and this printed a checkmark while
+      // the schedule kept firing (#179802). The API now accepts is_active as an alias too, so
+      // both are sent: `status` is correct, `is_active` keeps older backends working.
       const endpoint = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`
+      const wanted = args.disable ? "paused" : "scheduled"
 
-      const res = await irisFetch(endpoint, { method: "PUT", body: JSON.stringify({ is_active: !args.disable }) })
+      const res = await irisFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ status: wanted, is_active: !args.disable }),
+      })
       const ok = await handleApiError(res, `${action} schedule`)
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      spinner.stop(`${success("✓")} Schedule ${action.toLowerCase()}d`)
+      // VERIFY THE WRITE LANDED. Disabling a schedule is the emergency brake — it is what you
+      // reach for when an agent is looping or burning tokens. A checkmark the operator trusts
+      // and does not re-check is worse than an error, so success is now asserted against the
+      // server's own view rather than against a 200.
+      let landed: string | null = null
+      try {
+        const body = (await res.json()) as any
+        landed = body?.data?.status ?? body?.status ?? null
+      } catch {
+        // Non-JSON body — fall through to the explicit re-read below.
+      }
+      if (landed === null) {
+        try {
+          const check = await irisFetch(endpoint)
+          const body = (await check.json()) as any
+          landed = body?.data?.status ?? body?.status ?? null
+        } catch {
+          landed = null
+        }
+      }
+
+      if (landed !== null && landed !== wanted) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error(
+          `The API accepted the request but the schedule is still '${landed}', not '${wanted}'.\n` +
+            `Nothing was changed. Stop it with: iris schedules delete ${args.id} --yes`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Schedule ${action.toLowerCase()}d${landed ? dim(` (status: ${landed})`) : ""}`)
+      if (landed === null) {
+        // Could not confirm — say so rather than implying it is done.
+        prompts.log.warn(`Could not read the schedule back to confirm. Check: iris schedules get ${args.id}`)
+      }
       prompts.outro(dim(`iris schedules get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1009,7 +1110,9 @@ const SchedulesDeleteCommand = cmd({
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
       .option("dry-run", { describe: "show what would be deleted without deleting", type: "boolean", default: false })
-      .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
+      // `yes` aliased because that is what every other tool calls it, and the reporter of
+      // #179802 concluded there was no such flag while `--force` sat right here.
+      .option("force", { alias: ["f", "yes", "y"], describe: "skip confirmation", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -1050,6 +1153,18 @@ const SchedulesDeleteCommand = cmd({
       }
 
       if (!args.force) {
+        // Deleting is the only mechanism that reliably STOPS a schedule, so it is what a script
+        // reaches for in an incident. Prompting with no TTY hung the process instead of failing
+        // — the worst outcome available: a runaway job keeps firing while the operator's script
+        // sits waiting on a question nobody can answer (#179802).
+        if (isNonInteractive()) {
+          prompts.log.error(
+            `Refusing to prompt with no TTY. Re-run with --yes to confirm:\n  iris schedules delete ${args.id} --yes`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
         const confirmed = await prompts.confirm({ message: `Delete schedule #${args.id}? This cannot be undone.` })
         if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
       }
@@ -1270,8 +1385,6 @@ const SchedulesUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update schedule #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId()
     if (!userId) { prompts.outro("Done"); return }
@@ -1280,10 +1393,10 @@ const SchedulesUpdateCommand = cmd({
     if (args.frequency) payload.frequency = args.frequency
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --frequency to set a new frequency.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --frequency to set a new frequency.")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -1477,7 +1590,7 @@ const SchedulesHoursCommand = cmd({
       }
 
       // Parse days
-      let workingDays: string[] = currentSchedule.working_days ?? []
+      let workingDays: string[] = firstArray(currentSchedule.working_days)
       if (args.days) {
         const dayAbbrevs: Record<string, string> = {
           mon: "monday", tue: "tuesday", wed: "wednesday", thu: "thursday",

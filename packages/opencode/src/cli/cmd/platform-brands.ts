@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Brand CLI — first-class brand entity
@@ -85,9 +86,9 @@ const BrandsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any }
-      const brands: any[] = (data?.data?.data ?? data?.data ?? []) as any[]
+      const brands: any[] = firstArray(data?.data?.data, data?.data)
 
-      if (args.json) { console.log(JSON.stringify(brands, null, 2)); return }
+      if (args.json) { await writeJson(brands); return }
 
       if (spinner) spinner.stop(`${brands.length} brand(s)`)
 
@@ -262,7 +263,6 @@ const BrandsUpdateCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Brand #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -270,9 +270,9 @@ const BrandsUpdateCommand = cmd({
     if (args.description) body.description = args.description
     if (args["entity-type"]) body.entity_type = args["entity-type"]
     if (Object.keys(body).length === 0) {
-      prompts.log.warn("Nothing to update — pass --name, --status, --description, or --entity-type")
-      prompts.outro("Done"); return
+      failNoOp("update", "pass --name, --status, --description, or --entity-type")
     }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -407,7 +407,7 @@ const PersonasListCommand = cmd({
       const ok = await handleApiError(res, "List personas"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
-      const personas: any[] = data?.data ?? []
+      const personas: any[] = firstArray(data?.data)
       spinner.stop(`${personas.length} persona(s)`)
 
       if (personas.length === 0) {
@@ -490,7 +490,6 @@ const PersonasUpdateCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update persona #${args.personaId}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -499,7 +498,8 @@ const PersonasUpdateCommand = cmd({
     if (args["system-prompt"]) body.system_prompt = args["system-prompt"]
     if (args["voice-sample-id"] != null) body.voice_sample_id = args["voice-sample-id"]
     if (args.default != null) body.is_default = args.default
-    if (Object.keys(body).length === 0) { prompts.log.warn("Nothing to update"); prompts.outro("Done"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "pass at least one field flag") }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -581,6 +581,343 @@ const PersonasGroup = cmd({
       .command(PersonasUpdateCommand)
       .command(PersonasDeleteCommand)
       .command(PersonasDefaultCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+
+// ============================================================================
+// brands glossary <subcommand> — per-tenant transcription vocabulary
+//
+// A hardcoded IRIS glossary was briefly applied to every tenant's audio, which biased other
+// people's transcripts toward our product's nouns. Vocabulary is per-brand for the same reason
+// design tokens are: it belongs to the client, not to the platform.
+// ============================================================================
+
+/** slug -> brand id, the same lookup the design-tokens set path uses. */
+async function resolveBrandId(slug: string): Promise<number | null> {
+  const res = await irisFetch(`/api/v1/brands?slug=${encodeURIComponent(slug)}&per_page=1`)
+  if (!res.ok) return null
+  const body = (await res.json()) as { data?: any }
+  const brands: any[] = firstArray(body?.data?.data, body?.data)
+  return brands.length ? brands[0].id : null
+}
+
+const GlossaryGetCommand = cmd({
+  command: "get <slug>",
+  describe: "show a brand's transcription vocabulary",
+  builder: (yargs) => yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Transcription Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Loading…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`)
+      const ok = await handleApiError(res, "Get glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const glossary = body?.data?.glossary ?? null
+
+      spinner.stop(String(args.slug))
+      printDivider()
+      if (!glossary) {
+        // Not an error state. No glossary means transcription sends no hint at all, which is
+        // the safe default — a wrong hint is worse than none.
+        console.log(`  ${dim("No glossary set. Transcription runs without domain hints.")}`)
+        console.log(`  ${dim(`Set one: iris brands glossary set ${args.slug} "term, term, term"`)}`)
+      } else {
+        console.log(`  ${Array.isArray(glossary) ? glossary.join(", ") : glossary}`)
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossarySetCommand = cmd({
+  command: "set <slug> <terms>",
+  describe: "set a brand's transcription vocabulary (a sentence or comma-separated terms)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .positional("terms", { describe: 'e.g. "deposition, lien, subrogation"', type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Saving…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`, {
+        method: "PATCH",
+        body: JSON.stringify({ glossary: String(args.terms) }),
+      })
+      const ok = await handleApiError(res, "Set glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // Read it back. A 200 says the request was accepted, not that the value stored — the
+      // lesson from #179802, which printed a checkmark while nothing changed.
+      const check = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`)
+      const stored = ((await check.json()) as any)?.data?.glossary ?? null
+
+      if (!stored) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error("The API accepted the request but no glossary is stored.")
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+
+      spinner.stop(`${success("✓")} Glossary set`)
+      printDivider()
+      console.log(`  ${Array.isArray(stored) ? stored.join(", ") : stored}`)
+      printDivider()
+      console.log(dim("  Applies to this brand's transcriptions only."))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossaryClearCommand = cmd({
+  command: "clear <slug>",
+  describe: "remove a brand's transcription vocabulary",
+  builder: (yargs) => yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Clear Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Clearing…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`, {
+        method: "PATCH",
+        body: JSON.stringify({ glossary: null }),
+      })
+      const ok = await handleApiError(res, "Clear glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Glossary cleared`)
+      console.log(dim("  Transcription will run without domain hints for this brand."))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossaryGroup = cmd({
+  command: "glossary <subcommand>",
+  describe: "transcription vocabulary for a brand — get, set, clear",
+  builder: (yargs) =>
+    yargs
+      .command(GlossaryGetCommand)
+      .command(GlossarySetCommand)
+      .command(GlossaryClearCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+
+// ============================================================================
+// brands treatments <subcommand> — a brand's own transcript treatments
+//
+// The platform ships seven treatments (clean, notes, meeting, standup, captions, idea, raw).
+// A client's work is not our work: a clinic's intake note and a label's session recap keep
+// entirely different things. Until now defining one meant hand-editing brands.metadata, which
+// is not something to ask a client to do.
+// ============================================================================
+
+const TreatmentsListCommand = cmd({
+  command: "list <slug>",
+  aliases: ["ls", "get"],
+  describe: "show a brand's own treatments",
+  builder: (yargs) =>
+    yargs.positional("slug", { type: "string", demandOption: true }).option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Transcript Treatments — ${args.slug}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const ok = await handleApiError(res, "Get treatments")
+    if (!ok) { prompts.outro("Done"); return }
+
+    const data = (await res.json()) as any
+    const treatments = data?.data?.treatments ?? {}
+    const ids = Object.keys(treatments)
+
+    if (args.json) { await writeJson(treatments); prompts.outro("Done"); return }
+
+    printDivider()
+    if (!ids.length) {
+      // Not an error state — the built-ins are a working default, and saying so beats an empty
+      // list that reads as "something went wrong".
+      console.log(`  ${dim("No custom treatments. The built-ins still apply:")}`)
+      console.log(`  ${dim("clean · notes · meeting · standup · captions · idea")}`)
+      console.log()
+      console.log(`  ${dim("$")} iris brands treatments set ${args.slug} intake --prompt "..."`)
+    } else {
+      for (const id of ids) {
+        const t = treatments[id] || {}
+        console.log(`  ${bold(id)}  ${dim(t.label || "")}`)
+        if (t.description) console.log(`    ${dim(t.description)}`)
+        console.log(`    ${dim(String(t.prompt || "").slice(0, 110))}${String(t.prompt || "").length > 110 ? dim("…") : ""}`)
+        console.log()
+      }
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const TreatmentsSetCommand = cmd({
+  command: "set <slug> <id>",
+  describe: "add or replace one treatment (keeps the others)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { type: "string", demandOption: true })
+      .positional("id", { type: "string", demandOption: true, describe: "Short id, e.g. intake" })
+      .option("prompt", { type: "string", describe: "The instruction. Required unless --file is given." })
+      .option("file", { type: "string", describe: "Read the prompt from a file" })
+      .option("label", { type: "string", describe: "Name shown in pickers" })
+      .option("description", { type: "string", describe: "One line explaining what it keeps" })
+      .option("shape", { type: "string", choices: ["text", "markdown"], default: "markdown" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Treatment — ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let prompt = args.prompt ? String(args.prompt) : ""
+    if (args.file) {
+      const { readFileSync, existsSync } = await import("fs")
+      const path = String(args.file)
+      if (!existsSync(path)) { prompts.log.error(`Not found: ${path}`); process.exitCode = 1; prompts.outro("Done"); return }
+      prompt = readFileSync(path, "utf8").trim()
+    }
+    if (!prompt) {
+      prompts.log.error("A treatment IS its prompt. Pass --prompt \"...\" or --file <path>.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    // Read-modify-write: the endpoint takes the whole map, and a naive set would silently drop
+    // every other treatment the brand had defined.
+    const cur = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const existing = cur.ok ? (((await cur.json()) as any)?.data?.treatments ?? {}) : {}
+
+    const merged = {
+      ...existing,
+      [String(args.id)]: {
+        label: args.label ? String(args.label) : String(args.id),
+        description: args.description ? String(args.description) : "Custom treatment.",
+        shape: String(args.shape),
+        prompt,
+      },
+    }
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`, {
+      method: "PATCH",
+      body: JSON.stringify({ treatments: merged }),
+    })
+    const ok = await handleApiError(res, "Set treatment")
+    if (!ok) { process.exitCode = 1; prompts.outro("Done"); return }
+
+    // Read it back. A 200 means the request was accepted, not that the field changed — the
+    // lesson from #179802, where a control reported success for months while doing nothing.
+    const verify = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const after = verify.ok ? (((await verify.json()) as any)?.data?.treatments ?? {}) : {}
+    if (!after[String(args.id)]) {
+      prompts.log.error("The API accepted the write but the treatment is not there. Nothing was saved.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    console.log(`  ${success("✓")} ${bold(String(args.id))} saved on ${bold(String(args.slug))}`)
+    console.log(`  ${dim(`${Object.keys(after).length} custom treatment(s) on this brand`)}`)
+    printDivider()
+    console.log()
+    console.log(`  ${dim("$")} iris transcribe recording.m4a --treatment ${args.id}`)
+    console.log()
+    prompts.outro("Done")
+  },
+})
+
+const TreatmentsRemoveCommand = cmd({
+  command: "remove <slug> <id>",
+  aliases: ["rm", "delete"],
+  describe: "remove one treatment (the built-in of that name, if any, comes back)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { type: "string", demandOption: true })
+      .positional("id", { type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Treatment — ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    const cur = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const existing = cur.ok ? (((await cur.json()) as any)?.data?.treatments ?? {}) : {}
+
+    if (!existing[String(args.id)]) {
+      prompts.log.error(`"${args.id}" is not a custom treatment on this brand.`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    delete existing[String(args.id)]
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`, {
+      method: "PATCH",
+      body: JSON.stringify({ treatments: existing }),
+    })
+    const ok = await handleApiError(res, "Remove treatment")
+    if (!ok) { process.exitCode = 1; prompts.outro("Done"); return }
+
+    prompts.outro(`${success("✓")} Removed ${args.id}`)
+  },
+})
+
+const TreatmentsGroup = cmd({
+  command: "treatments <subcommand>",
+  describe: "a brand's own transcript treatments — list, set, remove",
+  builder: (yargs) =>
+    yargs
+      .command(TreatmentsListCommand)
+      .command(TreatmentsSetCommand)
+      .command(TreatmentsRemoveCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -837,7 +1174,7 @@ const DesignTokensSetCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 
@@ -981,7 +1318,7 @@ const DesignTokensImportCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 
@@ -1093,7 +1430,7 @@ const DesignTokensPushCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
 
       spinner.message("Pushing tokens…")
@@ -1220,7 +1557,7 @@ const ProfileGetCommand = cmd({
       if (!tokens) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const profile = (tokens.profile ?? {}) as Record<string, any>
       spinner.stop(String(args.slug))
-      if (args.json) { console.log(JSON.stringify(profile, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(profile); prompts.outro("Done"); return }
       if (Object.keys(profile).length === 0) {
         prompts.log.warn("No profile set")
         prompts.outro(`Set it: ${dim(`iris brands profile set ${args.slug} --file profile.json`)}`)
@@ -1274,7 +1611,7 @@ const ProfileSetCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 
@@ -1343,6 +1680,8 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsDetachCommand)
       .command(PersonasGroup)
       .command(DesignTokensGroup)
+      .command(GlossaryGroup)
+      .command(TreatmentsGroup)
       .command(ProfileGroup)
       .demandCommand(),
   async handler() {},

@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: beginner
+tags: [events, import, content]
+duration_min: 8
+---
 # Import an Event Flyer (IG / any URL) → Events + Show on the Front
 
 Two things people conflate. **There are two separate "events" surfaces** — know which one you're feeding:

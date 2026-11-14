@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Payments — port of PaymentsCommand.php
@@ -50,7 +51,7 @@ const PaymentsCmd = cmd({
       }
     }
 
-    if (args.json) { console.log(JSON.stringify(payments, null, 2)); return }
+    if (args.json) { await writeJson(payments); return }
 
     console.log("")
     console.log(bold(`Stripe Payment History — ${payments.lead_name ?? `Lead #${args.leadId}`}`))
@@ -81,7 +82,7 @@ const PaymentsCmd = cmd({
     }
 
     // Invoices
-    const invoices: any[] = payments.invoices ?? []
+    const invoices: any[] = firstArray(payments.invoices)
     if (invoices.length > 0) {
       console.log("")
       console.log(bold(`Invoices (${invoices.length})`))
@@ -91,7 +92,7 @@ const PaymentsCmd = cmd({
     }
 
     // Payments
-    const txns: any[] = payments.payments ?? []
+    const txns: any[] = firstArray(payments.payments)
     if (txns.length > 0) {
       console.log("")
       console.log(bold(`Transactions (${txns.length})`))
@@ -103,7 +104,7 @@ const PaymentsCmd = cmd({
     }
 
     // Subscriptions
-    const subs: any[] = payments.subscriptions ?? []
+    const subs: any[] = firstArray(payments.subscriptions)
     if (subs.length > 0) {
       console.log("")
       console.log(bold(`Subscriptions (${subs.length})`))

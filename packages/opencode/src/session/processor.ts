@@ -14,6 +14,7 @@ import { LLM } from "./llm"
 import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
+import { Beacon } from "@/telemetry/beacon"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -34,6 +35,33 @@ export namespace SessionProcessor {
     let attempt = 0
     let needsCompaction = false
 
+    // ── Trace spine (#178533) ────────────────────────────────────────────
+    // The reasoning chain was already being tracked here — every tool part
+    // carries a status and a start/end time — it just never left the machine,
+    // so nobody could tell whether a client's run made it to the end. These
+    // spans ship the SHAPE of that chain: tool name, duration, outcome. Never
+    // an argument value, never prompt/response text (that is PHI territory and
+    // belongs on audit_events, not telemetry).
+    //
+    // The session id doubles as the trace id — it is 30 chars, fits the
+    // column, and lets a trace be joined back to a session you can open.
+    const traceID = input.sessionID
+    const runSpanID = Beacon.newSpanId()
+
+    /** Emit one tool span. Swallows everything — telemetry must not break a run. */
+    function toolSpan(part: MessageV2.ToolPart | undefined, outcome: Beacon.Outcome, startedAt?: number) {
+      if (!part) return
+      Beacon.span("tool_call", {
+        trace_id: traceID,
+        span_id: Beacon.newSpanId(),
+        parent_span_id: runSpanID,
+        tool_name: part.tool,
+        outcome,
+        duration_ms: startedAt !== undefined ? Math.max(0, Date.now() - startedAt) : undefined,
+        model: input.model?.id,
+      })
+    }
+
     const result = {
       get message() {
         return input.assistantMessage
@@ -43,6 +71,12 @@ export namespace SessionProcessor {
       },
       async process(streamInput: LLM.StreamInput) {
         log.info("process")
+        Beacon.span("run_start", {
+          trace_id: traceID,
+          span_id: runSpanID,
+          model: input.model?.id,
+          provider: input.model?.providerID,
+        })
         needsCompaction = false
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         while (true) {
@@ -187,6 +221,7 @@ export namespace SessionProcessor {
                       },
                     })
 
+                    toolSpan(match, "ok", match.state.time.start)
                     delete toolcalls[value.toolCallId]
                   }
                   break
@@ -208,7 +243,12 @@ export namespace SessionProcessor {
                       },
                     })
 
-                    if (value.error instanceof PermissionNext.RejectedError) {
+                    // A denied permission is a user decision, not a failure —
+                    // recording it as an error would make the tool look broken.
+                    const rejected = value.error instanceof PermissionNext.RejectedError
+                    toolSpan(match, rejected ? "aborted" : "error", match.state.time.start)
+
+                    if (rejected) {
                       blocked = shouldBreak
                     }
                     delete toolcalls[value.toolCallId]
@@ -374,6 +414,9 @@ export namespace SessionProcessor {
           const p = await MessageV2.parts(input.assistantMessage.id)
           for (const part of p) {
             if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
+              // Never reached a terminal state — these are the calls that
+              // vanish today. 'aborted' distinguishes them from real errors.
+              toolSpan(part as MessageV2.ToolPart, "aborted")
               await Session.updatePart({
                 ...part,
                 state: {
@@ -408,14 +451,32 @@ export namespace SessionProcessor {
             if (badFinish && !hasOutput && input.assistantMessage.tokens.output === 0) {
               log.error("empty finalization", {
                 finish: finish ?? "unknown",
+                model: input.model?.id,
+                provider: input.model?.providerID,
                 sessionID: input.assistantMessage.sessionID,
                 messageID: input.assistantMessage.id,
               })
+              // #178291: the old text was a generic "the upstream provider may be
+              // rate-limited or exhausted", which was accurate but unactionable —
+              // it named neither the model that failed nor a way forward, so a
+              // credentials problem and a rate limit read identically and we spent
+              // a day chasing the wrong one. Name the model and provider the CLI
+              // actually asked for, and point at the command that lists alternatives.
+              //
+              // The upstream identity (e.g. OpenCode Zen) and HTTP status live
+              // server-side; the proxy records them to telemetry and, since the
+              // failover work (#178556), only lets a stream finish empty once EVERY
+              // provider has failed. So by the time a user sees this, "try another
+              // model" is genuinely the right next step.
+              const who = input.model?.id
+                ? `${input.model.id}${input.model.providerID ? ` (${input.model.providerID})` : ""}`
+                : "The model"
               input.assistantMessage.error = new MessageV2.APIError(
                 {
                   message:
-                    `Model stream ended without output (finish reason: ${finish ?? "unknown"}). ` +
-                    `The upstream provider may be rate-limited or exhausted — no response was produced.`,
+                    `${who} returned no output (finish reason: ${finish ?? "unknown"}). ` +
+                    `Every upstream attempt failed — most often a rate limit or an exhausted/invalid API key. ` +
+                    `Check with: iris doctor    ·    Pick another model: iris models`,
                   isRetryable: false,
                 },
                 {},
@@ -428,6 +489,22 @@ export namespace SessionProcessor {
           }
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
+
+          // Terminal span for the run. A trace with no run_end is a run that
+          // died without reporting — which is exactly the population the
+          // traces endpoint surfaces as "unfinished". Flushed on the way out
+          // so the last spans are not lost if the process exits next.
+          Beacon.span("run_end", {
+            trace_id: traceID,
+            span_id: Beacon.newSpanId(),
+            parent_span_id: runSpanID,
+            outcome: input.assistantMessage.error ? "error" : blocked ? "aborted" : "ok",
+            duration_ms: Math.max(0, input.assistantMessage.time.completed - (input.assistantMessage.time.created ?? input.assistantMessage.time.completed)),
+            model: input.model?.id,
+            provider: input.model?.providerID,
+          })
+          void Beacon.flush()
+
           if (needsCompaction) return "compact"
           if (blocked) return "stop"
           if (input.assistantMessage.error) return "stop"

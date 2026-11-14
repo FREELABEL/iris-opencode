@@ -21,9 +21,44 @@ export const InstallAppCommand = {
     UI.empty()
     prompts.intro("IRIS Desktop App")
 
+    // Windows ships an NSIS installer (.exe), not a zip — a different flow with no
+    // unzip-into-Applications step. Download it and hand off; silently running an
+    // installer on someone's machine is not this command's call to make.
+    // Uses fetch/Bun.write rather than the shell pipeline below, which is unix-only
+    // (mktemp/unzip/xattr do not exist on Windows).
+    if (process.platform === "win32") {
+      // heyiris.io, not /releases/latest/download/. That URL has no fallback by asset name --
+      // it resolves to whichever release holds the one repo-wide "latest" flag, which the CLI
+      // series takes on every publish. It served the desktop build off `main` (version 1.1.3,
+      // no 1.18 engine, no rebrand), and now that CLI releases carry no desktop assets it
+      // would simply 404. heyiris.io selects the desktop-v* series by tag prefix.
+      const setupUrl = "https://heyiris.io/download/windows"
+      const dest = `${os.homedir()}\\Downloads\\IRIS-Setup.exe`
+      const winSpinner = prompts.spinner()
+      winSpinner.start("Downloading the IRIS installer...")
+      try {
+        const res = await fetch(setupUrl)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await Bun.write(dest, res)
+        winSpinner.stop("Installer downloaded")
+        prompts.log.success(`Saved to ${dest}`)
+        prompts.log.info("Run it to finish installing.")
+        prompts.log.info("The build is unsigned, so SmartScreen will warn — click")
+        prompts.log.info('  "More info" -> "Run anyway"')
+      } catch (e) {
+        winSpinner.stop("Download failed", 1)
+        prompts.log.error(`Could not download the installer: ${e}`)
+        prompts.log.info(`  ${setupUrl}`)
+      }
+      prompts.outro("Done")
+      return
+    }
+
     if (process.platform !== "darwin") {
-      prompts.log.warn("Desktop app is currently macOS only")
-      prompts.log.info("Windows support coming soon")
+      prompts.log.warn("No desktop build for this platform yet")
+      prompts.log.info("macOS and Windows only. A Linux desktop build is not")
+      prompts.log.info("produced by CI yet — tracked as bug:182262 / BG-182262.")
+      prompts.log.info("The IRIS CLI itself does support Linux.")
       prompts.outro("Done")
       return
     }
@@ -45,7 +80,13 @@ export const InstallAppCommand = {
       return
     }
 
-    const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip`
+    // IRIS-app-darwin-* was the OLD Electron/SaaS-wrapper app. Its build job has been
+    // dead for weeks (expired CROSS_REPO_PAT) so that asset 404s on every recent
+    // release — this command was silently broken. The current desktop app is the
+    // Tauri build in packages/desktop, published as IRIS-tauri-darwin-{arm64,x64}.zip
+    // since v1.3.206. See item:182113 / IT-182113.
+    // Same reason as the Windows path above: heyiris.io resolves desktop-v* by tag prefix.
+    const appUrl = `https://heyiris.io/download/mac-${arch}-zip`
 
     const spinner = prompts.spinner()
     spinner.start("Downloading IRIS desktop app...")
@@ -72,8 +113,8 @@ export const InstallAppCommand = {
       prompts.log.info(`  ${appUrl}`)
       prompts.log.info("")
       prompts.log.info("To build locally:")
-      prompts.log.info("  cd fl-docker-dev/fl-elon-web-ui/electron")
-      prompts.log.info("  ./build-desktop.sh --pack")
+      prompts.log.info("  cd packages/desktop")
+      prompts.log.info("  bun run tauri build --config ./src-tauri/tauri.prod.conf.json")
     }
 
     prompts.outro("Done")

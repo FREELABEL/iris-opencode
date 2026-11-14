@@ -1,19 +1,176 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId, writeJson } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
+import { Auth } from "../../auth"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
-import { join } from "path"
-import { existsSync, readFileSync } from "fs"
+import { join, dirname } from "path"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
 const BUG_BLOQ_ID = 297
 
+/**
+ * Per-repo bug routing, read from `.iris/config.json` walking up from the cwd.
+ *
+ * The point is that nobody has to remember a flag. Run `iris bug report` inside a client's
+ * repo and it already knows which board its bugs belong on; run it anywhere else and it goes
+ * to the IRIS board exactly as before.
+ *
+ * A TOKEN DOES NOT BELONG IN A COMMITTED FILE. `.iris/` is version-controlled, so a token
+ * found there is read but warned about — the intended home is `bugIntakeToken` in the user's
+ * own `~/.iris/config.json`, which is not shared. An open intake needs no token at all.
+ *
+ * Never throws: unreadable or malformed config means "no project", i.e. the default board.
+ * Losing a bug report to a syntax error in a config file would be a poor trade.
+ */
+function readProjectConfig(): { project?: string; projectToken?: string } {
+  const out: { project?: string; projectToken?: string } = {}
+
+  const read = (file: string): Record<string, unknown> | null => {
+    try {
+      if (!existsSync(file)) return null
+      return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+
+  // Walk up for the repo-level config: the slug is not a secret and belongs with the project.
+  let dir = process.cwd()
+  for (let i = 0; i < 12; i++) {
+    const cfg = read(join(dir, ".iris", "config.json"))
+    if (cfg) {
+      if (typeof cfg.bugProject === "string") out.project = cfg.bugProject
+      if (typeof cfg.bugIntakeToken === "string" && cfg.bugIntakeToken) {
+        out.projectToken = cfg.bugIntakeToken
+        console.error(
+          "warning: a bug intake token was read from a committed .iris/config.json — " +
+            "move it to ~/.iris/config.json so it is not shared in version control",
+        )
+      }
+      break
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+
+  // The user-level config supplies the secret, and only fills gaps the repo left.
+  const home = process.env.HOME || process.env.USERPROFILE
+  if (home) {
+    const user = read(join(home, ".iris", "config.json"))
+    if (user) {
+      if (!out.project && typeof user.bugProject === "string") out.project = user.bugProject
+      if (typeof user.bugIntakeToken === "string" && user.bugIntakeToken) out.projectToken = user.bugIntakeToken
+      // Per-project tokens, so one machine can report into several clients' boards.
+      const byProject = user.bugIntakeTokens
+      if (out.project && byProject && typeof byProject === "object") {
+        const t = (byProject as Record<string, unknown>)[out.project]
+        if (typeof t === "string" && t) out.projectToken = t
+      }
+    }
+  }
+
+  return out
+}
+
 // Resolve a bug (record the fix/solution + commit) via PUBLIC endpoint — no auth required
 const bugResolveEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/resolve`
+// Amend a bug after the fact (reporter attribution / severity / status / title / note) — no auth
+const bugUpdateEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/update`
+
+/**
+ * Render the fix badge for a bug (#177916).
+ *
+ * The badge used to key off "a resolution exists", with no status check — so a bug that was
+ * WRONGLY closed and then reopened kept its green `✓ FIXED <commit>` stamp while showing
+ * `todo`. Both at once, which reads as "fixed" to anyone scanning the board, and is exactly
+ * how a bad batch close (#177912) survives a QA reopen invisibly.
+ *
+ * A resolution on a bug that is NOT done is a CONTRADICTED claim, so render it as one.
+ */
+export function fixBadge(status: unknown, hasResolution: boolean, fixCommit?: string): string {
+  if (!hasResolution) return ""
+  const commit = fixCommit ? ` ${fixCommit}` : ""
+  const done = String(status ?? "").toLowerCase() === "done"
+  return done ? success(`✓ FIXED${commit}`) : dim(`was marked fixed${commit} — REOPENED`)
+}
+
+/**
+ * The CURRENT fix commit for a bug — the LAST one recorded, not the first.
+ *
+ * `resolve` APPENDS a resolution block, so a bug closed more than once carries every
+ * stamp it has ever had. Reading with `String.match()` (no /g) returns the FIRST, which
+ * is the OLDEST — so re-closing with a corrected hash changed nothing anyone could see.
+ *
+ * That is the remediation path for a wrong stamp. #180525 was mis-stamped a8a9cc45
+ * (fl-eco-docker, an unrelated repo), corrected twice to ebbf1f7c8, and still displayed
+ * a8a9cc45 — the correction was invisible and the wrong hash was what everyone read.
+ * A record you cannot correct is worse than one that was never written.
+ */
+export function latestFixCommit(content: string): string | undefined {
+  const all = [...content.matchAll(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/gi)]
+
+  return all.length ? all[all.length - 1][1] : undefined
+}
+
+/** Repo identity for the cwd, so a fix stamp can say WHICH repo it came from (#177912). */
+function detectGitRepo(): string | undefined {
+  try {
+    const remote = execSync("git config --get remote.origin.url", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim()
+    return remote.match(/github\.com[:/]([^/]+\/.+?)(?:\.git)?$/i)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The caller's API key, if we have one — used to attribute a bug report to a real person
+ * instead of to the machine it was filed from (#178532, #158230).
+ *
+ * Checked in the order a key is most likely to be authoritative:
+ *   1. the stored credential from `iris auth login`
+ *   2. IRIS_API_KEY / FL_API_TOKEN in the environment — this is the one that matters for MCP,
+ *      because McpController mints a per-user key and hands it to the iris-exec runner
+ *   3. ~/.iris/sdk/.env, which is where the installer writes it (same file platform-hive-enroll
+ *      reads for exactly this reason)
+ *
+ * Returns "" rather than throwing. Bug reporting must never fail because auth had a bad day —
+ * an unattributed report is worth far more than no report.
+ */
+async function resolveReporterToken(): Promise<string> {
+  try {
+    const stored = await Auth.get("iris")
+    if (stored?.type === "api" && stored.key) return stored.key
+  } catch {}
+
+  if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+  if (process.env.FL_API_TOKEN) return process.env.FL_API_TOKEN
+
+  try {
+    const envPath = join(homedir(), ".iris", "sdk", ".env")
+    if (existsSync(envPath)) {
+      for (const line of readFileSync(envPath, "utf8").split("\n")) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#")) continue
+        const eq = trimmed.indexOf("=")
+        if (eq < 0) continue
+        if (trimmed.slice(0, eq).trim() === "IRIS_API_KEY") {
+          return trimmed.slice(eq + 1).trim()
+        }
+      }
+    }
+  } catch {}
+
+  return ""
+}
 
 // Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
 function detectGitCommit(): { hash?: string; url?: string } {
@@ -40,6 +197,98 @@ function detectGitCommit(): { hash?: string; url?: string } {
   } catch {
     return {}
   }
+}
+
+// ============================================================================
+// Never lose a report
+// ============================================================================
+
+const PENDING_BUGS_DIR = join(homedir(), ".iris", "pending-bugs")
+
+/**
+ * Keep a report that could not be sent, so it can be sent later.
+ *
+ * On 2026-08-15 the bug endpoint returned 500 for every submission on the host the CLI
+ * posts to. The user experience was one line — "Failed to submit bug report (HTTP 500)" —
+ * and the report they had just written was gone. There is no worse endpoint to lose data
+ * on: this is the channel people use to tell us something is broken, so the failures it
+ * swallows are exactly the failures we most need to hear about, and we cannot even count
+ * them because the only record would have been the reports.
+ *
+ * Returns the path so the caller can tell the user where their words went.
+ */
+function queueBugReport(payload: string): string | null {
+  try {
+    mkdirSync(PENDING_BUGS_DIR, { recursive: true })
+    const file = join(PENDING_BUGS_DIR, `${Date.now()}-${randomUUID().slice(0, 8)}.json`)
+    writeFileSync(file, payload, { mode: 0o600 })
+    return file
+  } catch {
+    return null
+  }
+}
+
+// ============================================================================
+// Stable reporter identity
+// ============================================================================
+
+/**
+ * A hostname is NOT a stable identity, and on macOS it is barely stable at all.
+ *
+ * mDNS appends a collision counter whenever another device claims the same name on the
+ * network, so one Mac reports as `Alexs-MacBook-Pro-7653.local` today and
+ * `Alexs-MacBook-Pro-7087.local` next week. Measured on the live bug board: 144 clinical
+ * tickets carried 20 distinct reporter strings that collapse to 8 actual people — one
+ * person appeared as 20 reporters across suffixes 5563, 5988, 6841, 7087, 7195, 7285,
+ * 7653. Under the MCP connector it is worse: the hostname is a container id that rotates
+ * every deploy, so everyone on one deploy also collapses into a single fake reporter.
+ *
+ * Attribution that fragments cannot be used to thank, follow up, or pay anybody — which
+ * is the whole point of recording it.
+ */
+function stableMachineId(): string {
+  const idPath = join(homedir(), ".iris", "machine-id")
+  try {
+    if (existsSync(idPath)) {
+      const existing = readFileSync(idPath, "utf-8").trim()
+      if (existing) return existing
+    }
+  } catch {}
+
+  // Random, not derived from hardware: a machine id that can be recomputed from serial
+  // numbers or MAC addresses is a fingerprint, and this only needs to be *consistent*,
+  // not identifying. Persisted so it survives hostname churn and CLI upgrades.
+  const id = randomUUID()
+  try {
+    mkdirSync(dirname(idPath), { recursive: true })
+    writeFileSync(idPath, id + "\n", { mode: 0o600 })
+  } catch {
+    // Unwritable home (sandbox, read-only container) — fall back to a per-run id rather
+    // than failing the report. Marked so the server can tell it apart from a real one.
+    return "ephemeral-" + id
+  }
+  return id
+}
+
+/**
+ * Strip the mDNS collision counter and `.local` so the same machine reads the same way
+ * even before `machine_id` exists (older reports, and the human-facing display).
+ *
+ * `Alexs-MacBook-Pro-7653.local` → `Alexs-MacBook-Pro`
+ * Deliberately conservative: only a trailing `-<3-5 digits>` is removed, so a machine
+ * genuinely named `build-box-01` or `node-2` keeps its name.
+ */
+export function normalizeHostname(host: string): string {
+  // Keep only the first LABEL: the rest is the network domain (.local, .attlocal.net,
+  // .lan), which says which network the machine was on when it filed, not which machine it
+  // is. Measured: one Mac appeared as three reporters purely for moving between home wifi,
+  // tethering and mDNS.
+  const label = host.split(".")[0] ?? host
+  // Then the mDNS collision counter. 3-5 digits only, so `build-box-01` and `node-2` keep
+  // their names — and digits INSIDE the label are left alone, because `AlexMaysnow1063` and
+  // `AlexMaysnow1008` are two real machines on this fleet and merging them would be worse
+  // than leaving them split.
+  return label.replace(/-\d{3,5}$/, "")
 }
 
 // ============================================================================
@@ -95,12 +344,53 @@ async function submitBug(args: {
   error?: string
   reporterLeadId?: number
   reporterName?: string
+  /** Registered client intake slug; falls back to .iris/config.json, then the IRIS board. */
+  project?: string
+  projectToken?: string
   json?: boolean
 }): Promise<void> {
   const sysInfo = collectSystemInfo()
-  const reporter = `${sysInfo.user}@${sysInfo.hostname}`
 
-  // POST to public bug report endpoint — no auth required, always writes to user 193's bloq
+  // `reporter` is DIAGNOSTICS now, not identity (#178532, #158230). It used to be the only thing
+  // the server had, and under the MCP connector the CLI runs in a container — so this string is a
+  // container id that rotates every deploy. One person became four reporters over a few weeks;
+  // everyone on a single deploy became one. Keep it (the /app cwd is what exposed the bug), but
+  // the Authorization header below is what actually says who filed this.
+  // Normalised, so the same machine reads the same way across mDNS renames. The raw
+  // hostname stays in system_info for diagnostics — that is what exposed the /app cwd
+  // under the MCP connector — but it must not be the thing that names a person.
+  const reporter = `${sysInfo.user}@${normalizeHostname(sysInfo.hostname)}`
+
+  // The endpoint stays public — an unauthenticated tester must still be able to report. But when
+  // we DO hold a key, send it: fl-api derives reporter_user_id from the token server-side, marks
+  // it reporter_verified, and ignores any claim in the body. Without this header the report is
+  // recorded as honestly-unattributed, which is better than a container id but still means a beta
+  // user who reports through Claude cannot be thanked, followed up, or paid a bounty.
+  const authToken = await resolveReporterToken()
+
+  // Built once so the fallback host resends the IDENTICAL report rather than a
+  // reconstruction that might differ from whatever the primary rejected.
+  // A flag you have to remember is a flag people forget, and a bug filed onto the wrong
+  // client's board is worse than one you have to go looking for. So the repo answers first.
+  const projectCfg = readProjectConfig()
+  const project = args.project ?? projectCfg.project
+  const projectToken = args.projectToken ?? projectCfg.projectToken
+
+  const payload = JSON.stringify({
+    title: args.title,
+    project: project ?? null,
+    project_token: projectToken ?? null,
+    description: args.description,
+    severity: args.severity,
+    reporter,
+    machine_id: stableMachineId(),
+    reporter_lead_id: args.reporterLeadId ?? null,
+    reporter_name: args.reporterName ?? null,
+    system_info: sysInfo,
+    command: args.command ?? null,
+    error: args.error ?? null,
+  })
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
 
@@ -108,18 +398,14 @@ async function submitBug(args: {
   try {
     res = await fetch(`${FL_API}${BUG_REPORT_ENDPOINT}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        title: args.title,
-        description: args.description,
-        severity: args.severity,
-        reporter,
-        reporter_lead_id: args.reporterLeadId ?? null,
-        reporter_name: args.reporterName ?? null,
-        system_info: sysInfo,
-        command: args.command ?? null,
-        error: args.error ?? null,
-      }),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      // machine_id survives hostname churn AND container redeploys, so reports from one
+      // machine stay one machine. Random persisted UUID, not derived from hardware.
+      body: payload,
       signal: controller.signal,
     })
   } catch (e: any) {
@@ -132,13 +418,52 @@ async function submitBug(args: {
     clearTimeout(timeout)
   }
 
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Failed to submit bug report (HTTP ${res.status}): ${text}`)
+  // FALL BACK, THEN QUEUE. This endpoint is how someone tells us the product is broken, and
+  // on 2026-08-15 it was the broken thing: fl-api returned 500 for every submission while
+  // iris-api served the same path fine. Reporters got "HTTP 500" and nothing else — no
+  // retry, no second host, no local copy. Reports were simply lost, and the only record
+  // that they had existed would have been the reports.
+  //
+  // A bug reporter with no retry path is the one endpoint that must have one.
+  if (!res.ok && res.status >= 500) {
+    try {
+      const alt = await fetch(`${IRIS_API}${BUG_REPORT_ENDPOINT}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: payload,
+        signal: AbortSignal.timeout(15000),
+      })
+      if (alt.ok) res = alt
+    } catch {
+      // Fall through to the queue below — the primary already failed, so a failed
+      // fallback changes nothing about what we owe the user.
+    }
   }
 
-  const data = (await res.json()) as { success?: boolean; data?: { item_id?: number; message?: string } }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    // Never lose the report at the keyboard. Someone took the trouble to write it.
+    const queued = queueBugReport(payload)
+    throw new Error(
+      `Failed to submit bug report (HTTP ${res.status}): ${text}` +
+        (queued ? `\n\nSaved locally: ${queued}\nRetry all queued reports with: iris bug flush` : ""),
+    )
+  }
+
+  const data = (await res.json()) as {
+    success?: boolean
+    data?: { item_id?: number; message?: string; bloq_id?: number; project?: string; project_label?: string }
+  }
   const itemId = data?.data?.item_id
+  // Where it ACTUALLY landed. This used to print BUG_BLOQ_ID unconditionally, which was
+  // merely redundant when there was one board and becomes a lie the moment there is more
+  // than one — sending the reporter to look on a board their report is not on.
+  const landedBloqId = data?.data?.bloq_id ?? BUG_BLOQ_ID
+  const landedLabel = data?.data?.project_label ?? "IRIS CLI Bug Reports"
 
   if (args.json) {
     console.log(
@@ -146,7 +471,8 @@ async function submitBug(args: {
         {
           success: true,
           item_id: itemId,
-          bloq_id: BUG_BLOQ_ID,
+          bloq_id: landedBloqId,
+          project: data?.data?.project ?? null,
           title: args.title,
         },
         null,
@@ -158,8 +484,16 @@ async function submitBug(args: {
 
   console.log("")
   console.log(success("✓ Bug report submitted"))
-  console.log(`  ${dim("Bloq:")} IRIS CLI Bug Reports (#${BUG_BLOQ_ID})`)
+  console.log(`  ${dim("Bloq:")} ${landedLabel} (#${landedBloqId})`)
   if (itemId) console.log(`  ${dim("Item ID:")} #${itemId}`)
+  // #180713: echo the TITLE THAT WAS STORED. Collapsed shell quoting cannot be detected
+  // reliably from argv — by the time yargs sees it, `--json` has been eaten as a flag and the
+  // leftovers look like an ordinary title. What CAN be fixed is the silence: four corrupted
+  // reports were filed in a row without anyone noticing, because the confirmation said only
+  // "submitted" and an item id. Printing the stored title turns a corrupted report from
+  // something that looks complete into something visibly wrong, at the one moment the reporter
+  // is still watching.
+  console.log(`  ${dim("Title:")} ${args.title}`)
   console.log(`  ${dim("Severity:")} ${args.severity}`)
   console.log("")
   console.log(dim("The IRIS team will review and respond. Thanks for helping improve IRIS!"))
@@ -175,7 +509,7 @@ const ReportCommand = cmd({
   describe: "submit a bug report to the IRIS team",
   builder: (yargs) =>
     yargs
-      .positional("title", { describe: "short bug title", type: "string", array: true })
+      .positional("title", { describe: "short bug title — quote it, or pass --title \"...\"", type: "string", array: true })
       .option("description", {
         alias: "d",
         describe: "detailed description",
@@ -215,6 +549,20 @@ const ReportCommand = cmd({
         describe: "display name of the reporter (optional, used with --reporter-lead)",
         type: "string",
       })
+      .option("project", {
+        describe: "file into a registered client bug list instead of the IRIS board (slug)",
+        type: "string",
+      })
+      .option("project-token", {
+        describe: "token for a private client intake (only if that intake requires one)",
+        type: "string",
+      })
+      // #180713: the unambiguous way to pass a title. The positional is `[title..]` — a GREEDY
+      // array — so when a caller's quoting collapses (agents building shell strings do this
+      // routinely) every loose token is silently joined into the title. `--title` takes exactly
+      // one value and cannot absorb anything. The pre-existing non-interactive error already
+      // told people "--title is required" while no such flag existed.
+      .option("title", { describe: "short bug title — quote it, or pass --title \"...\"", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
@@ -224,6 +572,60 @@ const ReportCommand = cmd({
     if (Array.isArray(args.title)) titleParts.push(...args.title.map(String))
     if (Array.isArray(args["--"])) titleParts.push(...args["--"].map(String))
     let title = titleParts.join(" ").trim() || undefined
+
+    // NOTE: yargs folds `--title "x"` into the SAME array as the positional, so there is no
+    // separate string branch to read here — verified, `--title x` yields ["x"]. The flag is
+    // still worth having: it is the form that cannot silently absorb neighbouring tokens, and
+    // the non-interactive error below has been telling people to use it for some time.
+
+    // #180713: REFUSE a title that shows signs of collapsed quoting, instead of filing it.
+    //
+    // Verified mechanism (yargs, same builder shape):
+    //   ["report","search returns 0","daycare","Hutto","--json","TX","78634"]
+    //     -> title "search returns 0 daycare Hutto TX 78634", json=true
+    // which is exactly the shape stored on #180697. Nothing errored; the report simply arrived
+    // wrong and LOOKED complete, which is worse than not arriving — an engineer reading it has
+    // no way to know the repro command was truncated or the title is half description.
+    //
+    // NOT fixable here (and wrongly attributed to this tool in #180713): apostrophe loss and
+    // repro commands cut at the first quote. Those happen in the CALLER's shell before argv
+    // exists. Confirmed by counter-example: #180691 was filed by this same command and stores
+    // "person's push" with the apostrophe intact. So this guard aims at what argv can still
+    // see — flag-shaped tokens that landed in a title, and titles too long to be titles.
+    if (title) {
+      const flagLike = titleParts.find((p) => /^--?[A-Za-z]/.test(p))
+      const absorbed = ["--description", "--severity", "--command", "--error", "--json", "--bounty"].find((f) =>
+        title!.includes(f),
+      )
+
+      if (flagLike || absorbed) {
+        console.error(`\n  ${bold("Refusing to file: the title absorbed a flag.")}`)
+        console.error(`  Saw: ${dim(flagLike ?? absorbed!)}`)
+        console.error(`  Assembled title: ${dim(title)}`)
+        console.error("")
+        console.error(`  This almost always means the shell quoting collapsed and description`)
+        console.error(`  text slid into the title. Filing it would store a corrupted report`)
+        console.error(`  that still looks complete.`)
+        console.error("")
+        console.error(`  Fix: ${dim(`iris bug report --title "short title" --description "$(cat body.txt)"`)}`)
+        console.error("")
+        process.exitCode = 1
+        return
+      }
+
+      // A title is a headline. Past a couple hundred characters it is body text that leaked in.
+      const MAX_TITLE = 220
+      if (title.length > MAX_TITLE) {
+        console.error(`\n  ${bold("Refusing to file: title is " + title.length + " characters.")}`)
+        console.error(`  A title is a headline; this is body text that leaked into it.`)
+        console.error(`  Starts: ${dim(title.slice(0, 90) + "…")}`)
+        console.error("")
+        console.error(`  Fix: ${dim(`iris bug report --title "short title" --description "$(cat body.txt)"`)}`)
+        console.error("")
+        process.exitCode = 1
+        return
+      }
+    }
     let description = args.description
     let severity = args.severity as string
 
@@ -303,6 +705,8 @@ const ReportCommand = cmd({
         error: args.error,
         reporterLeadId: args["reporter-lead"] as number | undefined,
         reporterName: args["reporter-name"] as string | undefined,
+        project: args["project"] as string | undefined,
+        projectToken: args["project-token"] as string | undefined,
         json: args.json,
       })
     } catch (e: any) {
@@ -378,39 +782,94 @@ const ListCommand = cmd({
       return
     }
 
-    const params = new URLSearchParams({
-      per_page: String(args.limit),
-      page: String(args.page),
-    })
-    if (args.status && args.status !== "all") params.set("status", args.status)
-    if (args.search) params.set("search", args.search)
+    const severityOf = (item: any): string => {
+      // `content` is not always a string — some board items carry structured
+      // content, and calling .match() on those threw once the scan reached them.
+      const raw = item.content ?? item.description ?? ""
+      const contentStr = typeof raw === "string" ? raw : JSON.stringify(raw)
+      const fromBody = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]
+      if (fromBody) return fromBody.toLowerCase()
+      // Older reports carry severity only as a title prefix: "[CRITICAL] ...".
+      const fromTitle = String(item.title ?? "").match(/^\s*\[(low|medium|high|critical)\]/i)?.[1]
+      return fromTitle ? fromTitle.toLowerCase() : ""
+    }
 
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
-    const ok = await handleApiError(res, "List bug reports")
-    if (!ok) return
+    const fetchPage = async (page: number, perPage: number) => {
+      const params = new URLSearchParams({ per_page: String(perPage), page: String(page) })
+      if (args.status && args.status !== "all") params.set("status", args.status)
+      if (args.search) params.set("search", args.search)
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
+      const ok = await handleApiError(res, "List bug reports")
+      if (!ok) return null
+      const data = (await res.json()) as any
+      const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+      const pageItems: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+      const pagination = data?.data?.pagination ?? data?.meta ?? null
+      return { pageItems, pagination }
+    }
 
-    const data = (await res.json()) as any
-    const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
-    let items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+    let items: any[] = []
+    let totalItems = 0
+    let currentPage = args.page
+    let lastPage = 1
+    let scanTruncated = false
 
-    // Extract pagination info from response
-    const pagination = data?.data?.pagination ?? data?.meta ?? null
-    const totalItems = pagination?.total ?? items.length
-    const currentPage = pagination?.current_page ?? args.page
-    const lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
-
-    // Client-side severity filter (API may not support this param)
     if (args.severity) {
-      const sev = args.severity.toLowerCase()
-      items = items.filter((item: any) => {
-        const contentStr = item.content ?? item.description ?? ""
-        const itemSev = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]?.toLowerCase() ?? ""
-        return itemSev === sev
-      })
+      // Severity is not a column — it lives in the report body (and, for older
+      // reports, the title prefix), so the API cannot filter on it and we must.
+      //
+      // This used to filter ONLY the current page and then print the server's
+      // UNFILTERED total beside the result. `iris bug list --severity=critical`
+      // scanned 20 of 2,348 open bugs, found nothing, and printed
+      // "0 item(s) ... Page 1/118" — reported as "No bug reports found" while a
+      // critical auth bug (#182059) was open. A triage query answering "none"
+      // when the answer is "one, and it is an auth bypass" is the worst possible
+      // failure for this command. It also reported total=2347/last_page=24 in
+      // --json, so any consumer counting criticals got 2,347 instead of 1.
+      //
+      // Scan every page, filter across the whole set, then paginate the RESULT.
+      const SCAN_PAGE_SIZE = 100
+      const MAX_SCAN_PAGES = 60 // 6,000 reports — well past the current board
+      const matches: any[] = []
+      let page = 1
+      let serverLastPage = 1
+      for (; page <= MAX_SCAN_PAGES; page++) {
+        const got = await fetchPage(page, SCAN_PAGE_SIZE)
+        if (!got) return
+        const { pageItems, pagination } = got
+        serverLastPage = pagination?.last_page ?? serverLastPage
+        const sev = args.severity.toLowerCase()
+        for (const item of pageItems) if (severityOf(item) === sev) matches.push(item)
+        if (pageItems.length === 0 || page >= serverLastPage) break
+      }
+      // Never let a bounded scan masquerade as a complete answer.
+      if (page > MAX_SCAN_PAGES && page < serverLastPage) scanTruncated = true
+
+      totalItems = matches.length
+      lastPage = Math.max(1, Math.ceil(totalItems / args.limit))
+      currentPage = Math.min(Math.max(1, args.page), lastPage)
+      const start = (currentPage - 1) * args.limit
+      items = matches.slice(start, start + args.limit)
+    } else {
+      const got = await fetchPage(args.page, args.limit)
+      if (!got) return
+      items = got.pageItems
+      const pagination = got.pagination
+      totalItems = pagination?.total ?? items.length
+      currentPage = pagination?.current_page ?? args.page
+      lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ items, page: currentPage, total: totalItems, last_page: lastPage }, null, 2))
+      // AWAITED write, not console.log. console.log is fire-and-forget: for a
+      // large payload Bun hands part of it to the pipe and the process exits
+      // before the rest drains, so the consumer gets a JSON document cut off
+      // mid-string. Measured on this command — three of four runs of
+      // `--limit 40 --json | python` truncated at exactly 81,856 chars while the
+      // fourth delivered all 142,482. It reads as corrupt data rather than a
+      // lost write, and never reproduces in a terminal because TTY writes are
+      // synchronous. Awaiting the write removes the race.
+      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) })
       return
     }
 
@@ -423,7 +882,12 @@ const ListCommand = cmd({
 
     console.log("")
     console.log(bold("📋 Bug Reports"))
-    console.log(`  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} item(s)${filterStr} — Page ${currentPage}/${lastPage}`)}`)
+    console.log(
+      `  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} of ${totalItems} item(s)${filterStr} — Page ${currentPage}/${lastPage}`)}`,
+    )
+    if (scanTruncated) {
+      console.log(`  ${dim(`⚠ scan stopped at 6,000 reports — results may be incomplete`)}`)
+    }
     printDivider()
 
     if (items.length === 0) {
@@ -438,9 +902,10 @@ const ListCommand = cmd({
         const sevTag = severity ? `  [${severity.toUpperCase()}]` : ""
         const status = item.status ? `  ${dim(item.status)}` : ""
         // Surface the recorded fix (if any) so other machines can see what resolved it
-        const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+        const fixCommit = latestFixCommit(contentStr)
         const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
-        const fixTag = hasResolution ? `  ${success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`)}` : ""
+        const badge = fixBadge(item.status, hasResolution, fixCommit)
+        const fixTag = badge ? `  ${badge}` : ""
         console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}${fixTag}`)
         if (contentStr) {
           // Show first meaningful line (skip markdown headers)
@@ -521,7 +986,7 @@ const ShowCommand = cmd({
 
     if (!found) {
       if (args.json) {
-        console.log(JSON.stringify({ error: "not_found", id: targetId }, null, 2))
+        await writeJson({ error: "not_found", id: targetId })
         return
       }
       console.error(`\n  Bug #${targetId} not found (searched open + closed).`)
@@ -531,24 +996,58 @@ const ShowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(found, null, 2))
+      await writeJson(found)
       return
     }
 
     const contentStr = found.content ?? found.description ?? ""
     const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
     const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
-    const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+    const fixCommit = latestFixCommit(contentStr)
 
     console.log("")
     console.log(`  ${bold(String(found.title))}  ${dim(`#${found.id}`)}`)
     const meta: string[] = []
     if (severity) meta.push(`[${severity.toUpperCase()}]`)
     if (found.status) meta.push(dim(String(found.status)))
-    if (hasResolution) meta.push(success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`))
+    const showBadge = fixBadge(found.status, hasResolution, fixCommit)
+    if (showBadge) meta.push(showBadge)
     if (meta.length) console.log(`  ${meta.join("  ")}`)
     printDivider()
     console.log(contentStr ? String(contentStr) : dim("  (no description)"))
+
+    // ATTRIBUTION — who this bug is credited to, and from which machine.
+    //
+    // The API never serialised `attachments`, so there was no read path anywhere that
+    // could answer "who gets paid for this". Resolving a mis-attribution meant filing a
+    // probe bug and watching `bounty:hunters` move, which is an absurd way to read a
+    // field — and verifying machine_id had landed was impossible outright.
+    const att = (found as any).attachments
+    if (att && typeof att === "object" && Object.keys(att).length) {
+      printDivider()
+      console.log(`  ${bold("Attribution")}`)
+      if (att.reporter_name) console.log(`    ${dim("name:")}        ${att.reporter_name}`)
+      if (att.reporter_lead_id) console.log(`    ${dim("lead:")}        ${att.reporter_lead_id}`)
+      if (att.reporter_user_id) console.log(`    ${dim("user:")}        ${att.reporter_user_id}`)
+      if ("reporter_verified" in att) {
+        // Verified means the TOKEN proved it. An unverified claim is still recorded, and
+        // a payout must be able to tell "we know who this is" from "someone typed a number".
+        console.log(
+          `    ${dim("verified:")}    ` +
+          (att.reporter_verified
+            ? `${UI.Style.TEXT_SUCCESS}yes${UI.Style.TEXT_NORMAL}`
+            : `${UI.Style.TEXT_WARNING}no — claimed, not proven${UI.Style.TEXT_NORMAL}`),
+        )
+      }
+      if (att.machine_id) {
+        const eph = att.machine_id_ephemeral ? dim("  (ephemeral — differs next run)") : ""
+        console.log(`    ${dim("machine:")}     ${String(att.machine_id).slice(0, 18)}…${eph}`)
+      }
+      if (!att.reporter_lead_id && !att.reporter_user_id) {
+        console.log(`    ${dim("unattributed — set one with:")} iris bug update ${found.id} --reporter-lead <id>`)
+      }
+    }
+
     printDivider()
     console.log(dim(`  iris bug close ${found.id} --solution "..." — record the fix`))
     console.log("")
@@ -630,9 +1129,58 @@ const CloseCommand = cmd({
       let fixCommit = typeof args.commit === "string" ? (args.commit as string) : undefined
       let fixCommitUrl: string | undefined
       if (!fixCommit && !noCommit) {
+        // NEVER auto-stamp a BATCH close (#177912). cwd HEAD is a single commit in a single
+        // repo; N bugs closed together are rarely all fixed by it. This is exactly how
+        // #177889-#177893 (iris-opencode work) got stamped with fd678579 — an unrelated
+        // fl-api geo commit that happened to be the cwd's HEAD — making five "fixed"
+        // references untrustworthy and hiding that none were actually fixed.
+        if (ids.length > 1) {
+          prompts.log.error(
+            `Refusing to auto-stamp a commit across ${ids.length} bugs — cwd HEAD is one commit in one repo.`,
+          )
+          prompts.log.info(dim("Pass --commit <hash> if they really share a fix, --no-commit to record none,"))
+          prompts.log.info(dim("or close them one at a time so each gets its own commit."))
+          prompts.outro("Done")
+          return
+        }
+        // A SINGLE close auto-stamped cwd HEAD, announcing it in dim text. Naming the
+        // repo was not enough: closing an iris-opencode bug from the freelabel monorepo
+        // recorded a8a9cc45 (fl-eco-docker) as the fix, and a wrong hash is indistinguishable
+        // from a right one to everyone who reads it later. cwd is where you are STANDING,
+        // which is not evidence about where the fix LANDED.
+        //
+        // So stamp only on an explicit yes. A human gets one keypress; a non-interactive
+        // caller (agent, CI, `iris` over MCP) must say which commit, because guessing on
+        // its behalf is how five bugs got stamped with an unrelated fl-api commit (#177912).
         const git = detectGitCommit()
-        fixCommit = git.hash
-        fixCommitUrl = git.url
+        if (git.hash) {
+          const repo = detectGitRepo()
+          const from = `${git.hash}${repo ? ` from ${repo}` : ""}`
+          const interactive = Boolean(process.stdin.isTTY) && !args.json
+
+          if (!interactive) {
+            prompts.log.error(`Refusing to guess the fix commit. cwd HEAD is ${from}.`)
+            prompts.log.info(dim(`Pass --commit ${git.hash} if that IS the fix, --commit <hash> if it is not,`))
+            prompts.log.info(dim("or --no-commit to close without one."))
+            prompts.outro("Done")
+            return
+          }
+
+          // Default NO. The failure mode is a confident wrong reference, so a bare
+          // Enter must record nothing rather than record a guess.
+          const useHead = await prompts.confirm({
+            message: `Record ${from} as the fix commit?`,
+            initialValue: false,
+          })
+          if (prompts.isCancel(useHead)) {
+            prompts.outro("Cancelled")
+            return
+          }
+          if (useHead) {
+            fixCommit = git.hash
+            fixCommitUrl = git.url
+          }
+        }
       }
 
       const spinner = prompts.spinner()
@@ -658,7 +1206,8 @@ const CloseCommand = cmd({
 
       if (args.json) {
         spinner.stop("")
-        console.log(JSON.stringify({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null }, null, 2))
+        await writeJson({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null })
+        if (failCount > 0) process.exit(1)
         return
       }
 
@@ -669,7 +1218,11 @@ const CloseCommand = cmd({
         for (const r of results.filter((r) => !r.ok)) prompts.log.error(`#${r.id}: ${r.error}`)
       }
       if (fixCommit) console.log(`  ${dim("Fix commit:")} ${highlight(fixCommit)}`)
-      console.log(dim("  Other machines will see this fix via iris bug list --status=all"))
+      // Only promise propagation if something actually resolved. This line used to print
+      // unconditionally — including directly under "0 resolved, 1 failed", where it reads
+      // as reassurance about work that did not happen.
+      if (okCount > 0) console.log(dim("  Other machines will see this fix via iris bug list --status=all"))
+      if (failCount > 0) process.exit(1)
       return
     }
 
@@ -709,7 +1262,8 @@ const CloseCommand = cmd({
 
     if (args.json) {
       spinner.stop("")
-      console.log(JSON.stringify({ results, ok: okCount, failed: failCount }, null, 2))
+      await writeJson({ results, ok: okCount, failed: failCount })
+      if (failCount > 0) process.exit(1)
       return
     }
 
@@ -721,8 +1275,251 @@ const CloseCommand = cmd({
         prompts.log.error(`#${r.id}: ${r.error}`)
       }
     }
-    console.log(dim("  Tip: iris bug close <id> --solution \"how you fixed it\" records the fix for other machines"))
+    // The tip is advice for a close that worked. Under a failure it is noise on top of an error.
+    if (okCount > 0) {
+      console.log(dim("  Tip: iris bug close <id> --solution \"how you fixed it\" records the fix for other machines"))
+    }
     console.log(dim("  iris bug list --status=all  — view all bugs"))
+    if (failCount > 0) process.exit(1)
+  },
+})
+
+// The marketplace Opportunity that funds bug-bounty payouts (config bounty.bug_opportunity_id).
+const BUG_OPPORTUNITY_ID = 581
+
+// Verify (accept) reported bugs for the bug bounty. This flips them to status=done — the state
+// BugBountyPayoutService/BloqItemObserver treat as "verified" — so they become payout-eligible
+// (the batch sweep keys off done; auto-pay fires on the todo->done transition). Owner-authed via
+// the marketplace verifyBug route; the response is the owner bug console (payout status per bug).
+const VerifyCommand = cmd({
+  command: "verify <id..>",
+  aliases: ["accept"],
+  describe: "verify bug report(s) for the bug bounty — marks them done so the reporter can be paid",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID(s) to verify", type: "number", array: true, demandOption: true })
+      .option("opportunity", { alias: "o", describe: "bounty opportunity id", type: "number", default: BUG_OPPORTUNITY_ID })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const ids = (args.id as number[]).filter(Boolean)
+    if (ids.length === 0) {
+      console.error("No bug IDs provided")
+      process.exitCode = 1
+      return
+    }
+    const oppId = Number(args.opportunity)
+
+    const spinner = prompts.spinner()
+    spinner.start(`Verifying ${ids.length} bug(s) for opportunity #${oppId}…`)
+
+    // The console returned by the LAST successful call — its per-bug rows carry the payout amount
+    // + status we surface (amount_cents, payout_status, severity).
+    let lastConsole: any = null
+    const results: Array<{ id: number; ok: boolean; error?: string }> = []
+    for (const bugId of ids) {
+      try {
+        const res = await irisFetch(
+          `/api/v1/marketplace/opportunities/${oppId}/bug-bounty/bugs/${bugId}/verify`,
+          { method: "POST" },
+        )
+        if (!res.ok) {
+          const text = await res.text().catch(() => "")
+          results.push({ id: bugId, ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` })
+          continue
+        }
+        lastConsole = ((await res.json()) as any)?.data ?? null
+        results.push({ id: bugId, ok: true })
+      } catch (e: any) {
+        results.push({ id: bugId, ok: false, error: e.message })
+      }
+    }
+
+    const okCount = results.filter((r) => r.ok).length
+    const failCount = results.filter((r) => !r.ok).length
+
+    if (args.json) {
+      spinner.stop("")
+      await writeJson({ results, ok: okCount, failed: failCount, console: lastConsole })
+      return
+    }
+
+    if (failCount === 0) {
+      spinner.stop(`${success("✓")} ${okCount} bug(s) verified`)
+    } else {
+      spinner.stop(`${okCount} verified, ${failCount} failed`)
+      for (const r of results.filter((r) => !r.ok)) prompts.log.error(`#${r.id}: ${r.error}`)
+    }
+
+    // Surface each verified bug's resulting payout state from the owner console.
+    const byId = new Map<number, any>()
+    for (const b of (lastConsole?.bugs ?? [])) byId.set(Number(b.id), b)
+    for (const r of results.filter((r) => r.ok)) {
+      const b = byId.get(r.id)
+      if (b) {
+        const amount = `$${(((b.amount_cents ?? 0) as number) / 100).toFixed(2)}`
+        console.log(`  ${dim(`#${r.id}`)} ${String(b.severity ?? "").toUpperCase()} → ${highlight(amount)}  ${dim(String(b.payout_status ?? ""))}`)
+      }
+    }
+    console.log(dim("  Verified bugs are payout-eligible. Pay: iris bounty pay <id> --execute (or the batch sweep)."))
+    console.log("")
+  },
+})
+
+const UpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit", "amend"],
+  describe: "amend a bug — reporter attribution, severity, status, title, or an appended note",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .option("reporter-lead", { describe: "lead ID to attribute as the reporter (bounty tally)", type: "number" })
+      .option("reporter-user", { describe: "user ID to attribute as the reporter", type: "number" })
+      .option("reporter-name", { describe: "display name of the reporter", type: "string" })
+      .option("clear-reporter", {
+        describe: "detach reporter attribution entirely (lead, user and name)",
+        type: "boolean",
+        default: false,
+      })
+      .option("severity", { alias: "s", describe: "low | medium | high | critical", type: "string" })
+      .option("status", { describe: "board status (todo, in_progress, done, …)", type: "string" })
+      .option("title", { describe: "new title (severity prefix preserved)", type: "string" })
+      .option("description", { alias: ["d", "note"], describe: "append an update note to the bug", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const itemId = args.id as number
+    const body: Record<string, unknown> = {}
+    // --reporter-lead had no inverse: once a bug was attributed, nothing in the CLI
+    // could detach it, so a mis-attribution could only be corrected with production DB
+    // access. On a system whose value is an auditable money trail, that made the trail
+    // append-only by accident (#178618). Send explicit nulls so the server clears the
+    // keys rather than merely omitting them.
+    if (args["clear-reporter"]) {
+      body.reporter_lead_id = null
+      body.reporter_user_id = null
+      body.reporter_name = null
+    } else {
+      // Accept 0 / negative as "detach" too, so `--reporter-lead 0` does the obvious thing.
+      const lead = args["reporter-lead"] as number | undefined
+      if (lead != null) body.reporter_lead_id = lead > 0 ? lead : null
+      if (args["reporter-user"] != null) {
+        const u = args["reporter-user"] as number
+        body.reporter_user_id = u > 0 ? u : null
+      }
+      if (args["reporter-name"]) body.reporter_name = args["reporter-name"]
+    }
+    if (args.severity) body.severity = args.severity
+    if (args.status) body.status = args.status
+    if (args.title) body.title = args.title
+    if (args.description) body.description = args.description
+
+    if (Object.keys(body).length === 0) {
+      console.error(
+        "\n  Nothing to update. Pass at least one of:\n" +
+          "    --reporter-lead <id> [--reporter-name <name>]  ·  --severity <sev>  ·  --status <s>  ·  --title <t>  ·  --description <note>\n",
+      )
+      process.exitCode = 1
+      return
+    }
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
+    let res: Response
+    try {
+      res = await fetch(`${FL_API}${bugUpdateEndpoint(itemId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch (e: any) {
+      clearTimeout(timeout)
+      console.error(e.name === "AbortError" ? "Update timed out after 15s." : `Network error: ${e.message}`)
+      process.exitCode = 1
+      return
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    const data = await res.json().catch(() => ({}) as any)
+    if (!res.ok || data?.success === false) {
+      console.error(`Update failed: ${data?.error ?? `HTTP ${res.status}`}`)
+      process.exitCode = 1
+      return
+    }
+
+    // VERIFY THE WRITE LANDED (#179802). This used to fall back to Object.keys(body) — the
+    // fields we SENT — whenever the server did not say what it changed, so a multi-field
+    // update that applied only one of them still printed all three as updated. Observed:
+    // `bug update <id> -s high --title … --description …` applied only the description while
+    // reporting success; re-running each flag alone worked. Assert against the item itself.
+    const requested = Object.keys(body)
+    // `applied` is the REQUEST fields the server acted on. `updated` is the COLUMNS it wrote,
+    // and the two do not correspond — a note lands in `content`, severity lands in `title`,
+    // and `content` is rewritten on every call. Checking a request field against the column
+    // list meant `--note` reported "did NOT apply" on writes that had landed perfectly well:
+    // four identical notes went onto one bug, and a duplicate ticket was opened to carry the
+    // one presumed lost. Prefer `applied`; fall back to re-reading the item; never treat the
+    // column list as an answer about a field it does not name.
+    const serverSaid = Array.isArray(data?.data?.applied) ? (data.data.applied as string[]) : null
+    let missed: string[] = []
+
+    if (serverSaid) {
+      missed = requested.filter((k) => !serverSaid.includes(k))
+    } else {
+      // No per-field receipt — re-read and compare the fields we can check directly.
+      try {
+        const check = await irisFetch(`/api/v1/bloqs/items/${itemId}`)
+        const fresh = ((await check.json()) as any)?.data ?? null
+        if (fresh) {
+          const cmp: Record<string, unknown> = {
+            severity: fresh.severity,
+            status: fresh.status,
+            title: fresh.title,
+          }
+          missed = requested.filter(
+            (k) => k in cmp && cmp[k] != null && String(cmp[k]) !== String(body[k]),
+          )
+        }
+      } catch {
+        // Unreadable — say nothing rather than claiming either way.
+      }
+    }
+
+    if (args.json) {
+      await writeJson({ ...data, requested, not_applied: missed })
+    } else if (missed.length) {
+      console.log(
+        `${success("✓")} Bug #${itemId} updated` +
+          dim(` (${requested.filter((k) => !missed.includes(k)).join(", ") || "nothing"})`),
+      )
+      // The remediation has to know which fields are IDEMPOTENT. Re-running `--severity` or
+      // `--status` converges; re-running `--note`/`--description` APPENDS, so "re-run them one
+      // at a time" quietly duplicates the note every attempt. That advice already put four
+      // identical notes on one bug, and it is worse for an agent, which retries until it sees
+      // success and grows the record on each pass.
+      const APPEND_ONLY = ["description", "note"]
+      const appendOnly: string[] = missed.filter((k) => APPEND_ONLY.includes(k))
+      const rerunnable: string[] = missed.filter((k) => !APPEND_ONLY.includes(k))
+
+      prompts.log.error(
+        `These did NOT apply: ${missed.join(", ")}.` +
+          (rerunnable.length
+            ? `\nSafe to re-run individually: ${rerunnable.join(", ")}.`
+            : "") +
+          (appendOnly.length
+            ? `\nDo NOT blindly re-run ${appendOnly.join(", ")} — notes APPEND, so a retry adds a` +
+              `\nsecond copy rather than replacing the first. Read the bug back before retrying:` +
+              `\n  iris bug show ${itemId}`
+            : ""),
+      )
+      process.exitCode = 1
+    } else {
+      const fields = serverSaid ?? requested
+      console.log(success(`✓ Bug #${itemId} updated`) + dim(` (${fields.join(", ")})`))
+    }
   },
 })
 
@@ -730,10 +1527,92 @@ const CloseCommand = cmd({
 // Root command
 // ============================================================================
 
+
+/**
+ * Resend reports that could not be submitted when they were written.
+ *
+ * The queue exists because the endpoint went down (see queueBugReport). A queue nobody can
+ * drain is just a slower way of losing the report, so this is not optional furniture.
+ */
+const FlushCommand = cmd({
+  command: "flush",
+  describe: "resend bug reports that were saved locally when submission failed",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    const fs = await import("fs")
+    if (!existsSync(PENDING_BUGS_DIR)) {
+      console.log(dim("  No queued bug reports."))
+      return
+    }
+    const files = fs.readdirSync(PENDING_BUGS_DIR).filter((f: string) => f.endsWith(".json")).sort()
+    if (files.length === 0) {
+      console.log(dim("  No queued bug reports."))
+      return
+    }
+
+    const authToken = await resolveReporterToken()
+    let sent = 0
+    const failed: string[] = []
+
+    for (const f of files) {
+      const full = join(PENDING_BUGS_DIR, f)
+      let body: string
+      try {
+        body = readFileSync(full, "utf8")
+      } catch {
+        continue
+      }
+      // Try both hosts, same order as a live submission.
+      let ok = false
+      for (const base of [FL_API, IRIS_API]) {
+        try {
+          const r = await fetch(`${base}${BUG_REPORT_ENDPOINT}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+            },
+            body,
+            signal: AbortSignal.timeout(15000),
+          })
+          if (r.ok) {
+            ok = true
+            break
+          }
+        } catch {
+          // try the next host
+        }
+      }
+      if (ok) {
+        // Only delete once it is definitely accepted somewhere.
+        try {
+          fs.unlinkSync(full)
+        } catch {}
+        sent++
+      } else {
+        failed.push(f)
+      }
+    }
+
+    if (args.json) {
+      await writeJson({ sent, failed })
+      return
+    }
+    console.log()
+    if (sent) console.log(`${success("✓")} sent ${sent} queued report${sent === 1 ? "" : "s"}`)
+    if (failed.length) {
+      console.log(`${highlight("!")} ${failed.length} still queued in ${dim(PENDING_BUGS_DIR)}`)
+      console.log(dim("  Both hosts refused them. They are kept, not discarded."))
+    }
+    console.log()
+  },
+})
+
 export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(CloseCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })

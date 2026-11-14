@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: intermediate
+tags: [crm, outreach, som, automation]
+duration_min: 15
+---
 # How to: Run an outreach campaign (SOM pipeline)
 
 ## What this does

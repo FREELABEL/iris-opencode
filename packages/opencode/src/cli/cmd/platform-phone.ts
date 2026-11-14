@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (PhoneResource):
 //   GET    /api/v1/phone/list           ?agent_id=
@@ -31,8 +32,8 @@ const PhoneListCommand = cmd({
     const ok = await handleApiError(res, "List phones")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const phones: any[] = data?.data ?? data?.phones ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(phones, null, 2)); prompts.outro("Done"); return }
+    const phones: any[] = firstArray(data?.data, data?.phones, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(phones); prompts.outro("Done"); return }
     printDivider()
     if (phones.length === 0) console.log(`  ${dim("(no phones)")}`)
     else for (const p of phones) {
@@ -83,7 +84,7 @@ const PhoneSearchCommand = cmd({
     const ok = await handleApiError(res, "Search phones")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const phones: any[] = data?.data ?? data?.numbers ?? (Array.isArray(data) ? data : [])
+    const phones: any[] = firstArray(data?.data, data?.numbers, (Array.isArray(data) ? data : []))
     printDivider()
     for (const p of phones) console.log(`  ${bold(String(p.phone_number ?? p.number))}  ${dim(String(p.locality ?? ""))}`)
     printDivider()
@@ -124,7 +125,7 @@ const PhoneProvidersCommand = cmd({
     const ok = await handleApiError(res, "List providers")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    console.log(JSON.stringify(data?.data ?? data, null, 2))
+    await writeJson(data?.data ?? data)
     prompts.outro("Done")
   },
 })

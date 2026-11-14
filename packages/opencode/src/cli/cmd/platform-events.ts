@@ -1,10 +1,12 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
+import { getBySlug } from "./platform-pages"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -41,6 +43,36 @@ function findLocalFile(dir: string, id: number): string | undefined {
   return files.length > 0 ? join(dir, files[0]) : undefined
 }
 
+/**
+ * Coerce a metadata value read back from the API into something safe to spread.
+ *
+ * The events GET can hand back `metadata` as a JSON *string* rather than an
+ * object. Spreading a string explodes it per character — `{...'abc'}` is
+ * `{0:'a',1:'b',2:'c'}` — and pushing that back destroys the column, growing it
+ * on every round-trip (#177952). Parse strings, and refuse anything that is not
+ * a plain object rather than silently mangling it.
+ */
+function asMetadataObject(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  let parsed = value
+  if (typeof parsed === "string") {
+    const text = parsed.trim()
+    if (text === "") return {}
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      throw new Error(
+        `Refusing to push: the API returned metadata as an unparseable string (${text.slice(0, 60)}…). ` +
+          `Pushing would corrupt it — see #177952.`,
+      )
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Refusing to push: expected metadata to be an object, got ${Array.isArray(parsed) ? "array" : typeof parsed}.`)
+  }
+  return parsed as Record<string, unknown>
+}
+
 // ============================================================================
 // Display helpers
 // ============================================================================
@@ -67,7 +99,9 @@ const ListCommand = cmd({
   describe: "list events",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per page", type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based) — walk forward through the full set", type: "number" })
+      .option("offset", { describe: "skip N events (converted to a page given --limit)", type: "number" })
       .option("future", { describe: "only future events", type: "boolean" })
       .option("past", { describe: "only past events", type: "boolean" })
       .option("city", { describe: "filter by city", type: "string" })
@@ -83,7 +117,14 @@ const ListCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      // The events index reads `limit` (per_page is now accepted as an alias too);
+      // sending per_page alone silently capped results at 10 (#177629).
+      const params = new URLSearchParams({ limit: String(args.limit) })
+      // Pagination so `list` can walk the WHOLE set — raising --limit alone can't reach
+      // recent events when the default sort front-loads older ones (#178065). --offset is
+      // a convenience that maps to the API's 1-based `page` given the current --limit.
+      if (args.page != null) params.set("page", String(Math.max(1, args.page)))
+      else if (args.offset != null) params.set("page", String(Math.floor(Math.max(0, args.offset) / Math.max(1, args.limit)) + 1))
       // The public /events endpoint now defaults include_private=false (#152137);
       // the CLI manages events, so it must explicitly opt in to see hidden drafts.
       params.set("include_private", "true")
@@ -97,11 +138,11 @@ const ListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (args.json) { console.log(JSON.stringify({ error: "API error" })); } else { prompts.outro("Done"); } return }
 
       const data = (await res.json()) as { data?: any[] }
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       if (spinner) spinner.stop(`${items.length} event(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -246,7 +287,7 @@ const CreateCommand = cmd({
       spinner.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -294,6 +335,9 @@ const UpdateCommand = cmd({
       .option("tags", { describe: "tags (comma-separated)", type: "string" })
       .option("bloq-id", { describe: "associated bloq ID", type: "number" })
       .option("status", { describe: "event status", type: "string" })
+      .option("photo", { describe: "photo/banner URL (attach generated artwork)", type: "string" })
+      .option("meta", { describe: "metadata key=value, repeatable (e.g. --meta video=https://… --meta video_status=ready)", type: "array", string: true })
+      .option("meta-json", { describe: "metadata as a JSON object string, merged server-side", type: "string" })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -320,11 +364,33 @@ const UpdateCommand = cmd({
     if (args.tags) payload.tags = args.tags
     if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
     if (args.status) payload.status = args.status
+    if (args.photo) payload.photo = args.photo
+
+    // --meta key=value (repeatable) and/or --meta-json build a metadata object the
+    // server MERGES into the existing metadata (preserving other keys), so attaching
+    // artwork/flags no longer forces the pull-edit-push path that corrupted six events
+    // (#178066/#177928).
+    const meta: Record<string, unknown> = {}
+    if (args["meta-json"]) {
+      try {
+        const parsed = JSON.parse(String(args["meta-json"]))
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object")
+        Object.assign(meta, parsed)
+      } catch {
+        prompts.log.error("--meta-json must be a JSON object, e.g. '{\"video\":\"https://…\"}'")
+        prompts.outro("Done"); return
+      }
+    }
+    for (const kv of ((args.meta as string[] | undefined) ?? [])) {
+      const s = String(kv)
+      const idx = s.indexOf("=")
+      if (idx === -1) { prompts.log.error(`--meta must be key=value (got "${s}")`); prompts.outro("Done"); return }
+      meta[s.slice(0, idx)] = s.slice(idx + 1)
+    }
+    if (Object.keys(meta).length > 0) payload.metadata = meta
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --date, --time, --venue, --city, --state, --type, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --title, --description, --date, --time, --venue, --city, --state, --type, --photo, --meta key=value, etc.")
     }
 
     const spinner = prompts.spinner()
@@ -340,7 +406,7 @@ const UpdateCommand = cmd({
       spinner.stop(`${success("✓")} Updated: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -469,7 +535,7 @@ const PushCommand = cmd({
       // Merge extra fields into metadata so they're preserved
       const metaKeys = Object.keys(extraMetadata)
       if (metaKeys.length > 0) {
-        payload.metadata = { ...(entity.metadata ?? {}), ...extraMetadata }
+        payload.metadata = { ...asMetadataObject(entity.metadata), ...extraMetadata }
       }
 
       const res = await irisFetch(`/api/v1/events/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
@@ -641,7 +707,7 @@ const StagesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       spinner.stop(`${items.length} stage(s)`)
 
       if (items.length === 0) { prompts.log.warn("No stages found"); prompts.outro("Done"); return }
@@ -738,7 +804,7 @@ const SetTimesListCommand = cmd({
       const data = (await res.json()) as any
       const setTimes = data.data || []
       spinner.stop(success(`${setTimes.length} artist(s) on stage`))
-      if (args.json) { console.log(JSON.stringify(setTimes, null, 2)); return }
+      if (args.json) { await writeJson(setTimes); return }
       if (setTimes.length === 0) { prompts.log.info(dim("No set times. Use: iris events add-set-time <event-id> <stage-id> --profile <pk>")); return }
       printDivider()
       for (const st of setTimes) {
@@ -785,7 +851,7 @@ const AddSetTimeCommand = cmd({
       const st = data.data || data
       const name = st.profile?.name || st.profile_name || "Artist"
       spinner.stop(success(`${name} added to lineup`))
-      if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+      if (args.json) { await writeJson(st); return }
       printDivider()
       printKV("Artist", name)
       if (st.profile?.id) printKV("Profile", `@${st.profile.id}`)
@@ -899,7 +965,7 @@ const VendorsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       spinner.stop(`${items.length} vendor(s)`)
 
       if (items.length === 0) { prompts.log.warn("No vendors found"); prompts.outro("Done"); return }
@@ -1031,8 +1097,11 @@ function printTicket(t: Record<string, unknown>): void {
   if (t.url) console.log(`    ${dim(String(t.url))}`)
 }
 
-async function fetchTickets(eventId: number): Promise<any[] | null> {
-  const res = await irisFetch(`/api/v1/events/${eventId}/tickets`)
+async function fetchTickets(eventId: number, includeHidden = false): Promise<any[] | null> {
+  // include_hidden=true returns hidden tickets too (authed route) so pull/push
+  // round-trips and link-page idempotency don't miss hidden rows (#177628 follow-up).
+  const qs = includeHidden ? "?include_hidden=true" : ""
+  const res = await irisFetch(`/api/v1/events/${eventId}/tickets${qs}`)
   const ok = await handleApiError(res, "Fetch tickets")
   if (!ok) return null
   const data = (await res.json()) as any
@@ -1097,7 +1166,9 @@ const TicketsPullCommand = cmd({
     spinner.start("Fetching…")
 
     try {
-      const items = await fetchTickets(args["event-id"])
+      // Pull the full set (incl. hidden) so a pull → edit → push round-trip doesn't
+      // silently drop hidden tickets.
+      const items = await fetchTickets(args["event-id"], true)
       if (!items) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       // Normalize to clean ticket objects for local editing
@@ -1187,7 +1258,8 @@ const TicketsPushCommand = cmd({
 
       // 2. Fetch live tickets
       spinner.start("Comparing local vs live…")
-      const liveTickets = await fetchTickets(args["event-id"])
+      // incl. hidden — push manages the full set
+      const liveTickets = await fetchTickets(args["event-id"], true)
       if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const liveMap = new Map<number, any>()
@@ -1307,7 +1379,7 @@ const TicketsPushCommand = cmd({
 
       // 6. Re-pull to get fresh IDs for newly created tickets
       prompts.log.info("Re-pulling to sync local file with new IDs…")
-      const fresh = await fetchTickets(args["event-id"])
+      const fresh = await fetchTickets(args["event-id"], true)
       if (fresh) {
         const freshTickets = fresh.map((t: any) => ({
           id: t.id,
@@ -1365,8 +1437,8 @@ const TicketsDiffCommand = cmd({
         return t
       })
 
-      // Fetch live
-      const liveTickets = await fetchTickets(args["event-id"])
+      // Fetch live (incl. hidden — diff must match what push manages)
+      const liveTickets = await fetchTickets(args["event-id"], true)
       if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const liveMap = new Map<number, any>()
@@ -1530,6 +1602,127 @@ const TicketCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Link Page — wire an event to a Genesis registration page in one command
+// ============================================================================
+//
+// The Discover → Genesis funnel needs three things wired together: the event
+// (on the Discover grid), the hosted /p/ registration page, and lead capture.
+// This does all three: it creates/updates a single "Register" ticket whose url
+// points at the page, which the event-detail UI renders as a real RSVP link
+// (EventTicketsSection.isOwnLandingPage gates /p/ pages into the external-link
+// path), and it links the event to the page's lead bloq so registrations land
+// in the CRM. Idempotent: re-running updates the existing link ticket in place.
+
+const LinkPageCommand = cmd({
+  command: "link-page <event-id> <page-slug>",
+  aliases: ["attach-page", "register-page"],
+  describe: "wire an event to a Genesis registration page — one 'Register' button → /p/<slug> + lead capture",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args["event-id"])
+    const slug = String(args["page-slug"])
+    UI.empty()
+    prompts.intro(`◈  Link Page — Event #${eventId} → /p/${slug}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resolving page…")
+    try {
+      // 1. Verify the page exists (and pull json_content for its lead bloq).
+      const page = await getBySlug(slug, true)
+      if (!page) {
+        spinner.stop("Page not found", 1)
+        prompts.log.error(`No page with slug '${slug}'. Create it first: ${highlight("iris pages create")}`)
+        prompts.outro("Failed")
+        return
+      }
+
+      // 2. Public URL — MUST match the frontend /p/ whitelist (isOwnLandingPage).
+      const url: string = page.public_url || `https://freelabel.net/p/${slug}`
+
+      // Derive the lead bloq from the page's json_content unless overridden.
+      let jc: any = page.json_content
+      if (typeof jc === "string") { try { jc = JSON.parse(jc) } catch { jc = {} } }
+      const bloqOpt = args.bloq !== undefined ? String(args.bloq) : undefined
+      const skipBloq = bloqOpt === "none"
+      const explicitBloq = bloqOpt && bloqOpt !== "none" ? Number(bloqOpt) : undefined
+      const leadBloqId: number | undefined =
+        explicitBloq ?? (jc?.leadBloqId ?? jc?.lead_bloq_id ?? undefined)
+
+      // 3. Idempotency — reuse any existing ticket that already links to a /p/ page.
+      //    include hidden so a previously-hidden link ticket is reused, not duplicated.
+      spinner.message("Checking existing tickets…")
+      const tickets = (await fetchTickets(Number(eventId), true)) ?? []
+      const existing = tickets.find(
+        (t: any) => typeof t.url === "string" && (t.url === url || t.url.includes(`/p/${slug}`) || t.url.includes("/p/")),
+      )
+
+      const title = String(args.title ?? "Register")
+      const priceStr = String(args.price ?? "0")
+      const payload: Record<string, unknown> = {
+        title, url, price: priceStr, is_visible: true, status: "active", max_per_order: 1,
+      }
+      if (args.seats) payload.quantity_total = Number(args.seats)
+      if (args.description) payload.description = String(args.description)
+
+      spinner.message(existing ? "Updating Register link…" : "Creating Register link…")
+      let ticketId: number | undefined
+      if (existing) {
+        const res = await irisFetch(`/api/v1/events/${eventId}/tickets/${existing.id}`, { method: "PUT", body: JSON.stringify(payload) })
+        const ok = await handleApiError(res, "Update Register link")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Failed"); return }
+        ticketId = existing.id
+      } else {
+        const res = await irisFetch(`/api/v1/events/${eventId}/tickets`, { method: "POST", body: JSON.stringify(payload) })
+        const ok = await handleApiError(res, "Create Register link")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Failed"); return }
+        const data = (await res.json()) as any
+        ticketId = (data.data || data)?.id
+      }
+
+      // 4. Link the event to the page's lead bloq so registrations reach the CRM.
+      let bloqLinked: number | undefined
+      if (leadBloqId && !skipBloq) {
+        const res = await irisFetch(`/api/v1/events/${eventId}`, { method: "PUT", body: JSON.stringify({ bloq_id: Number(leadBloqId) }) })
+        if (res.ok) bloqLinked = Number(leadBloqId)
+      }
+
+      spinner.stop(success(existing ? "Register link updated" : "Register link created"))
+
+      if (args.json) {
+        await writeJson({ event_id: Number(eventId), page_slug: slug, url, ticket_id: ticketId ?? null, bloq_id: bloqLinked ?? null })
+        return
+      }
+      printDivider()
+      printKV("Event", `#${eventId}`)
+      printKV("Page", `/p/${slug}`)
+      printKV("Register URL", url)
+      printKV("Ticket", `#${ticketId} · ${title}${priceStr === "0" ? " · Free" : ` · $${priceStr}`}`)
+      if (bloqLinked) printKV("Leads → Bloq", `#${bloqLinked}`)
+      else if (skipBloq) printKV("Leads → Bloq", dim("skipped (--bloq none)"))
+      else printKV("Leads → Bloq", dim("none (page declares no leadBloqId)"))
+      printDivider()
+      console.log(dim("Discover event → 'Register' button → Genesis page → lead capture. Wired."))
+      prompts.outro(highlight(url))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("page-slug", { describe: "Genesis page slug (e.g. ai-for-lawyers)", type: "string", demandOption: true })
+    .option("title", { describe: "button/ticket label", type: "string", default: "Register" })
+    .option("price", { describe: "ticket price in dollars (0 = free RSVP)", type: "string" })
+    .option("seats", { describe: "capacity (quantity_total)", type: "number" })
+    .option("description", { describe: "ticket description shown under the button", type: "string" })
+    .option("bloq", { describe: "lead bloq id for registrations (default: the page's leadBloqId; 'none' to skip)", type: "string" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+// ============================================================================
 // Venue Deal — link/unlink a venue to an event
 // ============================================================================
 
@@ -1561,7 +1754,7 @@ const LinkVenueCommand = cmd({
       const data = (await res.json()) as any
       const deal = data.data || data
       spinner.stop(success("Venue linked to event"))
-      if (args.json) { console.log(JSON.stringify(deal, null, 2)); return }
+      if (args.json) { await writeJson(deal); return }
       printDivider()
       printKV("Event", `#${eventId}`)
       printKV("Venue ID", venueId)
@@ -1635,7 +1828,7 @@ const ListLeadsCommand = cmd({
       const data = (await res.json()) as any
       const leads = data.data || []
       spinner.stop(success(`${leads.length} lead(s) on event #${eventId}`))
-      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+      if (args.json) { await writeJson(leads); return }
       if (leads.length === 0) { prompts.log.info(dim("No leads attached. Use: iris events add-lead <event-id> <lead-id> --role performer")); return }
       printDivider()
       for (const el of leads) {
@@ -1674,6 +1867,14 @@ const AddLeadCommand = cmd({
         status: String(args.status || "invited"),
       }
       if (args.notes) body.notes = String(args.notes)
+      // Comp model on the event role (#170876 Gap 2). Dollar amounts → cents.
+      if (args["comp-type"]) body.comp_type = String(args["comp-type"])
+      if (args.rate !== undefined) body.rate_cents = Math.round(Number(args.rate) * 100)
+      if (args.hours !== undefined) body.hours = Number(args.hours)
+      if (args["guaranteed-min"] !== undefined) body.guaranteed_minimum_cents = Math.round(Number(args["guaranteed-min"]) * 100)
+      if (args.upside) body.upside_formula = String(args.upside)
+      if (args.opportunity !== undefined) body.opportunity_id = Number(args.opportunity)
+      if (args.bounty !== undefined) body.bounty_id = Number(args.bounty)
 
       const res = await irisFetch(`/api/v1/events/${eventId}/leads`, { method: "POST", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Add lead to event")
@@ -1682,12 +1883,20 @@ const AddLeadCommand = cmd({
       const el = data.data || data
       const lead = el.lead || {}
       spinner.stop(success(`${lead.nickname || lead.name || "Lead #" + leadId} added as ${el.role}`))
-      if (args.json) { console.log(JSON.stringify(el, null, 2)); return }
+      if (args.json) { await writeJson(el); return }
       printDivider()
       printKV("Event", `#${eventId}`)
       printKV("Lead", `#${leadId} — ${lead.nickname || lead.name || "?"}`)
       printKV("Role", el.role)
       printKV("Status", el.status)
+      if (el.comp_type) {
+        const parts: string[] = [String(el.comp_type)]
+        if (el.rate_cents != null) parts.push(`$${(Number(el.rate_cents) / 100).toFixed(2)}/hr`)
+        if (el.hours != null) parts.push(`× ${el.hours}h`)
+        if (el.guaranteed_minimum_cents != null) parts.push(`min $${(Number(el.guaranteed_minimum_cents) / 100).toFixed(2)}`)
+        printKV("Comp", parts.join("  "))
+        if (el.opportunity_id) printKV("Opportunity", `#${el.opportunity_id}`)
+      }
       printDivider()
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1700,6 +1909,14 @@ const AddLeadCommand = cmd({
     .option("role", { alias: "r", describe: "role: performer, organizer, judge, staff, vendor_contact, sponsor, speaker, vip, attendee, prospect", type: "string", default: "prospect" })
     .option("status", { alias: "s", describe: "status: invited, confirmed, attended, no_show, cancelled, waitlisted", type: "string", default: "invited" })
     .option("notes", { describe: "notes", type: "string" })
+    // Comp model (#170876 Gap 2)
+    .option("comp-type", { describe: "comp type: hourly (floor) | bounty (variable) | royalty (host share)", type: "string", choices: ["hourly", "bounty", "royalty"] })
+    .option("rate", { describe: "hourly rate in dollars (e.g. 22 → $22/hr)", type: "number" })
+    .option("hours", { describe: "hours worked/scheduled", type: "number" })
+    .option("guaranteed-min", { describe: "stated pay floor in dollars — the audit-clean minimum guarantee", type: "number" })
+    .option("upside", { describe: "free-text upside formula (variable pay above the floor)", type: "string" })
+    .option("opportunity", { describe: "opportunity ID this role was hired under", type: "number" })
+    .option("bounty", { describe: "bounty ID this role was hired under", type: "number" })
     .option("json", { describe: "JSON output", type: "boolean" }),
 })
 
@@ -1717,6 +1934,14 @@ const UpdateLeadCommand = cmd({
       if (args.role) body.role = String(args.role)
       if (args.status) body.status = String(args.status)
       if (args.notes) body.notes = String(args.notes)
+      // Comp model on the event role (#170876 Gap 2). Dollar amounts → cents.
+      if (args["comp-type"]) body.comp_type = String(args["comp-type"])
+      if (args.rate !== undefined) body.rate_cents = Math.round(Number(args.rate) * 100)
+      if (args.hours !== undefined) body.hours = Number(args.hours)
+      if (args["guaranteed-min"] !== undefined) body.guaranteed_minimum_cents = Math.round(Number(args["guaranteed-min"]) * 100)
+      if (args.upside) body.upside_formula = String(args.upside)
+      if (args.opportunity !== undefined) body.opportunity_id = Number(args.opportunity)
+      if (args.bounty !== undefined) body.bounty_id = Number(args.bounty)
 
       const res = await irisFetch(`/api/v1/events/${eventId}/leads/${leadId}`, { method: "PUT", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Update event lead")
@@ -1734,7 +1959,15 @@ const UpdateLeadCommand = cmd({
     .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
     .option("role", { alias: "r", describe: "new role", type: "string" })
     .option("status", { alias: "s", describe: "new status", type: "string" })
-    .option("notes", { describe: "notes", type: "string" }),
+    .option("notes", { describe: "notes", type: "string" })
+    // Comp model (#170876 Gap 2)
+    .option("comp-type", { describe: "comp type: hourly | bounty | royalty", type: "string", choices: ["hourly", "bounty", "royalty"] })
+    .option("rate", { describe: "hourly rate in dollars", type: "number" })
+    .option("hours", { describe: "hours worked/scheduled", type: "number" })
+    .option("guaranteed-min", { describe: "stated pay floor in dollars", type: "number" })
+    .option("upside", { describe: "free-text upside formula", type: "string" })
+    .option("opportunity", { describe: "opportunity ID this role was hired under", type: "number" })
+    .option("bounty", { describe: "bounty ID this role was hired under", type: "number" }),
 })
 
 const RemoveLeadCommand = cmd({
@@ -1765,6 +1998,58 @@ const RemoveLeadCommand = cmd({
     .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
     .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
     .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
+const StaffingCommand = cmd({
+  command: "staffing <event-id>",
+  aliases: ["economics"],
+  describe: "event staffing economics — comp'd roles, committed budget, ledger refs (#170876)",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading staffing economics…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/staffing`)
+      const ok = await handleApiError(res, "Load staffing")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const d = data.data || data
+      spinner.stop(success(`${d.role_count} comp'd role${d.role_count === 1 ? "" : "s"}`))
+      if (args.json) { await writeJson(d); return }
+
+      const fmt = (c: number | null | undefined) => c == null ? "—" : `$${(Number(c) / 100).toFixed(2)}`
+      printDivider()
+      printKV("Event", `#${d.event_id} — ${d.event_name || "?"}`)
+      printDivider()
+      if (!d.roles || d.roles.length === 0) {
+        prompts.log.info(dim("No comp'd roles yet. Use: iris events add-lead <event> <lead> -r staff --comp-type hourly --rate 22 --hours 4 --guaranteed-min 88"))
+      } else {
+        for (const r of d.roles) {
+          const line = [
+            bold(r.lead_name || `Lead #${r.lead_id}`),
+            dim(r.role || "—"),
+            highlight(r.comp_type),
+            r.comp_type === "hourly" && r.rate_cents != null ? dim(`${fmt(r.rate_cents)}/hr × ${r.hours ?? "?"}h`) : "",
+            `→ committed ${bold(fmt(r.committed_cents))}`,
+            r.ledger_transaction_id ? dim(`(ledger #${r.ledger_transaction_id})`) : dim("(no ledger line)"),
+          ].filter(Boolean).join("  ")
+          console.log("  " + line)
+          if (r.upside_formula) console.log("    " + dim(`upside: ${r.upside_formula}`))
+        }
+      }
+      printDivider()
+      printKV("Committed total", bold(fmt(d.committed_total_cents)))
+      printDivider()
+      prompts.outro(dim(`iris atlas:ledger list --type expense  |  iris events production overview -e ${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
 })
 
 // ============================================================================
@@ -1968,7 +2253,7 @@ const PreflightCommand = cmd({
 
     // ── Render ──
     if (args.json) {
-      console.log(JSON.stringify(checks, null, 2))
+      await writeJson(checks)
       prompts.outro("Done")
       return
     }
@@ -2091,7 +2376,7 @@ const AuditCommand = cmd({
 
     // ── Render ──
     if (args.json) {
-      console.log(JSON.stringify(checks, null, 2))
+      await writeJson(checks)
       prompts.outro("Done")
       return
     }
@@ -2201,7 +2486,7 @@ const ImportIgCommand = cmd({
       printDivider()
 
       if (args["dry-run"]) {
-        if (args.json) { console.log(JSON.stringify({ caption, flyerUrl, images, location }, null, 2)) }
+        if (args.json) { await writeJson({ caption, flyerUrl, images, location }) }
         prompts.outro(dim("Dry run — no event created"))
         return
       }
@@ -2238,7 +2523,7 @@ const ImportIgCommand = cmd({
       spinner2.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -2483,7 +2768,7 @@ Return this exact JSON structure (use null for unknown fields):
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({ platform, title: eventTitle, date: eventDate, time: eventTime, venue: eventVenue, city: eventCity, state: eventState, description: eventDesc, flyer: flyerUrl, ticket_url: ticketUrl, price, images, source: args.url }, null, 2))
+          await writeJson({ platform, title: eventTitle, date: eventDate, time: eventTime, venue: eventVenue, city: eventCity, state: eventState, description: eventDesc, flyer: flyerUrl, ticket_url: ticketUrl, price, images, source: args.url })
         }
         prompts.outro(dim("Dry run — no event created"))
         return
@@ -2532,7 +2817,7 @@ Return this exact JSON structure (use null for unknown fields):
       createSpinner.stop(`${success("✓")} Event #${eventId} created`)
 
       if (args.json) {
-        console.log(JSON.stringify({ event_id: eventId, platform, title: eventTitle, flyer: flyerUrl }, null, 2))
+        await writeJson({ event_id: eventId, platform, title: eventTitle, flyer: flyerUrl })
       }
 
       prompts.outro(dim(`iris events get ${eventId}`))
@@ -2639,7 +2924,7 @@ const SearchCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
         prompts.outro("Done")
         return
       }
@@ -2695,7 +2980,7 @@ const SalesCommand = cmd({
 
       spinner.stop(success(`Sales for event #${eventId}`))
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       // Header
       printDivider()
@@ -2779,7 +3064,7 @@ const ResolveCommand = cmd({
 
       spinner.stop(success(`Checked ${data.total_checked || 0} pending purchases`))
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       console.log(`  Resolved (paid):   ${success(String(data.resolved || 0))}`)
@@ -2833,6 +3118,7 @@ export const PlatformEventsCommand = cmd({
       .command(TicketsPushCommand)
       .command(TicketsDiffCommand)
       .command(TicketCheckoutCommand)
+      .command(LinkPageCommand)
       // Venue Deals
       .command(LinkVenueCommand)
       .command(UnlinkVenueCommand)
@@ -2841,6 +3127,7 @@ export const PlatformEventsCommand = cmd({
       .command(AddLeadCommand)
       .command(UpdateLeadCommand)
       .command(RemoveLeadCommand)
+      .command(StaffingCommand)
       // Sales & Revenue
       .command(SalesCommand)
       .command(ResolveCommand)

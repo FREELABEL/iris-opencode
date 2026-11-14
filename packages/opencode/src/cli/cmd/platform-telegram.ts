@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL } from "./iris-api"
+import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL, writeJson } from "./iris-api"
 
 const BRIDGE_BASE = BRIDGE_URL
 
@@ -54,7 +54,7 @@ const TelegramChatsCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       if (data.bot_username) prompts.log.info(dim(`Bot: @${data.bot_username}`))
       printDivider()
@@ -96,7 +96,7 @@ const TelegramReadCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       for (const msg of messages) {
@@ -156,7 +156,7 @@ const TelegramInfoCommand = cmd({
     try {
       const data = await bridgeFetch("/api/telegram/info")
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       if (data.connected) {
         console.log(`  ${success("● connected")}  @${bold(data.username)}`)

@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
 import {
   HiveScanCommandExport,
   HiveProbeCommandExport,
@@ -10,13 +11,23 @@ import {
 import {
   HiveNodesCommandExport,
   HiveRunCommandExport,
+  fetchNodes,
 } from "./platform-hive-nodes"
+import { HiveFilesCommandExport } from "./platform-hive-files"
+import { runRemoteDoctor } from "./platform-hive-doctor"
+import { HiveSelftestCommandExport } from "./platform-hive-selftest"
+import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
+import { VaultCommandExport } from "./platform-vault"
 import {
   HiveDiscoverCommandExport,
   HiveEnrollCommandExport,
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 import { HiveVpnCommandExport } from "./platform-hive-vpn"
+import { HiveConnectCommandExport } from "./platform-hive-connect"
+import { exitCodeForResult, verdictForResult, renderOutput, type ScriptRunResult } from "./hive-script-result"
+import { runLocalOAuthConnect } from "./integration-oauth-connect"
+import { HiveKeysCommandExport } from "./platform-hive-keys"
 import { HiveHostCommandExport } from "./platform-hive-host"
 import {
   HiveSendCommand,
@@ -31,6 +42,7 @@ import {
 import {
   ExchangeCommand,
 } from "./platform-exchange"
+import { firstArray } from "../../util/array"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -1176,6 +1188,220 @@ const HiveTasksCommand = cmd({
   },
 })
 
+// ── iris hive board ─────────────────────────────────────────────────────
+// The fleet cockpit: every task across every node in one view, grouped by
+// what needs a human. `hive tasks` answers "what is on this node"; the board
+// answers "what is blocked on me". Competitive gap G2 — bloq #503 item
+// #178177, bug #178193, https://heyiris.io/p/ao-gap-analysis
+
+type BoardTask = {
+  id: string
+  title: string
+  type: string
+  status: string
+  node: string
+  error?: string
+  ts?: string
+  durationMs?: number
+  progress?: number
+  stale?: boolean
+}
+
+type Lane = "needs" | "working" | "queued" | "done"
+
+const LANE_ORDER: Lane[] = ["needs", "working", "queued", "done"]
+
+const LANE_LABEL: Record<Lane, string> = {
+  needs: "NEEDS YOU",
+  working: "WORKING",
+  queued: "QUEUED",
+  done: "DONE",
+}
+
+// A task that reports "completed" but carries an error is a known lying-status
+// case — surface it rather than trusting the badge.
+function laneOf(t: BoardTask): Lane {
+  const s = (t.status || "").toLowerCase()
+  if (s === "failed" || s === "timeout" || s === "needs_input" || s === "blocked") return "needs"
+  if (t.stale) return "needs"
+  if (s === "running" || s === "dispatched") return "working"
+  if (s === "pending" || s === "queued") return "queued"
+  return "done"
+}
+
+function shortId(id: string): string {
+  return String(id ?? "").substring(0, 12)
+}
+
+function laneGlyph(lane: Lane, status: string): string {
+  if (lane === "needs") return "\x1b[31m✗\x1b[0m"
+  if (lane === "working") return "\x1b[34m▶\x1b[0m"
+  if (lane === "queued") return dim("◌")
+  return status === "failed" ? "\x1b[31m✗\x1b[0m" : success("✓")
+}
+
+const HiveBoardCommand = cmd({
+  command: "board",
+  aliases: ["fleet"],
+  describe: "fleet cockpit — every task across every node, grouped by what needs you",
+  builder: (yargs) =>
+    yargs
+      .option("all", { describe: "include the DONE lane (hidden by default)", type: "boolean", default: false })
+      .option("node", { describe: "filter to one node (name or id prefix)", type: "string" })
+      .option("since", { describe: "history window (e.g. 6h, 24h, 7d)", type: "string", default: "24h" })
+      .option("limit", { describe: "max history tasks to pull", type: "number", default: 60 })
+      .option("stale-after", { describe: "minutes before a queued task counts as stuck", type: "number", default: 60 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    const userId = await requireUserId(args["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const asJson = args.json as boolean
+    const staleAfterMs = Math.max(1, args["stale-after"] as number) * 60_000
+
+    if (!asJson) prompts.intro("◈  Hive Board")
+    const spinner = asJson ? null : prompts.spinner()
+    spinner?.start("Gathering the fleet…")
+
+    // Node roster — also gives us id → friendly name for task attribution.
+    let nodes: Awaited<ReturnType<typeof fetchNodes>> = []
+    try {
+      nodes = await fetchNodes(userId)
+    } catch { /* roster unavailable — tasks still render, just unattributed */ }
+    const nodeName = new Map<string, string>()
+    for (const n of nodes) nodeName.set(String(n.id), n.name)
+
+    const resolveNodeLabel = (t: Record<string, unknown>): string => {
+      const id = t.node_id ?? t.nodeId ?? t.node
+      if (t.node_name) return String(t.node_name)
+      if (id && nodeName.has(String(id))) return nodeName.get(String(id))!
+      return id ? shortId(String(id)) : "—"
+    }
+
+    const toBoardTask = (t: Record<string, unknown>, fallbackStatus: string): BoardTask => {
+      const created = (t.created_at ?? t.queued_at ?? null) as string | null
+      const status = String(t.status ?? fallbackStatus)
+      const isQueued = status === "pending" || status === "queued"
+      const ageMs = created ? Date.now() - new Date(created).getTime() : 0
+      return {
+        id: String(t.id ?? ""),
+        title: String(t.title ?? t.type ?? "untitled"),
+        type: String(t.type ?? "—"),
+        status,
+        node: resolveNodeLabel(t),
+        error: t.error ? String(t.error) : undefined,
+        ts: String(t.completed_at ?? t.started_at ?? created ?? ""),
+        durationMs: (t.duration_ms as number) ?? undefined,
+        progress: (t.progress as number) ?? undefined,
+        stale: isQueued && ageMs > staleAfterMs,
+      }
+    }
+
+    const byId = new Map<string, BoardTask>()
+    const add = (t: BoardTask) => { if (t.id && !byId.has(t.id)) byId.set(t.id, t) }
+    const degraded: string[] = []
+
+    // 1. Live running tasks from the local bridge daemon.
+    try {
+      const res = await bridgeFetch("/daemon/queue")
+      const data = await res.json() as Record<string, unknown>
+      for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "running"))
+    } catch { degraded.push("local daemon unreachable — running tasks on THIS node may be missing") }
+
+    // 2. Pending work claimed by this node.
+    try {
+      const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+      const data = await res.json() as Record<string, unknown>
+      for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "pending"))
+    } catch { degraded.push("node key missing — queued tasks may be missing") }
+
+    // 3. Fleet-wide history from the cloud (this is the cross-node source).
+    try {
+      const params = new URLSearchParams({
+        user_id: String(userId),
+        since: String(args.since),
+        limit: String(args.limit),
+      })
+      const res = await hiveFetch(`/api/v6/nodes/tasks?${params}`)
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>
+        for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "completed"))
+      } else {
+        degraded.push(`fleet history HTTP ${res.status} — cross-node tasks may be missing`)
+      }
+    } catch { degraded.push("fleet history unreachable — cross-node tasks may be missing") }
+
+    let tasks = [...byId.values()]
+    if (args.node) {
+      const q = String(args.node).toLowerCase()
+      tasks = tasks.filter(t => t.node.toLowerCase().includes(q))
+    }
+
+    const lanes: Record<Lane, BoardTask[]> = { needs: [], working: [], queued: [], done: [] }
+    for (const t of tasks) lanes[laneOf(t)].push(t)
+    for (const l of LANE_ORDER) lanes[l].sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
+
+    const online = nodes.filter(n => n.connection_status === "connected" || n.connection_status === "online").length
+
+    if (asJson) {
+      await writeJson({
+        nodes: { total: nodes.length, online },
+        counts: { needs: lanes.needs.length, working: lanes.working.length, queued: lanes.queued.length, done: lanes.done.length },
+        degraded,
+        lanes,
+      })
+      return
+    }
+
+    spinner?.stop(
+      `${lanes.needs.length} need you · ${lanes.working.length} working · ${lanes.queued.length} queued · ${lanes.done.length} done`,
+    )
+    printDivider()
+    console.log(
+      `  ${bold(String(online))}/${nodes.length} node(s) online` +
+      dim(`  ·  window ${args.since}  ·  stuck after ${args["stale-after"]}m`),
+    )
+
+    // Never let a partial fetch masquerade as an empty fleet.
+    for (const d of degraded) console.log(`  \x1b[33m⚠\x1b[0m ${dim(d)}`)
+    console.log()
+
+    for (const lane of LANE_ORDER) {
+      const items = lanes[lane]
+      if (lane === "done" && !args.all) {
+        if (items.length) console.log(dim(`  DONE (${items.length}) — hidden, use --all`))
+        continue
+      }
+      if (!items.length) continue
+
+      const heading = lane === "needs" && items.length ? `\x1b[31m${LANE_LABEL[lane]}\x1b[0m` : bold(LANE_LABEL[lane])
+      console.log(`  ${heading} (${items.length})`)
+      for (const t of items) {
+        const glyph = laneGlyph(lane, t.status)
+        const meta: string[] = [t.node]
+        if (t.durationMs) meta.push(formatDuration(t.durationMs))
+        if (t.progress != null && lane === "working") meta.push(`${t.progress}%`)
+        if (t.ts) meta.push(timeAgo(t.ts))
+        if (t.stale) meta.push("\x1b[33mstuck\x1b[0m")
+        console.log(`    ${glyph} ${dim(shortId(t.id))}  ${t.title.substring(0, 46).padEnd(46)}  ${dim(meta.join(" · "))}`)
+        if (t.error && lane === "needs") {
+          console.log(`        \x1b[31m${String(t.error).split("\n")[0].substring(0, 90)}\x1b[0m`)
+        }
+      }
+      console.log()
+    }
+
+    if (!tasks.length) {
+      console.log(dim("  Fleet is idle — no tasks in this window."))
+      console.log()
+    }
+
+    console.log(dim("  iris hive tasks get <id>  ·  iris hive tasks logs <id>  ·  iris hive cancel <id>"))
+    prompts.outro("Done")
+  },
+})
+
 // ── iris hive cancel ────────────────────────────────────────────────────
 
 const HiveCancelCommand = cmd({
@@ -1439,10 +1665,22 @@ const HivePurgeCommand = cmd({
 // ── iris hive doctor ────────────────────────────────────────────────────
 
 const HiveDoctorCommand = cmd({
-  command: "doctor",
-  describe: "diagnose daemon health, connectivity, and stale tasks",
-  builder: (yargs) => yargs,
-  async handler() {
+  command: "doctor [node]",
+  describe: "diagnose daemon health, connectivity, and stale tasks — this machine, or a named node over Tailscale",
+  builder: (yargs) =>
+    yargs
+      .positional("node", { describe: "check THIS node instead of the local machine (name or id)", type: "string" })
+      .option("all", { describe: "check every node you own", type: "boolean", default: false })
+      .option("expect-sha", { describe: "commit the remote daemon SHOULD be running; a mismatch is a failure", type: "string" })
+      .option("host", { describe: "override the address, skipping Tailscale resolution", type: "string" })
+      .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    // Naming a node moves the SAME question to a different machine (#182019). With no node
+    // this behaves exactly as before, so nothing that called `iris hive doctor` changes.
+    if (argv.node || argv.all) return runRemoteDoctor(argv)
+
     UI.empty()
     prompts.intro("◈  Hive Doctor")
 
@@ -1575,6 +1813,18 @@ const HiveDoctorCommand = cmd({
     // HMAC task signing (informational)
     checks.push({ name: "Task signing", status: "pass", detail: "HMAC-SHA256 verification enabled" })
 
+    const failures = checks.filter(c => c.status === "fail")
+
+    // --json was added to this command's builder when remote support
+    // (runRemoteDoctor) was bolted on, which honors it — this pre-existing
+    // local path never did (#182105), so `iris hive doctor --json` with no
+    // node argument printed decorated text and broke any JSON.parse() of it.
+    if (argv.json) {
+      await writeJson({ ok: failures.length === 0, checks })
+      if (failures.length > 0) process.exit(1)
+      return
+    }
+
     // Display results
     printDivider()
     for (const check of checks) {
@@ -1583,7 +1833,6 @@ const HiveDoctorCommand = cmd({
     }
     console.log()
 
-    const failures = checks.filter(c => c.status === "fail")
     if (failures.length > 0) {
       prompts.log.warn(`${failures.length} issue(s) found`)
     } else {
@@ -1605,7 +1854,10 @@ const HiveScriptPushCommand = cmd({
       .positional("file", { type: "string", describe: "local file path" })
       .option("project", { alias: "p", type: "string", describe: "inject env vars from a hive project" })
       .option("persist", { type: "boolean", default: true, describe: "keep script on node after execution" })
-      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" }),
+      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" })
+      // `exec` has always had this; `push` — the command that actually runs the script — did
+      // not, and sent no timeout at all, so the node silently applied its own default.
+      .option("timeout", { type: "number", default: 30000, describe: "timeout in ms (node caps at 300000)" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Push Script")
@@ -1653,6 +1905,7 @@ const HiveScriptPushCommand = cmd({
           content,
           persist: args.persist,
           args: args.args,
+          timeout_ms: args.timeout,
           env: Object.keys(projectEnv).length > 0 ? projectEnv : undefined,
         }),
       })
@@ -1660,34 +1913,43 @@ const HiveScriptPushCommand = cmd({
       if (!res.ok) {
         const errMsg = await reportBridgeFailure("POST", url, res)
         spinner.stop(`Failed: HTTP ${res.status} — ${errMsg}`, 1)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
 
-      const result = await res.json() as Record<string, unknown>
-      spinner.stop(result.status === "completed" ? success("Completed") : highlight(String(result.status)))
+      const result = await res.json() as ScriptRunResult
+      const verdict = verdictForResult(result)
+      spinner.stop(verdict === "completed" ? success("Completed") : highlight(verdict))
+
+      // THE FIX THAT MATTERS. This handler used to set no exit code at all, so a script ending
+      // `exit 42` on the node still made `iris` exit 0 — every Hive script in CI was a no-op
+      // check. Measured 2026-08-05.
+      process.exitCode = exitCodeForResult(result)
 
       printDivider()
-      printKV("Exit code", String(result.exit_code ?? "?"))
+      // A null exit code means killed-by-signal, not unknown. Printing "?" for both is how a
+      // SIGKILL got read as "the daemon didn't say".
+      printKV("Exit code", result.exit_code === null || result.exit_code === undefined
+        ? (result.signal ? `killed (${result.signal})` : "none reported")
+        : String(result.exit_code))
       printKV("Duration", `${result.duration_ms}ms`)
+      if (result.timed_out) printKV("Timed out", highlight(`yes — node killed it after ${args.timeout}ms`))
       if (result.script_path) printKV("Persisted", success(String(result.script_path)))
       if (result.machine) printKV("Machine", dim(String(result.machine)))
 
-      const stdout = String(result.stdout ?? "").trim()
-      const stderr = String(result.stderr ?? "").trim()
-      if (stdout) {
+      for (const [label, text, limit, upstream] of [
+        ["stdout", result.stdout, 50, result.stdout_truncated],
+        ["stderr", result.stderr, 20, result.stderr_truncated],
+      ] as const) {
+        const rendered = renderOutput(text, limit, Boolean(upstream))
+        if (!rendered.lines.length && !rendered.notice) continue
         console.log()
-        console.log(bold("  stdout:"))
-        for (const line of stdout.split("\n").slice(0, 50)) {
-          console.log(`    ${line}`)
-        }
-      }
-      if (stderr) {
-        console.log()
-        console.log(highlight("  stderr:"))
-        for (const line of stderr.split("\n").slice(0, 20)) {
-          console.log(`    ${line}`)
-        }
+        console.log(label === "stdout" ? bold(`  ${label}:`) : highlight(`  ${label}:`))
+        // Truncation is announced. Output that vanishes without a marker is indistinguishable
+        // from output that was never produced.
+        if (rendered.notice) console.log(dim(`    [${rendered.notice}]`))
+        for (const line of rendered.lines) console.log(`    ${line}`)
       }
     } catch (err) {
       spinner.stop("Error", 1)
@@ -2786,7 +3048,7 @@ const HiveCredentialsListCommand = cmd({
     if (!ok) return
 
     const data = (await res.json()) as any
-    const creds: any[] = data?.data ?? []
+    const creds: any[] = firstArray(data?.data)
 
     printDivider()
     if (creds.length === 0) {
@@ -3574,7 +3836,7 @@ const HiveDashboardCommand = cmd({
           tasks: daemonResult.queue.tasks ?? [],
         } : { status: "offline", node_name: null, active_tasks: 0, tasks: [] }
 
-        console.log(JSON.stringify({
+        await writeJson({
           daemon,
           summary: jobsByStatus,
           pending_tasks: pendingResult.length,
@@ -3590,7 +3852,7 @@ const HiveDashboardCommand = cmd({
             status: t.status,
             created_at: t.created_at,
           })),
-        }, null, 2))
+        })
         return
       }
 
@@ -3911,7 +4173,7 @@ const HiveSwarmCommand = cmd({
       spinner.stop("Swarm dispatched")
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       } else {
         prompts.log.success(`Task ID: ${(data as any).task?.id || (data as any).id || "unknown"}`)
         prompts.log.info(`Roles: ${roleNames.join(", ")} (${roleNames.length} panes)`)
@@ -4047,7 +4309,7 @@ const HivePanesCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(sessions, null, 2))
+      await writeJson(sessions)
       return
     }
 
@@ -4269,7 +4531,7 @@ const HiveLogsCommand = cmd({
         if (res.ok) {
           const data = (await res.json()) as { events: any[] }
           if (args.json) {
-            console.log(JSON.stringify(data.events, null, 2))
+            await writeJson(data.events)
             return
           }
           if (data.events.length === 0) {
@@ -4308,7 +4570,7 @@ const HiveLogsCommand = cmd({
 
       const data = (await res.json()) as { entries: any[] }
       if (args.json) {
-        console.log(JSON.stringify(data.entries, null, 2))
+        await writeJson(data.entries)
         return
       }
 
@@ -4337,13 +4599,58 @@ const HiveLogsCommand = cmd({
 })
 
 // ============================================================================
+// Clio — alias onto the CLI-native OAuth flow
+// ============================================================================
+
+/**
+ * `iris hive clio connect` — the same code path as `iris integrations connect clio`.
+ * Aliased here because that is where the muscle memory is; the implementation is
+ * shared so the two can never drift.
+ */
+const HiveClioConnectCommand = cmd({
+  command: "connect",
+  describe: "connect Clio via OAuth (loopback listener; --paste for headless)",
+  builder: (y) =>
+    y
+      .option("client-id", { type: "string", describe: "Clio app client id (or CLIO_CLIENT_ID)" })
+      .option("client-secret", { type: "string", describe: "Clio app client secret (or CLIO_CLIENT_SECRET)" })
+      .option("port", { type: "number", default: 8787, describe: "loopback port for the OAuth callback" })
+      .option("paste", { type: "boolean", default: false, describe: "paste the code instead of a loopback listener (SSH/headless)" })
+      .option("print-url", { type: "boolean", default: false, describe: "print the authorize URL and exit" })
+      .option("name", { type: "string", describe: "label for this connection" })
+      .option("bloq", { type: "number", describe: "share this integration with a bloq" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" })
+      .option("user-id", { type: "number", describe: "user ID (or IRIS_USER_ID env)" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Connect: Clio")
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    await runLocalOAuthConnect("clio", args as any)
+  },
+})
+
+const HiveClioCommand = cmd({
+  command: "clio <subcommand>",
+  describe: "Clio (legal practice management) — OAuth connect",
+  builder: (y) => y.command(HiveClioConnectCommand).demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
-export const PlatformHiveCommand = cmd({
-  command: "hive",
+export const PlatformHiveCommand = productCommand({
+  name: "hive",
   aliases: ["compute"],
-  describe: "manage Hive nodes, tasks, projects & peer connections",
+  purpose:
+    "Hive — distributed compute: nodes, tasks, projects and peer connections",
+  keywords: ["hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer"],
+  howtos: ["hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
+  playbooks: ["iris-hive"],
   builder: (yargs) =>
     yargs
       // LAN discovery (local utility — no API)
@@ -4353,7 +4660,21 @@ export const PlatformHiveCommand = cmd({
       // Node management + remote exec
       .command(HiveNodesCommandExport)
       .command(HiveRunCommandExport)
-      // Remote enrollment (SSH-based)
+      .command(HiveFilesCommandExport)
+      .command(HiveSelftestCommandExport)
+      // Rentals — long-lived machines a customer pays for, distinct from the ephemeral task
+      // workers behind `hive nodes`. Separate verbs because they are a separate product.
+      .command(HiveRentCommand)
+      .command(HiveRentalsCommand)
+      .command(HiveReleaseCommand)
+      .command(HiveProvidersCommand)
+      .command(VaultCommandExport)
+      // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
+      // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
+      .command(HiveKeysCommandExport)
+      // Self enrollment (outbound) — run ON the machine; no SSH, no VPN, no open ports
+      .command(HiveConnectCommandExport)
+      // Remote enrollment (SSH-based) — run FROM your machine; needs to reach the target
       .command(HiveSshSetupCommandExport)
       .command(HiveDiscoverCommandExport)
       .command(HiveEnrollCommandExport)
@@ -4365,6 +4686,7 @@ export const PlatformHiveCommand = cmd({
       .command(HiveScriptCommand)
       .command(HiveScheduleCommand)
       // Daemon operations (fast debugging)
+      .command(HiveBoardCommand)
       .command(HiveTasksCommand)
       .command(HiveCancelCommand)
       .command(HiveQueueCommand)
@@ -4416,6 +4738,6 @@ export const PlatformHiveCommand = cmd({
       .command(HivePanesCommand)
       .command(HiveWatchCommand)
       .command(HiveLogsCommand)
+      .command(HiveClioCommand)
       .demandCommand(),
-  async handler() {},
 })

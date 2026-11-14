@@ -1,4 +1,7 @@
+import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
+import { PulseCheckCommand } from "./platform-pulse-check"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -18,8 +21,7 @@ import {
   PLATFORM_URLS,
   BRIDGE_URL,
   getBridgeToken,
-  resolveUserId,
-} from "./iris-api"
+  resolveUserId, writeJson, failNoOp} from "./iris-api"
 // #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
 import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
@@ -31,6 +33,17 @@ import {
   aiGenerateCarouselProps,
   resolveRemotionDir,
 } from "./platform-remotion"
+// #182461 — the CRM table is not the only place a person is written down.
+import {
+  searchBloqMentions,
+  hitMatchesLead,
+  gradeEvidence,
+  groupByProject,
+  type MentionHit,
+  type MentionSearchResult,
+  type CrmMatch,
+} from "./lead-mentions"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -197,7 +210,7 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
         return null
       }
       const searchData = (await searchRes.json()) as { data?: any[] }
-      const matches: any[] = searchData?.data ?? []
+      const matches: any[] = firstArray(searchData?.data)
       if (matches.length === 0) {
         spinner.stop("No leads found", 1)
         return null
@@ -292,11 +305,17 @@ const LeadsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      let leads: any[] = data?.data ?? []
+      let leads: any[] = firstArray(data?.data)
 
       // Default: hide Prospected leads (mass-scraped venue/SOM leads)
       // Use --all or --status to see everything
-      const totalFromApi = data?.meta?.total ?? leads.length
+      // The endpoint is a Laravel paginator: the real population is `total` at the TOP
+      // level and `meta.total` does not exist. Reading meta first meant this silently fell
+      // back to the PAGE SIZE, so the command could only ever report "N of N" and
+      // truncation was undetectable by construction (#182078). Measured while fixing it:
+      // per_page=5 returns total 28522, against the 56 rows every published funnel KPI
+      // had been computed from.
+      const totalFromApi = data?.total ?? data?.meta?.total ?? leads.length
       let prospectedCount = 0
       if (!args.all && !args.status && !args.search) {
         prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
@@ -326,17 +345,33 @@ const LeadsListCommand = cmd({
 
       // Trim to requested limit
       leads = leads.slice(0, args.limit)
-      if (!args.all && !args.status && !args.search) {
-        const suffix = prospectedCount > 0 ? dim(` (${prospectedCount} Prospected hidden — use --all to include)`) : ""
-        spinner.stop(`${leads.length} lead(s)${suffix}`)
-      } else if (args.search && totalFromApi > leads.length) {
+      // #182078 — SAY WHEN THE ANSWER IS PARTIAL.
+      //
+      // This command hides Prospected by default, caps by recency, and reported only the
+      // page size. Each behaviour is defensible alone; together, with no total, they
+      // produce a confident partial answer indistinguishable from a complete one. It was
+      // used as a measurement instrument and the funnel KPIs computed from it were wrong
+      // in the FLATTERING direction — a truncated sample of WORKED leads looks like a
+      // healthy funnel precisely because the unworked ones are what is missing.
+      // Reporting lives in leads-scope.ts so it can be tested — it is the part that failed.
+      const scope = describeListScope({ shown: leads.length, total: totalFromApi, prospectedHidden: prospectedCount })
+      const truncated = scope.truncated
+      const suffix = scope.notes.length ? dim(` (${scope.notes.join(" · ")})`) : ""
+
+      if (args.search && truncated) {
         spinner.stop(`Showing ${leads.length} of ${totalFromApi} results for "${args.search}"`)
       } else {
-        spinner.stop(`${leads.length} lead(s)`)
+        spinner.stop(`${leads.length} lead(s)${suffix}`)
       }
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        // The array shape is preserved because callers parse it, so the caveat goes to
+        // STDERR — it reaches a human or an agent without corrupting piped stdout. A
+        // silent truncation in JSON is the exact failure this fix exists for.
+        if (truncated || prospectedCount > 0) {
+          process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
+        }
+        await writeJson(leads)
         return
       }
 
@@ -405,14 +440,14 @@ const LeadsRepliedCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[] }
-      let leads: any[] = data?.data ?? []
+      let leads: any[] = firstArray(data?.data)
       const repliedTime = (l: any) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime()
       leads.sort((a, b) => repliedTime(b) - repliedTime(a)) // newest reply first
       leads = leads.slice(0, args.limit)
       spinner.stop(`${leads.length} responder(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        await writeJson(leads)
         prompts.outro("Done")
         return
       }
@@ -498,7 +533,7 @@ const LeadsGetCommand = cmd({
           return
         }
         const searchData = (await searchRes.json()) as { data?: any[] }
-        const matches: any[] = searchData?.data ?? []
+        const matches: any[] = firstArray(searchData?.data)
         if (matches.length === 0) {
           spinner.stop("No leads found", 1)
           process.exitCode = 1
@@ -565,7 +600,7 @@ const LeadsGetCommand = cmd({
       spinner.stop(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
 
       if (args.json) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -676,11 +711,20 @@ const LeadsGetCommand = cmd({
 
 const LeadsSearchCommand = cmd({
   command: "search <query>",
-  describe: "search leads",
+  describe: "search leads (CRM records + mentions across your bloq projects)",
   builder: (yargs) =>
     yargs
       .positional("query", { describe: "search query", type: "string", demandOption: true })
       .option("limit", { describe: "max results", type: "number", default: 10 })
+      // #182461 — mentions are ON by default, and that is the whole fix. The cross-project
+      // sweep existed as a reachable endpoint the entire time; nobody found Tyler Smith
+      // because nothing called it from here. A flag you have to know about would have left
+      // the default answer exactly as wrong as it was. `--crm-only` opts out.
+      //
+      // Named flag rather than yargs' automatic `--no-mentions`: this CLI runs yargs in
+      // strict mode, which rejects the negated form outright.
+      .option("crm-only", { describe: "skip the project-mention sweep (faster)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -705,8 +749,30 @@ const LeadsSearchCommand = cmd({
     spinner.start("Searching…")
 
     try {
+      // The mention sweep needs a user id; the CRM query does not. Resolve it without
+      // failing the command — a search that can still answer from the CRM should, and the
+      // missing half gets NAMED below rather than silently returning zero mentions.
+      // resolveUserId() is the SILENT resolver on purpose. requireUserId() prints a
+      // three-line "set IRIS_USER_ID" lecture, and firing that mid-spinner over an
+      // optional second source would make the CRM answer look like it failed.
+      const userId = args["crm-only"]
+        ? null
+        : ((args["user-id"] as number | undefined) ?? (await resolveUserId()))
+
       const params = new URLSearchParams({ search: args.query, per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/leads?${params}`)
+
+      // Both sources run CONCURRENTLY. The mention sweep is one API call against an
+      // endpoint the CRM query does not touch, so it costs latency only when it is slower
+      // than the leads query — not in addition to it.
+      const [res, mentionResult] = await Promise.all([
+        irisFetch(`/api/v1/leads?${params}`),
+        args["crm-only"]
+          ? Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "--crm-only" })
+          : userId
+            ? searchBloqMentions(String(args.query), userId, Math.max(Number(args.limit) * 2, 25))
+            : Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "not signed in" }),
+      ])
+
       if (!res.ok) {
         const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>
         const errMsg = String(errBody?.message || errBody?.error || `HTTP ${res.status}`)
@@ -717,8 +783,13 @@ const LeadsSearchCommand = cmd({
         return
       }
 
-      const data = (await res.json()) as { data?: any[]; meta?: { total?: number } }
-      let leads: any[] = data?.data ?? []
+      const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
+      let leads: any[] = firstArray(data?.data)
+
+      // Whether these rows answer the WHOLE query or only part of it. The fallback below
+      // is allowed to widen the search; it is not allowed to let the widened results
+      // masquerade as exact ones (#182461).
+      let crmMatch: CrmMatch = leads.length ? "exact" : "none"
 
       // Fallback: if multi-word query returned 0, try searching by last name only
       if (leads.length === 0 && args.query.includes(" ")) {
@@ -739,38 +810,135 @@ const LeadsSearchCommand = cmd({
                 return allWords.every((w) => haystack.includes(w))
               })
               if (filtered.length > 0) {
+                // Every word present, just not adjacent — that is still an exact answer.
                 leads = filtered
+                crmMatch = "exact"
                 break
               }
-              // If no multi-word match, show partial matches
-              if (leads.length === 0) leads = fbLeads
+              // If no multi-word match, show partial matches — LABELLED as partial.
+              if (leads.length === 0) {
+                leads = fbLeads
+                crmMatch = "partial"
+              }
             }
           }
         }
       }
 
-      const total = data?.meta?.total ?? leads.length
-      spinner.stop(`${total} result(s)`)
+      const total = data?.total ?? data?.meta?.total ?? leads.length
+
+      // Attribute each mention to a lead where we can. Unattributed hits are the
+      // interesting half: a person written about in projects who has no CRM row at all.
+      const claimed = new Set<MentionHit>()
+      const evidence = leads.map((l) => {
+        const hits = mentionResult.hits.filter((h) => hitMatchesLead(l, h))
+        hits.forEach((h) => claimed.add(h))
+        return {
+          lead: l,
+          hits,
+          evidence: gradeEvidence({ crm: crmMatch, hits, mentionsSearched: mentionResult.searched }),
+        }
+      })
+      const unclaimed = mentionResult.hits.filter((h) => !claimed.has(h))
+
+      // Report what is on SCREEN. The old line printed the first query's `total`, so a
+      // fallback that surfaced ten partial rows announced "0 result(s)" above a list of
+      // ten — a count that describes a query the reader never sees.
+      const crmLabel =
+        crmMatch === "partial"
+          ? `${leads.length} partial CRM match(es)`
+          : `${leads.length} CRM result(s)${total > leads.length ? ` of ${total}` : ""}`
+      spinner.stop(
+        crmLabel + (mentionResult.searched ? `, ${mentionResult.hits.length} project mention(s)` : ""),
+      )
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        // Machine callers get the same distinction the terminal gets: `mentions_searched:
+        // false` is not zero mentions, and a caller that cannot tell them apart will
+        // publish "we have no record of this person" off a sweep that never ran.
+        await writeJson({
+          query: args.query,
+          crm_match: crmMatch,
+          leads: evidence.map((e) => ({
+            ...e.lead,
+            evidence: e.evidence,
+            mentions: e.hits.map(({ haystack: _h, ...rest }) => rest),
+          })),
+          unmatched_mentions: unclaimed.map(({ haystack: _h, ...rest }) => rest),
+          mentions_searched: mentionResult.searched,
+          mentions_unavailable_reason: mentionResult.reason,
+        })
         return
       }
 
-      if (leads.length === 0) {
+      // A name found ONLY in project content is a result, not an empty search. This is the
+      // exact case the bug was filed for — Tyler Smith exists all over the bloqs and every
+      // lookup answered "No leads matching", which reads as "we have nothing on them".
+      if (leads.length === 0 && unclaimed.length === 0) {
         prompts.log.warn(`No leads matching "${args.query}"`)
+        if (!mentionResult.searched) {
+          prompts.log.warn(
+            `Project content was NOT searched (${mentionResult.reason ?? "unavailable"}) — this is not "no mentions".`,
+          )
+        }
         prompts.outro("Done")
         return
       }
 
-      printDivider()
-      for (const l of leads) {
-        printLead(l)
-        console.log()
+      if (leads.length > 0) {
+        if (crmMatch === "partial") {
+          prompts.log.warn(
+            `No CRM lead matches all of "${args.query}" — showing partial name matches below.`,
+          )
+        }
+        printDivider()
+        for (const { lead, evidence: ev } of evidence) {
+          printLead(lead)
+          if (ev.mentions > 0) {
+            const when = ev.lastMentioned ? ` · last ${formatDate(ev.lastMentioned)}` : ""
+            const where = ev.projects.length ? ` — ${ev.projects.slice(0, 3).join(", ")}` : ""
+            console.log(`    ${dim("◇")} ${dim(`${ev.mentions} project mention(s)${where}${when}`)}`)
+          }
+          console.log(`    ${dim(`evidence: ${ev.source} — ${ev.why}`)}`)
+          console.log()
+        }
+        printDivider()
       }
-      printDivider()
 
-      prompts.outro(dim("iris leads get <id>"))
+      if (unclaimed.length > 0) {
+        console.log()
+        console.log(
+          `  ${bold("Mentioned in your projects")} ${dim(
+            leads.length ? "(not matched to any CRM lead above)" : "(no CRM record exists)",
+          )}`,
+        )
+        printDivider()
+        for (const group of groupByProject(unclaimed).slice(0, 5)) {
+          const board = group.bloqId != null ? dim(` bloq:${group.bloqId}`) : ""
+          console.log(`  ${bold(group.bloqName)}${board}  ${dim(`${group.hits.length} item(s)`)}`)
+          for (const h of group.hits.slice(0, 3)) {
+            const list = h.listName ? dim(`  ${h.listName}`) : ""
+            console.log(`    ${dim(`#${h.itemId}`)} ${h.title}${list}`)
+            if (h.snippet) console.log(`       ${dim(h.snippet.slice(0, 110))}`)
+          }
+          if (group.hits.length > 3) console.log(`    ${dim(`… ${group.hits.length - 3} more`)}`)
+        }
+        printDivider()
+      }
+
+      // Always say whether the second source ran. Fewer results because a source was down
+      // is indistinguishable from a genuinely small answer unless we say so.
+      if (!mentionResult.searched && !args["crm-only"]) {
+        prompts.log.warn(`Project mentions NOT searched (${mentionResult.reason ?? "unavailable"})`)
+      }
+
+      prompts.outro(
+        dim(
+          unclaimed.length && !leads.length
+            ? "iris bloqs items --bloq-id <id>"
+            : "iris leads get <id>  ·  iris leads search <query> --crm-only",
+        ),
+      )
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -815,6 +983,13 @@ const LeadsCreateCommand = cmd({
         type: "string",
         choices: LEAD_STATUSES,
       })
+      // Amounts at CREATE, not only at update (#182075 RO-2). The fields and the
+      // aggregate both already existed; what did not exist was any point in the
+      // workflow that ASKED. Board 368 reads 0% coverage — nine open leads, none
+      // priced. That is a capture gap, not a reporting one, and an amount is cheapest
+      // to record at the moment someone knows it.
+      .option("bid", { describe: "deal amount — counts toward board pipeline value", type: "number" })
+      .option("mrr", { describe: "monthly recurring revenue", type: "number" })
       .option("notes", { describe: "initial note to attach", type: "string" })
       .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
@@ -884,6 +1059,11 @@ const LeadsCreateCommand = cmd({
       if (args.company) payload.company = args.company
       if (args.source) payload.source = args.source
       if (args.status) payload.status = args.status
+      // `!== undefined` so an explicit 0 is sent. The same truthy guard on `update`
+      // silently discarded `--bid 0`, which made an amount possible to set and
+      // impossible to clear.
+      if (args.bid !== undefined) payload.price_bid = args.bid
+      if (args.mrr !== undefined) payload.mrr_amount = args.mrr
       // Store additional emails in contact_info.emails array
       if (args.emails) {
         const extras = String(args.emails)
@@ -935,7 +1115,7 @@ const LeadsCreateCommand = cmd({
       }
 
       if (isJson) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -1005,7 +1185,7 @@ const LeadsNotesCommand = cmd({
         return
       }
       const searchData = (await searchRes.json()) as { data?: any[] }
-      const matches: any[] = searchData?.data ?? []
+      const matches: any[] = firstArray(searchData?.data)
       if (matches.length === 0) {
         prompts.log.warn(`No leads matching "${args.id}"`)
         prompts.outro("Done")
@@ -1052,7 +1232,7 @@ const LeadsNotesCommand = cmd({
 
       if (isJson) {
         // Include note IDs so scripts can edit/delete (#137530).
-        console.log(JSON.stringify({ lead_id: leadId, notes }, null, 2))
+        await writeJson({ lead_id: leadId, notes })
         return
       }
 
@@ -1127,13 +1307,13 @@ const LeadsOutreachCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const body = (await res.json()) as any
-      const messages: any[] = body.messages ?? []
+      const messages: any[] = firstArray(body.messages)
       const stats = body.stats ?? {}
 
       spinner.stop(`${messages.length} messages`)
 
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
         return
       }
 
@@ -1286,7 +1466,7 @@ const LeadsNoteCommand = cmd({
 
       const data = await res.json().catch(() => ({}))
       if (isJson) {
-        console.log(JSON.stringify((data as any)?.data ?? data, null, 2))
+        await writeJson((data as any)?.data ?? data)
         return
       }
 
@@ -1367,8 +1547,11 @@ const LeadsUpdateCommand = cmd({
     if (args.website) payload.website = args.website
     if (args.source) payload.source = args.source
     if (args.stage) payload.stage = args.stage
-    if (args.bid) payload.price_bid = args.bid
-    if (args.mrr) payload.mrr_amount = args.mrr
+    // `!== undefined`, not truthiness: 0 is a legitimate value and the ONLY way to clear
+    // an amount. A truthy guard silently discarded `--bid 0`, so an amount entered by
+    // mistake could be set but never unset — and the command reported success either way.
+    if (args.bid !== undefined) payload.price_bid = args.bid
+    if (args.mrr !== undefined) payload.mrr_amount = args.mrr
     if (args["revenue-type"]) payload.revenue_type = args["revenue-type"]
     if (args["payment-method"]) payload.payment_method = args["payment-method"]
     // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
@@ -1420,9 +1603,7 @@ const LeadsUpdateCommand = cmd({
         process.exitCode = 1
         return
       }
-      prompts.log.warn("Nothing to update. Use --name, --email, --status, --bloq-id, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --email, --status, --bloq-id, etc.")
     }
 
     const spinner = isJson ? null : prompts.spinner()
@@ -1446,7 +1627,7 @@ const LeadsUpdateCommand = cmd({
       const l = data?.data ?? data
 
       if (isJson) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -1969,7 +2150,7 @@ const LeadsMergeCommand = cmd({
       .option("dry-run", { describe: "preview what will be merged without executing", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    const removeIds: number[] = ((args.remove as number[]) ?? []).filter((id) => id !== args.keep)
+    const removeIds: number[] = firstArray<number>(args.remove).filter((id) => id !== args.keep)
     if (removeIds.length === 0) {
       prompts.log.error("Cannot merge a lead into itself.")
       prompts.outro("Done")
@@ -2044,8 +2225,50 @@ const LeadsMergeCommand = cmd({
         console.log(`  ${dim(`${alternateEmails.length} alternate email(s) will be preserved: ${alternateEmails.join(", ")}`)}`)
       }
 
-      // Dry-run mode — show preview and exit
+      // TASKS were never mentioned in the preview, so the 5 tasks destroyed on 2026-08-10 were
+      // invisible before the merge ran (#179656 defect 3). Count them from the server rather
+      // than the already-fetched payload, which does not carry them.
+      let taskTotal = 0
+      for (const rid of removeIds) {
+        try {
+          const tr = await irisFetch(`/api/v1/leads/${rid}/tasks`)
+          if (tr.ok) {
+            const tb = (await tr.json()) as any
+            const list = Array.isArray(tb?.data) ? tb.data : Array.isArray(tb) ? tb : []
+            taskTotal += list.length
+          }
+        } catch { /* counting is best-effort; never block the preview */ }
+      }
+      if (taskTotal > 0) {
+        console.log(`  ${dim(`${taskTotal} task(s) will move to #${args.keep}`)}`)
+      }
+
+      // Dry-run mode — show preview and exit.
       if (args.dryRun) {
+        // The preview used to describe the SERVER merge plan while the LEGACY path was what
+        // actually executed — it promised "2 note(s) will be copied" and copied none (#179656
+        // defect 2). Probe the endpoint so the preview reflects the path that would really run.
+        // Only in a dry run: on the real path the merge call below IS the probe.
+        let serverMergeReachable = false
+        try {
+          // remove:[] is a no-op merge — enough for the route to answer, not enough to change
+          // anything. Even a 4xx proves the route exists.
+          const probe = await irisFetch(`/api/v1/leads/${args.keep}/merge`, {
+            method: "POST",
+            body: JSON.stringify({ remove: [], alternate_emails: [] }),
+          })
+          serverMergeReachable = probe.status !== 404 && probe.status !== 405
+        } catch {
+          serverMergeReachable = false
+        }
+        if (!serverMergeReachable) {
+          console.log()
+          prompts.log.warn(
+            `The server merge endpoint is NOT reachable, so this merge would be refused.\n` +
+              `Nothing above would happen. Retry when the API is available.`,
+          )
+        }
+
         console.log()
         console.log(`  ${bold("Dry run")} — no changes made`)
         prompts.outro("Done")
@@ -2083,47 +2306,25 @@ const LeadsMergeCommand = cmd({
         const result = await mergeRes.json().catch(() => ({}))
         mergeSpinner.stop(`${success("✓")} ${result.message ?? `Merged ${removeIds.length} lead(s) into #${args.keep}`}`)
       } else {
-        // Fallback to legacy client-side merge if endpoint not available
-        mergeSpinner.stop(dim("Server merge unavailable — falling back to legacy merge"))
-        const legacySpinner = prompts.spinner()
-        legacySpinner.start("Legacy merge…")
-
-        for (const rid of removeIds) {
-          const r = leads[rid]
-          const notes: any[] = Array.isArray(r.notes) ? r.notes : []
-          for (const n of notes) {
-            const content = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
-            await irisFetch(`/api/v1/leads/${args.keep}/notes`, {
-              method: "POST",
-              body: JSON.stringify({ content: `[Merged from #${rid}] ${content}` }),
-            })
-          }
-
-          const updates: Record<string, unknown> = {}
-          for (const field of ["company", "phone", "website", "city", "state", "country"]) {
-            if (!primary[field] && r[field]) updates[field] = r[field]
-          }
-          if (Object.keys(updates).length > 0) {
-            await irisFetch(`/api/v1/leads/${args.keep}`, {
-              method: "PATCH",
-              body: JSON.stringify(updates),
-            })
-          }
-
-          await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
-        }
-
-        // Legacy: preserve alternate emails via contact_info update
-        if (alternateEmails.length > 0) {
-          const ci = primary.contact_info ?? {}
-          ci.emails = [...new Set([...(ci.emails ?? []), ...alternateEmails])]
-          await irisFetch(`/api/v1/leads/${args.keep}`, {
-            method: "PATCH",
-            body: JSON.stringify({ contact_info: ci }),
-          })
-        }
-
-        legacySpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep} (legacy)`)
+        // The legacy client-side fallback DELETED the source lead after copying only the notes
+        // that happened to be present in the already-fetched payload — and never touched tasks
+        // at all. On 2026-08-10 that destroyed 2 notes and 5 tasks on lead #29006, unrecoverably
+        // (#179656).
+        //
+        // A fallback that is strictly MORE destructive than the primary path must never be
+        // selected automatically and silently. Merge is either atomic or it does not happen, so
+        // this now refuses and leaves every lead intact rather than half-migrating and deleting.
+        mergeSpinner.stop("Refused", 1)
+        prompts.log.error(
+          `The server merge endpoint is unavailable, and the old client-side fallback is unsafe:\n` +
+            `it deletes the source lead while migrating only some notes and NO tasks.\n\n` +
+            `Nothing was changed — all ${removeIds.length + 1} leads are intact.\n\n` +
+            `Back up first, then retry when the API is reachable:\n` +
+            removeIds.map((rid) => `  iris leads pull ${rid}`).join("\n"),
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
       }
 
       // Clean up orphaned local .iris/leads/ files for merged-away leads
@@ -2163,10 +2364,15 @@ function bridgeHeaders(): Record<string, string> {
   return h
 }
 
-interface ChannelHealth {
+export interface ChannelHealth {
   name: string
   ok: boolean
-  status: "verified" | "expired" | "error" | "not_connected" | "no_permission"
+  /**
+   * "unverified" = the API responded but the connection could not be confirmed.
+   * Kept distinct from "verified" so the doctor can't claim a connection it
+   * has not actually proven (#178282).
+   */
+  status: "verified" | "unverified" | "expired" | "error" | "not_connected" | "no_permission"
   error?: string
   hint?: string
 }
@@ -2176,74 +2382,154 @@ interface ChannelHealth {
  * Each check is non-blocking — one failure doesn't stop others.
  * Exported so iris doctor can reuse it.
  */
+/**
+ * Map an HTTP status from the Gmail probe to an honest health verdict (#178282).
+ *
+ * The previous logic returned ok:true for ANY status except 401/403, on the
+ * reasoning that "any response means the integration is reachable". That
+ * conflates *endpoint reachable* with *integration connected*: a 500 carrying
+ * "Gmail integration is not connected for this user" was rendered to the user
+ * as "connected + verified", directly contradicting `iris gmail read_emails`.
+ *
+ * Note the probe targets lead 0, which never exists — so a 404 proves the API
+ * is up but says nothing about the integration. That is reported as
+ * indeterminate rather than claimed as verified.
+ */
+export function gmailHealthFromStatus(status: number): ChannelHealth {
+  if (status === 401 || status === 403) {
+    return { name: "Gmail", ok: false, status: "expired", error: "token expired", hint: "run: iris connect gmail" }
+  }
+
+  if (status >= 200 && status < 300) {
+    return { name: "Gmail", ok: true, status: "verified" }
+  }
+
+  if (status >= 500) {
+    return {
+      name: "Gmail",
+      ok: false,
+      status: "not_connected",
+      error: `integration error (HTTP ${status})`,
+      hint: "run: iris connect gmail",
+    }
+  }
+
+  if (status === 404) {
+    return {
+      name: "Gmail",
+      ok: false,
+      status: "unverified",
+      error: "reachable, but connection could not be confirmed",
+      hint: "confirm with: iris gmail read_emails limit=1",
+    }
+  }
+
+  return { name: "Gmail", ok: false, status: "error", error: `HTTP ${status}`, hint: "run: iris connect gmail" }
+}
+
+/**
+ * Probe a bridge-backed channel over the SAME endpoint the feature uses, and
+ * report what the bridge actually said (#178282, same class).
+ *
+ * Two things this exists to stop:
+ *   (a) collapsing the response body into `HTTP 503`. The bridge answers a TCC
+ *       denial with a 503 whose body names the problem exactly ("No permission
+ *       to read the Calendar store"). Printing only the status turned a
+ *       Full Disk Access problem into "check bridge: iris hive doctor" — the
+ *       bridge is fine, and that hint sends you to the wrong place.
+ *   (b) probing a different path than the feature. iMessage health read the
+ *       local Messages DB via sqlite3 while pulse reads it through the bridge;
+ *       the terminal holds Full Disk Access and iris-daemon does not, so health
+ *       printed "connected + verified" directly above a scan that failed.
+ */
+async function bridgeChannelHealth(name: string, path: string): Promise<ChannelHealth> {
+  try {
+    const res = await fetch(`${BRIDGE_BASE}${path}`, {
+      signal: AbortSignal.timeout(5000),
+      headers: bridgeHeaders(),
+    })
+    if (res.ok) return { name, ok: true, status: "verified" }
+
+    const body = await res.text().catch(() => "")
+    let detail = body.slice(0, 200)
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed?.error) detail = String(parsed.error)
+    } catch {
+      /* not JSON — keep the raw text */
+    }
+
+    // A TCC denial is not a bridge fault. Name the real remedy.
+    if (/permission|full disk access|not permitted|authorization denied/i.test(detail)) {
+      return {
+        name,
+        ok: false,
+        status: "no_permission",
+        error: detail || `HTTP ${res.status}`,
+        hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+      }
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      return { name, ok: false, status: "expired", error: detail || `HTTP ${res.status}`, hint: "bridge key rejected — check ~/.iris/bridge-token" }
+    }
+
+    return {
+      name,
+      ok: false,
+      status: "error",
+      error: detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`,
+      hint: "check bridge: iris hive doctor",
+    }
+  } catch {
+    return { name, ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
+  }
+}
+
 export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
   const results: ChannelHealth[] = []
 
   const checks = await Promise.allSettled([
-    // Gmail — verify via fl-api integration endpoint
+    // Gmail — make a REAL Gmail call and report what actually happened.
+    //
+    // This used to request /api/v1/leads/0/gmail-threads — lead 0 deliberately does not
+    // exist — and treat every status except 401/403 as success. It returned 404 and was
+    // rendered as "connected + verified". Two compounding errors (#178282):
+    //   (a) it proved an fl-api route was reachable, then reported that as Gmail being
+    //       verified — different claims;
+    //   (b) that endpoint reads the local lead_email_messages table and never contacts
+    //       Gmail, so it could not detect Gmail's state even in principle.
+    // Composio also signals expiry with 410, which is neither 401 nor 403, so the single
+    // failure mode it tried to catch was the one it structurally could not see.
+    //
+    // "Verified" now means a live Gmail request succeeded. Nothing less.
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await irisFetch("/api/v1/leads/0/gmail-threads")
-        // 401/403 = token expired; 404 = lead not found but integration works; 200 = ok
-        if (res.status === 401 || res.status === 403) {
-          return {
-            name: "Gmail",
-            ok: false,
-            status: "expired",
-            error: "token expired",
-            hint: "run: iris connect gmail",
-          }
-        }
-        // Any response (even 404 for lead 0) means the integration is reachable
+        const { getLabels } = await import("../lib/gmail")
+        await getLabels("")
         return { name: "Gmail", ok: true, status: "verified" }
-      } catch {
-        return { name: "Gmail", ok: false, status: "not_connected", hint: "run: iris connect gmail" }
-      }
-    })(),
-
-    // Google Calendar — verify via bridge
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, {
-          signal: AbortSignal.timeout(3000),
-          headers: bridgeHeaders(),
-        })
-        if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
+      } catch (e: any) {
+        const msg = String(e?.message ?? "unknown error")
+        const expired = /expired|1820|ConnectedAccountExpired|revoked/i.test(msg)
         return {
-          name: "Google Calendar",
+          name: "Gmail",
           ok: false,
-          status: "error",
-          error: `HTTP ${res.status}`,
-          hint: "check bridge: iris hive doctor",
-        }
-      } catch {
-        return {
-          name: "Google Calendar",
-          ok: false,
-          status: "not_connected",
-          hint: "bridge not running — iris-daemon start",
+          status: expired ? "expired" : "error",
+          // Surface the upstream text — a generic string here is what made this
+          // unreadable for weeks.
+          error: msg.slice(0, 160),
+          hint: expired ? "reconnect: iris integrations connect gmail --yes" : "check: iris gmail labels",
         }
       }
     })(),
 
-    // iMessage — verify macOS Messages.app SQLite access
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const { isAvailable } = await import("../lib/imessage")
-        if (isAvailable()) {
-          return { name: "iMessage", ok: true, status: "verified" }
-        }
-        return {
-          name: "iMessage",
-          ok: false,
-          status: "no_permission",
-          error: "Full Disk Access required",
-          hint: "System Settings → Privacy → Full Disk Access → enable terminal",
-        }
-      } catch {
-        return { name: "iMessage", ok: false, status: "error", error: "check failed", hint: "check macOS Messages.app" }
-      }
-    })(),
+    // Google Calendar — verify via bridge, over the endpoint pulse actually reads
+    bridgeChannelHealth("Google Calendar", "/api/calendar/events?days=1&limit=1"),
+
+    // iMessage — probe the bridge, because that is what pulse reads iMessage
+    // through. Checking the local Messages DB from this process instead proved
+    // only that *the terminal* has Full Disk Access, which is not the question.
+    bridgeChannelHealth("iMessage", "/api/imessage/search?handle=health-probe&days=1&limit=1"),
 
     // WhatsApp — verify local macOS ChatStorage.sqlite access (groups read from here)
     (async (): Promise<ChannelHealth> => {
@@ -2264,30 +2550,8 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
       }
     })(),
 
-    // Apple Mail — verify via bridge
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, {
-          signal: AbortSignal.timeout(3000),
-          headers: bridgeHeaders(),
-        })
-        if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
-        return {
-          name: "Apple Mail",
-          ok: false,
-          status: "error",
-          error: `HTTP ${res.status}`,
-          hint: "check bridge: iris hive doctor",
-        }
-      } catch {
-        return {
-          name: "Apple Mail",
-          ok: false,
-          status: "not_connected",
-          hint: "bridge not running — iris-daemon start",
-        }
-      }
-    })(),
+    // Apple Mail — verify via bridge, over the endpoint pulse actually reads
+    bridgeChannelHealth("Apple Mail", "/api/mail/search?from=test&days=1&limit=1"),
 
     // Bridge health (covers iMessage bridge + Apple Mail)
     (async (): Promise<ChannelHealth> => {
@@ -2380,10 +2644,14 @@ const LeadsSyncCommsCommand = cmd({
               const threads = d?.data ?? d?.threads ?? []
               const msgs = Array.isArray(threads)
                 ? threads.slice(0, msgLimit).map((t: any) => ({
-                    subject: t.subject ?? t.snippet ?? "(no subject)",
-                    from: t.from ?? "",
+                    // Field names must match fl-api Bloq/LeadController::getGmailThreads(),
+                    // which emits latest_subject / latest_from / latest_snippet / thread_id.
+                    // Reading t.subject/t.from/t.gmail_thread_id silently yielded the ?? fallback
+                    // on every row, so every ingested message was blank (#178548).
+                    subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
+                    from: t.latest_from ?? "",
                     date: t.last_message_at ?? t.first_message_at ?? "",
-                    thread_id: t.gmail_thread_id ?? "",
+                    thread_id: t.thread_id ?? "",
                   }))
                 : []
               channels.push({ name: "Gmail", messages: msgs })
@@ -2482,6 +2750,13 @@ const LeadsSyncCommsCommand = cmd({
                 from_identifier: msg.from_me ? "me" : phone || email,
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
+                // MUST match the id `atlas:comms ingest` uses for the same message (CR-13).
+                // Omitting it sent LeadComm::contentHash down its fallback branch —
+                // sha256(channel:from:body:sent_at) — while the other sweep took the id branch,
+                // sha256(channel:"imessage_<rowid>"). Two hash inputs for one physical message,
+                // so external_id could never match and every run added a row: 582 duplicate
+                // groups on production, all of them differing by external_id.
+                external_message_id: msg.id != null ? `imessage_${msg.id}` : undefined,
                 metadata: { source: "comms_sync_task" },
               }
             } else if (ch.name === "WhatsApp") {
@@ -2490,6 +2765,7 @@ const LeadsSyncCommsCommand = cmd({
                 from_identifier: msg.from_me ? "me" : phone || email,
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
+                external_message_id: msg.id != null ? `whatsapp_${msg.id}` : undefined,
                 metadata: { source: "comms_sync_task", platform: "whatsapp" },
               }
             } else if (ch.name === "Gmail") {
@@ -2499,6 +2775,7 @@ const LeadsSyncCommsCommand = cmd({
                 subject: msg.subject ?? "",
                 body: msg.snippet ?? msg.subject ?? "",
                 sent_at: msg.date ?? null,
+                external_message_id: msg.id != null ? `gmail_${msg.id}` : undefined,
                 metadata: { gmail_thread_id: msg.thread_id, source: "comms_sync_task" },
               }
             } else {
@@ -2590,7 +2867,7 @@ const LeadsPulseCommand = cmd({
           return
         }
         const searchData = (await searchRes.json()) as { data?: any[] }
-        const matches: any[] = searchData?.data ?? []
+        const matches: any[] = firstArray(searchData?.data)
         if (matches.length === 0) {
           spinner.stop("No leads found", 1)
           process.exitCode = 1
@@ -2848,14 +3125,14 @@ const LeadsPulseCommand = cmd({
           } else if (!checks.payment_received) {
             fixHints.push({ signal: "deal", score: dealS, reason: "payment gate unpaid", fix: `iris leads pulse ${leadId} --hydrate` })
           } else {
-            fixHints.push({ signal: "deal", score: dealS, reason: "missing contract/proposal", fix: `iris leads upload ${leadId} ./proposal.pdf` })
+            fixHints.push({ signal: "deal", score: dealS, reason: "missing contract/proposal", fix: `iris proposals create ${leadId}` })
           }
         }
 
         // Knowledge completeness
         if (kbScore !== null && kbScore !== undefined && kbScore < 50) {
           const count = kbSig?.docs_count ?? 0
-          fixHints.push({ signal: "KB", score: kbScore, reason: `${count}/8 docs`, fix: `iris leads kb ${leadId} add ./doc.md` })
+          fixHints.push({ signal: "KB", score: kbScore, reason: `${count}/8 docs`, fix: `iris leads kb ${leadId} --generate` })
         }
 
         // Meeting engagement
@@ -2867,7 +3144,7 @@ const LeadsPulseCommand = cmd({
         if (delivS !== null && delivS !== undefined && delivS < 50) {
           const passed = delivSig?.passed ?? 0
           const total = delivSig?.total ?? 8
-          fixHints.push({ signal: "deliv", score: delivS, reason: `${passed}/${total} deliverables`, fix: `iris leads upload ${leadId} ./deliverable.pdf` })
+          fixHints.push({ signal: "deliv", score: delivS, reason: `${passed}/${total} deliverables`, fix: `iris deliver ${leadId} <workflow>` })
         }
 
         // Task completion
@@ -2883,7 +3160,7 @@ const LeadsPulseCommand = cmd({
           if (!cc.has_email) missing.push("email")
           if (!cc.has_company) missing.push("company")
           if (!cc.has_bloq) missing.push("bloq")
-          fixHints.push({ signal: "cfg", score: cfgS, reason: `missing ${missing.join(", ") || "config"}`, fix: `iris leads edit ${leadId}` })
+          fixHints.push({ signal: "cfg", score: cfgS, reason: `missing ${missing.join(", ") || "config"}`, fix: `iris leads update ${leadId}` })
         }
 
         // Requirements
@@ -2968,8 +3245,14 @@ const LeadsPulseCommand = cmd({
         }
         if (duplicateLeadIds.length > 0) {
           // #57685: Rank duplicates by data richness to suggest best master record
+          // Only leads that cleared the email/phone identity check above are real
+          // duplicates. This used to filter `allMatches` — the raw fuzzy-name search —
+          // so the list printed rows the header count excluded, and `bestDup` below
+          // could nominate a lead that was never a duplicate for deletion.
+          const confirmedDupIds = new Set(duplicateLeadIds)
           const uniqueDups = allMatches.filter(
-            (v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i,
+            (v: any, i: number, a: any[]) =>
+              confirmedDupIds.has(v.id) && a.findIndex((x: any) => x.id === v.id) === i,
           )
           const scoreLead = (l: any) => {
             let s = 0
@@ -3399,7 +3682,7 @@ const LeadsPulseCommand = cmd({
         const reqRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
         if (reqRes.ok) {
           const reqBody = await reqRes.json().catch(() => ({}))
-          const reqs: any[] = reqBody.data ?? []
+          const reqs: any[] = firstArray(reqBody.data)
           if (reqs.length > 0) {
             const passing = reqs.filter((r) => r.last_status === "passed" || r.last_status === "completed").length
             const failing = reqs.filter((r) => r.last_status === "failed").length
@@ -3467,16 +3750,35 @@ const LeadsPulseCommand = cmd({
                   // Flatten thread summaries into message-like entries
                   const msgs = Array.isArray(threads)
                     ? threads.slice(0, msgLimit).map((t: any) => ({
-                        subject: t.subject ?? t.snippet ?? "(no subject)",
-                        from: t.from ?? "",
+                        // Must match fl-api getGmailThreads(): latest_subject / latest_from /
+                        // latest_snippet / thread_id. The old names never existed on the response,
+                        // so every field below fell through to its ?? default (#178548).
+                        subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
+                        from: t.latest_from ?? "",
                         date: t.last_message_at ?? t.first_message_at ?? "",
                         message_count: t.message_count ?? 1,
-                        thread_id: t.gmail_thread_id ?? "",
+                        sent_count: Number(t.sent_count ?? 0),
+                        thread_id: t.thread_id ?? "",
                       }))
                     : []
-                  // Filter to only threads involving ANY of the lead's emails (#55723)
+                  // Filter to only threads involving ANY of the lead's emails (#55723).
+                  // NOTE: this filter was INERT until #178548 — `from` was always "" because it
+                  // read a field the API does not emit, so the guard below matched every row and
+                  // nothing was ever filtered. With `from` now populated it runs for the first time.
+                  // The fail-open branch is kept deliberately: the source endpoint is already
+                  // scoped byLead($leadId) server-side, so an unknown sender is not evidence the
+                  // thread belongs to someone else, and dropping it would lose real history.
+                  //
+                  // CRITICAL: the original predicate keeps a thread only when the SENDER is the
+                  // lead, i.e. inbound only. Enabling it unchanged would have silently dropped
+                  // every OUTBOUND thread from Pulse — the first real thread checked was
+                  // "Follow-Up on Genesis Website Agreement" from alex@freelabel.net, which the
+                  // lead did not send. That would have starved the comms_freshness /
+                  // last_outbound_at signals that Pulse and the recap window depend on.
+                  // sent_count > 0 means we participated in the thread outbound, so keep it.
                   const filtered = msgs.filter((m: any) => {
-                    if (!m.from) return true // keep if no from info
+                    if (!m.from) return true // unknown sender — source is already lead-scoped
+                    if ((m.sent_count ?? 0) > 0) return true // we sent into this thread
                     const fromLower = m.from.toLowerCase()
                     return allEmails.some((e) => fromLower.includes(e))
                   })
@@ -3909,14 +4211,18 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               }
             } catch {}
 
-            const callModel = async (url: string, key: string, model: string, label: string, extra?: Record<string, unknown>): Promise<SentimentResult | null> => {
+            // #178794 — through the IRIS model proxy. This one matters most of the three: the
+            // payload is LEAD DATA, and for Pathways/Vanguard tenants a lead record is a
+            // patient. A direct client->OpenAI call reaches a vendor the BAA registry marks
+            // PHI-allowed: NO, with no server-side gate in the path and no audit that it
+            // happened. Auth is the existing IRIS token; no OpenAI key on disk.
+            const callModel = async (model: string, label: string, extra?: Record<string, unknown>): Promise<SentimentResult | null> => {
               const t0 = Date.now()
               try {
-                const res = await fetch(url, {
+                const res = await irisFetch("/api/v6/openai/chat/completions", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
                   body: JSON.stringify({ model, max_completion_tokens: 200, messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }], ...extra }),
-                })
+                }, IRIS_API)
                 const ms = Date.now() - t0
                 if (!res.ok) return null
                 const data = (await res.json()) as any
@@ -3926,8 +4232,11 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               } catch { return null }
             }
 
-            if (openaiKey) {
-              const r = await callModel("https://api.openai.com/v1/chat/completions", openaiKey, "gpt-5-nano", "gpt-5-nano", { reasoning_effort: "low" })
+            // No key check: the proxy authenticates with the IRIS token the CLI already holds,
+            // so this no longer silently skips sentiment when an operator lacks a personal
+            // OPENAI_API_KEY — which is how this analysis quietly produced no results at all.
+            {
+              const r = await callModel("gpt-5-nano", "gpt-5-nano", { reasoning_effort: "low" })
               if (r) sentimentResults.push(r)
             }
           }
@@ -4864,7 +5173,7 @@ const LeadsMeetCommand = cmd({
             // Resolve by display name
             try {
               const calsResult = await calExec("get_calendars", {}, accountOpts)
-              const cals: any[] = calsResult?.calendars ?? calsResult?.data?.calendars ?? []
+              const cals: any[] = firstArray(calsResult?.calendars, calsResult?.data?.calendars)
               const match = cals.find((c: any) => (c.name ?? "").toLowerCase() === calInput.toLowerCase())
               if (match) {
                 calendarId = match.id
@@ -5121,7 +5430,7 @@ const LeadsMeetingsCommand = cmd({
       spinner.stop(`${upcoming.length} upcoming, ${past.length} past`)
 
       if (args.json) {
-        console.log(JSON.stringify({ lead_id: leadId, upcoming, past }, null, 2))
+        await writeJson({ lead_id: leadId, upcoming, past })
         prompts.outro("Done")
         return
       }
@@ -5229,7 +5538,7 @@ const LeadsSyncCalendarCommand = cmd({
       spinner.start("Checking existing notes…")
       const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
       const leadData = leadRes.ok ? (await leadRes.json() as any)?.data : null
-      const existingNotes: any[] = leadData?.notes ?? []
+      const existingNotes: any[] = firstArray(leadData?.notes)
       const trackedIds = new Set<string>()
       for (const note of existingNotes) {
         try {
@@ -5311,13 +5620,13 @@ const LeadsSyncCalendarCommand = cmd({
       spinner.stop(`${success("✓")} ${imported} imported${failed > 0 ? `, ${failed} failed` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           lead_id: leadId,
           events_found: allEvents.length,
           already_tracked: allEvents.length - toImport.length,
           imported,
           failed,
-        }, null, 2))
+        })
       } else {
         printDivider()
         printKV("Events found", String(allEvents.length))
@@ -5400,7 +5709,7 @@ const LeadsPaymentGateCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5465,7 +5774,7 @@ const LeadsUpdatePaymentGateCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5519,7 +5828,7 @@ const LeadsDeletePaymentGateCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
     if (isJson) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5553,7 +5862,7 @@ const LeadsDealStatusCommand = cmd({
     const status = result?.data ?? result
 
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       return
     }
 
@@ -5614,10 +5923,10 @@ const LeadsPackagesCommand = cmd({
     if (!(await handleApiError(res, "List packages"))) return
 
     const result = await res.json().catch(() => ({}))
-    const packages: any[] = result?.data?.packages ?? result?.data ?? []
+    const packages: any[] = firstArray(result?.data?.packages, result?.data)
 
     if (args.json) {
-      console.log(JSON.stringify(packages, null, 2))
+      await writeJson(packages)
       return
     }
 
@@ -5688,7 +5997,7 @@ const LeadsCreatePackageCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5745,7 +6054,6 @@ const LeadsUpdatePackageCommand = cmd({
       .option("active", { describe: "set active/inactive", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
-    if (!(await requireAuth())) return
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -5757,9 +6065,9 @@ const LeadsUpdatePackageCommand = cmd({
     if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
 
     if (Object.keys(body).length === 0) {
-      prompts.log.error("Nothing to update — provide at least one flag (--name, --price, --billing, etc.)")
-      return
+      failNoOp("update", "provide at least one flag (--name, --price, --billing, etc.)")
     }
+    if (!(await requireAuth())) return
 
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages/${args.packageId}`, {
       method: "PATCH",
@@ -5769,7 +6077,7 @@ const LeadsUpdatePackageCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5840,7 +6148,7 @@ const LeadsRegenCheckoutCommand = cmd({
 
       if (args.json) {
         const data = await res.json().catch(() => ({}))
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -5921,7 +6229,7 @@ const LeadsSubscriptionUpdateCommand = cmd({
 
     const data = (await res.json()) as any
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5969,7 +6277,7 @@ const LeadsTasksListCommand = cmd({
         return
       }
       const data = ((await res.json()) as any)?.data
-      let tasks: any[] = data?.tasks ?? data ?? []
+      let tasks: any[] = firstArray(data?.tasks, data)
 
       // Client-side filters (in case API doesn't support them)
       if (args.pending) tasks = tasks.filter((t: any) => !t.is_completed)
@@ -5977,7 +6285,7 @@ const LeadsTasksListCommand = cmd({
 
       spinner.stop(`${tasks.length} task(s)`)
       if (args.json) {
-        console.log(JSON.stringify(tasks, null, 2))
+        await writeJson(tasks)
         return
       }
       if (tasks.length === 0) {
@@ -6304,11 +6612,11 @@ const LeadsEnrichCommand = cmd({
       }
       const out = (await res.json()) as any
       const data = out?.data ?? {}
-      const contacts: any[] = data.found_contacts ?? []
-      const tags: any[] = data.generated_tags ?? []
+      const contacts: any[] = firstArray(data.found_contacts)
+      const tags: any[] = firstArray(data.generated_tags)
 
       if (argv.json) {
-        console.log(JSON.stringify({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true }, null, 2))
+        await writeJson({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true })
         return
       }
       console.log(`${success("✓")} Enriched lead ${bold(String(leadId))} — ${contacts.length} contact(s) found, ${tags.length} tag(s) (${data.iterations ?? 0} research iterations)`)
@@ -6530,7 +6838,7 @@ const LeadsVerifyCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored }, null, 2))
+      await writeJson({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored })
       return
     }
 
@@ -6675,7 +6983,7 @@ const LeadsScoreCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored }, null, 2))
+      await writeJson({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored })
       return
     }
 
@@ -6709,6 +7017,7 @@ const LeadsDiscoverCommand = cmd({
       .option("location", { alias: "loc", describe: 'geography, e.g. "Fort Worth TX"', type: "string" })
       .option("bloq-id", { alias: "bloq", describe: "CRM bloq to create leads in (omit = preview only)", type: "number" })
       .option("limit", { alias: "n", describe: "max businesses", type: "number", default: 10 })
+      .option("lead-type", { describe: "individual|business (default: business — discovery finds organisations)", type: "string" })
       .option("verify", { describe: "verify each created lead's contact info (#137535)", type: "boolean", default: false })
       .option("score", { describe: "ICP-score each created lead (#137536)", type: "boolean", default: false })
       .option("dry-run", { describe: "preview results without creating leads", type: "boolean", default: false })
@@ -6764,7 +7073,22 @@ const LeadsDiscoverCommand = cmd({
           rating: b.rating ?? null,
           website: b.website ?? b.website_url ?? null,
         }
-        const payload: Record<string, unknown> = { name, bloqId: args["bloq-id"], status: "Prospected", source: "discover", company: name, contact_info }
+        // lead_type: "business" — discover's entire job is finding ORGANISATIONS, and it never
+        // stamped the type, so every org it created was born untyped. That is why 21,216 of
+        // ~28.5k production leads have lead_type unknown and "email all the colleges" had
+        // nothing to segment on. website is promoted out of contact_info to a real column so
+        // findDuplicate can dedup organisations on DOMAIN — otherwise re-running discovery
+        // creates the same institution again under a different subdomain.
+        const payload: Record<string, unknown> = {
+          name,
+          bloqId: args["bloq-id"],
+          status: "Prospected",
+          source: "discover",
+          company: name,
+          lead_type: (args["lead-type"] as string) ?? "business",
+          contact_info,
+        }
+        if (contact_info.website) payload.website = contact_info.website
         if (b.email) payload.email = b.email
         if (b.phone) payload.phone = b.phone
         try {
@@ -6785,7 +7109,7 @@ const LeadsDiscoverCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, query, found: businesses.length, businesses, created }, null, 2))
+      await writeJson({ ok: true, query, found: businesses.length, businesses, created })
       return
     }
 
@@ -6851,7 +7175,7 @@ const LeadsGateAllCommand = cmd({
         return
       }
       const body = (await res.json()) as { data?: any[] }
-      const allWon: any[] = body?.data ?? []
+      const allWon: any[] = firstArray(body?.data)
 
       // Filter: skip leads without email, already-gated, and self
       const needsGate: any[] = []
@@ -6978,7 +7302,7 @@ const LeadsGateAllCommand = cmd({
       console.log(success(`  ${created}/${needsGate.length} payment gates created`))
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       }
     } catch (e: any) {
       spinner.stop("Error", 1)
@@ -7060,13 +7384,13 @@ const LeadsKBCommand = cmd({
       }
 
       const body = (await res.json()) as any
-      const docs: any[] = body?.data ?? []
+      const docs: any[] = firstArray(body?.data)
       const completeness = body?.completeness ?? { count: docs.length, total: 8 }
 
       spinner.stop(`${completeness.count}/${completeness.total} sections`)
 
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
         return
       }
 
@@ -7239,7 +7563,7 @@ const LeadsPulseAllCommand = cmd({
             ])
             if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
               const td = ((await tasksRes.value.json()) as any)?.data ?? []
-              const tasks: any[] = Array.isArray(td) ? td : (td?.tasks ?? [])
+              const tasks: any[] = firstArray(td, td?.tasks)
               const now = new Date()
               tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
               const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
@@ -7820,7 +8144,7 @@ const LeadsOnboardCommand = cmd({
       const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
       const searchRes = await irisFetch(`/api/v1/leads?${params}`)
       if (!searchRes.ok) { prompts.log.error("Search failed"); return }
-      const matches: any[] = ((await searchRes.json()) as any)?.data ?? []
+      const matches: any[] = firstArray(((await searchRes.json()) as any)?.data)
       if (matches.length === 0) { prompts.log.error(`No lead found for "${args.id}"`); return }
       leadId = matches[0].id
     }
@@ -7866,7 +8190,7 @@ const LeadsOnboardCommand = cmd({
     spinner.stop("")
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -7936,7 +8260,7 @@ const LeadsOnboardAllCommand = cmd({
       const params = new URLSearchParams({ status: args.status, per_page: "200" })
       const res = await irisFetch(`/api/v1/leads?${params}`)
       if (!res.ok) { spinner.stop("Failed", 1); return }
-      const leads: any[] = ((await res.json()) as any)?.data ?? []
+      const leads: any[] = firstArray(((await res.json()) as any)?.data)
       const eligible = leads.filter((l) => l.email && !l.email.endsWith("@instagram.com") && !l.email.endsWith("@twitter.com"))
       spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
 
@@ -7980,7 +8304,7 @@ const LeadsOnboardAllCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(rows, null, 2))
+        await writeJson(rows)
         return
       }
 
@@ -8228,7 +8552,7 @@ const ContentEngineCreateCommand = cmd({
 
     if (args["dry-run"]) {
       if (args.json) {
-        console.log(JSON.stringify(config, null, 2))
+        await writeJson(config)
       } else {
         console.log()
         console.log(`  ${bold("Agent Config")}`)
@@ -8361,7 +8685,7 @@ const ContentEngineCreateCommand = cmd({
           if (bloqRes.ok) {
             const bd = (await bloqRes.json()) as { data?: any }
             const bloqObj = bd?.data?.bloq ?? bd?.data ?? bd
-            const allLists: any[] = bloqObj.lists ?? bd?.data?.lists ?? []
+            const allLists: any[] = firstArray(bloqObj.lists, bd?.data?.lists)
             for (const list of allLists) {
               const ln = (list.name ?? "").toLowerCase()
               if (ln.includes("deliverable") || ln.includes("article") || ln.includes("content")) {
@@ -8391,7 +8715,7 @@ const ContentEngineCreateCommand = cmd({
 
       // Summary
       if (args.json) {
-        console.log(JSON.stringify({ agent_id: agent.id, schedule_id: scheduleId, bloq_id: bloqId, lead_id: leadId, page: publishedPage }, null, 2))
+        await writeJson({ agent_id: agent.id, schedule_id: scheduleId, bloq_id: bloqId, lead_id: leadId, page: publishedPage })
       } else {
         console.log()
         printDivider()
@@ -8456,7 +8780,7 @@ const ContentEngineStatusCommand = cmd({
         spinner.stop("Failed", 1); prompts.outro("Done"); return
       }
       const agentsData = (await agentsRes.json()) as { data?: any[] }
-      const agents: any[] = agentsData?.data ?? []
+      const agents: any[] = firstArray(agentsData?.data)
 
       // Find content agents (match by name keywords or heartbeat_tools containing manageBloqItems)
       const contentAgents = agents.filter((a: any) => {
@@ -8511,12 +8835,12 @@ const ContentEngineStatusCommand = cmd({
       spinner.stop(`${contentAgents.length} content agent(s) found`)
 
       if (args.json) {
-        console.log(JSON.stringify(results.map((r) => ({
+        await writeJson(results.map((r) => ({
           agent_id: r.agent.id, agent_name: r.agent.name, model: r.agent.model,
           schedule_id: r.schedule?.id, schedule_status: r.schedule?.status,
           next_run: r.schedule?.next_run_at, articles_7d: r.articlesProduced,
           recent_executions: r.recentExecs.length,
-        })), null, 2))
+        })))
         prompts.outro("Done")
         return
       }
@@ -8598,7 +8922,7 @@ const ContentEngineDoctorCommand = cmd({
         spinner.stop("Failed", 1); prompts.outro("Done"); return
       }
       const agentsData = (await agentsRes.json()) as { data?: any[] }
-      const agents: any[] = agentsData?.data ?? []
+      const agents: any[] = firstArray(agentsData?.data)
 
       const contentAgents = agents.filter((a: any) => {
         const nameMatch = /newsletter|content|article|blog|writer/i.test(a.name ?? "")
@@ -8616,7 +8940,7 @@ const ContentEngineDoctorCommand = cmd({
       }
 
       const agent = contentAgents[0]
-      const heartbeatTools: string[] = agent.heartbeat_tools ?? agent.settings?.heartbeat_tools ?? []
+      const heartbeatTools: string[] = firstArray(agent.heartbeat_tools, agent.settings?.heartbeat_tools)
       const heartbeatMode = agent.heartbeat_mode ?? agent.settings?.heartbeat_mode ?? ""
       const maxIterations = agent.settings?.max_iterations ?? 5
 
@@ -8703,7 +9027,7 @@ const ContentEngineDoctorCommand = cmd({
 
       // Check 7: ManageBloqItemsTool in tools_used (last run)
       const lastExec = recentExecs[0]
-      const lastTools: string[] = lastExec?.tools_used ?? lastExec?.metadata?.tools_used ?? []
+      const lastTools: string[] = firstArray(lastExec?.tools_used, lastExec?.metadata?.tools_used)
       const manageBloqUsed = Array.isArray(lastTools) && lastTools.some((t) => /managebloq/i.test(t))
       checks.push({
         name: "ManageBloqItemsTool in last run",
@@ -8727,12 +9051,12 @@ const ContentEngineDoctorCommand = cmd({
 
       if (args.json) {
         const passing = checks.filter((c) => c.pass).length
-        console.log(JSON.stringify({
+        await writeJson({
           agent_id: agent.id, agent_name: agent.name,
           schedule_id: activeSchedule?.id, healthy: passing === checks.length,
           checks: checks.map((c) => ({ ...c })),
           passing, total: checks.length,
-        }, null, 2))
+        })
         prompts.outro("Done")
         return
       }
@@ -9082,7 +9406,7 @@ async function fetchBrandTokens(brandSlug: string): Promise<Record<string, any> 
     const res = await irisFetch(`/api/v1/brands?per_page=50`)
     if (!res.ok) return null
     const bd = (await res.json()) as { data?: any[] | { data?: any[] } }
-    const brands: any[] = Array.isArray(bd.data) ? bd.data : (bd.data as any)?.data ?? []
+    const brands: any[] = firstArray(bd.data, (bd.data as any)?.data)
     const brand = brands.find((b: any) => b.slug === brandSlug)
     if (!brand) return null
     const dt = brand.metadata?.design_tokens
@@ -9291,7 +9615,7 @@ const ContentEnginePublishCommand = cmd({
 
       const bloqData = (await bloqRes.json()) as { data?: any }
       const bloq = bloqData?.data?.bloq ?? bloqData?.data ?? bloqData
-      const lists: any[] = bloq.lists ?? bloqData?.data?.lists ?? []
+      const lists: any[] = firstArray(bloq.lists, bloqData?.data?.lists)
 
       // Collect all items from Agent Deliverables and other content lists
       const items: any[] = []
@@ -9355,7 +9679,7 @@ const ContentEnginePublishCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       } else if (results.length > 0) {
         console.log()
         for (const r of results) {
@@ -9406,7 +9730,7 @@ async function ensureRequirementsForPages(
   // 1. Fetch existing requirements
   const reqListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
   const reqListData = reqListRes.ok ? ((await reqListRes.json()) as any) : { data: [] }
-  const existingReqs: any[] = reqListData.data || []
+  const existingReqs: any[] = firstArray(reqListData.data)
 
   // 2. For each page, check if a requirement already exists (exact slug match)
   let created = 0
@@ -9434,7 +9758,7 @@ async function ensureRequirementsForPages(
   // 3. Re-fetch all requirements, then fetch script_content individually
   const freshListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
   const freshListData = freshListRes.ok ? ((await freshListRes.json()) as any) : { data: [] }
-  const allReqs: any[] = freshListData.data || []
+  const allReqs: any[] = firstArray(freshListData.data)
 
   const requirements: Array<{ id: number; name: string; script_content: string }> = []
   for (const req of allReqs) {
@@ -10419,7 +10743,7 @@ const LeadsStatsCommand = cmd({
     const byType = data.by_type ?? {}
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10431,8 +10755,40 @@ const LeadsStatsCommand = cmd({
     printKV("Pending", String(summary.pending_count ?? 0))
     printKV("Completion Rate", `${summary.completion_rate ?? 0}%`)
     printKV("Avg/Day", String(summary.avg_per_day ?? 0))
-    printKV("Pipeline Value", `$${Number(summary.pipeline_value ?? 0).toLocaleString()}`)
-    printKV("Pipeline Leads", String(summary.pipeline_lead_count ?? 0))
+    // Two different questions, previously answered by one confusingly-named number.
+    // "Outreach pipeline" counts only leads worked THIS PERIOD, so a live deal with a
+    // real amount reads as $0 unless someone logged a step. "Board pipeline" is what
+    // is actually in play. (#182075 RO-2)
+    printKV("Outreach pipeline", `$${Number(summary.pipeline_value ?? 0).toLocaleString()} (${summary.pipeline_lead_count ?? 0} worked this period)`)
+    printKV("Board pipeline", `$${Number(summary.board_pipeline_value ?? 0).toLocaleString()} (${summary.board_pipeline_leads ?? 0} of ${summary.board_open_leads ?? 0} open leads priced)`)
+    
+    // The capture gap, stated rather than hidden. An open lead with no amount is worth
+    // UNKNOWN, not zero — a board reading as fully valued when most of it was never
+    // priced is the failure this line exists to prevent.
+    const missingAmt = Number(summary.board_missing_amount ?? 0)
+    if (Number(summary.board_open_leads ?? 0) > 0) {
+      printKV("Amount coverage", missingAmt > 0
+        ? `${summary.board_amount_coverage ?? 0}% — ${missingAmt} open lead(s) carry NO amount`
+        : `${summary.board_amount_coverage ?? 0}% — every open lead priced`)
+    }
+    // Recurring revenue (#182112 RO-3). The endpoint has returned these since RO-3
+    // shipped and nothing displayed them — the number existed and no one could see it,
+    // which is the same as not having built it.
+    //
+    // MRR here is what is COLLECTING, from program_memberships. It currently reads one
+    // membership of 35 live subscriptions (#182189), so it understates; the account
+    // count is printed beside it so the figure is never read without its denominator.
+    const mrr = Number(summary.mrr ?? 0)
+    const trialing = Number(summary.trialing_mrr ?? 0)
+    if (mrr > 0 || trialing > 0) {
+      const accounts = Number(summary.mrr_accounts ?? 0)
+      printKV("MRR", `$${mrr.toLocaleString()}/mo across ${accounts} account(s)  ·  ARR $${(mrr * 12).toLocaleString()}`)
+      // Trials are not revenue until they convert. Folding them into MRR is the
+      // single most common way a subscription number flatters itself.
+      if (trialing > 0) {
+        printKV("Trialing", `$${trialing.toLocaleString()}/mo — NOT counted in MRR until it converts`)
+      }
+    }
     printKV("Outreached Leads", String(summary.outreached_lead_count ?? 0))
     if (summary.percent_change !== undefined) {
       const arrow = summary.trend === "up" ? "↑" : summary.trend === "down" ? "↓" : "→"
@@ -10530,7 +10886,7 @@ const LeadsQuotaCommand = cmd({
     const data = (await res.json().catch(() => ({}))) as any
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10697,7 +11053,7 @@ const LeadsAnalyzeCommand = cmd({
     printDivider()
 
     if ((args as any).json) {
-      console.log(JSON.stringify({ metrics: metrics.summary, quota: {}, messages: [] }, null, 2))
+      await writeJson({ metrics: metrics.summary, quota: {}, messages: [] })
     }
   },
 })
@@ -10791,10 +11147,10 @@ const DealsListCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
     const data = result?.data ?? {}
-    const deals: any[] = data?.deals ?? []
+    const deals: any[] = firstArray(data?.deals)
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10850,7 +11206,7 @@ const DealsStatusCommand = cmd({
     const status = result?.data ?? result
 
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       return
     }
 
@@ -10911,7 +11267,7 @@ const DealsRemindCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -10971,7 +11327,7 @@ const DealsRecoverCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ lead_id: args.id, reminders_triggered: sent, status: status.status }, null, 2))
+      await writeJson({ lead_id: args.id, reminders_triggered: sent, status: status.status })
       return
     }
 
@@ -11039,7 +11395,7 @@ const DealsCreateCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11087,7 +11443,7 @@ const DealsDeleteCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11172,7 +11528,7 @@ const DealsUpdateCommand = cmd({
     const result = await createRes.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11240,9 +11596,18 @@ const LeadsCollectCommand = cmd({
     const results: Record<string, unknown> = { lead_id: leadId, steps: [] }
     const steps = results.steps as string[]
 
-    // Get lead info
+    // Get lead info. Bail if we cannot read the lead — this command creates BILLING
+    // against it, so silently degrading the name to "Lead #<id>" on a 403/404 would
+    // charge against a lead we could not even fetch (#178552).
     const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
     const leadData = await leadRes.json().catch(() => ({}))
+    if (!leadRes.ok) {
+      const detail = (leadData as any)?.error ?? (leadData as any)?.message ?? `HTTP ${leadRes.status}`
+      if (args.json) await writeJson({ ...results, error: "lead_fetch_failed", detail })
+      else console.log(highlight(`  ⚠ Could not load lead #${leadId} — ${detail}`))
+      process.exitCode = 1
+      return
+    }
     const lead = leadData?.data ?? leadData?.lead ?? leadData
     const leadName = lead?.name ?? `Lead #${leadId}`
 
@@ -11295,7 +11660,7 @@ const LeadsCollectCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
         return
       }
       printDivider()
@@ -11316,8 +11681,26 @@ const LeadsCollectCommand = cmd({
         }),
       })
       const subBody = await subRes.json().catch(() => ({}))
+      // irisFetch does NOT throw on 4xx/5xx — it returns the Response. Validate before
+      // announcing or recording anything, or a failed charge prints a green tick and
+      // writes "subscription_created" into the machine-readable steps[] (#178552).
+      if (!subRes.ok) {
+        const detail = subBody?.error ?? subBody?.message ?? `HTTP ${subRes.status}`
+        if (args.json) await writeJson({ ...results, error: "subscription_creation_failed", detail })
+        else console.log(highlight(`  ⚠ Failed to create subscription — ${detail}`))
+        process.exitCode = 1
+        return
+      }
       invoiceId = subBody?.data?.id ?? subBody?.invoice?.id
       results.checkout_url = subBody?.data?.checkout_url ?? subBody?.checkout_url
+      // A 200 with an unrecognised body shape is still a failure — say so as a
+      // subscription, not as an invoice.
+      if (!invoiceId) {
+        if (args.json) await writeJson({ ...results, error: "subscription_creation_failed", detail: "no subscription id in response" })
+        else console.log(highlight("  ⚠ Failed to create subscription — the server returned no subscription id"))
+        process.exitCode = 1
+        return
+      }
       steps.push("subscription_created")
       if (!args.json) console.log(success(`  ✓ Subscription created (#${invoiceId})`))
     } else {
@@ -11327,13 +11710,20 @@ const LeadsCollectCommand = cmd({
         body: JSON.stringify({ price: args.amount, title: args.title ?? `Payment from ${leadName}` }),
       })
       const createBody = await createRes.json().catch(() => ({}))
+      if (!createRes.ok) {
+        const detail = createBody?.error ?? createBody?.message ?? `HTTP ${createRes.status}`
+        if (args.json) await writeJson({ ...results, error: "invoice_creation_failed", detail })
+        else console.log(highlight(`  ⚠ Failed to create invoice — ${detail}`))
+        process.exitCode = 1
+        return
+      }
       invoiceId = createBody?.data?.id ?? createBody?.invoice?.id ?? createBody?.id
       steps.push("invoice_created")
       if (!args.json) console.log(success(`  ✓ Invoice created (#${invoiceId})`))
     }
 
     if (!invoiceId) {
-      if (args.json) console.log(JSON.stringify({ ...results, error: "invoice_creation_failed" }, null, 2))
+      if (args.json) await writeJson({ ...results, error: "invoice_creation_failed" })
       else console.log(highlight("  ⚠ Failed to create invoice"))
       return
     }
@@ -11363,7 +11753,7 @@ const LeadsCollectCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ ...results, invoice_id: invoiceId }, null, 2))
+      await writeJson({ ...results, invoice_id: invoiceId })
       return
     }
     printDivider()
@@ -11405,7 +11795,7 @@ const SegmentListCommand = cmd({
 
     const segments = await fetchSegments(args["bloq-id"] as number | undefined)
     if ((args as any).json) {
-      console.log(JSON.stringify(segments, null, 2))
+      await writeJson(segments)
       return
     }
     if (segments.length === 0) {
@@ -11486,7 +11876,7 @@ const SegmentCreateCommand = cmd({
     const seg = data?.segment
 
     if ((args as any).json) {
-      console.log(JSON.stringify(seg, null, 2))
+      await writeJson(seg)
       return
     }
     prompts.log.success(`Segment "${args.name}" created (ID: ${seg?.id})`)
@@ -11534,11 +11924,11 @@ const SegmentViewCommand = cmd({
     if (!(await handleApiError(res, "Fetch segment leads"))) return
 
     const data = await res.json().catch(() => ({}))
-    const leads: any[] = data?.leads ?? data?.data ?? []
+    const leads: any[] = firstArray(data?.leads, data?.data)
     const seg = data?.segment
 
     if ((args as any).json) {
-      console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2))
+      await writeJson({ segment: seg, leads, count: leads.length })
       return
     }
 
@@ -11816,7 +12206,7 @@ const ReqCreateCommand = cmd({
     const body = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
@@ -11845,10 +12235,10 @@ const ReqListCommand = cmd({
     if (!(await handleApiError(res, "List requirements"))) return
 
     const body = await res.json().catch(() => ({}))
-    const reqs: any[] = body.data ?? []
+    const reqs: any[] = firstArray(body.data)
 
     if ((args as any).json) {
-      console.log(JSON.stringify(reqs, null, 2))
+      await writeJson(reqs)
       return
     }
 
@@ -11929,7 +12319,7 @@ const ReqRunCommand = cmd({
     const body = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
@@ -11965,7 +12355,7 @@ const ReqSummaryCommand = cmd({
     const s = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(s, null, 2))
+      await writeJson(s)
       return
     }
 
@@ -12005,7 +12395,7 @@ const ReqDeleteCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
     prompts.log.success(body.message ?? "Requirement deleted")
@@ -12043,11 +12433,11 @@ const ReqAllCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
-    const items: any[] = body.data ?? []
+    const items: any[] = firstArray(body.data)
     const pg = body.pagination ?? {}
 
     if (items.length === 0) {
@@ -12137,7 +12527,7 @@ const ReqScheduleCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -12277,13 +12667,18 @@ const PulseAlertsCommand = cmd({
   handler() {},
 })
 
-export const PlatformPulseCommand = cmd({
-  command: "pulse",
+export const PlatformPulseCommand = productCommand({
+  name: "pulse",
   aliases: ["daily"],
-  describe: "account health (default: your account) — use --admin for agency view",
+  purpose:
+    "Pulse — account and deal health, with an agency-wide view behind --admin",
+  keywords: ["pulse", "health", "readiness", "account", "deal", "agency", "daily", "score", "attachments", "files", "documents"],
+  howtos: ["pulse"],
+  playbooks: ["lead-health-sweep"],
   builder: (yargs) =>
     yargs
       .command(PulseAlertsCommand)
+      .command(PulseCheckCommand)
       .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
@@ -12417,7 +12812,7 @@ export const PlatformPulseCommand = cmd({
         }
 
         if (args.json) {
-          console.log(JSON.stringify({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() }, null, 2))
+          await writeJson({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() })
         }
         return
       } catch (err: any) {
@@ -12434,11 +12829,12 @@ export const PlatformPulseCommand = cmd({
         fallbackSpinner.start("Computing from your leads...")
 
         try {
-          const meRes = await irisFetch("/api/v1/me")
-          const me = meRes.ok ? await meRes.json().catch(() => ({})) : {}
+          // Dropped a call to /api/v1/me here: the endpoint has never existed, and its
+          // result was assigned to `me` and then never read. A round trip to a 404 whose
+          // answer was discarded. (#181136)
           const leadsRes = await irisFetch(`/api/v1/leads?user_id=${userId}&per_page=50`)
           const leadsBody = leadsRes.ok ? await leadsRes.json().catch(() => ({})) : {}
-          const myLeads: any[] = (leadsBody?.data ?? []).slice(0, 20)
+          const myLeads: any[] = firstArray(leadsBody?.data).slice(0, 20)
 
           if (myLeads.length === 0) {
             fallbackSpinner.stop(dim("no leads found"))
@@ -12653,7 +13049,7 @@ export const PlatformPulseCommand = cmd({
       const gateRes = await irisFetch(`/api/v1/deals/active?per_page=200`)
       if (gateRes.ok) {
         const gateBody = await gateRes.json().catch(() => ({}))
-        const deals: any[] = gateBody?.data?.deals ?? []
+        const deals: any[] = firstArray(gateBody?.data?.deals)
         const ungated = deals.filter((d: any) => !d.has_gate)
         if (ungated.length > 0) {
           for (const d of ungated.slice(0, 10)) {
@@ -12698,7 +13094,7 @@ export const PlatformPulseCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() }, null, 2))
+      await writeJson({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() })
     }
   },
 })

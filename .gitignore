@@ -24,3 +24,7 @@ target
 # Local dev files
 opencode-dev
 logs/
+
+# `iris atlas export` writes here. Generated data, and an untracked directory
+# blocks script/release, which refuses on a dirty tree.
+iris-export/

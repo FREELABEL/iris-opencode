@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { SopDraftCommand } from "./sop-draft"
+import { firstArray } from "../../util/array"
 
 // Endpoints (from SopCommand.php):
 //   GET    /api/v1/services/requests/simplified
@@ -23,8 +25,8 @@ const SopRequestsCommand = cmd({
     const ok = await handleApiError(res, "List requests")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const items: any[] = data?.data ?? data?.requests ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(items, null, 2)); prompts.outro("Done"); return }
+    const items: any[] = firstArray(data?.data, data?.requests, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(items); prompts.outro("Done"); return }
     printDivider()
     for (const r of items) console.log(`  ${bold(String(r.title ?? r.name ?? "Untitled"))}  ${dim(`#${r.id}`)}`)
     printDivider()
@@ -48,8 +50,8 @@ const SopListCommand = cmd({
     const ok = await handleApiError(res, "List SOPs")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const sops: any[] = data?.data ?? data?.sops ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(sops, null, 2)); prompts.outro("Done"); return }
+    const sops: any[] = firstArray(data?.data, data?.sops, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(sops); prompts.outro("Done"); return }
     printDivider()
     if (sops.length === 0) console.log(`  ${dim("(no SOPs)")}`)
     else for (const s of sops) {
@@ -63,13 +65,13 @@ const SopListCommand = cmd({
 
 const SopCreateCommand = cmd({
   command: "create <requestId>",
-  describe: "create a new SOP",
+  describe: "attach a written procedure to an opportunity (creates the document too)",
   builder: (yargs) =>
     yargs
-      .positional("requestId", { type: "number", demandOption: true })
-      .option("title", { type: "string", demandOption: true })
-      .option("description", { type: "string" })
-      .option("content", { type: "string" }),
+      .positional("requestId", { type: "number", demandOption: true, describe: "opportunity / service request id" })
+      .option("title", { type: "string", demandOption: true, describe: "what a worker sees in the requirements list" })
+      .option("description", { type: "string", describe: "one line under the title" })
+      .option("content", { type: "string", describe: "the procedure itself — this is what they read" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create SOP")
@@ -155,6 +157,7 @@ export const PlatformSopCommand = cmd({
   describe: "manage Standard Operating Procedures (SOPs)",
   builder: (yargs) =>
     yargs
+      .command(SopDraftCommand)
       .command(SopRequestsCommand)
       .command(SopListCommand)
       .command(SopCreateCommand)

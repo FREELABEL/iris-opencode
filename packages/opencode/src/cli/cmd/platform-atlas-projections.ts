@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { resolve } from "path"
 
@@ -53,7 +53,7 @@ const ProjPullCommand = cmd({
 
       // --json: emit to stdout for piping/scripting and stop (pull normally writes a file).
       if (args.json) {
-        console.log(JSON.stringify(doc, null, 2))
+        await writeJson(doc)
         return
       }
 

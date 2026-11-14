@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 const RAICHU = process.env.IRIS_FL_API_URL ?? process.env.FL_API_URL ?? "https://raichu.heyiris.io"
 
@@ -74,7 +74,7 @@ const OutreachApproveListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(pending, null, 2))
+      await writeJson(pending)
       return
     }
 

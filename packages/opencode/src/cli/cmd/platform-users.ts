@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, FL_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (UsersResource):
 //   GET /api/v1/users               — list with filters
@@ -27,8 +28,8 @@ const UsersListCommand = cmd({
     const ok = await handleApiError(res, "List users")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(users, null, 2)); prompts.outro("Done"); return }
+    const users: any[] = firstArray(data?.data, data?.users, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(users); prompts.outro("Done"); return }
     printDivider()
     for (const u of users) {
       const name = u.full_name ?? u.user_name ?? u.name ?? u.email ?? `User #${u.id}`
@@ -51,7 +52,7 @@ const UsersGetCommand = cmd({
     const ok = await handleApiError(res, "Get user")
     if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data ?? (await res.json().catch(() => ({})))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", data.id)
     printKV("Name", data.full_name ?? data.user_name ?? data.name)
@@ -80,7 +81,7 @@ const UsersSearchCommand = cmd({
     // The endpoint may return 500 but still include valid data in the body
     const res = await irisFetch(`/api/v1/users/search?${params}`, {}, FL_API)
     const data = await res.json().catch(() => ({})) as any
-    const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
+    const users: any[] = firstArray(data?.data, data?.users, (Array.isArray(data) ? data : []))
 
     if (users.length === 0 && !res.ok) {
       if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
@@ -89,7 +90,7 @@ const UsersSearchCommand = cmd({
       return
     }
 
-    if (args.json) { console.log(JSON.stringify(users, null, 2)); return }
+    if (args.json) { await writeJson(users); return }
 
     printDivider()
     if (users.length === 0) {
@@ -117,7 +118,7 @@ const UsersMeCommand = cmd({
     const ok = await handleApiError(res, "Get me")
     if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data ?? (await res.json().catch(() => ({})))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", data.id)
     printKV("Name", data.full_name ?? data.user_name ?? data.name)

@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * iris content-engine — one-command onboarding for the article content engine.
@@ -65,7 +66,7 @@ const ContentEngineInitCommand = cmd({
     if (!(await handleApiError(bloqRes, "Fetch bloq"))) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const bloqData = (await bloqRes.json()) as any
     const bloq = bloqData?.data ?? bloqData
-    const existingLists: string[] = (bloq?.lists ?? []).map((l: any) => l.name)
+    const existingLists: string[] = firstArray(bloq?.lists).map((l: any) => l.name)
     spinner.stop(`Bloq: ${bold(bloq?.name ?? `#${args.bloq}`)} (${existingLists.length} lists)`)
 
     // 2. Verify the newsletter page exists (it's the brand template — promotion

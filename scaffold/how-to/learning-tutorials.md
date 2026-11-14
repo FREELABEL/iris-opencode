@@ -1,3 +1,10 @@
+---
+category: Content & Media
+level: beginner
+tags: [discover, learning, pricing]
+duration_min: 8
+prerequisites: [discover]
+---
 # How to: Price tutorials on the Discover Learning tab
 
 ## What this does

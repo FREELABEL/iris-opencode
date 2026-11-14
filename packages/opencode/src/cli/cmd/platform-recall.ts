@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, IRIS_API, writeJson } from "./iris-api"
 
 // Cross-source recall — search past sessions, agent memory, and diary.
 // Backed by /api/v6/recall on iris-api.
@@ -51,7 +51,7 @@ export const PlatformRecallCommand = cmd({
     const data = (await res.json()) as any
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }

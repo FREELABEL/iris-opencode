@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -91,7 +92,7 @@ const ProfileShowCommand = cmd({
     const profile = await fetchProfile(args.slug)
     if (!profile) { prompts.log.error(`Profile '${args.slug}' not found`); prompts.outro("Done"); return }
 
-    if (args.json) { console.log(JSON.stringify(profile, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(profile); prompts.outro("Done"); return }
 
     printDivider()
     printKV("Name", profile.name)
@@ -118,7 +119,7 @@ const ProfileShowCommand = cmd({
       const r = await irisFetch(`/api/v1/profile/${profile.pk}/fan-funding`)
       if (r.ok) {
         const d = (await r.json()) as any
-        const pkgs: any[] = d?.packages ?? d?.data?.packages ?? []
+        const pkgs: any[] = firstArray(d?.packages, d?.data?.packages)
         console.log()
         console.log(`  ${dim(`Memberships (${pkgs.length}):`)}`)
         for (const p of pkgs) {
@@ -148,7 +149,7 @@ const ProfileGetCommand = cmd({
     const profile = await fetchProfile(args.slug)
     if (!profile) { console.error(`Profile '${args.slug}' not found`); return }
     if (typeof profile.links === "string") profile.links = parseLinks(profile.links)
-    if (!args.path) { console.log(JSON.stringify(profile, null, 2)); return }
+    if (!args.path) { await writeJson(profile); return }
     const v = getNested(profile, args.path)
     if (v === undefined || v === null) { console.log(`(not found: ${args.path})`); return }
     console.log(typeof v === "object" ? JSON.stringify(v, null, 2) : String(v))
@@ -315,7 +316,7 @@ const ProfileMembershipsCommand = cmd({
     const ok = await handleApiError(res, "List packages")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const pkgs: any[] = data?.packages ?? data?.data?.packages ?? []
+    const pkgs: any[] = firstArray(data?.packages, data?.data?.packages)
     printDivider()
     if (pkgs.length === 0) console.log(`  ${dim("(no packages)")}`)
     else for (const p of pkgs) {
@@ -413,7 +414,7 @@ const ProfileCreateCommand = cmd({
       spinner.stop(success(`${name} created${slugNote}`))
     }
 
-    if (args.json) { console.log(JSON.stringify(profile, null, 2)); return }
+    if (args.json) { await writeJson(profile); return }
 
     printDivider()
     printKV("PK", profile.pk ?? profile.id ?? "?")
@@ -640,7 +641,7 @@ const ProfileBatchCreateCommand = cmd({
 
     printDivider()
     if (args.json) {
-      console.log(JSON.stringify(results, null, 2))
+      await writeJson(results)
     }
     prompts.outro(success(`${created} created, ${failed} failed`))
   },
@@ -679,10 +680,10 @@ const ProfileListCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const hits: any[] = data?.data ?? []
+    const hits: any[] = firstArray(data?.data)
     const meta = data?.meta ?? {}
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
     if (hits.length === 0) {
@@ -746,9 +747,9 @@ const ProfileMediaCommand = cmd({
     if (!mediaOk) { prompts.outro("Done"); return }
 
     const mediaData = (await mediaRes.json()) as any
-    const items: any[] = mediaData?.data ?? mediaData ?? []
+    const items: any[] = firstArray(mediaData?.data, mediaData)
 
-    if (args.json) { console.log(JSON.stringify({ counts, items }, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson({ counts, items }); prompts.outro("Done"); return }
 
     printDivider()
     // Show counts header
@@ -813,7 +814,7 @@ const ProfileAnalyticsCommand = cmd({
     const data = (await res.json()) as any
     const stats = data?.data ?? data ?? {}
 
-    if (args.json) { console.log(JSON.stringify(stats, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(stats); prompts.outro("Done"); return }
 
     printDivider()
     printKV("Profile", profile.name)
@@ -870,7 +871,7 @@ const ProfileSearchCommand = cmd({
     const profileResults = data?.results?.profiles ?? data?.data?.profiles ?? data?.data ?? []
     const hits: any[] = Array.isArray(profileResults) ? profileResults : []
 
-    if (args.json) { console.log(JSON.stringify(hits, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(hits); prompts.outro("Done"); return }
 
     printDivider()
     if (hits.length === 0) {
@@ -917,7 +918,7 @@ const ProfilePullCommand = cmd({
     const filepath = join(dir, filename)
     writeFileSync(filepath, JSON.stringify(profile, null, 2))
 
-    if (args.json) { console.log(JSON.stringify(profile, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(profile); prompts.outro("Done"); return }
 
     prompts.outro(`${success("✓")} Saved to ${filepath}`)
   },
@@ -1023,7 +1024,7 @@ const ProfileSocialCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ accounts, feed: args.feed ? feed : undefined }, null, 2))
+      await writeJson({ accounts, feed: args.feed ? feed : undefined })
       prompts.outro("Done")
       return
     }
@@ -1106,9 +1107,9 @@ const ProfileOpportunitiesCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const items: any[] = data?.data?.data ?? data?.data ?? []
+    const items: any[] = firstArray(data?.data?.data, data?.data)
 
-    if (args.json) { console.log(JSON.stringify(items, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(items); prompts.outro("Done"); return }
 
     printDivider()
     printKV("Profile", `${profile.name} (pk ${profile.pk})`)
@@ -1217,7 +1218,7 @@ const ProfileEnrichCommand = cmd({
       spinner.stop(success(`Scraped @${igHandle}: ${stats.followers} followers, ${stats.posts} posts`))
 
       if (args.json) {
-        console.log(JSON.stringify({ stats, posts }, null, 2))
+        await writeJson({ stats, posts })
       } else {
         printDivider()
         printKV("Username", `@${stats.username}`)
@@ -1361,7 +1362,7 @@ const ProfileMergeCommand = cmd({
     const data = (await res.json()) as any
     const result = data?.data ?? data
 
-    if (args.json) { console.log(JSON.stringify(result, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(result); prompts.outro("Done"); return }
 
     printDivider()
     console.log(`  ${success("✓")} Merged`)

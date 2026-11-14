@@ -1,12 +1,13 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, FL_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, FL_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { aiGenerateCarouselProps, fetchBrandTokens, resolveRemotionDir } from "./platform-remotion"
 import { Auth } from "../../auth"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Deliver — port of DeliverCommand.php
@@ -80,7 +81,7 @@ export const PlatformDeliverCommand = cmd({
     spinner.stop(success("Delivered"))
     const data = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     console.log("")
     console.log(bold("Delivery Summary"))
@@ -248,7 +249,7 @@ export const DeliverCarouselCommand = cmd({
           const res = await irisFetch(`/api/v1/leads/${leadId}/tasks`)
           if (res.ok) {
             const data = ((await res.json()) as any)?.data
-            const allTasks: any[] = data?.tasks ?? data ?? []
+            const allTasks: any[] = firstArray(data?.tasks, data)
             resolvedFromApi = allTasks
               .filter((t: any) => taskIds.includes(t.id))
               .map((t: any) => ({ id: t.id, title: t.title, description: t.description }))
@@ -388,7 +389,7 @@ export const DeliverCarouselCommand = cmd({
 
     if (noUpload) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ output_dir: outDir, slides: 9 }, null, 2))
+        await writeJson({ output_dir: outDir, slides: 9 })
       } else {
         prompts.log.success(bold(`Carousel rendered: ${outDir}`))
         spawnSync("open", [outDir], { stdio: "ignore" })
@@ -435,7 +436,7 @@ export const DeliverCarouselCommand = cmd({
 
     // ── Output ──
     if (jsonOutput) {
-      console.log(JSON.stringify({
+      await writeJson({
         lead_id: leadId,
         brand,
         output_dir: outDir,
@@ -443,7 +444,7 @@ export const DeliverCarouselCommand = cmd({
         slides_uploaded: uploads.length,
         uploads,
         note_attached: noteOk,
-      }, null, 2))
+      })
     } else {
       console.log("")
       printDivider()

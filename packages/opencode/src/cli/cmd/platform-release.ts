@@ -143,7 +143,7 @@ function buildChecklist(opts: ChecklistOpts): CheckItem[] {
     {
       label: "OpenAI API key",
       ok: opts.hasOpenAI,
-      detail: opts.hasOpenAI ? "found" : "not configured",
+      detail: opts.hasOpenAI ? "via IRIS model proxy" : "not signed in",
       autoFixable: false,
     },
     {
@@ -809,7 +809,11 @@ const AnnounceCommand = cmd({
     spinner.start("Resolving prerequisites...")
 
     const authToken = await requireAuth()
-    const hasOpenAI = !!(await resolveOpenAIKey())
+    // #178794 — AI generation now goes through the IRIS model proxy, so the capability is
+    // "am I signed in to IRIS", not "do I personally hold an OpenAI key". Left as the key check
+    // this would skip carousel generation (line ~904) for every operator without a personal
+    // OPENAI_API_KEY — silently producing a release with no carousel and no explanation.
+    const hasOpenAI = !!authToken
     const discordWebhook = await resolveDiscordWebhook()
     let description = (args.description as string) || null
 

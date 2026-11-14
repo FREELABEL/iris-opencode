@@ -1,3 +1,9 @@
+---
+category: Finance
+level: intermediate
+tags: [crowdfunding, opportunities, fundraising]
+duration_min: 15
+---
 # How to: Turn an opportunity into a crowdfunded pitch
 
 ## What this does
@@ -8,7 +14,7 @@ This recipe covers authoring those rich opportunity pages from the CLI.
 
 ## Canonical example
 
-The reference implementation is the **Smart Notebook — Encrypted Personal Server** opportunity (Andrew Escher / Good Deals Hardware). It exercises every field — funding goal, 4 roles with mixed pay types, 6 pitch sections, board members, 4 milestones, sample backer.
+The reference implementation is the **Smart Notebook — Encrypted Personal Server** opportunity (A. Whitfield / Northwind Hardware). It exercises every field — funding goal, 4 roles with mixed pay types, 6 pitch sections, board members, 4 milestones, sample backer.
 
 Seed it locally:
 

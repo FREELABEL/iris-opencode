@@ -15,6 +15,13 @@ export interface BloqOption {
   name: string
 }
 
+export interface IrisPlaybook {
+  name: string
+  description: string
+  /** true when attached to the SELECTED bloq; false when shown from the available list. */
+  attached: boolean
+}
+
 interface IrisDataStore {
   status: DataStatus
   bloqList: BloqOption[]
@@ -24,6 +31,7 @@ interface IrisDataStore {
   atlas: AtlasList[]
   contacts: IrisContact[]
   pages: IrisPage[]
+  playbooks: IrisPlaybook[]
   hiveSessions: IrisHiveSession[]
 }
 
@@ -127,6 +135,14 @@ function mapWorkflows(workflows: RawWorkflow[]): IrisWorkflow[] {
   })
 }
 
+function mapPlaybooks(rows: any[], attached: boolean): IrisPlaybook[] {
+  return rows.map((p) => ({
+    name: String(p?.name ?? "unknown"),
+    description: String(p?.description ?? ""),
+    attached,
+  }))
+}
+
 function mapPages(pages: any[]): IrisPage[] {
   return pages.map((p) => ({
     id: p.id,
@@ -169,6 +185,7 @@ export function useIrisData() {
     atlas: [],
     contacts: [],
     pages: [],
+    playbooks: [],
     hiveSessions: [],
   })
 
@@ -199,9 +216,12 @@ export function useIrisData() {
     }
 
     try {
-      const [bloqRes, pagesRes] = await Promise.all([
+      // Pages are NOT fetched here any more. They used to be, and that was the bug: this
+      // block runs ONCE for the user, before any project is selected, so the Pages tab showed
+      // every page the account owns and could never change when you switched projects. Every
+      // other tab fetches per-bloq. Pages now does too — see fetchBloqData.
+      const [bloqRes] = await Promise.all([
         irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`),
-        irisFetch(`/api/v1/pages?user_id=${_userId}&per_page=50`, {}, IRIS_API),
       ])
       if (bloqRes.status === 401) {
         setData("status", "no-auth")
@@ -210,15 +230,6 @@ export function useIrisData() {
       const raw = await extractData(bloqRes)
       const list: BloqOption[] = raw.map((b: any) => ({ id: b.id, name: b.name }))
       setData("bloqList", reconcile(list))
-
-      // Pages from iris-api (nested pagination response)
-      try {
-        if (pagesRes.ok) {
-          const pagesJson = await pagesRes.json() as any
-          const rawPages = pagesJson?.data?.data ?? pagesJson?.data ?? []
-          setData("pages", reconcile(mapPages(rawPages)))
-        }
-      } catch {}
 
       // Auto-select first bloq if none selected
       if (!data.selectedBloqId && list.length > 0) {
@@ -235,12 +246,20 @@ export function useIrisData() {
     if (!_userId) return
 
     try {
-      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes] = await Promise.all([
+      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes, pagesRes, attachedPbRes, allPbRes] = await Promise.all([
         irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
         irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
+        // PAGES, now scoped to the selected project. owner_type+owner_id is a NARROWING
+        // filter fl-api's PageController::index already supports (its own comment: "never a
+        // widening one"), and iris-api's /v1/pages is a pass-through proxy that forwards the
+        // query verbatim, so it reaches the filter untouched.
+        irisFetch(`/api/v1/pages?user_id=${_userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`, {}, IRIS_API),
+        // PLAYBOOKS attached to this project, and the available set as a labelled fallback.
+        irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
+        irisFetch(`/api/v1/playbooks`, {}, IRIS_API),
       ])
 
       // Extract atlas from single-bloq detail response
@@ -262,6 +281,35 @@ export function useIrisData() {
       setData("agents", reconcile(mapAgents(rawAgents, rawJobs)))
       setData("workflows", reconcile(mapWorkflows(rawWorkflows)))
       setData("contacts", reconcile(mapContacts(rawLeads)))
+
+      // Pages, scoped to this bloq.
+      try {
+        if (pagesRes.ok) {
+          const pagesJson = await pagesRes.json() as any
+          const rawPages = pagesJson?.data?.data ?? pagesJson?.data ?? []
+          setData("pages", reconcile(mapPages(rawPages)))
+        }
+      } catch {}
+
+      // Playbooks. ATTACHED ones belong to this project and are the honest answer. When none
+      // are attached the tab would be empty, so the AVAILABLE set is shown instead — flagged
+      // attached:false so the UI can say so out loud. Showing 97 global playbooks under a
+      // project header without that label would repeat the exact bug this commit fixes for
+      // pages: a project-scoped panel quietly listing everything.
+      try {
+        const attached = attachedPbRes.ok ? await extractData(attachedPbRes) : []
+        if (Array.isArray(attached) && attached.length > 0) {
+          setData("playbooks", reconcile(mapPlaybooks(attached, true)))
+        } else if (allPbRes.ok) {
+          const allJson = await allPbRes.json() as any
+          const raw = allJson?.playbooks ?? allJson?.data ?? []
+          setData("playbooks", reconcile(mapPlaybooks(Array.isArray(raw) ? raw : [], false)))
+        } else {
+          setData("playbooks", reconcile([]))
+        }
+      } catch {
+        setData("playbooks", reconcile([]))
+      }
       setData("status", "loaded")
       syncIrisContext()
     } catch {
