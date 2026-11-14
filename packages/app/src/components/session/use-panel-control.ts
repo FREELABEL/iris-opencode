@@ -66,7 +66,7 @@ type Command =
 
 /** The Browser pane's page (#193145): run a browser-tool script there, or open an address. */
 /** Every page command may name a tab (#193328): its number, id or label; none = the one showing. */
-type PageCommand = { tab?: string } & (
+export type PageCommand = { tab?: string } & (
   | {
       action: "page"
       op: "eval"
@@ -152,6 +152,13 @@ export function usePanelControl(input: { open: () => boolean }) {
     if (answered.size > 500) answered.delete(answered.keys().next().value!)
     void deliverReport(platform.fetch ?? globalThis.fetch, serverSDK().url, { ...body, catalog: IRIS_PANEL_CATALOG })
   }
+
+  // This chat is on screen while its page is mounted; the app-wide listener covers the rest (#193492).
+  createEffect(() => {
+    const id = params.id
+    if (id) onCleanup(markOnScreen(id))
+  })
+  listenOffScreen(serverSDK(), platform)
 
   // 2. Report on change.
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -316,129 +323,23 @@ export function usePanelControl(input: { open: () => boolean }) {
     requestAnimationFrame(() => requestAnimationFrame(tick))
   }
 
-  /**
-   * A page command (#193145). THE GRANT IS CHECKED HERE, on the person's side: the engine asks,
-   * this decides. `open` navigates the pane like a chat link (no grant: the person sees it
-   * happen, and reading the new page needs that site's grant); `eval` needs the site granted and
-   * `read` mode.
-   */
-  const runPage = async (cmd: PageCommand, ack: string) => {
+  /** A page command for this chat, on screen: see runPageCommand. */
+  const runPage = (cmd: PageCommand, ack: string) => {
     const chat = params.id
-    // Every answer carries this chat's tabs, so the agent always knows which one the person sees.
-    const reply = (r: { result?: string; error?: string }) =>
-      post({ ...untrack(snapshot), ack, ...(chat ? { browserTabs: describeTabs(chat) } : {}), ...r })
-    // This chat's own pages: an agent in one chat never reads or drives another chat's.
-    if (!chat || !platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) {
-      return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
-    }
-    const noSuchTab = (t?: string) =>
-      `there is no tab "${t}" in this chat. Its tabs: ${describeTabs(chat)
-        .map((x) => `${x.n} ${x.label ?? x.title ?? "New tab"}${x.active ? " (showing)" : ""}`)
-        .join(", ")}`
-    if (cmd.op === "tabs") return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
-    if (cmd.op === "close-tab") {
-      const id = resolveTab(chat, cmd.tab)
-      if (!id || !cmd.tab) return reply({ error: cmd.tab ? noSuchTab(cmd.tab) : "close-tab needs a tab" })
-      const key = pageKey(chat, id)
-      if (closeTab(chat, id) === undefined) return reply({ error: "that is this chat's only tab: it stays open" })
-      forgetTabPage(key)
-      await platform.nativeBrowser(key).close?.().catch(() => undefined)
-      return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
-    }
-    const fresh = cmd.op === "open" && cmd.newTab
-    const tab = fresh ? addTab(chat, cmd.label, { show: false }) : resolveTab(chat, cmd.tab)
-    if (!tab) {
-      return reply({
-        error: fresh
-          ? `this chat already has ${MAX_TABS} tabs open: close one first ({"action":"close","tab":N}) or open in an existing tab`
-          : noSuchTab(cmd.tab),
-      })
-    }
-    const key = pageKey(chat, tab)
-    const nb = platform.nativeBrowser(key)
-    const showing = activeTab(chat) === tab
-    try {
-      if (cmd.op === "open") {
-        const before = fresh ? undefined : (await nb.state())?.url
-        if (fresh) {
-          // The new tab opens on this address when it first shows.
-          setPendingOpen(key, cmd.url)
-          setActiveTab(chat, tab)
-        } else if (!showing) {
-          // A tab in the background: navigate its page if it is alive, else open there when shown.
-          await nb.navigate(cmd.url).catch(() => setPendingOpen(key, cmd.url))
-          setActiveTab(chat, tab)
-        } else {
-          navigateWeb(cmd.url)
-        }
-        requestIrisNav({ surface: "browser", session: params.id })
-        showTab("iris")
-        const landed = await waitForPage(nb, cmd.url, before)
-        // Landed on a "prove you're human" page: ask the person now; the agent's next look waits.
-        const o = originOf(landed.url)
-        if (o && (await humanCheckShowing((x) => nb.eval(x)))) noteAsked(o, "check")
-        return reply({ result: JSON.stringify({ ok: true, value: landed }) })
-      }
-      // The agent never acts out of sight: a click or type in a background tab, or a picture of
-      // it, brings that tab to the front first. Reading one does not switch, unless its page was
-      // closed to make room (then showing it reopens it).
-      if (!showing) {
-        const acting = (cmd.op === "eval" && cmd.mode === "act") || cmd.op === "screenshot"
-        const alive = acting ? false : await nb.eval("true").then(() => true, () => false)
-        if (!alive) {
-          setActiveTab(chat, tab)
+    return runPageCommand(
+      {
+        chat,
+        platform,
+        onScreen: true,
+        reply: (r) => post({ ...untrack(snapshot), ack, ...(chat ? { browserTabs: describeTabs(chat) } : {}), ...r }),
+        showBrowser: (url) => {
+          if (url) navigateWeb(url)
           requestIrisNav({ surface: "browser", session: params.id })
-          await new Promise((r) => setTimeout(r, 900))
-        }
-      }
-      const s = await nb.state()
-      const origin = originOf(s?.url)
-      // A "prove you're human" page is for the PERSON (human-check.ts): never read or click it.
-      // The agent waits on this answer the way it waits for Allow.
-      if (await humanCheckShowing((x) => nb.eval(x))) {
-        if (recentlyDeclined(origin)) {
-          return reply({ error: `the person chose not to finish ${hostOf(origin)}'s human check. Don't try again unless they ask` })
-        }
-        if (origin) noteAsked(origin, "check")
-        return reply({ error: HUMAN_CHECK_WAIT })
-      }
-      clearHumanCheck(origin)
-      if (cmd.op === "screenshot") {
-        // Looking is reading: the same per-site Allow (or Always allow).
-        const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
-        if (no && recentlyDeclined(origin)) return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
-        if (no) {
-          if (origin && !takenOverSites().includes(origin)) noteAsked(origin, "read")
-          return reply({ error: no })
-        }
-        if (!nb.screenshot) return reply({ error: "this IRIS can't take pictures of the Browser yet: use read or find" })
-        noteActivity(origin!, "looking at the page", "read")
-        return reply({ result: JSON.stringify({ ok: true, value: await nb.screenshot() }) })
-      }
-      const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
-      if (why && recentlyDeclined(origin)) {
-        return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
-      }
-      if (why) {
-        // Offer the missing permission right there in the strip (never while the person has the wheel).
-        if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)
-        return reply({ error: why })
-      }
-      if (cmd.mode === "act" && cmd.confirm) {
-        noteActivity(origin!, `waiting for you to allow "${cmd.confirm}"`, "act")
-        const ok = await confirmAct(origin!, cmd.confirm)
-        if (!ok) {
-          return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
-        }
-        // They may have taken over or stopped while the prompt was up.
-        const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
-        if (again) return reply({ error: again })
-      }
-      noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
-      reply({ result: await nb.eval(cmd.script) })
-    } catch (err) {
-      reply({ error: err instanceof Error ? err.message : String(err) })
-    }
+          showTab("iris")
+        },
+      },
+      cmd,
+    )
   }
 
   const stop = serverSDK().event.listen((e: any) => {
@@ -479,6 +380,248 @@ export function usePanelControl(input: { open: () => boolean }) {
     settle(command, props.id)
   })
   onCleanup(stop)
+}
+
+/**
+ * THE AGENT'S CHAT NEED NOT BE ON SCREEN (#193492).
+ *
+ * The listener in usePanelControl lives in the session page, so only the chat on screen answered
+ * page commands. In the flight-booking test the person went to another chat while the agent
+ * worked: 11 of 11 Browser failures were "the desktop did not answer within 16-25 s" for the
+ * agent's chat, while its page sat alive and hidden the whole time (browser.rs keeps a chat's
+ * pages when it leaves). Nothing about the page needed the chat on screen; only the listener did.
+ *
+ * So a second, app-wide listener answers page commands for chats that are NOT on screen, against
+ * that chat's own hidden page. Same grants, same human-check rule, same tabs. What changes off
+ * screen is only what needs the person's eyes: an irreversible click's yes, an Allow, a human
+ * check. Those answer at once, saying the person is in another chat, instead of waiting on a
+ * prompt nobody can see.
+ */
+const onScreen = new Map<string, number>()
+export function chatOnScreen(chat: string): boolean {
+  return (onScreen.get(chat) ?? 0) > 0
+}
+export function markOnScreen(chat: string): () => void {
+  onScreen.set(chat, (onScreen.get(chat) ?? 0) + 1)
+  return () => {
+    const n = (onScreen.get(chat) ?? 1) - 1
+    if (n > 0) onScreen.set(chat, n)
+    else onScreen.delete(chat)
+  }
+}
+
+/** Where a page the person can't see is laid out: off screen, at a normal desktop size. */
+const OFFSCREEN = { x: -30_000, y: 0, width: 1200, height: 860 }
+
+/** Bring a chat's page to life without showing it: hidden pages keep running; closed ones reopen. */
+async function wakeHidden(nb: NativeBrowser, url?: string) {
+  const alive = await nb.eval("true").then(
+    () => true,
+    () => false,
+  )
+  if (alive) {
+    if (url) await nb.navigate(url)
+    return
+  }
+  // No page yet, or closed to make room: create it off screen (on `url`, or where it last was), then hide it.
+  await nb.show(url, OFFSCREEN)
+  await nb.hide()
+  await new Promise((r) => setTimeout(r, 900))
+}
+
+export type PageCtx = {
+  chat: string | undefined
+  platform: ReturnType<typeof usePlatform>
+  /** The chat is on screen: its session page is mounted. */
+  onScreen: boolean
+  reply: (r: { result?: string; error?: string }) => void
+  /** On screen only: show the Browser in this chat's panel (and navigate the showing tab to `url`). */
+  showBrowser: (url?: string) => void
+}
+
+const AWAY = "The person is in another chat right now, so they can't see this prompt"
+
+/**
+ * A page command (#193145). THE GRANT IS CHECKED HERE, on the person's side: the engine asks,
+ * this decides. `open` navigates the pane like a chat link (no grant: the person sees it
+ * happen, and reading the new page needs that site's grant); `eval` needs the site granted and
+ * `read` mode.
+ */
+export async function runPageCommand(ctx: PageCtx, cmd: PageCommand) {
+  const { chat, platform, reply } = ctx
+  // This chat's own pages: an agent in one chat never reads or drives another chat's.
+  if (!chat || !platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) {
+    return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
+  }
+  const noSuchTab = (t?: string) =>
+    `there is no tab "${t}" in this chat. Its tabs: ${describeTabs(chat)
+      .map((x) => `${x.n} ${x.label ?? x.title ?? "New tab"}${x.active ? " (showing)" : ""}`)
+      .join(", ")}`
+  if (cmd.op === "tabs") return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+  if (cmd.op === "close-tab") {
+    const id = resolveTab(chat, cmd.tab)
+    if (!id || !cmd.tab) return reply({ error: cmd.tab ? noSuchTab(cmd.tab) : "close-tab needs a tab" })
+    const key = pageKey(chat, id)
+    if (closeTab(chat, id) === undefined) return reply({ error: "that is this chat's only tab: it stays open" })
+    forgetTabPage(key)
+    await platform.nativeBrowser(key).close?.().catch(() => undefined)
+    return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+  }
+  const fresh = cmd.op === "open" && cmd.newTab
+  const tab = fresh ? addTab(chat, cmd.label, { show: false }) : resolveTab(chat, cmd.tab)
+  if (!tab) {
+    return reply({
+      error: fresh
+        ? `this chat already has ${MAX_TABS} tabs open: close one first ({"action":"close","tab":N}) or open in an existing tab`
+        : noSuchTab(cmd.tab),
+    })
+  }
+  const key = pageKey(chat, tab)
+  const nb = platform.nativeBrowser(key)
+  const showing = activeTab(chat) === tab
+  try {
+    if (cmd.op === "open") {
+      const before = fresh ? undefined : (await nb.state())?.url
+      if (!ctx.onScreen) {
+        // Off screen: load it in the chat's hidden page; the person finds it there when they come back.
+        await wakeHidden(nb, cmd.url)
+        setActiveTab(chat, tab)
+      } else if (fresh) {
+        // The new tab opens on this address when it first shows.
+        setPendingOpen(key, cmd.url)
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+      } else if (!showing) {
+        // A tab in the background: navigate its page if it is alive, else open there when shown.
+        await nb.navigate(cmd.url).catch(() => setPendingOpen(key, cmd.url))
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+      } else {
+        ctx.showBrowser(cmd.url)
+      }
+      const landed = await waitForPage(nb, cmd.url, before)
+      // Landed on a "prove you're human" page: ask the person now; the agent's next look waits.
+      const o = originOf(landed.url)
+      if (o && (await humanCheckShowing((x) => nb.eval(x)))) noteAsked(o, "check")
+      return reply({ result: JSON.stringify({ ok: true, value: landed }) })
+    }
+    if (!ctx.onScreen) {
+      // Nobody is looking at this chat: work in its hidden page, waking it if it was closed.
+      await wakeHidden(nb)
+    } else if (!showing) {
+      // The agent never acts out of sight in the chat the person is watching: a click or type in a
+      // background tab, or a picture of it, brings that tab to the front first. Reading one does
+      // not switch, unless its page was closed to make room (then showing it reopens it).
+      const acting = (cmd.op === "eval" && cmd.mode === "act") || cmd.op === "screenshot"
+      const alive = acting ? false : await nb.eval("true").then(() => true, () => false)
+      if (!alive) {
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+        await new Promise((r) => setTimeout(r, 900))
+      }
+    }
+    const away = ctx.onScreen ? "" : ` ${AWAY}: ask them to open this chat.`
+    const s = await nb.state()
+    const origin = originOf(s?.url)
+    // A "prove you're human" page is for the PERSON (human-check.ts): never read or click it.
+    // The agent waits on this answer the way it waits for Allow.
+    if (await humanCheckShowing((x) => nb.eval(x))) {
+      if (recentlyDeclined(origin)) {
+        return reply({ error: `the person chose not to finish ${hostOf(origin)}'s human check. Don't try again unless they ask` })
+      }
+      if (origin) noteAsked(origin, "check")
+      return reply({ error: HUMAN_CHECK_WAIT + away })
+    }
+    clearHumanCheck(origin)
+    if (cmd.op === "screenshot") {
+      // Looking is reading: the same per-site Allow (or Always allow).
+      const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+      if (no && recentlyDeclined(origin)) return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+      if (no) {
+        if (origin && !takenOverSites().includes(origin)) noteAsked(origin, "read")
+        return reply({ error: no + away })
+      }
+      if (!nb.screenshot) return reply({ error: "this IRIS can't take pictures of the Browser yet: use read or find" })
+      noteActivity(origin!, "looking at the page", "read")
+      const shot = await nb.screenshot().catch((err) => {
+        if (ctx.onScreen) throw err
+        throw new Error(`no picture: this chat's Browser is hidden while the person is in another chat. Use read, elements or find instead`)
+      })
+      return reply({ result: JSON.stringify({ ok: true, value: shot }) })
+    }
+    const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+    if (why && recentlyDeclined(origin)) {
+      return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+    }
+    if (why) {
+      // Offer the missing permission right there in the strip (never while the person has the wheel).
+      if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)
+      return reply({ error: why + away })
+    }
+    if (cmd.mode === "act" && cmd.confirm) {
+      // An irreversible click always waits for the person's yes, and they can only give it where they can see it.
+      if (!ctx.onScreen) {
+        return reply({
+          error: `clicking "${cmd.confirm}" needs the person's yes. ${AWAY}. Nothing was clicked: tell them it is ready and ask them to open this chat to allow it`,
+        })
+      }
+      noteActivity(origin!, `waiting for you to allow "${cmd.confirm}"`, "act")
+      const ok = await confirmAct(origin!, cmd.confirm)
+      if (!ok) {
+        return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
+      }
+      // They may have taken over or stopped while the prompt was up.
+      const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+      if (again) return reply({ error: again })
+    }
+    noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
+    reply({ result: await nb.eval(cmd.script) })
+  } catch (err) {
+    reply({ error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/** The app-wide listener for chats not on screen. One per server connection. */
+let background: { sdk: unknown; stop: () => void } | undefined
+function listenOffScreen(sdk: ReturnType<ReturnType<typeof useServerSDK>>, platform: ReturnType<typeof usePlatform>) {
+  if (background?.sdk === sdk) return
+  background?.stop()
+  const post = (body: Record<string, unknown>) => {
+    if (typeof body.ack === "string") answered.set(body.ack, { error: body.error as string | undefined, result: body.result as string | undefined })
+    if (answered.size > 500) answered.delete(answered.keys().next().value!)
+    void deliverReport(platform.fetch ?? globalThis.fetch, sdk.url, { ...body, catalog: IRIS_PANEL_CATALOG })
+  }
+  // What the engine keeps for a chat that is not on screen: its panel is not showing, its Browser still works.
+  const state = (chat: string) => ({ session: chat, open: false, browser: true, browserTabs: describeTabs(chat) })
+  const stop = sdk.event.listen((e: any) => {
+    const event = e?.details
+    if (event?.type !== PANEL_COMMAND_EVENT) return
+    const props = event.properties as { id?: string; session?: string; command?: Command } | undefined
+    const chat = props?.session
+    if (!props?.id || !chat || props.command?.action !== "page") return
+    // A chat on screen answers for itself (usePanelControl).
+    if (chatOnScreen(chat)) return
+    if (!platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) return
+    if (handled.has(props.id)) {
+      const prior = answered.get(props.id)
+      if (prior) post({ ...state(chat), ack: props.id, error: prior.error, result: prior.result })
+      return
+    }
+    handled.add(props.id)
+    if (handled.size > 500) handled.delete(handled.values().next().value!)
+    const ack = props.id
+    void runPageCommand(
+      {
+        chat,
+        platform,
+        onScreen: false,
+        reply: (r) => post({ ...state(chat), ack, ...r }),
+        showBrowser: () => undefined,
+      },
+      props.command as PageCommand,
+    )
+  })
+  background = { sdk, stop }
 }
 
 /**
