@@ -452,7 +452,9 @@ async function updateRemoteNode(args: Record<string, any>): Promise<number> {
   console.log(`  ${bold(node.name)}: ${before.text}`)
   console.log(`  target: ${du.short(sha)} (${sha})`)
 
+  const { nodeOs } = await import("./platform-hive-runner")
   const script = fleet.remoteUpdateScript(sha, {
+    windows: nodeOs(node) === "win32",
     force: Boolean(args.force),
     dryRun: Boolean(args["dry-run"]),
     delaySec: Number(args["restart-delay"]) || 10,

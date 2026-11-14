@@ -105,6 +105,17 @@ export function currentActId(): string {
   return _actId
 }
 
+/**
+ * Start a NEW act in this process. One process is one act everywhere except a loop that acts many
+ * times — `iris android batch run` taps and types through a whole night. Without this every act in
+ * the loop shares one id, the budget collapses them into a single row, and an act limit of 60
+ * would permit the 600th tap.
+ */
+export function beginNewAct(): string {
+  _actId = null
+  return currentActId()
+}
+
 export const currentRunId = (): string | null => String(process.env.IRIS_RUN_ID || "").trim() || null
 
 /** Is this node locked down (an operator needs a couple too)? One file, one line, node-local. */

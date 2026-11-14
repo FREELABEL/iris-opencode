@@ -1196,6 +1196,13 @@ const ShowCommand = cmd({
       }
     }
 
+    const comments = await fetchBugComments(Number(found.id))
+    if (comments.length) {
+      printDivider()
+      console.log(`  ${bold("Comments")}`)
+      for (const c of comments) console.log(`    ${dim(`${c.when}  ${c.who}:`)} ${c.text}`)
+    }
+
     printDivider()
     console.log(dim(`  iris bug close ${found.id} --solution "..." — record the fix`))
     console.log("")
@@ -1231,9 +1238,16 @@ async function resolveBug(
     const text = await res.text().catch(() => "")
     throw new Error(`HTTP ${res.status}: ${text}`)
   }
+
+  // A 200 is not the claim being made here. "resolved" is printed only for a bug the server says
+  // is now done (#191888).
+  const data = (await res.json().catch(() => null)) as any
+  if (data?.success === false || data?.data?.status !== "done") {
+    throw new Error(`the server did not mark it done (status: ${data?.data?.status ?? "not reported"})`)
+  }
 }
 
-const CloseCommand = cmd({
+export const CloseCommand = cmd({
   command: "close <id..>",
   aliases: ["done", "resolve", "complete"],
   describe: "mark bug report(s) as completed — optionally record the fix/solution + commit hash",
@@ -1247,10 +1261,10 @@ const CloseCommand = cmd({
       })
       .option("commit", {
         alias: "hash",
-        describe: "fix commit hash (auto-detected from git HEAD when --solution is given)",
+        describe: "fix commit hash to record. Optional: without it the bug still closes, with no commit recorded",
         type: "string",
       })
-      .option("no-commit", { describe: "skip git commit auto-detection", type: "boolean", default: false })
+      .option("no-commit", { describe: "don't offer git HEAD as the fix commit", type: "boolean", default: false })
       .option("note", { alias: "n", describe: "(deprecated alias for --solution)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -1282,15 +1296,11 @@ const CloseCommand = cmd({
         // #177889-#177893 (iris-opencode work) got stamped with fd678579 — an unrelated
         // fl-api geo commit that happened to be the cwd's HEAD — making five "fixed"
         // references untrustworthy and hiding that none were actually fixed.
-        if (ids.length > 1) {
-          prompts.log.error(
-            `Refusing to auto-stamp a commit across ${ids.length} bugs — cwd HEAD is one commit in one repo.`,
-          )
-          prompts.log.info(dim("Pass --commit <hash> if they really share a fix, --no-commit to record none,"))
-          prompts.log.info(dim("or close them one at a time so each gets its own commit."))
-          prompts.outro("Done")
-          return
-        }
+        //
+        // Not stamping is not the same as not closing. These branches used to return here and
+        // exit 0 under the word "Done" with nothing written: 16 tickets "closed" that way on
+        // 2026-10-30 were still open hours later (#191888). The solution is what was asked to
+        // be recorded and it needs no commit, so the close goes ahead without one.
         // A SINGLE close auto-stamped cwd HEAD, announcing it in dim text. Naming the
         // repo was not enough: closing an iris-opencode bug from the freelabel monorepo
         // recorded a8a9cc45 (fl-eco-docker) as the fix, and a wrong hash is indistinguishable
@@ -1304,29 +1314,27 @@ const CloseCommand = cmd({
         if (git.hash) {
           const repo = detectGitRepo()
           const from = `${git.hash}${repo ? ` from ${repo}` : ""}`
-          const interactive = Boolean(process.stdin.isTTY) && !args.json
+          const interactive = ids.length === 1 && Boolean(process.stdin.isTTY) && !args.json
 
           if (!interactive) {
-            prompts.log.error(`Refusing to guess the fix commit. cwd HEAD is ${from}.`)
-            prompts.log.info(dim(`Pass --commit ${git.hash} if that IS the fix, --commit <hash> if it is not,`))
-            prompts.log.info(dim("or --no-commit to close without one."))
-            prompts.outro("Done")
-            return
-          }
-
-          // Default NO. The failure mode is a confident wrong reference, so a bare
-          // Enter must record nothing rather than record a guess.
-          const useHead = await prompts.confirm({
-            message: `Record ${from} as the fix commit?`,
-            initialValue: false,
-          })
-          if (prompts.isCancel(useHead)) {
-            prompts.outro("Cancelled")
-            return
-          }
-          if (useHead) {
-            fixCommit = git.hash
-            fixCommitUrl = git.url
+            if (!args.json) {
+              prompts.log.info(dim(`No fix commit recorded: cwd HEAD (${from}) is not assumed to be the fix. Add --commit <hash> to record one.`))
+            }
+          } else {
+            // Default NO. The failure mode is a confident wrong reference, so a bare
+            // Enter must record nothing rather than record a guess.
+            const useHead = await prompts.confirm({
+              message: `Record ${from} as the fix commit?`,
+              initialValue: false,
+            })
+            if (prompts.isCancel(useHead)) {
+              prompts.outro("Cancelled")
+              return
+            }
+            if (useHead) {
+              fixCommit = git.hash
+              fixCommitUrl = git.url
+            }
           }
         }
       }
@@ -1758,32 +1766,88 @@ const FlushCommand = cmd({
   },
 })
 
+/** Where a card's comments and activity trail live. The trail is what stamps who and when. */
+const bugCardPath = (userId: number, itemId: number, leaf: string) =>
+  `/api/v1/user/${userId}/bloqs/list/item/${itemId}/${leaf}`
+
+/** Comments newest-last from a card's activity trail. Unreadable is empty: `bug show` still works. */
+export async function fetchBugComments(itemId: number): Promise<Array<{ who: string; when: string; text: string }>> {
+  try {
+    const userId = await resolveUserId()
+    if (!userId) return []
+    const res = await irisFetch(`${bugCardPath(userId, itemId, "activity")}?limit=200`)
+    if (!res.ok) return []
+    const activity = ((await res.json()) as any)?.data?.activity
+    if (!Array.isArray(activity)) return []
+    return activity
+      .filter((a: any) => a?.type === "comment")
+      .map((a: any) => ({
+        who: String(a.actor ?? "someone"),
+        when: String(a.created_at ?? ""),
+        text: String(a.content ?? ""),
+      }))
+      .sort((a, b) => a.when.localeCompare(b.when))
+  } catch {
+    return []
+  }
+}
+
 /**
- * `iris bug comment <id> "<text>"` (#189449). The append path already existed as
- * `bug update <id> --note`, and nobody found it: the obvious verb is "comment", and the
- * option sat under a command named for changing fields. Epics that attach existing bugs
- * ("attach, don't duplicate") had no visible way to tell the bug it was picked up, so
- * every cross-link was one-way. Same endpoint, same write verification — just a name
- * people reach for.
+ * `iris bug comment <id> "<text>"` (#189449). It used to be `bug update --note` under another name,
+ * which appends to the bug's description, so comments could not be told apart from the original
+ * report (#191888). It now writes to the card's own comment trail, which records who and when and
+ * leaves the description alone. `bug update --note` is still there for changing the report itself.
  */
-const CommentCommand = cmd({
+export const CommentCommand = cmd({
   command: "comment <id> <text..>",
   aliases: ["note"],
-  describe: "add a note to a bug — e.g. link the epic that picked it up (status and title untouched)",
+  describe: "add a timestamped, attributed comment to a bug — the description, status and title are untouched",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
-      .positional("text", { describe: "the note", type: "string", array: true, demandOption: true })
+      .positional("text", { describe: "the comment", type: "string", array: true, demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .example('$0 bug comment 186544 "Picked up by epic #189448"', "point a bug at the plan that closes it"),
   async handler(args) {
     const text = ([] as string[]).concat((args.text as any) ?? []).join(" ").trim()
     if (!text) {
-      console.error('\n  Nothing to add. Usage: iris bug comment <id> "your note"\n')
+      console.error('\n  Nothing to add. Usage: iris bug comment <id> "your comment"\n')
       process.exitCode = 1
       return
     }
-    await (UpdateCommand as any).handler({ ...args, description: text })
+    const itemId = args.id as number
+    const token = await requireAuth()
+    if (!token) {
+      process.exitCode = 1
+      return
+    }
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error("\n  Could not resolve your user ID, so nothing was added.\n")
+      process.exitCode = 1
+      return
+    }
+
+    const res = await irisFetch(bugCardPath(userId, itemId, "comments"), {
+      method: "POST",
+      body: JSON.stringify({ body: text }),
+    })
+    const data = (await res.json().catch(() => ({}))) as any
+    if (!res.ok || data?.success === false) {
+      if (args.json) await writeJson({ success: false, error: data?.error ?? `HTTP ${res.status}`, status: res.status })
+      else {
+        console.error(`\n  Comment not added: ${data?.error ?? data?.message ?? `HTTP ${res.status}`}`)
+        // Commenting needs write access to the board. Appending to the report is a separate,
+        // public action, so it is offered by name and never done in its place.
+        if (res.status === 403 || res.status === 404) {
+          console.error(`  You may not have write access to this board. To add to the report itself: iris bug update ${itemId} --note "..."\n`)
+        }
+      }
+      process.exitCode = 1
+      return
+    }
+    if (args.json) await writeJson(data)
+    else console.log(success(`✓ Comment added to bug #${itemId}`))
   },
 })
 

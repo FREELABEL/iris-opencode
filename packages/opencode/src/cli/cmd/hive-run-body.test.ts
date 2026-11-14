@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildHiveRunBody } from "./hive-run-body"
+import { buildHiveRunBody, hiveRunScript } from "./hive-run-body"
 
 const NODE = "01a09d2c-2076-72e5-9292-7f69c00e8407"
 const base = { userId: 193, nodeId: "01a10379-0c9f-73c5-bf83-157496a21589", title: "iris hive run: uptime", script: "#!/bin/bash\nuptime", timeoutSec: 60 }
@@ -25,5 +25,18 @@ describe("buildHiveRunBody (#188667)", () => {
       timeout_seconds: 60,
       priority: 7,
     })
+  })
+})
+
+describe("hiveRunScript (#192109)", () => {
+  test("POSIX: bash with set -e, or without it for --no-fail-fast", () => {
+    expect(hiveRunScript("uptime", { failFast: true, windows: false })).toBe("#!/bin/bash\nset -e\nuptime")
+    expect(hiveRunScript("uptime", { failFast: false, windows: false })).toBe("#!/bin/bash\nuptime")
+  })
+  test("Windows: the command as written — cmd.exe reads neither a shebang nor set -e", () => {
+    expect(hiveRunScript("ver && hostname", { failFast: true, windows: true })).toBe("ver && hostname")
+  })
+  test("a command with its own shebang is never wrapped", () => {
+    expect(hiveRunScript("#!/usr/bin/env python3\nprint(1)", { failFast: true, windows: false })).toBe("#!/usr/bin/env python3\nprint(1)")
   })
 })

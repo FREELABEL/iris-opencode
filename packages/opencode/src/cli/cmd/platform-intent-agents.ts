@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
-import { irisFetch, resolveUserId } from "./iris-api"
+import { resolveUserId } from "./iris-api"
+import { listAllAgents } from "./agent-list-all"
 import { searchCapabilities, type Entry, type Index } from "./platform-find"
 
 /**
@@ -89,6 +90,26 @@ export function rankAgents(text: string, agents: RawAgent[], vocab: Index["terms
 const TTL_MS = 10 * 60 * 1000
 const cacheFile = () => join(homedir(), ".iris", "cache", "intent-agents.json")
 
+/** Every agent on the account. One timeout across all pages: `intent` must never block for long. */
+export async function fetchIntentAgents(
+  userId: number,
+  timeoutMs: number,
+): Promise<{ ok: true; agents: RawAgent[] } | { ok: false; error: string }> {
+  const all = await listAllAgents<any>(userId, { signal: AbortSignal.timeout(timeoutMs) })
+  if (!all.ok) return { ok: false, error: all.error }
+  return {
+    ok: true,
+    agents: all.rows.map((a: any) => ({
+      id: Number(a.id),
+      name: String(a.name ?? ""),
+      type: a.type,
+      active: a.active,
+      description: a.description ?? null,
+      last_active_at: a.last_active_at ?? null,
+    })),
+  }
+}
+
 /**
  * The account's agents, from a 10-minute cache or the API. Never throws and never blocks long:
  * agent discovery is an addition, and `intent` must still answer for commands without it.
@@ -105,19 +126,9 @@ export async function loadAgents(timeoutMs = 4000): Promise<{ agents: RawAgent[]
   } catch {}
   if (!userId) return { agents: [], source: "no user id" }
   try {
-    const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (!res.ok) return { agents: [], source: `HTTP ${res.status}` }
-    const raw = (await res.json()) as any
-    const list: RawAgent[] = (Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : []).map((a: any) => ({
-      id: Number(a.id),
-      name: String(a.name ?? ""),
-      type: a.type,
-      active: a.active,
-      description: a.description ?? null,
-      last_active_at: a.last_active_at ?? null,
-    }))
+    const fetched = await fetchIntentAgents(userId, timeoutMs)
+    if (!fetched.ok) return { agents: [], source: fetched.error }
+    const list = fetched.agents
     try {
       mkdirSync(join(homedir(), ".iris", "cache"), { recursive: true })
       writeFileSync(file, JSON.stringify({ userId, at: Date.now(), agents: list }))

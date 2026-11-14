@@ -31,6 +31,8 @@ export const PROMPT_IS_PAYLOAD: Record<string, string> = {
   execute_file: "the path of the file to execute on that node",
   message: "the message text",
   session_message: "the message text",
+  code: "what to build or fix — the route is picked from it",
+  code_generation: "what to build or fix",
 }
 
 export interface TaskRequestInput {

@@ -67,6 +67,8 @@ export interface InstagramRun {
   userId: number
   /** extra scraper env — follower filters (#186254) */
   filters?: Record<string, string>
+  /** The spec, relative to root. Default: the Freelabel checkout's path. */
+  spec?: string
 }
 
 /** Run the scraper (dry) and return data in the same shape scrape-leads.sh produces for the web. */
@@ -87,7 +89,7 @@ export async function runInstagramScrape(r: InstagramRun): Promise<{ data?: any;
     CAMPAIGN_LABEL: "ReachR scrape",
     ...(r.filters ?? {}),
   }
-  const output = await runSpec({ root: r.root, spec: SPEC, env, timeoutMs, resultFile })
+  const output = await runSpec({ root: r.root, spec: r.spec ?? SPEC, env, timeoutMs, resultFile })
 
   let raw: any = null
   try {

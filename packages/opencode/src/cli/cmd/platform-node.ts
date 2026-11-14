@@ -1,3 +1,5 @@
+import { defaultNodeKeyFile, createNodeKeyWithSudo, linuxSecretService } from "./replicated-vault-keys"
+import { randomBytes } from "crypto"
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { dim, bold, success } from "./iris-api"
@@ -388,6 +390,22 @@ export const NodeInstallCommand = cmd({
     if (!args["no-autostart"]) auto = registerAutostart(bridge)
     out.steps.autostart = auto
     say(auto.ok ? "  ✓ registered to start at login" : dim(`  · autostart: ${auto.detail}`))
+
+    // 4b. Where replicated-vault keys are wrapped (#193396). A headless Linux node usually has no
+    // Secret Service, so it gets a node key outside $HOME (root-owned dir, user-owned 0400 file).
+    // Best effort and non-interactive: `sudo -n` or nothing. Without it, the first replicated
+    // vault command asks for a passphrase in a terminal or says to run `iris vault key setup --node-key`.
+    if (platform() === "linux") {
+      const file = defaultNodeKeyFile()
+      let nk: StepResult
+      if (existsSync(file)) nk = { ok: true, detail: file }
+      else if (linuxSecretService.available()) nk = { ok: true, detail: "Secret Service (keyring)" }
+      else nk = createNodeKeyWithSudo(file, randomBytes(32), false)
+        ? { ok: true, detail: file }
+        : { ok: false, detail: "no passwordless sudo — run once: iris vault key setup --node-key" }
+      out.steps.vault_keys = nk
+      say(nk.ok ? `  ✓ vault keys wrapped by ${nk.detail}` : dim(`  · vault keys: ${nk.detail}`))
+    }
 
     // 5. Start.
     let started: StepResult = { ok: false, detail: "skipped (--no-start)" }
