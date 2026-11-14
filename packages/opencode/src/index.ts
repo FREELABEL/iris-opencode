@@ -81,7 +81,7 @@ import { PlatformServicesCommand } from "./cli/cmd/platform-services"
 import { PlatformProductsCommand } from "./cli/cmd/platform-products"
 import { PlatformEventsCommand } from "./cli/cmd/platform-events"
 import { PlatformVenuesCommand } from "./cli/cmd/platform-venues"
-import { PlatformGeoCommand } from "./cli/cmd/platform-geo"
+import { PlatformTerraCommand } from "./cli/cmd/platform-terra"
 import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 import { PlatformMagazineCommand } from "./cli/cmd/platform-magazine"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
@@ -469,7 +469,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformProductsCommand))
   .command(reg(PlatformEventsCommand))
   .command(reg(PlatformVenuesCommand))
-  .command(reg(PlatformGeoCommand))
+  .command(reg(PlatformTerraCommand))
   .command(reg(PlatformProgramsCommand))
   .command(reg(PlatformMagazineCommand))
   .command(reg(PlatformRemotionCommand))
