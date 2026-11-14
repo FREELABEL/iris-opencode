@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, bold, dim, writeJson, failNoOp, IRIS_API, resolveUserId } from "./iris-api"
+import { addBody, removeQuery, mineQuery, formatMembers, membersSummary, type CampaignMember } from "./som-campaign-members"
 import { pickTemplateForCampaign, mergeTemplateCampaign, extractTemplates, confirmSenderStrategy, senderView, type SenderEntry } from "./som-registries"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
@@ -27,6 +28,10 @@ interface Campaign {
   color: string | null
   metadata: Record<string, unknown> | null
   is_live: boolean
+  /** Owner and reps (#193486). Absent on an older API. */
+  members?: CampaignMember[]
+  /** Only on `mine`: the caller's role on this campaign. */
+  my_role?: "owner" | "rep"
 }
 
 function fmtRow(c: Campaign): string {
@@ -105,6 +110,7 @@ const ShowCmd = cmd({
     if (c.ends_at)   console.log(`  ends:      ${c.ends_at}`)
     if (c.geo_tag)   console.log(`  geo:       ${c.geo_tag}`)
     if (c.parent_campaign_id) console.log(`  parent:    #${c.parent_campaign_id}`)
+    if (c.members) console.log(`  members:   ${membersSummary(c.members)} ${dim(`(iris som campaign members ${c.name})`)}`)
     console.log("")
   },
 })
@@ -328,6 +334,95 @@ const DeleteCmd = cmd({
   },
 })
 
+// ── members (#193486) ────────────────────────────────────────────────────────
+const MembersCmd = cmd({
+  command: "members <id-or-name> [action]",
+  describe: "list, add or remove a campaign's owner and reps (users on its board, or its agents)",
+  builder: (y) =>
+    y.positional("id-or-name", { type: "string", demandOption: true, describe: "campaign id or name" })
+     .positional("action", { type: "string", choices: ["list", "add", "remove"], default: "list" })
+     .option("user", { type: "string", describe: "user id or email (must be on the campaign's board)" })
+     .option("agent", { type: "string", describe: "agent id (must be one of the board's agents)" })
+     .option("role", { type: "string", choices: ["owner", "rep"], describe: "role when adding (default rep; one owner per campaign)" })
+     .option("json", { type: "boolean", describe: "JSON output" }),
+  async handler(args) {
+    const ref = args["id-or-name"] as string
+    const action = (args.action as string) ?? "list"
+    const path = `/api/v1/som/campaigns/${encodeURIComponent(ref)}/members`
+    const target = { user: args.user as string | undefined, agent: args.agent as string | undefined, role: args.role as string | undefined }
+
+    let res: Response
+    if (action === "add") {
+      const b = addBody(target)
+      if (!b.ok) { prompts.log.error(b.error); process.exitCode = 1; return }
+      await requireAuth()
+      res = await irisFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b.body) }, RAICHU)
+    } else if (action === "remove") {
+      const q = removeQuery(target)
+      if (!q.ok) { prompts.log.error(q.error); process.exitCode = 1; return }
+      await requireAuth()
+      res = await irisFetch(`${path}?${q.qs}`, { method: "DELETE" }, RAICHU)
+    } else {
+      await requireAuth()
+      res = await irisFetch(path, {}, RAICHU)
+    }
+
+    const body = (await res.json().catch(() => ({}))) as {
+      message?: string
+      data?: { members?: CampaignMember[]; member?: CampaignMember; created?: boolean; demoted?: { type: string; id: number }[] }
+    }
+    if (!res.ok) {
+      prompts.log.error(res.status === 404 && action !== "remove" ? `Campaign not found: ${ref}` : `API ${res.status}: ${body.message ?? ""}`)
+      process.exitCode = 1
+      return
+    }
+    if (args.json) { await writeJson(body.data ?? {}); return }
+
+    const m = body.data?.member
+    if (action === "add" && m) {
+      prompts.log.success(`${body.data?.created ? "Added" : "Updated"} ${m.name ?? `${m.type} #${m.id}`} as ${m.role} on ${ref}`)
+      for (const d of body.data?.demoted ?? []) prompts.log.info(`${d.type} #${d.id} moved from owner to rep`)
+    } else if (action === "remove") {
+      prompts.log.success(`Removed ${target.agent ? `agent #${target.agent}` : `user #${target.user}`} from ${ref}`)
+    }
+    console.log("")
+    console.log(bold(`Members of ${ref}`))
+    for (const line of formatMembers(body.data?.members ?? [])) console.log(line)
+    console.log("")
+  },
+})
+
+// ── mine (#193486) ───────────────────────────────────────────────────────────
+const MineCmd = cmd({
+  command: "mine",
+  describe: "campaigns you are on (owner or rep) — your queue; --agent for an agent's",
+  builder: (y) =>
+    y.option("agent", { type: "string", describe: "an agent id: that agent's campaigns instead of yours" })
+     .option("active", { type: "boolean", describe: "only active=true campaigns" })
+     .option("live", { type: "boolean", describe: "only campaigns within their time window" })
+     .option("json", { type: "boolean", describe: "JSON output" }),
+  async handler(args) {
+    await requireAuth()
+    const qs = mineQuery({ agent: args.agent as string | undefined, active: args.active as boolean, live: args.live as boolean })
+    const res = await irisFetch(`/api/v1/som/campaigns/mine${qs}`, {}, RAICHU)
+    if (!res.ok) {
+      prompts.log.error(res.status === 404 ? (args.agent ? `Agent not found: ${args.agent}` : "This API does not have campaign members yet (needs fl-api #193486).") : `API ${res.status}`)
+      process.exitCode = 1
+      return
+    }
+    const body = (await res.json()) as { data?: { campaigns?: Campaign[] } }
+    const list = body.data?.campaigns ?? []
+    if (args.json) { await writeJson(list); return }
+
+    console.log("")
+    console.log(bold(`${args.agent ? `Agent #${args.agent}'s` : "My"} campaigns ${dim("(" + list.length + ")")}`))
+    console.log("")
+    if (list.length === 0) console.log(dim("  none — ask a board owner or editor: iris som campaign members <campaign> add --user <you>"))
+    for (const c of list) console.log(`${fmtRow(c)}  ${dim(`${c.my_role ?? "?"} · ${membersSummary(c.members)}`)}`)
+    console.log("")
+  },
+})
+
 // ── parent: iris som campaign ─────────────────────────────────────────────────
 export const SomCampaignCommand = cmd({
   command: "campaign",
@@ -339,6 +434,8 @@ export const SomCampaignCommand = cmd({
      .command(UpdateCmd)
      .command(ExpireCmd)
      .command(DeleteCmd)
+     .command(MembersCmd)
+     .command(MineCmd)
      .demandCommand(1),
   handler: () => {},
 })
