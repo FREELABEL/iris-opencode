@@ -594,8 +594,13 @@ end tell`
   },
 })
 
-/** fl-api waits up to 15 s per bridge call (resolve, then send) and the daemon confirms for ≤ 8 s. */
-const ROUTER_TIMEOUT_MS = 45_000
+/**
+ * Must outlast the server, or the CLI hangs up on a send that is still in flight (a 499 at
+ * 44.9 s, #193288). fl-api: bridge check ≤ 5 s, then ONE node-rail send allowed 60 s
+ * (BridgeService::bridgeCall; fl-api#299), inside which the daemon confirms in chat.db ≤ 8 s.
+ * Worst case ≈ 65 s — 90 s leaves margin without leaving someone staring at a spinner for minutes.
+ */
+const ROUTER_TIMEOUT_MS = 90_000
 
 /** #193288: a send that did not happen exits 1 — never 0 with a "Sent"-shaped message. */
 function notSent(message: string): void {
