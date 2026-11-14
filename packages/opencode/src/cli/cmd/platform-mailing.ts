@@ -22,6 +22,7 @@ import {
   toCsv,
   type Friendly,
 } from "./mailing-core"
+import { overrideOptions, readOverride } from "./list-audit"
 
 /**
  * `iris mailing` — send one personalised email to each person on a list, through the
@@ -287,8 +288,12 @@ export async function runSend(args: any, deps: SendDeps = {}): Promise<void> {
       return
     }
 
+    const typed = readOverride(args, deps.interactive ?? !isNonInteractive())
+    if (!typed.ok) return fail({ code: "audit_override_invalid", message: typed.error })
+
     const body: Record<string, unknown> = { confirm: true }
     if (only.length) body.audiences = only
+    if (typed.override) body.audit_override = typed.override
     const r = await reply(await irisFetch(`/api/v1/mailings/${id}/send`, { method: "POST", body: JSON.stringify(body) }, IRIS_API))
     if (!r.ok) return failFrom(r, id)
 
@@ -565,6 +570,7 @@ const MailingSendCommand = cmd({
       .option("yes", { alias: "y", describe: "do not ask (required when there is no one to ask)", type: "boolean", default: false })
       // A literal flag: src/index.ts turns yargs' boolean-negation off, so --no-wait must be registered.
       .option("no-wait", { describe: "start the send and return at once instead of watching it", type: "boolean", default: false })
+      .options(overrideOptions)
       .option("json", jsonOpt)
       .example("iris mailing send 12 --audience members", "members first")
       .example("iris mailing send 12 --audience prospects", "then prospects, separately")
