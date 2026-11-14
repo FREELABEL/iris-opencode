@@ -31,7 +31,8 @@ interface DownloadResult {
   format: string
 }
 
-async function downloadFile(
+/** Exported for `iris peers pull --transcribe`, which pulls each post's audio the same way. */
+export async function downloadFile(
   ytdlp: string,
   url: string,
   outPath: string,
@@ -252,6 +253,21 @@ function extractViaOEmbed(url: string): any | null {
   return null
 }
 
+/** The post's author as yt-dlp reports it. Shared with `iris peers`. */
+export function metaAuthor(meta: any): string | null {
+  return meta?.uploader || meta?.channel || meta?.creator || null
+}
+
+/** The post's date as YYYY-MM-DD, from upload_date or the epoch timestamp. Shared with `iris peers`. */
+export function metaDate(meta: any): string | null {
+  const d = meta?.upload_date
+  if (typeof d === "string" && /^\d{8}$/.test(d)) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
+  if (typeof meta?.timestamp === "number" && Number.isFinite(meta.timestamp)) {
+    return new Date(meta.timestamp * 1000).toISOString().slice(0, 10)
+  }
+  return null
+}
+
 /**
  * Convert yt-dlp metadata to a clean markdown document.
  */
@@ -259,10 +275,8 @@ function metadataToMarkdown(meta: any, url: string): string {
   const lines: string[] = []
 
   const title = meta.title || meta.fulltitle || "Untitled"
-  const author = meta.uploader || meta.channel || meta.creator || "Unknown"
-  const date = meta.upload_date
-    ? `${meta.upload_date.slice(0, 4)}-${meta.upload_date.slice(4, 6)}-${meta.upload_date.slice(6, 8)}`
-    : meta.timestamp ? new Date(meta.timestamp * 1000).toISOString().slice(0, 10) : ""
+  const author = metaAuthor(meta) || "Unknown"
+  const date = metaDate(meta) || ""
   const platform = meta.extractor_key || meta.extractor || "Unknown"
   const description = meta.description || ""
 
