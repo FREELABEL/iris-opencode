@@ -1,5 +1,6 @@
 import type { Argv, InferredOptionTypes } from "yargs"
 import { Config } from "../config/config"
+import { LocalAuth } from "../server/local-auth"
 
 const options = {
   port: {
@@ -34,15 +35,10 @@ export function withNetworkOptions<T>(yargs: Argv<T>) {
 /**
  * IS THIS ADDRESS REACHABLE FROM ANOTHER MACHINE?
  *
- * Pure, so the rule can be proven without binding a socket. Loopback is the only safe default
- * because the session server has NO authentication of any kind — see assertBindIsSafe.
+ * Pure, so the rule can be proven without binding a socket.
  */
 export function isLoopbackHost(hostname: string): boolean {
-  const h = (hostname ?? "").trim().toLowerCase().replace(/^\[|\]$/g, "")
-  if (h === "localhost" || h === "::1" || h === "0:0:0:0:0:0:0:1") return true
-  // The whole 127.0.0.0/8 block, not just 127.0.0.1.
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
-  return false
+  return LocalAuth.isLoopbackName(hostname)
 }
 
 /** Env var carrying the shared secret, matching the daemon's bridge-token convention. */
@@ -55,7 +51,7 @@ export const TOKEN_ENV = "IRIS_SERVER_TOKEN"
  * check quietly becomes fail-open.
  */
 export function serverTokenPresent(): boolean {
-  const fromEnv = (process.env[TOKEN_ENV] ?? "").trim()
+  const fromEnv = (process.env[TOKEN_ENV] ?? process.env.OPENCODE_SERVER_PASSWORD ?? "").trim()
   if (fromEnv.length > 0) return true
 
   try {
@@ -73,8 +69,9 @@ export function serverTokenPresent(): boolean {
  * REFUSE TO PUT AN UNAUTHENTICATED SESSION API ON THE NETWORK (#182762).
  *
  * Every running IRIS TUI starts a full server in its worker, and that server exposes the entire
- * session surface — POST /session/:id/message, POST /session/:id/shell, the Pty routes — with no
- * authentication middleware anywhere. The ONLY thing protecting it is the loopback bind.
+ * session surface — POST /session/:id/message, POST /session/:id/shell, the Pty routes. Since
+ * #192113 it requires a token, but a random one nobody on another machine can be handed is not a
+ * way to reach it: a routable bind still has to be chosen, with a secret both ends know.
  *
  * `--mdns` silently flipped that bind to 0.0.0.0 AND advertised the service over Bonjour, so
  * anyone on the same wifi got unauthenticated remote code execution as the logged-in user, with
@@ -90,9 +87,7 @@ export function serverTokenPresent(): boolean {
  * scrolled is not a control. It is deliberately checked in the RESOLVER rather than at each call
  * site, so a new command that binds a server cannot forget it.
  *
- * This does NOT authenticate the loopback surface; a local process can still reach it. That is
- * the rest of #182762 and needs middleware in the server package. This closes the remote half,
- * which is the half a stranger on the network can reach.
+ * The token itself is enforced per request in server/local-auth.ts, on loopback too.
  */
 export function assertBindIsSafe(opts: { hostname: string; mdns?: boolean; tokenPresent: boolean }): void {
   if (isLoopbackHost(opts.hostname) || opts.tokenPresent) return
@@ -103,14 +98,14 @@ export function assertBindIsSafe(opts: { hostname: string; mdns?: boolean; token
 
   throw new Error(
     [
-      `Refusing to start: ${why}, and this server has no authentication.`,
+      `Refusing to start: ${why}, and no shared secret is configured.`,
       "",
-      "Anyone who can reach this address could read every session and POST to /session/:id/shell,",
-      "which is remote code execution as you. So a routable bind requires a shared secret.",
+      "Anyone with the secret can read every session and POST to /session/:id/shell, which is",
+      "remote code execution as you. So a routable bind takes a secret you chose on purpose.",
       "",
       "Fix it either way:",
       "  \u2022 keep it local   \u2014 drop --mdns / --hostname, or set server.hostname to 127.0.0.1",
-      `  \u2022 bind on purpose \u2014 put a secret in ${TOKEN_ENV} or ~/.iris/bridge-token, then retry`,
+      `  \u2022 bind on purpose \u2014 put a secret in OPENCODE_SERVER_PASSWORD, ${TOKEN_ENV} or ~/.iris/bridge-token, then retry`,
       "",
       "See bug #182762.",
     ].join("\n"),

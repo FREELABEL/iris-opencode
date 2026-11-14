@@ -114,3 +114,15 @@ export function stoppedWaitingNote(lastStatus: string | undefined): string {
   if (lastStatus === "dispatched") return "the task was sent to the node but has not reported starting; it was not cancelled"
   return "the task was last reported running on the node; it was not cancelled"
 }
+
+/**
+ * The script `iris hive run` sends. A POSIX node gets `#!/bin/bash`, plus `set -e` unless
+ * --no-fail-fast. A Windows node runs it as a .cmd file through cmd.exe, where neither line means
+ * anything: it printed "'#!' is not recognized" and "Environment variable -e not defined" ahead of
+ * every command, and there is no `set -e` to honour (#192109). A command that brings its own
+ * shebang is sent as written.
+ */
+export function hiveRunScript(command: string, o: { failFast: boolean; windows: boolean }): string {
+  if (o.windows || command.startsWith("#!")) return command
+  return o.failFast ? `#!/bin/bash\nset -e\n${command}` : `#!/bin/bash\n${command}`
+}

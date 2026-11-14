@@ -395,7 +395,9 @@ export function preflight(dir: string, node: string): string[] {
     const r = spawnSync(node, ["--check", join(dir, f)], { env: process.env, stdio: "pipe" })
     if (r.status !== 0) errors.push(`node --check ${f} failed: ${(r.stderr?.toString() || r.error?.message || "").trim().split("\n").slice(0, 4).join(" ")}`)
   }
-  if (existsSync(join(dir, "daemonctl"))) {
+  // daemonctl is the POSIX restart path. Windows restarts through its scheduled task and has no
+  // bash to parse it with: every update there failed here with "bash -n daemonctl failed" (#192109).
+  if (existsSync(join(dir, "daemonctl")) && !onWindows()) {
     const r = spawnSync("bash", ["-n", join(dir, "daemonctl")], { env: process.env, stdio: "pipe" })
     if (r.status !== 0) errors.push(`bash -n daemonctl failed: ${r.stderr?.toString().trim()}`)
   }
@@ -640,6 +642,63 @@ export function restartDaemon(bridge: string): { ok: boolean; out: string } {
   return { ok: r.status === 0, out: `${r.stdout?.toString() ?? ""}${r.stderr?.toString() ?? ""}${r.error ? r.error.message : ""}`.trim() }
 }
 
+// ─── Windows: the scheduled task, not daemonctl ─────────────────────────────────────────────
+//
+// A Windows node runs the daemon from a scheduled task (the installer's "IRIS Hive Node", or an
+// older hand-made "IRIS Hive Daemon") whose action cds into the bridge. Two things follow:
+//   1. The bridge cannot be renamed while the daemon runs — it is that process's working
+//      directory. So Windows STOPS, swaps, then STARTS, where POSIX swaps then restarts.
+//   2. Stop by killing the daemon's node process, never Stop-ScheduledTask. Measured on
+//      a Windows node (2026-11-10): a detached child of the daemon outlived the kill and the
+//      task's restart. The update helper is such a child; it must live to verify and roll back.
+
+export function onWindows(): boolean {
+  return (process.env.IRIS_PLATFORM_OVERRIDE || process.platform) === "win32"
+}
+
+export const WINDOWS_TASK_NAMES = ["IRIS Hive Node", "IRIS Hive Daemon"]
+
+const DAEMON_NODE_PROCS = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'daemon\\.js' }`
+
+const psList = (names: string[]) => names.map((n) => `'${n.replace(/'/g, "''")}'`).join(", ")
+
+export function windowsStopScript(names: string[] = WINDOWS_TASK_NAMES): string {
+  return [
+    `$n = 0`,
+    `${DAEMON_NODE_PROCS} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }`,
+    `for ($i = 0; $i -lt 20 -and (${DAEMON_NODE_PROCS}); $i++) { Start-Sleep -Milliseconds 500 }`,
+    // The task's cmd.exe also sits in the bridge; it exits once node does. Wait for it too.
+    `$tasks = @(${psList(names)}) | ForEach-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }`,
+    `for ($i = 0; $i -lt 20 -and ($tasks | Where-Object { (Get-ScheduledTask -TaskName $_.TaskName).State -eq 'Running' }); $i++) { Start-Sleep -Milliseconds 500 }`,
+    `"stopped $n daemon process(es)"`,
+  ].join("\n")
+}
+
+export function windowsStartScript(names: string[] = WINDOWS_TASK_NAMES): string {
+  const list = psList(names)
+  return [
+    `$t = @(${list}) | ForEach-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue } | Select-Object -First 1`,
+    `if (-not $t) { "no IRIS scheduled task (looked for ${names.join(", ")}) - start the daemon by hand: iris-daemon start"; exit 3 }`,
+    // The task stays Running until its cmd.exe notices node is gone; a Start then would be ignored.
+    `for ($i = 0; $i -lt 20 -and (Get-ScheduledTask -TaskName $t.TaskName).State -eq 'Running'; $i++) { Start-Sleep -Milliseconds 500 }`,
+    `Start-ScheduledTask -TaskName $t.TaskName`,
+    `"started scheduled task $($t.TaskName)"`,
+  ].join("\n")
+}
+
+function powershell(script: string): { ok: boolean; out: string } {
+  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+    env: process.env,
+    stdio: "pipe",
+    timeout: 60000,
+    windowsHide: true,
+  })
+  return { ok: r.status === 0, out: `${r.stdout?.toString() ?? ""}${r.stderr?.toString() ?? ""}${r.error ? r.error.message : ""}`.trim() }
+}
+
+export const stopDaemonWindows = () => powershell(windowsStopScript())
+export const startDaemonWindows = () => powershell(windowsStartScript())
+
 /** bridge → bridge.prev, bridge.next → bridge. One previous version is kept. */
 export function swapIn(p: UpdatePaths): void {
   rmSync(p.prev, { recursive: true, force: true })
@@ -857,6 +916,7 @@ export function decideLaunch(e: {
   userScopeWorks: () => boolean
   sudoScopeWorks: () => boolean
 }): LaunchPlan {
+  if (e.platform === "win32") return { kind: "setsid", prefix: [], reason: "win32: a detached process outlives the daemon's restart (the restart kills node.exe, not the scheduled task)" }
   if (e.platform !== "linux") return { kind: "setsid", prefix: [], reason: `${e.platform}: a setsid'd process leaves the daemon's process group` }
   const svc = systemdServiceOf(e.cgroup)
   if (!svc && !e.invocationId) return { kind: "setsid", prefix: [], reason: "not under systemd: setsid is enough (nohup daemon)" }
@@ -1000,12 +1060,19 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   const kept = yours.kept.length ? { kept: yours.kept } : {}
 
   phase("swapping", 60)
-  swapIn(p)
+  const win = onWindows()
+  if (win) log(`  stopped the daemon to free the bridge: ${stopDaemonWindows().out}`)
+  try {
+    swapIn(p)
+  } catch (e) {
+    if (win) startDaemonWindows() // the old tree is back in place; never leave the node with no daemon
+    throw e
+  }
   log(`  swapped: bridge → bridge.prev, bridge.next → bridge`)
 
   phase("restarting-new", 120 + H + 30)
-  const rs = restartDaemon(p.bridge)
-  log(`  daemonctl restart → ${rs.ok ? "exit 0" : "non-zero"}${rs.out ? `: ${rs.out.split("\n").slice(-2).join(" / ")}` : ""}`)
+  const rs = win ? startDaemonWindows() : restartDaemon(p.bridge)
+  log(`  ${win ? "scheduled task start" : "daemonctl restart"} → ${rs.ok ? "exit 0" : "non-zero"}${rs.out ? `: ${rs.out.split("\n").slice(-2).join(" / ")}` : ""}`)
   const obs = await waitHealth((o) => updateSucceeded(o, pending.target), pending.healthTimeoutSec * 1000)
   if (updateSucceeded(obs, pending.target)) {
     log(`  ✓ the running daemon reports ${short(pending.target)}`)
@@ -1015,9 +1082,10 @@ export async function finishUpdate(pendingFile: string, log: (s: string) => void
   const saw = obs.answered ? `it reported ${obs.commit ? short(obs.commit) : "no commit"}` : "it never answered /health"
   log(`  ✗ new code is not running after ${pending.healthTimeoutSec}s (${saw}) — rolling back`)
   phase("rolling-back", 120 + H + 30)
+  if (win) stopDaemonWindows()
   swapBack(p)
-  const rs2 = restartDaemon(p.bridge)
-  log(`  daemonctl restart (rollback) → ${rs2.ok ? "exit 0" : "non-zero"}`)
+  const rs2 = win ? startDaemonWindows() : restartDaemon(p.bridge)
+  log(`  ${win ? "scheduled task start" : "daemonctl restart"} (rollback) → ${rs2.ok ? "exit 0" : "non-zero"}`)
   const back = await waitHealth((o) => rollbackVerified(o, pending.previous, pending.target), pending.healthTimeoutSec * 1000)
   if (rollbackVerified(back, pending.previous, pending.target)) {
     return done({ ok: false, status: "rolled-back", from: pending.previous, to: pending.target, detail: `${saw}; the previous version is running again (failed tree kept in ${p.failed})`, ...kept })

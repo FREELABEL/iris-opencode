@@ -18,23 +18,35 @@ interface PendingMessage {
   preview: string
 }
 
-async function fetchPending(): Promise<PendingMessage[]> {
-  const res = await irisFetch("/api/v1/outreach/pending-approvals", {}, RAICHU)
+async function fetchPending(state?: "approved"): Promise<PendingMessage[]> {
+  const res = await irisFetch(`/api/v1/outreach/pending-approvals${state ? `?state=${state}` : ""}`, {}, RAICHU)
   if (!res.ok) { await handleApiError(res, "fetch pending approvals"); return [] }
   const body = (await res.json()) as any
   return body.data ?? []
 }
 
-async function reviewMessage(id: number, action: "approve" | "decline", notes?: string): Promise<boolean> {
+/** The status the server left the message in, or null if it refused. */
+async function reviewMessage(id: number, action: "approve" | "decline", notes?: string): Promise<string | null> {
   const res = await irisFetch(`/api/v1/outreach/messages/${id}/review`, {
     method: "POST",
     body: JSON.stringify({ action, notes: notes ?? null }),
   }, RAICHU)
   if (!res.ok) {
     await handleApiError(res, `${action} message #${id}`)
-    return false
+    return null
   }
-  return true
+  const body = (await res.json().catch(() => ({}))) as any
+  return body?.data?.status ?? "unknown"
+}
+
+/**
+ * What approving did. Approving records the decision and sends nothing (#191987); a server that has not
+ * taken that change yet still sends, and only the status it answers with can say which happened.
+ */
+function approvedLine(id: number, status: string): string {
+  return status === "sent"
+    ? `Message #${id} approved and sent`
+    : `Message #${id} approved. Not sent: ${highlight(`iris outreach approve send ${id}`)}`
 }
 
 function timeAgo(iso: string): string {
@@ -91,7 +103,7 @@ const OutreachApproveListCommand = cmd({
     }
 
     console.log()
-    prompts.log.info(`${bold(String(pending.length))} pending — approve with: ${highlight("iris outreach approve <id>")} or ${highlight("iris outreach approve --all")}`)
+    prompts.log.info(`${bold(String(pending.length))} pending — approve with: ${highlight("iris outreach approve approve <id>")} or ${highlight("iris outreach approve --all")}. Approving does not send.`)
     prompts.outro("Done")
   },
 })
@@ -99,7 +111,7 @@ const OutreachApproveListCommand = cmd({
 // ── APPROVE ───────────────────────────────────────────────────
 const OutreachApproveCommand = cmd({
   command: "approve [id]",
-  describe: "approve a pending outreach message (or --all)",
+  describe: "approve a pending outreach message (or --all). Records the decision and sends nothing",
   builder: (yargs) =>
     yargs
       .positional("id", { type: "number", describe: "message ID to approve" })
@@ -126,7 +138,7 @@ const OutreachApproveCommand = cmd({
         console.log(`  ${bold(`#${m.id}`)} ${m.subject ?? "(no subject)"} → ${m.to_email ?? "?"} (${lead}) ${dim(timeAgo(m.created_at))}`)
       }
       console.log()
-      prompts.log.info(`Approve one: ${highlight("iris outreach approve <id>")}`)
+      prompts.log.info(`Approve one: ${highlight("iris outreach approve approve <id>")}`)
       prompts.log.info(`Approve all: ${highlight("iris outreach approve --all")}`)
       prompts.outro("Done")
       return
@@ -143,21 +155,24 @@ const OutreachApproveCommand = cmd({
       }
 
       let approved = 0
+      let sent = 0
       for (const m of active) {
-        const ok = await reviewMessage(m.id, "approve", (args.notes as string) ?? undefined)
-        if (ok) {
+        const status = await reviewMessage(m.id, "approve", (args.notes as string) ?? undefined)
+        if (status) {
           approved++
+          if (status === "sent") sent++
           console.log(`  ${success("✓")} #${m.id} → ${m.to_email ?? "?"} (${m.subject ?? "no subject"})`)
         } else {
           console.log(`  ${dim("✗")} #${m.id} failed`)
         }
       }
+      if (approved > sent) prompts.log.info(`${approved - sent} approved and not sent. See them: ${highlight("iris outreach approve approved")}`)
       prompts.outro(`${approved}/${active.length} approved`)
     } else {
       prompts.intro(`◈  Approve #${messageId}`)
-      const ok = await reviewMessage(messageId!, "approve", (args.notes as string) ?? undefined)
-      if (ok) {
-        prompts.outro(`${success("✓")} Message #${messageId} approved and sent`)
+      const status = await reviewMessage(messageId!, "approve", (args.notes as string) ?? undefined)
+      if (status) {
+        prompts.outro(`${success("✓")} ${approvedLine(messageId!, status)}`)
       } else {
         prompts.outro("Failed")
       }
@@ -178,12 +193,67 @@ const OutreachDeclineCommand = cmd({
     UI.empty()
     const id = args.id as number
     prompts.intro(`◈  Decline #${id}`)
-    const ok = await reviewMessage(id, "decline", (args.reason as string) ?? undefined)
-    if (ok) {
+    const status = await reviewMessage(id, "decline", (args.reason as string) ?? undefined)
+    if (status) {
       prompts.outro(`${success("✓")} Message #${id} declined`)
     } else {
       prompts.outro("Failed")
     }
+  },
+})
+
+// ── APPROVED, NOT SENT ───────────────────────────────────────
+const OutreachApprovedListCommand = cmd({
+  command: "approved",
+  describe: "list messages a person approved that have not gone out",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const waiting = await fetchPending("approved")
+    if (args.json) {
+      await writeJson(waiting)
+      return
+    }
+    UI.empty()
+    prompts.intro("◈  Approved, not sent")
+    if (waiting.length === 0) {
+      prompts.log.info(dim("Nothing waiting"))
+      prompts.outro("Done")
+      return
+    }
+    for (const m of waiting) {
+      console.log(`  ${bold(`#${m.id}`)} ${m.status}  ${m.subject ?? "(no subject)"} → ${m.to_email ?? "?"}`)
+    }
+    console.log()
+    prompts.log.info(`Send one: ${highlight("iris outreach approve send <id>")}`)
+    prompts.log.info(dim("failed: it may have gone out. Check first, then --retry. pre_check: a send stopped midway; check before doing anything."))
+    prompts.outro("Done")
+  },
+})
+
+// ── SEND ──────────────────────────────────────────────────────
+const OutreachSendApprovedCommand = cmd({
+  command: "send <id>",
+  describe: "send one approved message now. This is a real send",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", demandOption: true, describe: "message ID" })
+      .option("retry", { type: "boolean", default: false, describe: "also send a message whose last send failed. It may already have gone out" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    const id = args.id as number
+    prompts.intro(`◈  Send #${id}`)
+    const res = await irisFetch(`/api/v1/outreach/messages/${id}/send`, {
+      method: "POST",
+      body: JSON.stringify(args.retry ? { retry: true } : {}),
+    }, RAICHU)
+    if (!res.ok) {
+      await handleApiError(res, `send message #${id}`)
+      prompts.outro("Not sent")
+      return
+    }
+    prompts.outro(`${success("✓")} Message #${id} sent`)
   },
 })
 
@@ -197,6 +267,8 @@ export const OutreachApproveGroup = cmd({
       .command(OutreachApproveListCommand)
       .command(OutreachApproveCommand)
       .command(OutreachDeclineCommand)
+      .command(OutreachApprovedListCommand)
+      .command(OutreachSendApprovedCommand)
       .option("all", { type: "boolean", default: false, describe: "approve all pending" })
       .option("id", { type: "number", describe: "message ID" }),
   async handler(args) {
