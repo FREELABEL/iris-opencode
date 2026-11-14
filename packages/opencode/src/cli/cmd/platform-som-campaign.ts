@@ -16,6 +16,8 @@ interface Campaign {
   name: string
   label: string | null
   bloq_id: string
+  /** The segment of the board this campaign targets; null = the whole board (#193484). */
+  segment_id?: number | null
   strategy_template_id: number | null
   strategy_name: string | null
   ig_account: string | null
@@ -92,6 +94,7 @@ const ShowCmd = cmd({
     console.log(bold(`#${c.id} ${c.name}`) + (c.label ? dim(` — ${c.label}`) : ""))
     console.log(`  status:    ${c.is_live ? "\x1b[32mlive\x1b[0m" : c.active ? "\x1b[33mactive (out of window)\x1b[0m" : "\x1b[90minactive\x1b[0m"}`)
     console.log(`  bloq:      ${c.bloq_id}`)
+    console.log(`  targets:   ${c.segment_id ? `segment #${c.segment_id} ${dim(`(iris segment show ${c.segment_id})`)}` : "the whole board"}`)
     console.log(`  strategy:  ${c.strategy_name ?? "(none)"} ${c.strategy_template_id ? dim(`[#${c.strategy_template_id}]`) : dim("[unresolved]")}`)
     // What the hive sender will actually use (#191686, #191770) — read from the same endpoint the
     // daemon writes into its cache before every batch, plus the opener of that strategy.
@@ -423,6 +426,43 @@ const MineCmd = cmd({
   },
 })
 
+// ── target ────────────────────────────────────────────────────────────────────
+// Point a campaign at a segment of its board instead of the whole board (#193484). The server
+// refuses a segment from another board, or one the caller cannot read, with a 422.
+const TargetCmd = cmd({
+  command: "target <campaign> <segment-id>",
+  describe: "target a segment of the campaign's board (\"none\" = the whole board again)",
+  builder: (y) =>
+    y.positional("campaign", { type: "string", demandOption: true, describe: "campaign id or name" })
+     .positional("segment-id", { type: "string", demandOption: true, describe: "segment id, or none" })
+     .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    const raw = String(args["segment-id"]).trim().toLowerCase()
+    const segmentId = raw === "none" || raw === "null" || raw === "board" ? null : Number(raw)
+    if (segmentId !== null && (!Number.isInteger(segmentId) || segmentId <= 0)) {
+      failNoOp("target", `segment id must be a number or "none", got "${args["segment-id"]}"`)
+    }
+    await requireAuth()
+    const ref = String(args.campaign)
+    const res = await irisFetch(`/api/v1/som/campaigns/${encodeURIComponent(ref)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segment_id: segmentId }),
+    }, RAICHU)
+    if (!res.ok) {
+      let msg = `API ${res.status}`
+      try { msg = ((await res.json()) as { message?: string }).message ?? msg } catch {}
+      if (args.json) console.log(JSON.stringify({ success: false, status: res.status, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+    const c = ((await res.json()) as { data?: { campaign?: Campaign } }).data?.campaign
+    if (args.json) { await writeJson(c ?? null); return }
+    prompts.log.success(c?.segment_id ? `${c.name} now targets segment #${c.segment_id} on board ${c.bloq_id}` : `${c?.name} now targets the whole board ${c?.bloq_id}`)
+  },
+})
+
 // ── parent: iris som campaign ─────────────────────────────────────────────────
 export const SomCampaignCommand = cmd({
   command: "campaign",
@@ -436,6 +476,7 @@ export const SomCampaignCommand = cmd({
      .command(DeleteCmd)
      .command(MembersCmd)
      .command(MineCmd)
+     .command(TargetCmd)
      .demandCommand(1),
   handler: () => {},
 })
