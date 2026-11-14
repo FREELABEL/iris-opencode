@@ -163,3 +163,12 @@ describe("boards from the platform", () => {
     expect(await readBoards()).toEqual({ ok: true, boards: [{ id: 905, name: "IRIS Drives", role: "owner", lists: 0 }] })
   })
 })
+
+import { pageUrl } from "./marketing-core"
+
+describe("page addresses (#188508)", () => {
+  test("IRIS never sends people to freelabel.net: pages are on heyiris.io", () => {
+    expect(pageUrl("spring-launch")).toBe("https://heyiris.io/p/spring-launch")
+    expect(pageUrl("Spring Launch")).toBe("https://heyiris.io/p/spring%20launch")
+  })
+})
