@@ -5,6 +5,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, IRIS_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
+import * as os from "os"
 import { firstArray } from "../../util/array"
 import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
 import { DatasetPullCommand, DatasetPushCommand, DatasetSyncCommand, DatasetStatusCommand, DatasetResolveCommand } from "./platform-atlas-dataset-sync"
@@ -100,6 +101,60 @@ function readJsonArg(v: string | undefined, label: string): { ok: boolean; value
     prompts.log.error(`Invalid JSON for --${label}`)
     return { ok: false }
   }
+}
+
+// ── --data: inline JSON or a file path (#193517) ─────────────────────────────
+//
+// `records upsert --data ~/x/rec.json` printed "Invalid JSON" then "Done" and exited 0: upsert
+// fed the PATH to JSON.parse, never read the file, and then reported like a success. Three runs
+// in a loop each tailed as "Done" and nothing was written. `add` read a path only when it ended
+// in .json, `update` never did. All three now go through here, and every failure exits non-zero.
+
+/** Read and parse a JSON file. Shared by `records add/update/upsert --data <path>` and `import`. */
+export function loadJsonFile(file: string): { ok: true; value: any } | { ok: false; error: string } {
+  let raw: string
+  try { raw = fs.readFileSync(file, "utf8") } catch (e: any) { return { ok: false, error: `Cannot read ${file}: ${e?.message ?? e}` } }
+  try { return { ok: true, value: JSON.parse(raw) } } catch (e: any) { return { ok: false, error: `Invalid JSON in ${file}: ${e?.message ?? e}` } }
+}
+
+function expandHome(p: string): string {
+  return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p
+}
+
+/**
+ * `--data` is "JSON data or path to .json file". Inline JSON (starts with { or [) is parsed;
+ * anything else that names an existing file is read (`@file` also works, and `~/` is expanded
+ * for `--data=~/x.json` where the shell does not). The value must be a JSON object.
+ */
+export function parseDataArg(v: string): { ok: true; value: Record<string, any> } | { ok: false; error: string } {
+  const raw = String(v ?? "").trim()
+  if (!raw) return { ok: false, error: "--data is empty" }
+  let value: any
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try { value = JSON.parse(raw) } catch (e: any) { return { ok: false, error: `Invalid JSON for --data: ${e?.message ?? e}` } }
+  } else {
+    const file = expandHome(raw.startsWith("@") ? raw.slice(1) : raw)
+    let isFile = false
+    try { isFile = fs.statSync(file).isFile() } catch { /* not a file */ }
+    if (isFile) {
+      const r = loadJsonFile(file)
+      if (!r.ok) return r
+      value = r.value
+    } else if (raw.startsWith("@") || /[\/]/.test(raw) || /\.json$/i.test(raw)) {
+      return { ok: false, error: `File not found for --data: ${file}` }
+    } else {
+      try { value = JSON.parse(raw) } catch (e: any) { return { ok: false, error: `Invalid JSON for --data (and no file named "${raw}"): ${e?.message ?? e}` } }
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, error: "--data must be a JSON object, e.g. '{\"name\": \"value\"}'" }
+  return { ok: true, value }
+}
+
+/** A failed command says so and exits non-zero. It never prints "Done". */
+function failed(message?: string): void {
+  if (message) prompts.log.error(message)
+  prompts.outro("Failed")
+  process.exitCode = 1
 }
 
 // ── SCHEMAS ──────────────────────────────────────────────────────────────────
@@ -1034,21 +1089,19 @@ const RecordsAddCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Add Record: ${args.schema}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let data: any = {}
     if (args.data) {
-      try {
-        if (args.data.endsWith(".json") && fs.existsSync(args.data)) {
-          data = JSON.parse(fs.readFileSync(args.data, "utf8"))
-        } else {
-          data = JSON.parse(args.data)
-        }
-      } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+      const parsed = parseDataArg(args.data)
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     } else {
       const raw = await prompts.text({ message: "Record data (JSON):", placeholder: '{"name": "value"}' })
-      if (prompts.isCancel(raw)) { prompts.outro("Done"); return }
-      try { data = JSON.parse(String(raw)) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+      if (prompts.isCancel(raw)) { prompts.outro("Cancelled"); process.exitCode = 1; return }
+      const parsed = parseDataArg(String(raw))
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     }
 
     const body: Record<string, any> = { data }
@@ -1059,14 +1112,13 @@ const RecordsAddCommand = cmd({
     spinner.start("Creating…")
     try {
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}`, { method: "POST", body: JSON.stringify(body) })
-      const ok = await handleApiError(res, "Create record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Create record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       const result = ((await res.json()) as any)?.data
       spinner.stop(`Created #${result?.id ?? "?"}`)
       prompts.outro(`iris atlas:datasets records show ${result?.id ?? ""} -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1079,16 +1131,18 @@ const RecordsUpdateCommand = cmd({
     y
       .positional("id", { type: "number", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s" })
-      .option("data", { type: "string", describe: "JSON data to merge" })
+      .option("data", { type: "string", describe: "JSON data to merge, or path to a .json file" })
       .option("set", { type: "string", describe: "key=value pairs (repeatable)", array: true }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Record #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let data: any = {}
     if (args.data) {
-      try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+      const parsed = parseDataArg(args.data)
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     }
     // Parse --set key=value pairs
     for (const s of args.set ?? []) {
@@ -1101,9 +1155,7 @@ const RecordsUpdateCommand = cmd({
     }
 
     if (Object.keys(data).length === 0) {
-      prompts.log.error("No data provided. Use --data '{...}' or --set key=value")
-      prompts.outro("Done")
-      return
+      return failed("No data provided. Use --data '{...}' (or a .json path) or --set key=value")
     }
 
     const spinner = prompts.spinner()
@@ -1113,13 +1165,12 @@ const RecordsUpdateCommand = cmd({
         method: "PATCH",
         body: JSON.stringify({ data }),
       })
-      const ok = await handleApiError(res, "Update record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Update record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       spinner.stop("Updated")
       prompts.outro(`iris atlas:datasets records show ${args.id} -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1137,7 +1188,7 @@ const RecordsDeleteCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Record #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     if (!args.force) {
       const confirm = await prompts.confirm({ message: `Delete record #${args.id}?` })
@@ -1149,13 +1200,12 @@ const RecordsDeleteCommand = cmd({
     try {
       const q = args.bloq != null ? `?bloq_id=${args.bloq}` : ""
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}${q}`, { method: "DELETE" })
-      const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       spinner.stop("Deleted")
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1168,15 +1218,16 @@ const RecordsUpsertCommand = cmd({
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
       .option("external-id", { type: "string", demandOption: true, describe: "external ID for dedup" })
-      .option("data", { type: "string", demandOption: true, describe: "JSON data" })
+      .option("data", { type: "string", demandOption: true, describe: "JSON data or path to .json file" })
       .option("bloq", { type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Upsert: ${args["external-id"]}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
-    let data: any
-    try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+    const parsed = parseDataArg(args.data)
+    if (!parsed.ok) return failed(parsed.error)
+    const data = parsed.value
 
     const body: Record<string, any> = { external_id: args["external-id"], data }
     if (args.bloq != null) body.bloq_id = args.bloq
@@ -1185,14 +1236,13 @@ const RecordsUpsertCommand = cmd({
     spinner.start("Upserting…")
     try {
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/upsert`, { method: "POST", body: JSON.stringify(body) })
-      const ok = await handleApiError(res, "Upsert"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Upsert"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       const result = ((await res.json()) as any)
-      spinner.stop(result?.message ?? "Done")
-      prompts.outro("Done")
+      spinner.stop(result?.message ?? "Upserted")
+      prompts.outro(`iris atlas:datasets records list -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1463,11 +1513,10 @@ const IMPORT_CHUNK = 500
  * worse than an import that failed.
  */
 function readImportRows(file: string, idField: string): { rows: any[]; error?: string } {
-  const raw = fs.readFileSync(file, "utf8")
-
   if (file.toLowerCase().endsWith(".json")) {
-    let parsed: any
-    try { parsed = JSON.parse(raw) } catch (e: any) { return { rows: [], error: `Invalid JSON: ${e.message}` } }
+    const loaded = loadJsonFile(file)
+    if (!loaded.ok) return { rows: [], error: loaded.error }
+    const parsed = loaded.value
     const list = Array.isArray(parsed) ? parsed : parsed?.records ?? parsed?.data
     if (!Array.isArray(list)) return { rows: [], error: "Expected a JSON array, or {records:[…]}" }
 
@@ -1484,6 +1533,7 @@ function readImportRows(file: string, idField: string): { rows: any[]; error?: s
   }
 
   // Minimal CSV: comma-separated, optional double quotes, no embedded newlines.
+  const raw = fs.readFileSync(file, "utf8")
   const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== "")
   if (lines.length < 2) return { rows: [], error: "CSV needs a header row and at least one data row" }
   const split = (line: string) =>
@@ -1526,10 +1576,10 @@ const ImportCommand = cmd({
     prompts.intro(`◈  Import → ${args.schema}`)
 
     const file = String(args.file)
-    if (!fs.existsSync(file)) { prompts.log.error(`File not found: ${file}`); prompts.outro("Done"); return }
+    if (!fs.existsSync(file)) return failed(`File not found: ${file}`)
 
     const { rows, error } = readImportRows(file, String(args["id-field"]))
-    if (error) { prompts.log.error(error); prompts.outro("Done"); return }
+    if (error) return failed(error)
 
     console.log(`  ${bold("Parsed")}    ${rows.length} row(s) from ${path.basename(file)}`)
     if (args["dry-run"]) {
@@ -1538,7 +1588,7 @@ const ImportCommand = cmd({
       prompts.outro("Done"); return
     }
 
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let created = 0, updated = 0, failedCount = 0, totalActive = 0
     const failures: any[] = []
@@ -1557,7 +1607,7 @@ const ImportCommand = cmd({
       const ok = await handleApiError(res, `Import chunk ${c + 1}/${chunks}`)
       // Stop on a failed chunk rather than pressing on — continuing would report a total that
       // mixes written and unwritten rows.
-      if (!ok) { prompts.outro("Done"); return }
+      if (!ok) return failed()
 
       const d = ((await res.json()) as any)?.data
       created += d?.created ?? 0
@@ -1570,7 +1620,8 @@ const ImportCommand = cmd({
 
     if (args.json) {
       await writeJson({ created, updated, failed_count: failedCount, total_active: totalActive, failed: failures })
-      prompts.outro("Done"); return
+      if (failedCount > 0) process.exitCode = 1
+      return
     }
 
     printDivider()
@@ -1587,6 +1638,7 @@ const ImportCommand = cmd({
       if (failures.length > 10) console.log(`    ${dim(`… ${failures.length - 10} more`)}`)
     }
     printDivider()
+    if (failedCount > 0) return failed(`${failedCount} row(s) were not written`)
     prompts.outro("Done")
   },
 })
