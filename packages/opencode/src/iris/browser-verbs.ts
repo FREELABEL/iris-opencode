@@ -340,7 +340,12 @@ function optionText(e: PageElement, i: number): string {
   return l && l !== v ? `${v} "${l.slice(0, 40)}"` : v
 }
 
-const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
+// combobox: a site-built picker (Google Flights' trip type, passengers, class) opens only on a click.
+// A native <select> is still refused below, pointing at select. gridcell/treeitem: calendar days, tree rows.
+const CLICKABLE = new Set([
+  "link", "button", "checkbox", "radio", "tab", "menuitem", "menuitemcheckbox", "menuitemradio",
+  "option", "switch", "combobox", "gridcell", "treeitem",
+])
 const TYPEABLE = new Set(["textbox", "searchbox", "combobox", "textarea"])
 const SELECTABLE = new Set(["combobox", "listbox"])
 const SCROLLS = ["up", "down", "top", "bottom"] as const
@@ -377,6 +382,9 @@ export function refuseTargetReason(els: PageElement[], ref: number, op: "click" 
   const el = els.find((e) => e.ref === ref)
   if (!el) return `there is no [${ref}] on this page — it lists ${els.length} elements; run elements again`
   if (!el.enabled) return `[${ref}] ${el.name} is disabled`
+  if (op === "click" && el.role === "combobox" && el.tag === "select") {
+    return `[${ref}] is a dropdown — use select with one of its options, not click`
+  }
   if (op === "click" && !CLICKABLE.has(el.role)) return `[${ref}] is a ${el.role} — not clickable`
   if (op === "type" && !TYPEABLE.has(el.role)) return `[${ref}] is a ${el.role} — not a text field`
   if (op === "select" && !(SELECTABLE.has(el.role) && el.options?.length)) {

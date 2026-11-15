@@ -228,6 +228,17 @@ describe("S3 — a target must be compatible with the operation", () => {
     expect(refuseTargetReason(els, 1, "click")).toBeNull()
   })
 
+  test("a site-built picker (combobox) is clickable; a native <select> points at select", () => {
+    const pickers = [
+      { ref: 3, role: "combobox", name: "Round trip", tag: "div", enabled: true, inViewport: true },
+      { ref: 4, role: "combobox", name: "Size", tag: "select", options: ["S", "M"], enabled: true, inViewport: true },
+      { ref: 5, role: "gridcell", name: "20", tag: "div", enabled: true, inViewport: true },
+    ]
+    expect(refuseTargetReason(pickers as any, 3, "click")).toBeNull()
+    expect(refuseTargetReason(pickers as any, 4, "click")).toContain("use select")
+    expect(refuseTargetReason(pickers as any, 5, "click")).toBeNull()
+  })
+
   test("typing into a link is refused", () => {
     expect(refuseTargetReason(els, 1, "type")).toContain("not a text field")
     expect(refuseTargetReason(els, 2, "type")).toBeNull()
