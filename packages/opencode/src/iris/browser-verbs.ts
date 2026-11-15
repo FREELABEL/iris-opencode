@@ -690,3 +690,31 @@ export function renderInspect(ref: number, i: {
   }
   return lines.join("\n")
 }
+
+/**
+ * The loop breaker (#193492). An agent shown the same thing tries the same thing: on Frontier
+ * (2026-11-14) it ran elements → click [1] → screenshot → reload for minutes, each answer
+ * identical. The model is not the problem; nothing told it the repetition was the problem.
+ *
+ * `history` is this chat's recent call signatures (action, ref, address, answer), newest last.
+ * The third identical one within the window gets a note that names the repetition and the ways
+ * out. Returns the note, or null.
+ */
+export const LOOP_WINDOW = 8
+export function loopNote(history: string[], sig: string): string | null {
+  const recent = history.slice(-LOOP_WINDOW)
+  const same = recent.filter((h) => h === sig).length
+  if (same < 2) return null
+  return (
+    `LOOP: this is the ${same + 1}${same + 1 === 3 ? "rd" : "th"} time this exact step gave this exact answer on this page. ` +
+    `Repeating it will not change the answer. Do something different: read the page (action=read) or find a word on it, ` +
+    `press Escape, scroll to the control, or open the next step's address directly. ` +
+    `If two different tries also fail, stop and tell the person what is in the way so they can do that one step in the Browser pane.`
+  )
+}
+export function loopSignature(action: string, ref: number | undefined, url: string | undefined, output: string): string {
+  const body = output.replace(/\n\npage: [^\n]*$/, "").slice(0, 2000)
+  let h = 0
+  for (let i = 0; i < body.length; i++) h = (h * 31 + body.charCodeAt(i)) | 0
+  return `${action}|${ref ?? ""}|${url ?? ""}|${h}`
+}
