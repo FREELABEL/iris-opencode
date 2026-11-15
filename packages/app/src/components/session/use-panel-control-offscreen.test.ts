@@ -72,21 +72,23 @@ describe("page commands for a chat that is not on screen (#193492)", () => {
     grantSite(SITE, true)
   })
 
-  test("a click runs in the chat's hidden page, without switching the person's screen", async () => {
+  test("a click runs in the chat's page laid out off screen, without switching the person's screen", async () => {
     const nb = fakeBrowser({ alive: true })
     const r = await run(nb, { action: "page", op: "eval", script: "click(7)", mode: "act" })
     expect(r.error).toBeUndefined()
     expect(nb.calls).toContain("eval click(7)")
     expect(nb.calls).not.toContain("showBrowser")
-    expect(nb.calls.some((c) => c.startsWith("show "))).toBe(false)
+    // shown only off screen, never where the person is looking, and never left hidden (#193598)
+    expect(nb.calls.filter((c) => c.startsWith("show ")).every((c) => c.endsWith("x=-30000"))).toBe(true)
+    expect(nb.calls).not.toContain("hide")
   })
 
-  test("a page closed to make room is woken off screen, then hidden, then used", async () => {
+  test("a page closed to make room is woken off screen and used there, not hidden (#193598)", async () => {
     const nb = fakeBrowser({ alive: false })
     const r = await run(nb, { action: "page", op: "eval", script: "read()", mode: "read" })
     expect(r.error).toBeUndefined()
     expect(nb.calls[0]).toBe("show - x=-30000")
-    expect(nb.calls[1]).toBe("hide")
+    expect(nb.calls).not.toContain("hide")
     expect(nb.calls).toContain("eval read()")
   })
 

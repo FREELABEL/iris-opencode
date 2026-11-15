@@ -412,20 +412,29 @@ export function markOnScreen(chat: string): () => void {
 
 /** Where a page the person can't see is laid out: off screen, at a normal desktop size. */
 const OFFSCREEN = { x: -30_000, y: 0, width: 1200, height: 860 }
+/** The engine waits 12 s at least for a page command: answer before it gives up. */
+export const OFFSCREEN_DEADLINE_MS = 11_000
 
-/** Bring a chat's page to life without showing it: hidden pages keep running; closed ones reopen. */
+/**
+ * Bring a chat's page to life without showing it to the person: SHOWN, but laid out off screen.
+ * Never left hidden while the agent uses it (#193598): WebKit throttles a hidden page's timers and
+ * stops its animation frames, so each read crept to the 10 s eval limit, three of them outlasted
+ * the engine's wait, and the agent heard nothing ("The desktop did not answer", 2026-11-14).
+ * The chat hides it again when the person opens and leaves it; until then it costs what a visible
+ * page costs, and the eight-page limit still closes the oldest.
+ */
 async function wakeHidden(nb: NativeBrowser, url?: string) {
   const alive = await nb.eval("true").then(
     () => true,
     () => false,
   )
   if (alive) {
+    await nb.show(undefined, OFFSCREEN)
     if (url) await nb.navigate(url)
     return
   }
-  // No page yet, or closed to make room: create it off screen (on `url`, or where it last was), then hide it.
+  // No page yet, or closed to make room: create it off screen (on `url`, or where it last was).
   await nb.show(url, OFFSCREEN)
-  await nb.hide()
   await new Promise((r) => setTimeout(r, 900))
 }
 
@@ -610,16 +619,26 @@ function listenOffScreen(sdk: ReturnType<ReturnType<typeof useServerSDK>>, platf
     handled.add(props.id)
     if (handled.size > 500) handled.delete(handled.values().next().value!)
     const ack = props.id
-    void runPageCommand(
-      {
-        chat,
-        platform,
-        onScreen: false,
-        reply: (r) => post({ ...state(chat), ack, ...r }),
-        showBrowser: () => undefined,
-      },
-      props.command as PageCommand,
+    // Always an answer (#193598): a step still running when the engine is about to give up says
+    // so, instead of the engine reporting a desktop that "did not answer". First answer wins.
+    let done = false
+    const reply = (r: { result?: string; error?: string }) => {
+      if (done) return
+      done = true
+      clearTimeout(late)
+      post({ ...state(chat), ack, ...r })
+    }
+    const late = setTimeout(
+      () =>
+        reply({
+          error: `the page in this chat's Browser (not on screen) did not finish within ${OFFSCREEN_DEADLINE_MS / 1000} s. It may still be loading: read it again, or ask the person to open this chat`,
+        }),
+      OFFSCREEN_DEADLINE_MS,
     )
+    void runPageCommand(
+      { chat, platform, onScreen: false, reply, showBrowser: () => undefined },
+      props.command as PageCommand,
+    ).catch((err) => reply({ error: err instanceof Error ? err.message : String(err) }))
   })
   background = { sdk, stop }
 }
