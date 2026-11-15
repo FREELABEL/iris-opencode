@@ -32,6 +32,11 @@ const STRESS: Record<string, string> = {
   "/banner": `<title>Book</title><body><h1>Find flights</h1><input aria-label="From"><input aria-label="To"><button>Search flights</button>
     <div id="onetrust-consent-sdk"><div class="ot-sdk-container" role="dialog" aria-label="Privacy" style="position:fixed;left:0;right:0;bottom:0;height:80px;background:#eee">
     <button>Accept all cookies</button><button>Cookie settings</button></div></div></body>`,
+  // Frontier's "Your Cart" (2026-11-14): a CLOSED drawer parked off-canvas that keeps
+  // aria-modal=true. Treated as the page, it hid the whole form behind one off-screen Close.
+  "/drawer": `<title>Your Info</title><body><h1>Passengers</h1><input aria-label="First name"><input aria-label="Last name"><button>Continue</button>
+    <div role="dialog" aria-modal="true" aria-label="Your cart" style="position:fixed;top:0;left:100%;width:380px;height:100vh;background:#fff">
+    <div role="button" tabindex="0" aria-label="Close">x</div><button>Continue Booking</button></div></body>`,
   // Radix/MUI: opens on pointerdown and ignores click. react-select: mousedown only.
   "/pointerdown": `<title>pd</title><button onpointerdown="document.title='opened'">Open menu</button>
     <div role="button" tabindex="0" onmousedown="this.textContent='airport open'">Choose airport</div>
@@ -349,6 +354,14 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(modal.every((e) => e.inDialog)).toBe(true)
     expect(session.lastListing?.behind).toBe(220)
     expect(listingFooter(modal.length, session.lastListing)).toContain("220 more controls are BEHIND the pop-up")
+  }, 60_000)
+
+  test("a modal drawer parked off screen does not hide the page (#193492)", async () => {
+    await session.open(`${url}drawer`)
+    const els = await session.elements()
+    expect(els.some((e) => e.inDialog)).toBe(false)
+    expect(els.map((e) => e.name)).toEqual(expect.arrayContaining(["First name", "Last name", "Continue"]))
+    expect(session.lastListing?.behind).toBeUndefined()
   }, 60_000)
 
   test("a click is a mouse: pointerdown/mousedown widgets open, and the click fires exactly once (#193355)", async () => {

@@ -384,7 +384,16 @@ export abstract class ScriptedPage {
       // the page (Southwest: a OneTrust banner hid 157 of 159 controls, #193355).
       const H = innerHeight
       const W = innerWidth
+      // On screen at all: a closed drawer parked off-canvas keeps aria-modal=true (Frontier's
+      // "Your Cart", 2026-11-14) and must not hide the whole page behind one off-screen Close.
+      const onScreen = (d) => {
+        const r = rectOf(d)
+        const w = Math.min(r.right, W) - Math.max(r.left, 0)
+        const h = Math.min(r.bottom, H) - Math.max(r.top, 0)
+        return w >= 40 && h >= 40
+      }
       const blocking = (d) => {
+        if (!onScreen(d)) return false
         if (d.getAttribute('aria-modal') === 'true' || d.getAttribute('role') === 'alertdialog') return true
         try { if (d.matches('dialog:modal')) return true } catch (e) {}
         const r = rectOf(d)
@@ -393,11 +402,17 @@ export abstract class ScriptedPage {
         return !!hit && within(d, hit)
       }
       const modals = all.filter((el) => el.matches('[aria-modal=true], dialog[open], [role=dialog], [role=alertdialog]') && shown(el) && blocking(el))
-      const root = modals.length ? modals[modals.length - 1] : null
+      let root = modals.length ? modals[modals.length - 1] : null
 
-      // 1. Every control on the page, in document order.
-      const found = []
+      // 1. Every control on the page, in document order. If the pop-up offers nothing a person
+      // could press on screen, it is not what stands between them and the page: list everything
+      // (an agent shown one off-screen Close looped on it for minutes, 2026-11-14).
+      const inView = (x) => { const r = rectOf(x); return r.bottom > 0 && r.top < H && r.right > 0 && r.left < W }
+      let found = []
       let behind = 0
+      for (let pass = 0; pass < 2; pass++) {
+      found = []
+      behind = 0
       for (const el of all) {
         let entry = null
         if (el.matches(SEL)) {
@@ -411,6 +426,9 @@ export abstract class ScriptedPage {
         if (!entry) continue
         if (root && !within(root, el)) behind++
         else found.push(entry)
+      }
+      if (!root || found.some((f) => inView(f.box))) break
+      root = null
       }
 
       // 2. Numbers that stay put. A control keeps the number it was given on an earlier listing,

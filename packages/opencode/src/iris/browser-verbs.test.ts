@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  loopNote,
+  loopSignature,
   VERBS,
   clampPageText,
   describeChange,
@@ -520,5 +522,23 @@ describe("#193442 — a landing on another page, and a field that did not take t
     // The field went away (the page moved on), or it is a password: nothing is said or echoed.
     expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: null })).toBeUndefined()
     expect(typeReadbackNote({ ref: 4, typed: "hunter2", shown: "x", secret: true })).toBeUndefined()
+  })
+})
+
+describe("#193492 — the loop breaker", () => {
+  test("the third identical step and answer on the same page says LOOP; a different answer does not", () => {
+    const a = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)\n\npage: https://x.test/p")
+    const b = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)")
+    expect(a).toBe(b) // the trailing page line does not make two answers different
+    expect(loopNote([], a)).toBeNull()
+    expect(loopNote([a], a)).toBeNull()
+    expect(loopNote([a, "elements|x", a], a)).toContain("LOOP")
+    const other = loopSignature("click", 1, "https://x.test/p", "navigated to /next")
+    expect(loopNote([a, a], other)).toBeNull()
+  })
+  test("it forgets steps older than the window", () => {
+    const a = loopSignature("screenshot", undefined, "https://x.test/p", "Here is the Browser pane")
+    const old = [a, a, ...Array.from({ length: 8 }, (_, i) => `x${i}`)]
+    expect(loopNote(old, a)).toBeNull()
   })
 })
