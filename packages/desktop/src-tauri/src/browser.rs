@@ -320,6 +320,8 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
     let mut b = WebviewBuilder::new(label, WebviewUrl::External(url))
         // A form that POSTs into a new window submits in this tab, so its data survives (#193441).
         .initialization_script(include_str!("browser_page.js"))
+        // The agent's page keeps running while IRIS is covered (#193492, keep_awake.rs).
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(move |url| {
             let ok = navigation_allowed(url, engine_port);
             if !ok {
@@ -458,7 +460,8 @@ pub async fn browser_show(app: AppHandle, chat: String, url: Option<String>, bou
     let window = app.get_window("main").ok_or("no main window")?;
     let cookies = IMPORTED.lock().map(|c| c.clone()).unwrap_or_default();
     if cookies.is_empty() {
-        window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
+        let w = window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
+        let _ = w.with_webview(crate::keep_awake::apply);
         return Ok(());
     }
     // macOS 13: this page has its own cookie jar, so it gets the Chrome sign-ins here. NEVER from
@@ -469,6 +472,7 @@ pub async fn browser_show(app: AppHandle, chat: String, url: Option<String>, bou
     // navigation is queued after them, so the page loads signed in.
     let blank = Url::parse("about:blank").expect("static url");
     let w = window.add_child(builder(&app, &label, blank), pos, size).map_err(|e| e.to_string())?;
+    let _ = w.with_webview(crate::keep_awake::apply);
     std::thread::spawn(move || {
         for c in cookies {
             let _ = w.set_cookie(c);
