@@ -40,7 +40,7 @@ const STRESS: Record<string, string> = {
   // Frontier's flight select (2026-11-16): each fare is a pointer-cursor box; its radio sits in a
   // display:none wrapper, and a click on the box picks the fare.
   "/farebox": `<title>Select</title><body><a href="#d">+Details</a><div class="row">
-    ${[["12:22 PM", "$375"], ["6:00 AM", "$402"]].map(([t, p]) => `<div class="fare" style="cursor:pointer;display:inline-block;width:170px;height:160px" data-t="${t}">
+    ${[["12:22 PM", "$375"], ["6:00 AM", "$402"]].map(([t, p]) => `<a href="#c" style="display:none">Basic</a><div class="fare" style="cursor:pointer;display:inline-block;width:170px;height:160px" data-t="${t}">
       <div>ROUND-TRIP</div><div>${p}</div><div>Standard</div>
       <div style="display:none"><label><span hidden>Select standard fare</span><input type="radio" name="f" aria-label="Standard fare ${p} departs at ${t}"></label></div></div>`).join("")}
     </div><script>for (const f of document.querySelectorAll('.fare')) f.addEventListener('click', () => { document.title = 'picked ' + f.dataset.t })</script></body>`,
@@ -374,9 +374,9 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
   test("a fare box whose radio is hidden is listed, named by that radio, and clickable (#193492)", async () => {
     await session.open(`${url}farebox`)
     const els = await session.elements()
-    const fare = els.find((e) => e.name.startsWith("Standard fare $375 departs at 12:22 PM"))
+    const fare = els.find((e) => e.name.startsWith("Basic: Standard fare $375 departs at 12:22 PM"))
     expect(fare).toBeDefined()
-    expect(els.some((e) => e.name.startsWith("Standard fare $402"))).toBe(true)
+    expect(els.some((e) => e.name.startsWith("Basic: Standard fare $402"))).toBe(true)
     await session.clickRef(fare!.ref)
     expect((await session.where()).title).toBe("picked 12:22 PM")
   }, 60_000)

@@ -372,7 +372,12 @@ export abstract class ScriptedPage {
       // 12:22 PM arrives at 2:17 PM" beats the box's own "ROUND-TRIP $373 Discount Den $375".
       const hiddenChoiceName = (el) => {
         const named = Array.from(el.querySelectorAll('input[type=radio], input[type=checkbox]')).map((x) => clean(x.getAttribute('aria-label') || byIds(x, 'aria-labelledby'))).filter(Boolean)
-        return named.length === 1 ? named[0].slice(0, 120) : ''
+        if (named.length !== 1) return ''
+        // Frontier names each column ("Basic", "Bizfare") in a short title just before the box;
+        // without it every column of a flight reads the same "Standard fare $375 …".
+        const prev = el.previousElementSibling
+        const cap = prev ? clean(prev.innerText || prev.textContent) : ''
+        return ((cap && cap.length <= 24 && !/\d/.test(cap) ? cap + ': ' : '') + named[0]).slice(0, 120)
       }
       const SKIP_TAG = /^(html|body|head|script|style|noscript|template|svg|path|g|use|iframe|img|br|hr)$/i
       const isArea = (el) => {
