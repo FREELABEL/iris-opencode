@@ -37,6 +37,13 @@ const STRESS: Record<string, string> = {
   "/drawer": `<title>Your Info</title><body><h1>Passengers</h1><input aria-label="First name"><input aria-label="Last name"><button>Continue</button>
     <div role="dialog" aria-modal="true" aria-label="Your cart" style="position:fixed;top:0;left:100%;width:380px;height:100vh;background:#fff">
     <div role="button" tabindex="0" aria-label="Close">x</div><button>Continue Booking</button></div></body>`,
+  // Frontier's flight select (2026-11-16): each fare is a pointer-cursor box; its radio sits in a
+  // display:none wrapper, and a click on the box picks the fare.
+  "/farebox": `<title>Select</title><body><a href="#d">+Details</a><div class="row">
+    ${[["12:22 PM", "$375"], ["6:00 AM", "$402"]].map(([t, p]) => `<div class="fare" style="cursor:pointer;display:inline-block;width:170px;height:160px" data-t="${t}">
+      <div>ROUND-TRIP</div><div>${p}</div><div>Standard</div>
+      <div style="display:none"><label><span hidden>Select standard fare</span><input type="radio" name="f" aria-label="Standard fare ${p} departs at ${t}"></label></div></div>`).join("")}
+    </div><script>for (const f of document.querySelectorAll('.fare')) f.addEventListener('click', () => { document.title = 'picked ' + f.dataset.t })</script></body>`,
   // Radix/MUI: opens on pointerdown and ignores click. react-select: mousedown only.
   "/pointerdown": `<title>pd</title><button onpointerdown="document.title='opened'">Open menu</button>
     <div role="button" tabindex="0" onmousedown="this.textContent='airport open'">Choose airport</div>
@@ -362,6 +369,16 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(els.some((e) => e.inDialog)).toBe(false)
     expect(els.map((e) => e.name)).toEqual(expect.arrayContaining(["First name", "Last name", "Continue"]))
     expect(session.lastListing?.behind).toBeUndefined()
+  }, 60_000)
+
+  test("a fare box whose radio is hidden is listed, named by that radio, and clickable (#193492)", async () => {
+    await session.open(`${url}farebox`)
+    const els = await session.elements()
+    const fare = els.find((e) => e.name.startsWith("Standard fare $375 departs at 12:22 PM"))
+    expect(fare).toBeDefined()
+    expect(els.some((e) => e.name.startsWith("Standard fare $402"))).toBe(true)
+    await session.clickRef(fare!.ref)
+    expect((await session.where()).title).toBe("picked 12:22 PM")
   }, 60_000)
 
   test("a click is a mouse: pointerdown/mousedown widgets open, and the click fires exactly once (#193355)", async () => {

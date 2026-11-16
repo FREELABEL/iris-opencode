@@ -13,9 +13,9 @@
   align-items: stretch;
   min-width: 0;
   width: 100%;
-  padding: 0 0 0 10px;
+  /* No coloured bar on the row's edge: the ⊘ icon in the danger colour says it failed. */
+  padding: 0;
   gap: 8px;
-  border-left: 2px solid var(--tec-border);
   font-variant-numeric: tabular-nums;
 
   [data-slot="tool-error-card-trigger"] {
