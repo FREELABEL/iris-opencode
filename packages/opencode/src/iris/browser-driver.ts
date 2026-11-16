@@ -360,6 +360,25 @@ export abstract class ScriptedPage {
       // (Southwest's fare cells, #193331). A person knows it by the pointer cursor, so do we.
       // Only the OUTERMOST such box, and never one that holds or sits in a real control — that
       // control is listed itself.
+      // A control a person can see. Frontier's fare boxes (2026-11-16) hold their radio inside a
+      // display:none wrapper: the box is what you click, and it was skipped for "holding a real
+      // control" nobody can see, so the agent could not pick a fare at all.
+      const holdsShownControl = (el) => Array.from(el.querySelectorAll(SEL)).some((x) => {
+        if (shown(x) && !tiny(x)) return true
+        const l = labelOf(x)
+        return !!l && within(el, l) && shown(l) && !tiny(l)
+      })
+      // ...and that hidden radio usually says what the box is: "Standard fare $375 departs at
+      // 12:22 PM arrives at 2:17 PM" beats the box's own "ROUND-TRIP $373 Discount Den $375".
+      const hiddenChoiceName = (el) => {
+        const named = Array.from(el.querySelectorAll('input[type=radio], input[type=checkbox]')).map((x) => clean(x.getAttribute('aria-label') || byIds(x, 'aria-labelledby'))).filter(Boolean)
+        if (named.length !== 1) return ''
+        // Frontier names each column ("Basic", "Bizfare") in a short title just before the box;
+        // without it every column of a flight reads the same "Standard fare $375 …".
+        const prev = el.previousElementSibling
+        const cap = prev ? clean(prev.innerText || prev.textContent) : ''
+        return ((cap && cap.length <= 24 && !/\d/.test(cap) ? cap + ': ' : '') + named[0]).slice(0, 120)
+      }
       const SKIP_TAG = /^(html|body|head|script|style|noscript|template|svg|path|g|use|iframe|img|br|hr)$/i
       const isArea = (el) => {
         if (SKIP_TAG.test(el.tagName)) return false
@@ -367,7 +386,7 @@ export abstract class ScriptedPage {
         if (!own) return false
         const p = el.parentElement
         if (p && p !== el.ownerDocument.body && cs(p).cursor === 'pointer' && !p.matches(SEL)) return false
-        if (el.closest(SEL) || el.querySelector(SEL)) return false
+        if (el.closest(SEL) || holdsShownControl(el)) return false
         const r = el.getBoundingClientRect()
         if (r.width < 8 || r.height < 8) return false
         if (r.width * r.height > innerWidth * innerHeight * 0.5) return false // a page-sized wrapper is not a button
@@ -421,7 +440,7 @@ export abstract class ScriptedPage {
           const box = isChoice && (!shown(el) || tiny(el)) && label && shown(label) ? label : el
           if (shown(box)) entry = { el, box, label, area: false }
         } else if (isArea(el) && shown(el)) {
-          entry = { el, box: el, label: null, area: true }
+          entry = { el, box: el, label: null, area: true, name: hiddenChoiceName(el) }
         }
         if (!entry) continue
         if (root && !within(root, el)) behind++
@@ -486,13 +505,13 @@ export abstract class ScriptedPage {
           const keep = new Set([...fs.filter((f) => f.zone === 'view'), ...fs].slice(0, 12))
           const gone = fs.filter((f) => !keep.has(f))
           gone.forEach((f) => drop.add(f))
-          const names = fs.map((f) => nameOf(f.el, f.label)).filter(Boolean)
+          const names = fs.map((f) => (f.name || nameOf(f.el, f.label))).filter(Boolean)
           collapsed.push({ role, count: gone.length, first: (names[0] || '').slice(0, 40), last: (names[names.length - 1] || '').slice(0, 40) })
         }
         return list.filter((f) => !drop.has(f))
       }
       const matches = QUERY
-        ? ordered.filter((f) => (nameOf(f.el, f.label) + ' ' + clean(f.box.innerText).slice(0, 200)).toLowerCase().includes(QUERY))
+        ? ordered.filter((f) => ((f.name || nameOf(f.el, f.label)) + ' ' + clean(f.box.innerText).slice(0, 200)).toLowerCase().includes(QUERY))
         : squeeze(ordered)
       const picked = matches.slice(0, LIMIT)
       if (INCLUDE > 0 && !picked.some((f) => f.ref === INCLUDE)) {
@@ -524,7 +543,7 @@ export abstract class ScriptedPage {
         }
         return ''
       }
-      const names = picked.map((f) => nameOf(f.el, f.label))
+      const names = picked.map((f) => (f.name || nameOf(f.el, f.label)))
       const seen = {}
       for (const n of names) seen[n.toLowerCase()] = (seen[n.toLowerCase()] || 0) + 1
       picked.forEach((f, i) => {
