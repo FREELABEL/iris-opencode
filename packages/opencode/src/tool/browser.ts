@@ -11,6 +11,7 @@ import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
+  landedState,
   errorPageReason,
   RECOVER,
   findInPage,
@@ -397,7 +398,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!before.ok) return yield* Effect.fail(new Error(before.message))
             const done = yield* attempt(() => page.scroll(dir))
             if (!done.ok) return yield* Effect.fail(new Error(done.message))
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
             const changed = describeChange(before.value, after.value)
 
@@ -425,7 +426,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!set.value) {
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
 
             return {
@@ -472,7 +473,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!pressed.value) {
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
             const offOrigin = refuseNavigationReason(before.value.url, after.value.url)
             if (offOrigin && after.value.url !== before.value.url) {
@@ -531,7 +532,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
 
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
 
             // A click may take the page somewhere the agent never chose. Same rule as open: the

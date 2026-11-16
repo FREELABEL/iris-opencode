@@ -548,6 +548,21 @@ export function errorPageReason(after: PageState): string | undefined {
   return undefined
 }
 
+/**
+ * The page's state after an action, read again once if it first looks like an error page
+ * (#193492). On 2026-11-16 Google Flights' "Select flight" went on to its return-flight page,
+ * still loading, and the first read called it an error. The agent believed it, left Google and
+ * re-entered the whole trip by hand on the airline's own site — the slowest part of the run.
+ */
+export const LANDING_RECHECK_MS = 2000
+export async function landedState<T extends PageState>(read: () => Promise<T>, before: PageState, waitMs = LANDING_RECHECK_MS): Promise<T> {
+  const first = await read()
+  const moved = before.url !== first.url || before.title !== first.title
+  if (!moved || !errorPageReason(first)) return first
+  await new Promise((r) => setTimeout(r, waitMs))
+  return read().catch(() => first)
+}
+
 /** Said with a failed landing: what to do instead of trying the same thing again. */
 export const RECOVER =
   "Do not repeat the same step: it will fail the same way. Try another route — go back to the page before ({\"action\":\"open\",\"url\":\"<that address>\"}) and pick a different control, search the page ({\"action\":\"elements\",\"query\":\"…\"}), or open the site's own address directly. If two routes fail, stop and tell the person in one line what you got done and what step they need to take."
