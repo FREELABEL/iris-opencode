@@ -6,6 +6,7 @@ import {
   clampPageText,
   describeChange,
   errorPageReason,
+  landedState,
   findInPage,
   humanCheckAdvice,
   humanCheckReason,
@@ -540,5 +541,31 @@ describe("#193492 — the loop breaker", () => {
     const a = loopSignature("screenshot", undefined, "https://x.test/p", "Here is the Browser pane")
     const old = [a, a, ...Array.from({ length: 8 }, (_, i) => `x${i}`)]
     expect(loopNote(old, a)).toBeNull()
+  })
+})
+
+describe("a landing that first looks like an error is read again (#193492)", () => {
+  const before = { url: "https://www.google.com/travel/flights/search?a", title: "Houston to Los Angeles | Google Flights", textLength: 9000, textHash: "1", values: {}, head: "Explore Flights" }
+  const loading = { ...before, url: "https://www.google.com/travel/flights/search?b", title: "Los Angeles to Houston | Google Flights", textLength: 300, textHash: "2", head: "Something went wrong" }
+  const loaded = { ...loading, textLength: 12000, textHash: "3", head: "Explore Flights Hotels Returning flights" }
+
+  test("Google's return-flight page, still loading, is not reported as an error once it loads", async () => {
+    const reads = [loading, loaded]
+    const after = await landedState(async () => reads.shift()!, before, 1)
+    expect(after).toBe(loaded)
+    expect(describeChange(before, after)).not.toContain("FAILED")
+  })
+
+  test("a real error page is still an error after the second look", async () => {
+    const err = { ...loading, title: "Error 404 (Not Found)!!1", head: "404. That’s an error." }
+    const after = await landedState(async () => err, before, 1)
+    expect(describeChange(before, after)).toContain("FAILED")
+  })
+
+  test("a normal landing is read once, with no wait", async () => {
+    let n = 0
+    const after = await landedState(async () => (n++, loaded), before, 10_000)
+    expect(n).toBe(1)
+    expect(after).toBe(loaded)
   })
 })
