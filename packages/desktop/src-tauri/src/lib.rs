@@ -8,6 +8,7 @@ mod engine_auth;
 mod engine_supervisor;
 mod google_signin;
 mod history_home;
+mod keep_awake;
 mod login;
 mod onboarding;
 mod window_customizer;
@@ -1192,6 +1193,8 @@ pub fn run() {
                           .inner_size(size.width as f64, size.height as f64)
                           .decorations(true)
                           .zoom_hotkeys_enabled(true)
+                          // A covered window keeps running its agent (#193492, keep_awake.rs).
+                          .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
                           .disable_drag_drop_handler()
                           .initialization_script(format!(
                               r#"
@@ -1212,7 +1215,9 @@ pub fn run() {
                           .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
                   }
 
-                  window_builder.build().expect("Failed to create window");
+                  let main = window_builder.build().expect("Failed to create window");
+                  let _ = main.with_webview(keep_awake::apply);
+                  keep_awake::process();
               });
             }
 
