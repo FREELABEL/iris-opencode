@@ -378,6 +378,61 @@ export interface IrisCardEditorProps {
    * record a meeting straight into this card (#190041). Without it, no microphone is drawn.
    */
   recorderUrl?: string
+  /**
+   * Where the card shows (#193330). "dialog" (default): the pop-up over the app. "panel": inside
+   * the side panel, in place of the board, so the chat stays on screen. Same editor either way.
+   */
+  mode?: "dialog" | "panel"
+  /** Panel: close the card and go back to the board. Dialog: unused (the dialog closes itself). */
+  onClose?: () => void
+  /** Panel: open this card as the pop-up instead. */
+  onPopOut?: () => void
+  /** Dialog: put this card back in the side panel instead. */
+  onDock?: () => void
+  /** Panel: step to the previous (-1) or next (1) card on the board. */
+  onStep?: (dir: -1 | 1) => void
+  /** Panel: where this card sits on the board, for the step buttons ("3 of 12"). */
+  position?: { index: number; total: number }
+  /** Panel: what the back button returns to, e.g. the board's name. */
+  backLabel?: string
+}
+
+/**
+ * The card's frame (#193330): the pop-up, or a plain box filling the side panel. The panel box
+ * carries the same data-slots as the dialog, so the editor's own styles apply to both.
+ */
+function CardFrame(props: {
+  panel: boolean
+  class: string
+  classList: Record<string, boolean>
+  title: JSX.Element
+  action: JSX.Element
+  children: JSX.Element
+}) {
+  return (
+    <Show
+      when={props.panel}
+      fallback={
+        <Dialog size="x-large" class={props.class} classList={props.classList} title={props.title} action={props.action}>
+          {props.children}
+        </Dialog>
+      }
+    >
+      <div
+        data-component="iris-card-panel"
+        data-slot="dialog-content"
+        class={`${props.class} iris-card--panel`}
+        role="region"
+        aria-label="Card"
+      >
+        <div data-slot="dialog-header">
+          <div data-slot="dialog-title">{props.title}</div>
+          {props.action}
+        </div>
+        <div data-slot="dialog-body">{props.children}</div>
+      </div>
+    </Show>
+  )
 }
 
 /**
@@ -395,6 +450,9 @@ type SideTab = "details" | "sharing" | "tasks" | "chat"
 
 export function IrisCardEditor(props: IrisCardEditorProps) {
   const dialog = useDialog()
+  const panel = () => props.mode === "panel"
+  /** The × and "Discard and close": the panel goes back to the board; the pop-up closes. */
+  const close = () => (panel() ? props.onClose?.() : dialog.close())
 
   /**
    * One fetch shape for every section. A route the sidecar does not have yet comes back as
@@ -1368,12 +1426,22 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
   )
 
   return (
-    <Dialog
-      size="x-large"
+    <CardFrame
+      panel={panel()}
       class="iris-card iris-card--elon"
-      classList={{ "iris-card--full": full() }}
+      classList={{ "iris-card--full": full() && !panel() }}
       action={
         <span class="iris-card__winbtns">
+          <Show when={panel() && props.onStep}>
+            <span class="iris-card__step">
+              <button type="button" class="iris-ib" aria-label="Previous card" title="Previous card on the board" disabled={!props.position || props.position.index <= 0} onClick={() => props.onStep?.(-1)}>
+                <Icon name="chevron-left" size="small" />
+              </button>
+              <button type="button" class="iris-ib" aria-label="Next card" title="Next card on the board" disabled={!props.position || props.position.index >= props.position.total - 1} onClick={() => props.onStep?.(1)}>
+                <Icon name="chevron-right" size="small" />
+              </button>
+            </span>
+          </Show>
           <span class="iris-card__saved" data-state={saveState()} title={{ saving: "Saving…", unsaved: "Unsaved changes", error: "Last save failed", saved: "All changes saved" }[saveState()]}>
             <Icon name={saveState() === "error" ? "warning" : saveState() === "unsaved" ? "dot-grid" : "circle-check"} size="small" />
           </span>
@@ -1423,25 +1491,47 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
           >
             <Icon name="share" size="small" />
           </button>
-          <button type="button" class="iris-ib" aria-label={full() ? "Exit full screen" : "Full screen"} title={full() ? "Exit full screen" : "Full screen"} onClick={toggleFull}>
-            <Icon name={full() ? "collapse" : "expand"} size="small" />
-          </button>
+          <Show
+            when={panel()}
+            fallback={
+              <>
+                <Show when={props.onDock}>
+                  <button type="button" class="iris-ib" aria-label="Show in the side panel" title="Show in the side panel, beside the chat" onClick={() => props.onDock?.()}>
+                    <Icon name="layout-right" size="small" />
+                  </button>
+                </Show>
+                <button type="button" class="iris-ib" aria-label={full() ? "Exit full screen" : "Full screen"} title={full() ? "Exit full screen" : "Full screen"} onClick={toggleFull}>
+                  <Icon name={full() ? "collapse" : "expand"} size="small" />
+                </button>
+              </>
+            }
+          >
+            <button type="button" class="iris-ib" aria-label="Open as a pop-up" title="Open as a pop-up, for more room" onClick={() => props.onPopOut?.()}>
+              <Icon name="expand" size="small" />
+            </button>
+          </Show>
           <button
             type="button"
             class="iris-ib"
+            hidden={panel()}
             aria-label={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
             title={collapsed() ? "Show the sidebar" : "Hide the sidebar"}
             onClick={toggleSide}
           >
             <Icon name={collapsed() ? "layout-right" : "layout-right-full"} size="small" />
           </button>
-          <button type="button" class="iris-ib iris-ib--close" aria-label="Close" title="Close" onClick={() => dialog.close()}>
+          <button type="button" class="iris-ib iris-ib--close" aria-label="Close" title="Close" onClick={close}>
             <Icon name="close" size="small" />
           </button>
         </span>
       }
       title={
         <span class="iris-card__hdr">
+          <Show when={panel()}>
+            <button type="button" class="iris-card__back iris-ib" aria-label={`Back to ${props.backLabel ?? "the board"}`} title={`Back to ${props.backLabel ?? "the board"}`} onClick={close}>
+              <Icon name="arrow-left" size="small" />
+            </button>
+          </Show>
           <Show
             when={editingTitle()}
             fallback={
@@ -2752,11 +2842,11 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
           <button type="button" class="iris-card__save" disabled={saving() || savingBody()} onClick={() => void saveAll()}>
             {saving() || savingBody() ? "Saving…" : "Save"}
           </button>
-          <button type="button" class="iris-card__linkbtn" onClick={() => dialog.close()}>
+          <button type="button" class="iris-card__linkbtn" onClick={close}>
             Discard and close
           </button>
         </div>
       </Show>
-    </Dialog>
+    </CardFrame>
   )
 }

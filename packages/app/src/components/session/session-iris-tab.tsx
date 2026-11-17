@@ -37,6 +37,7 @@ import { IrisAtlasTimeline } from "./iris-atlas-timeline"
 import { ATLAS_PAGE, moreLabel, moreOf, windowOf } from "./iris-atlas-window"
 import { timelineDatesLabel } from "./iris-atlas-timeline-model"
 import { IrisCardEditor } from "./iris-card-editor"
+import { boardIds, cardPosition, CARD_MODE_KEY, readCardMode, stepCard, type CardMode } from "./iris-card-panel"
 import { setDictationAuth } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { dictationAuthFor } from "@/utils/dictation-auth"
 import { settled } from "@/utils/settled"
@@ -3235,7 +3236,34 @@ export function SessionIrisTab() {
    * write the surface is re-read so the row behind the dialog shows what was saved; a page
    * beyond the first drops back to page 1, because a refetch returns only the page it asked for.
    */
-  function openCard(itemId: number, fromGraph?: { id: number; name: string }[]) {
+  /**
+   * THE CARD IN THE SIDE PANEL (#193330). A card opens in place of the board, inside the panel, so
+   * the chat stays on screen; the pop-up is still one button away (and comes back from there). The
+   * last choice is remembered, so someone who prefers the pop-up keeps getting it.
+   */
+  const [panelCard, setPanelCard] = createSignal<{ id: number; bloq: number; lists: { id: number; name: string }[] } | null>(null)
+  const storedMode = () => readCardMode((k) => localStorage.getItem(k))
+  const rememberMode = (m: CardMode) => {
+    try {
+      localStorage.setItem(CARD_MODE_KEY, m)
+    } catch {
+      /* not worth failing a click over */
+    }
+  }
+  const boardOrder = createMemo(() => boardIds((settled(data)?.lists as AtlasList[] | undefined) ?? []))
+  // What the side panel reports as the open card (#191507), for the panel as for the pop-up.
+  let panelCardWas: number | undefined
+  createEffect(() => {
+    const c = panelCard()
+    const was = panelCardWas
+    if (c) setIrisOpenCard({ id: c.id, bloq: c.bloq })
+    else if (was != null) setIrisOpenCard((o) => (o?.id === was ? undefined : o))
+    panelCardWas = c?.id
+  })
+  // Another product or another board: the card belonged to the one being left.
+  createEffect(on([pane, activeBloq], () => setPanelCard(null), { defer: true }))
+
+  function openCard(itemId: number, fromGraph?: { id: number; name: string }[], how?: CardMode) {
     const b = activeBloq()
     if (b == null) return
     // A card made offline exists only on this computer until it is sent: IRIS has nothing to open yet (#190537 W3).
@@ -3249,8 +3277,14 @@ export function SessionIrisTab() {
       fromGraph ?? ((settled(data)?.lists as AtlasList[] | undefined) ?? []).map((l) => ({ id: l.id, name: l.name }))
     // The card's microphone records through this same server, with the SDK's credentials (#190041).
     setDictationAuth((url) => dictationAuthFor(serverSDK().server.http, url))
+    const mode = how ?? storedMode()
+    if (how) rememberMode(how)
+    if (mode === "panel") {
+      setPanelCard({ id: itemId, bloq: Number(b), lists })
+      return
+    }
+    setPanelCard(null)
     dialog.show(() => {
-      // What the side panel reports as the open card (#191507), for as long as the editor is up.
       setIrisOpenCard({ id: itemId, bloq: Number(b) })
       onCleanup(() => setIrisOpenCard((c) => (c?.id === itemId ? undefined : c)))
       return (
@@ -3261,10 +3295,15 @@ export function SessionIrisTab() {
           doFetch={doFetch}
           onChanged={() => liveRefresh(false)}
           recorderUrl={base()}
+          onDock={() => {
+            dialog.close()
+            openCard(itemId, fromGraph, "panel")
+          }}
         />
       )
     })
   }
+
 
   // FOCUS: fold the product and sub-view rows away so the content (an artifact) runs nearly full
   // height. Esc or ⤢ brings them back.
@@ -3428,6 +3467,45 @@ export function SessionIrisTab() {
 
   return (
     <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2" onKeyDown={atlasKeys}>
+      <Show when={panelCard()}>
+        {(c) => (
+          // Covers the board inside the panel, which stays mounted underneath: back returns to the
+          // same scroll position. Keys typed in the card must not reach the board's j/k/x shortcuts.
+          <div
+            class="iris-card-panel-host"
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key !== "Escape" || e.defaultPrevented) return
+              if (document.querySelector("[data-dismiss-first]")) return
+              const t = e.target as HTMLElement
+              if (t.closest("input, textarea, select, [contenteditable=true]")) return
+              setPanelCard(null)
+            }}
+          >
+            <Show when={c().id} keyed>
+              {(id) => (
+                <IrisCardEditor
+                  mode="panel"
+                  itemId={id}
+                  bloqId={c().bloq}
+                  lists={c().lists}
+                  doFetch={doFetch}
+                  onChanged={() => liveRefresh(false)}
+                  recorderUrl={base()}
+                  backLabel={activeBloqName() ?? "the board"}
+                  position={cardPosition(boardOrder(), id)}
+                  onStep={(dir) => {
+                    const next = stepCard(boardOrder(), id, dir)
+                    if (next != null) setPanelCard({ ...c(), id: next })
+                  }}
+                  onClose={() => setPanelCard(null)}
+                  onPopOut={() => openCard(id, c().lists, "dialog")}
+                />
+              )}
+            </Show>
+          </div>
+        )}
+      </Show>
       <Show when={pane() === "atlas" && quick() && quickCard()}>
         {(card) => (
           <IrisQuickEdit
