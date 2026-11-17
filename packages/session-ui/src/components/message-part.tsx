@@ -1,4 +1,5 @@
 import {
+import { tidyBubbleSegments, type BubbleSegment } from "./bubble-text"
   Component,
   createEffect,
   createMemo,
@@ -1513,7 +1514,7 @@ export function UserMessageDisplay(props: {
   )
 }
 
-type HighlightSegment = { text: string; type?: "file" | "agent" }
+type HighlightSegment = BubbleSegment
 
 function HighlightedText(props: { text: string; references: FilePart[]; agents: AgentPart[] }) {
   const segments = createMemo(() => {
@@ -1546,7 +1547,7 @@ function HighlightedText(props: { text: string; references: FilePart[]; agents: 
       result.push({ text: text.slice(lastIndex) })
     }
 
-    return result
+    return tidyBubbleSegments(result)
   })
 
   return <For each={segments()}>{(segment) => <span data-highlight={segment.type}>{segment.text}</span>}</For>
