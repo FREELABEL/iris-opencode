@@ -3,6 +3,23 @@ import type { Prompt } from "@/context/prompt"
 import { buildRequestParts } from "./build-request-parts"
 
 describe("buildRequestParts", () => {
+  test("returns typed after the last word are not sent; the gap between lines is (#193703)", () => {
+    const text = "this needs to be the official UI for IRIS DRIVES\n\nhttps://heyiris.io/p/iris-drives-files\n\n\n \n"
+    const result = buildRequestParts({
+      prompt: [{ type: "text", content: text, start: 0, end: text.length }],
+      context: [],
+      images: [],
+      text,
+      messageID: "msg_1",
+      sessionID: "ses_1",
+      sessionDirectory: "/repo",
+    })
+    const sent = result.requestParts.find((part) => part.type === "text" && !part.synthetic)
+    expect(sent?.type === "text" && sent.text).toBe(
+      "this needs to be the official UI for IRIS DRIVES\n\nhttps://heyiris.io/p/iris-drives-files",
+    )
+  })
+
   test("builds typed request and optimistic parts without cast path", () => {
     const prompt: Prompt = [
       { type: "text", content: "hello", start: 0, end: 5 },
