@@ -125,8 +125,15 @@ export function emptyDrive(d: Drive, folders: DriveFolder[]): boolean {
 
 export function driveMeta(d: Drive): string {
   if (neverScanned(d)) return "never scanned"
-  const used = d.usedGb != null && d.sizeGb != null ? `${fmtGb(d.usedGb)} of ${fmtGb(d.sizeGb)}` : fmtGb(d.sizeGb)
-  return [used, d.encrypted ? "encrypted" : "not encrypted", `scanned ${fmtDate(d.lastScanned)}`].join(" · ")
+  return [usedOf(d.usedGb, d.sizeGb), d.encrypted ? "encrypted" : "not encrypted", fmtDate(d.lastScanned)].join(" · ")
+}
+
+/** "4.1 / 15.4 GB" — one unit when both share it, so the line fits at 360px. */
+export function usedOf(used: number | null, size: number | null): string {
+  if (used == null || size == null) return fmtGb(size)
+  const [u, s] = [fmtGb(used), fmtGb(size)]
+  const unit = (x: string) => x.split(" ")[1]
+  return unit(u) === unit(s) ? `${u.split(" ")[0]} / ${s}` : `${u} / ${s}`
 }
 
 export function folderMeta(f: DriveFolder): string {

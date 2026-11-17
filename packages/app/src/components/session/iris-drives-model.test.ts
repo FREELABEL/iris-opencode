@@ -13,6 +13,7 @@ import {
   neverScanned,
   scanCommand,
   statusTone,
+  usedOf,
   type Drive,
   type DriveFinding,
 } from "./iris-drives-model"
@@ -94,7 +95,9 @@ describe("Drives (#193705)", () => {
     expect(emptyDrive(drive({ lastScanned: null, files: 0 }), [])).toBe(false)
     expect(emptyDrive(drive({ files: 0 }), [])).toBe(true)
     expect(emptyDrive(drive(), [])).toBe(false)
-    expect(driveMeta(drive())).toBe("4.1 GB of 15.4 GB · encrypted · scanned Nov 9")
+    expect(driveMeta(drive())).toBe(`4.1 / 15.4 GB · encrypted · ${fmtDate("2026-11-09")}`)
+    expect(usedOf(0.5, 15.4)).toBe("500 MB / 15.4 GB")
+    expect(usedOf(4100, 6000)).toBe("4.1 / 6 TB")
   })
 
   test("arrow keys clamp; from nothing, Down picks the first and Up the last", () => {

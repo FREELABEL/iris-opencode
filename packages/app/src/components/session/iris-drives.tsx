@@ -129,6 +129,24 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   // Anything that changes the list resets the selection; leaving a scope closes the sheet.
   createEffect(on([driveId, folder, segment, query], () => setSel(-1)))
   createEffect(on([driveId, folder], () => setSheet(undefined)))
+  /*
+   * KEEP THE KEYBOARD AFTER A DRILL. The row a person clicked or pressed Enter on is replaced by the
+   * next level's rows, and focus falls to <body> — after which arrows and Backspace reach nothing.
+   * Pull it back to the panel, but only from <body> or from inside the panel: never out of the chat box.
+   */
+  createEffect(
+    on(
+      [driveId, folder, sheet],
+      () =>
+        queueMicrotask(() => {
+          const a = document.activeElement
+          if (!rootEl || (a && a !== document.body && !rootEl.contains(a))) return
+          if (a instanceof HTMLInputElement) return
+          rootEl.focus({ preventScroll: true })
+        }),
+      { defer: true },
+    ),
+  )
 
   const openDrive = (id: string) => {
     setDriveId(id)
@@ -317,6 +335,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
                   row={r}
                   index={i()}
                   selected={sel() === i() || (r.kind === "finding" && sheet()?.id === r.finding.id)}
+                  driveEncrypted={drive()?.encrypted}
                   onClick={() => {
                     setSel(i())
                     open(r)
@@ -402,17 +421,28 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   )
 }
 
-function RowView(props: { row: Row; index: number; selected: boolean; onClick: () => void }) {
+function RowView(props: { row: Row; index: number; selected: boolean; driveEncrypted?: boolean; onClick: () => void }) {
   const r = props.row
-  const icon: IconProps["name"] = r.kind === "drive" ? "disk" : r.kind === "folder" ? "folder" : "open-file"
+  const icon: IconProps["name"] =
+    r.kind === "drive"
+      ? "disk"
+      : r.kind === "folder"
+        ? "folder"
+        : r.finding.status === "exposed"
+          ? "warning"
+          : r.finding.status === "moved"
+            ? "archive"
+            : "lock"
   const name = r.kind === "drive" ? r.drive.label : r.kind === "folder" ? r.folder.folder : baseName(r.finding.path)
   const meta = r.kind === "drive" ? driveMeta(r.drive) : r.kind === "folder" ? folderMeta(r.folder) : findingMeta(r.finding)
   const trail = (): JSX.Element => {
     if (r.kind === "finding") return <span class="iris-drv-pill" data-tone={statusTone(r.finding.status)}>{r.finding.status ?? "—"}</span>
     const n = r.kind === "drive" ? r.drive.sensitiveFiles : r.folder.sensitiveFiles
     if (r.kind === "drive" && neverScanned(r.drive)) return <span class="iris-drv-pill" data-tone="muted">not scanned</span>
+    // Red only where a finding is readable by anyone holding the drive; on an encrypted drive it is contained.
+    const exposed = r.kind === "drive" ? !r.drive.encrypted : props.driveEncrypted === undefined ? undefined : !props.driveEncrypted
     return n ? (
-      <span class="iris-drv-count" title={`${n} sensitive files`}>
+      <span class="iris-drv-count" data-tone={exposed === false ? "muted" : "bad"} title={`${n} sensitive files`}>
         {fmtCount(n)}
       </span>
     ) : null

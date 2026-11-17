@@ -40,6 +40,7 @@
 .iris-drv-row-m { font-size: 11.5px; color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .iris-drv-chev { color: var(--text-weak); opacity: 0.6; display: inline-flex; }
 .iris-drv-count { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; font-size: 11px; color: var(--drv-bad); }
+.iris-drv-count[data-tone="muted"] { color: var(--text-weak); }
 
 .iris-drv-pill { font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto; color: var(--text-weak); background: var(--background-element); }
 .iris-drv-pill[data-tone="bad"] { color: var(--drv-bad); background: color-mix(in srgb, var(--drv-bad) 13%, transparent); }
