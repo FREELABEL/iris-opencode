@@ -37,7 +37,8 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = {
   // Outreach (#193487) is shown, before Leads: replies and drafts waiting on you, and the campaigns
   // behind them. New to every saved layout (the old `outreach` id was migrated to Leads by #192544),
   // so it lands here — after whatever the person put before Leads — and shows.
-  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "inbox", "marketing", "browser", "playbooks", "hive", "integrations", "mcp"],
+  // Drives (#193705) is shown, after Browser: asked for in the bar, beside the other products.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "inbox", "marketing", "browser", "drives", "playbooks", "hive", "integrations", "mcp"],
   hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
 }
 
