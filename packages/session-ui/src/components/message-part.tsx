@@ -1,5 +1,5 @@
-import {
 import { tidyBubbleSegments, type BubbleSegment } from "./bubble-text"
+import {
   Component,
   createEffect,
   createMemo,
