@@ -350,7 +350,9 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       const all: CommandOption[] = []
 
       for (const reg of activeCommandRegistrations(store.registrations)) {
-        for (const opt of reg.options()) {
+        // A registration whose owner was torn down reads as undefined (measured: the titlebar's
+        // "tabs" in a browser build). One bad list must not take the whole app down with it.
+        for (const opt of reg.options() ?? []) {
           if (seen.has(opt.id)) {
             if (import.meta.env.DEV && !warnedDuplicates.has(opt.id)) {
               warnedDuplicates.add(opt.id)
