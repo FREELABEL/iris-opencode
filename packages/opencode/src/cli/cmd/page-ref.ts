@@ -28,7 +28,7 @@ export function noteUuid(slugOrPage: string | { slug?: string }): string | null 
 
 export function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }): string {
   if (typeof slugOrPage === "object" && slugOrPage.public_url) {
-    return slugOrPage.public_url
+    return brandUrl(slugOrPage.public_url)
   }
   const slug = typeof slugOrPage === "string" ? slugOrPage : (slugOrPage.slug ?? "")
   const uuid = noteUuid(slug)
@@ -52,8 +52,36 @@ export function publicUrl(slugOrPage: string | { public_url?: string; slug?: str
  * graph (see the note at the top of platform-pages.ts). IRIS_PUBLIC_URL overrides for
  * white-label or staging hosts.
  */
-function publicSite(): string {
+export function publicSite(): string {
   return (process.env.IRIS_PUBLIC_URL ?? "https://heyiris.io").replace(/\/+$/, "")
+}
+
+/**
+ * Hosts that ANSWER /p/ and /s/ but are not the brand a person should be handed. freelabel.net
+ * is the API base; it serves every page too, so a link built on it works — which is exactly why
+ * the wrong host went unnoticed (2026-11-16: a freelabel.net share link went to a Pathways
+ * client, #193704). A client's own custom domain is NOT in this list and is kept.
+ */
+const API_HOSTS = new Set(["freelabel.net", "www.freelabel.net"])
+
+/**
+ * Scheme + host for any /p/, /n/ or /s/ link printed to a person.
+ *
+ * The page's own public_url host wins when it is a real public host (a custom domain).
+ * Otherwise — no public_url (every draft and private page), or the API host — the brand host.
+ * This replaces a copy in platform-pages.ts that fell back to https://freelabel.net.
+ */
+/** A link the API handed back, moved off the API host onto the brand host. Path, query and hash kept. */
+export function brandUrl(url: string): string {
+  const m = /^https?:\/\/([^/]+)(.*)$/.exec(url)
+  return m && API_HOSTS.has(m[1].toLowerCase()) ? `${pageOrigin()}${m[2]}` : url
+}
+
+export function pageOrigin(page?: { public_url?: string | null }): string {
+  const m = /^(https?:\/\/([^/]+))/.exec(page?.public_url ?? "")
+  if (m && !API_HOSTS.has(m[2].toLowerCase())) return m[1]
+  const env = process.env.IRIS_ENV ?? "production"
+  return env === "local" ? "http://local.iris.freelabel.net:9300" : publicSite()
 }
 
 /**

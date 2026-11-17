@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { FL_API, IRIS_API, irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson, emitJsonError } from "./iris-api"
 import { resolveBloqId } from "./platform-bloqs"
+import { pageOrigin } from "./page-ref"
 import {
   applyPinOp,
   boardMeta,
@@ -46,7 +47,7 @@ import {
 
 const JSON_OPTION = { describe: "machine-readable output", type: "boolean", default: false } as const
 const PINS_PATH = "/api/v1/me/settings/marketing.pins"
-const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://freelabel.net"
+const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? pageOrigin()
 
 /** The seams a test replaces. */
 export const marketingDeps = {
