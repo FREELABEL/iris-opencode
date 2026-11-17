@@ -94,7 +94,10 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
         {
           id: Identifier.ascending("part"),
           type: "text",
-          text: input.text,
+          // #193703: the returns typed after the last word are not part of the message; they showed
+          // as a block of empty space in the bubble. Only the end is trimmed: @mention offsets
+          // count from the start of the text.
+          text: input.text.trimEnd(),
         },
       ]
     : []
