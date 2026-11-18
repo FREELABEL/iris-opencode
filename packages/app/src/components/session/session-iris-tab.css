@@ -4411,3 +4411,21 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-held__btn--primary { background: var(--surface-strong, var(--background-element)); font-weight: 600; }
 .iris-held__btn:disabled { opacity: .5; cursor: default; }
 .iris-held__error { font-size: 12px; color: var(--text-on-critical-weak); margin: 0; }
+
+/* Terminal (#193785): the chat's terminals in the side panel. The strip is the panel's own
+   sub-view strip; the shell fills the rest. */
+.iris-terminal { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%; }
+.iris-terminal__tab { display: inline-flex; align-items: stretch; }
+.iris-terminal__close {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 0 4px 2px; margin-left: -6px; font-size: 13px; line-height: 1;
+  color: var(--text-weaker); border-radius: 4px;
+}
+.iris-terminal__close:hover { color: var(--text-strong); }
+.iris-terminal__body { position: relative; flex: 1 1 auto; min-height: 120px; margin-top: 6px; }
+.iris-terminal__away { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.iris-terminal__link {
+  appearance: none; background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-interactive-base); font: inherit;
+}
+.iris-terminal__link:hover { text-decoration: underline; }

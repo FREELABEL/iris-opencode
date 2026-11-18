@@ -684,6 +684,9 @@ const SURFACES = [
   // Browser (#193051 / #193062): browse beside the chat. On desktop a native webview with its own
   // cookies; on the web build the framed Browser. Not board-scoped: a web page is no board's.
   { id: "browser", label: "Browser", pane: "browser", path: () => `` },
+  // Terminal (#193785): the chat's own terminals — the same ones as the dock under the chat — beside
+  // it. Not board-scoped: a shell is the project folder's. Drawn by a pane the session hands in.
+  { id: "terminal", label: "Terminal", pane: "terminal", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -744,6 +747,8 @@ SELF_PANES.add("genesis-pages")
 SELF_PANES.add("marketing-pins")
 // Browser (#193062) draws itself: SessionWebTab picks native or framed.
 SELF_PANES.add("browser")
+// Terminal (#193785) draws itself: SessionTerminalPane, registered by the session's side panel.
+SELF_PANES.add("terminal")
 
 /**
  * The Browser pane, handed in by the screens that host this panel (session side panel, home panel)
@@ -754,6 +759,24 @@ SELF_PANES.add("browser")
 const [browserPane, setBrowserPane] = createSignal<Component>()
 export function registerBrowserPane(pane: Component) {
   if (browserPane() !== pane) setBrowserPane(() => pane)
+}
+/**
+ * The Terminal pane (#193785). Registered by the SESSION's side panel while it is mounted, not at
+ * module load as the Browser is: a terminal needs the session's TerminalProvider, which the home
+ * panel does not have, and a pane registered for good would be drawn there and throw.
+ */
+const [terminalPane, setTerminalPane] = createSignal<Component>()
+// Split view mounts one side panel per column; the pane goes away when the LAST of them does.
+let terminalPaneHolders = 0
+export function registerTerminalPane(pane: Component) {
+  terminalPaneHolders++
+  setTerminalPane(() => pane)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--terminalPaneHolders === 0) setTerminalPane(undefined)
+  }
 }
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
@@ -4523,6 +4546,14 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "browser"}>
               <Show when={browserPane()} fallback={<div class="iris-empty">The Browser is not available here.</div>}>
+                {(pane) => {
+                  const Pane = pane()
+                  return <Pane />
+                }}
+              </Show>
+            </Match>
+            <Match when={pane() === "terminal"}>
+              <Show when={terminalPane()} fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}>
                 {(pane) => {
                   const Pane = pane()
                   return <Pane />

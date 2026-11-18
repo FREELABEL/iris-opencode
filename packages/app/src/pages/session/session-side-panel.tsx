@@ -43,6 +43,7 @@ import {
   irisOpensOnAtlas,
   toggleIrisFilesPin,
   registerBrowserPane,
+  registerTerminalPane,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -53,6 +54,7 @@ const webTabPanelID = "session-side-panel-web-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
 import { SessionWebTab } from "@/components/session/session-web-tab"
+import { SessionTerminalPane } from "@/pages/session/terminal-pane"
 import { nativeBrowserEnabled } from "@/components/session/native-browser-model"
 import { usePlatform } from "@/context/platform"
 import { WEB_TAB, webUrl } from "@/components/session/web-nav"
@@ -123,6 +125,8 @@ export function SessionSidePanel(props: {
   const dialog = useDialog()
   const sdk = useSDK()
   const { sessionKey, tabs, view, params } = useSessionLayout()
+  // #193785: the panel's Terminal tab, while this session (and its TerminalProvider) is on screen.
+  onCleanup(registerTerminalPane(SessionTerminalPane))
   const projectDirectory = createMemo(() => sdk().directory)
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
