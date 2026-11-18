@@ -32,6 +32,18 @@ const STRESS: Record<string, string> = {
   "/banner": `<title>Book</title><body><h1>Find flights</h1><input aria-label="From"><input aria-label="To"><button>Search flights</button>
     <div id="onetrust-consent-sdk"><div class="ot-sdk-container" role="dialog" aria-label="Privacy" style="position:fixed;left:0;right:0;bottom:0;height:80px;background:#eee">
     <button>Accept all cookies</button><button>Cookie settings</button></div></div></body>`,
+  // Frontier's "Your Cart" (2026-11-14): a CLOSED drawer parked off-canvas that keeps
+  // aria-modal=true. Treated as the page, it hid the whole form behind one off-screen Close.
+  "/drawer": `<title>Your Info</title><body><h1>Passengers</h1><input aria-label="First name"><input aria-label="Last name"><button>Continue</button>
+    <div role="dialog" aria-modal="true" aria-label="Your cart" style="position:fixed;top:0;left:100%;width:380px;height:100vh;background:#fff">
+    <div role="button" tabindex="0" aria-label="Close">x</div><button>Continue Booking</button></div></body>`,
+  // Frontier's flight select (2026-11-16): each fare is a pointer-cursor box; its radio sits in a
+  // display:none wrapper, and a click on the box picks the fare.
+  "/farebox": `<title>Select</title><body><a href="#d">+Details</a><div class="row">
+    ${[["12:22 PM", "$375"], ["6:00 AM", "$402"]].map(([t, p]) => `<a href="#c" style="display:none">Basic</a><div class="fare" style="cursor:pointer;display:inline-block;width:170px;height:160px" data-t="${t}">
+      <div>ROUND-TRIP</div><div>${p}</div><div>Standard</div>
+      <div style="display:none"><label><span hidden>Select standard fare</span><input type="radio" name="f" aria-label="Standard fare ${p} departs at ${t}"></label></div></div>`).join("")}
+    </div><script>for (const f of document.querySelectorAll('.fare')) f.addEventListener('click', () => { document.title = 'picked ' + f.dataset.t })</script></body>`,
   // Radix/MUI: opens on pointerdown and ignores click. react-select: mousedown only.
   "/pointerdown": `<title>pd</title><button onpointerdown="document.title='opened'">Open menu</button>
     <div role="button" tabindex="0" onmousedown="this.textContent='airport open'">Choose airport</div>
@@ -56,6 +68,13 @@ const STRESS: Record<string, string> = {
     ${Array.from({ length: 3 }, (_, i) => `<div><span>Flight WN${100 + i}</span><button>Select</button></div>`).join("")}
     <span id="lbl">Swap origin and destination</span><button aria-labelledby="lbl"><svg width="16" height="16"></svg></button>
     <button><svg width="16" height="16"><title>Close dialog</title></svg></button>`,
+  // Google Flights (#193443): one grid per month, the month printed above it, each day a price
+  // button with no month of its own; a row of days that carry data-iso.
+  "/calendar": `<title>cal</title>${["December 2026", "January 2027"].map((m, k) => `<div><div>${m}</div><div role="grid">${Array.from({ length: 3 }, (_, i) => `<div role="gridcell"><div role="button">${i + 10} $${410 + i + k}</div></div>`).join("")}</div></div>`).join("")}
+    <div>${[1, 2].map((d) => `<span data-iso="2026-11-0${d}" role="button" tabindex="0">${d}</span>`).join("")}</div>
+    <input aria-label="Departure" placeholder="Departure" onchange="setTimeout(()=>this.value='',50)">
+    <input aria-label="Where to?" role="combobox" aria-autocomplete="list">
+    <input aria-label="Phone" oninput="this.value=this.value.replace(/[^0-9]/g,'')">`,
   // A control under a full-page overlay.
   "/overlay": `<title>ov</title><button style="margin:100px">Search flights</button><div style="position:fixed;inset:0;background:rgba(0,0,0,.5)"><button style="position:absolute;bottom:20px;right:20px" onclick="this.parentElement.remove()">Accept cookies</button></div>`,
   // Expedia's block page, and Kayak's.
@@ -344,6 +363,24 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(listingFooter(modal.length, session.lastListing)).toContain("220 more controls are BEHIND the pop-up")
   }, 60_000)
 
+  test("a modal drawer parked off screen does not hide the page (#193492)", async () => {
+    await session.open(`${url}drawer`)
+    const els = await session.elements()
+    expect(els.some((e) => e.inDialog)).toBe(false)
+    expect(els.map((e) => e.name)).toEqual(expect.arrayContaining(["First name", "Last name", "Continue"]))
+    expect(session.lastListing?.behind).toBeUndefined()
+  }, 60_000)
+
+  test("a fare box whose radio is hidden is listed, named by that radio, and clickable (#193492)", async () => {
+    await session.open(`${url}farebox`)
+    const els = await session.elements()
+    const fare = els.find((e) => e.name.startsWith("Basic: Standard fare $375 departs at 12:22 PM"))
+    expect(fare).toBeDefined()
+    expect(els.some((e) => e.name.startsWith("Basic: Standard fare $402"))).toBe(true)
+    await session.clickRef(fare!.ref)
+    expect((await session.where()).title).toBe("picked 12:22 PM")
+  }, 60_000)
+
   test("a click is a mouse: pointerdown/mousedown widgets open, and the click fires exactly once (#193355)", async () => {
     await session.open(`${url}pointerdown`)
     let els = await session.elements()
@@ -440,6 +477,27 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
     expect(names).toContain("Close dialog")
   }, 60_000)
 
+  test("a calendar day carries its month and year: from the month printed above it, or its data-iso (#193443)", async () => {
+    await session.open(`${url}calendar`)
+    const names = (await session.elements()).map((e) => e.name)
+    expect(names).toContain("10 $410 (December 2026)")
+    expect(names).toContain("10 $411 (January 2027)")
+    expect(names).toContain("1 (2026-11-01)")
+  }, 60_000)
+
+  test("typing says when the site cleared it, changed it, or still needs a choice from its list (#193442)", async () => {
+    await session.open(`${url}calendar`)
+    const els = await session.elements()
+    const by = (n: string) => els.find((e) => e.name === n)!
+    session.takeNotes()
+    await session.typeRef(by("Departure").ref, "12/10/2026")
+    expect(session.takeNotes().join(" ")).toContain("still EMPTY")
+    await session.typeRef(by("Where to?").ref, "Austin")
+    expect(session.takeNotes().join(" ")).toContain("NOT CHOSEN YET")
+    await session.typeRef(by("Phone").ref, "512-555")
+    expect(session.takeNotes().join(" ")).toContain(`NOT AS TYPED: [${by("Phone").ref}] now shows "512555"`)
+  }, 60_000)
+
   test("a control under an overlay is flagged as covered (#193355)", async () => {
     await session.open(`${url}overlay`)
     const els = await session.elements()
@@ -468,4 +526,39 @@ describe.if(!!chrome)("PageSession against real Chrome", () => {
 
 test.if(!chrome)("SKIPPED: no Chrome on this machine — the driver was not exercised", () => {
   expect(chrome).toBeNull()
+})
+
+describe("reapOrphanBrowsers (#193492)", () => {
+  test("ends a throwaway Chrome whose engine is gone, and leaves a live one alone", async () => {
+    const { reapOrphanBrowsers } = await import("./browser-driver")
+    const { mkdtemp, symlink, mkdir, stat } = await import("fs/promises")
+    const { tmpdir } = await import("os")
+    const nodePath = await import("path")
+    const { spawn } = await import("child_process")
+    const root = await mkdtemp(nodePath.join(tmpdir(), "reap-"))
+    // An orphan: a detached sleeper whose parent (a shell that exits at once) is gone.
+    const sh = spawn("sh", ["-c", "sleep 30 & echo $!"], { stdio: ["ignore", "pipe", "ignore"] })
+    const orphanPid = Number(await new Promise<string>((r) => sh.stdout.on("data", (d) => r(String(d).trim()))))
+    await Bun.sleep(300)
+    // Linux with a subreaper (systemd --user) adopts orphans itself: nothing to test there.
+    const { execSync } = await import("child_process")
+    if (execSync(`ps -o ppid= -p ${orphanPid}`).toString().trim() !== "1") {
+      process.kill(orphanPid)
+      return
+    }
+    // A live child of this process: its engine (us) is alive.
+    const live = spawn("sleep", ["30"])
+    for (const [name, pid] of [["iris-browser-orphan", orphanPid], ["iris-browser-live", live.pid!]] as const) {
+      await mkdir(nodePath.join(root, name))
+      await symlink(`host-${pid}`, nodePath.join(root, name, "SingletonLock"))
+    }
+    const n = await reapOrphanBrowsers(root)
+    expect(n).toBe(1)
+    await Bun.sleep(200)
+    expect(() => process.kill(orphanPid, 0)).toThrow()
+    expect(() => process.kill(live.pid!, 0)).not.toThrow()
+    expect(await stat(nodePath.join(root, "iris-browser-orphan")).catch(() => null)).toBeNull()
+    expect(await stat(nodePath.join(root, "iris-browser-live")).catch(() => null)).not.toBeNull()
+    live.kill()
+  })
 })

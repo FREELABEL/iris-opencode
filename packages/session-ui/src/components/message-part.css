@@ -664,13 +664,8 @@
     padding: 0;
   }
 
-  /* A command that exited non-zero (#189316): a rule and the reason, so it is findable inside the
-     fold. Neutral, not red (#190220): a probe that exits 1 is routine, not an alarm. */
-  [data-slot="context-tool-group-item"][data-error] {
-    border-left: 2px solid var(--v2-border-border-strong);
-    padding-left: 8px;
-    margin-left: -10px;
-  }
+  /* A command that exited non-zero (#189316): the icon and the reason make it findable inside the
+     fold. Neutral, not red (#190220): a probe that exits 1 is routine, not an alarm. No edge bar. */
   [data-slot="context-tool-group-error"] {
     display: block;
     color: var(--v2-text-text-muted);

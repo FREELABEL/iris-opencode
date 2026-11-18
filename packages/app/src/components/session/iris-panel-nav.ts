@@ -4,7 +4,7 @@
  */
 
 /** Products that belong to the account or machine, not to a project. */
-export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon", "inbox", "outreach"])
+export const ACCOUNT_SURFACES = new Set<string>(["hive", "integrations", "mcp", "marketing", "lexicon", "drives", "inbox", "outreach"])
 
 /**
  * Product ids that were retired into another product. Empty since #193487: Outreach (#192483), folded

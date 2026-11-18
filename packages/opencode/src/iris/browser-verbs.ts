@@ -340,7 +340,12 @@ function optionText(e: PageElement, i: number): string {
   return l && l !== v ? `${v} "${l.slice(0, 40)}"` : v
 }
 
-const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
+// combobox: a site-built picker (Google Flights' trip type, passengers, class) opens only on a click.
+// A native <select> is still refused below, pointing at select. gridcell/treeitem: calendar days, tree rows.
+const CLICKABLE = new Set([
+  "link", "button", "checkbox", "radio", "tab", "menuitem", "menuitemcheckbox", "menuitemradio",
+  "option", "switch", "combobox", "gridcell", "treeitem",
+])
 const TYPEABLE = new Set(["textbox", "searchbox", "combobox", "textarea"])
 const SELECTABLE = new Set(["combobox", "listbox"])
 const SCROLLS = ["up", "down", "top", "bottom"] as const
@@ -377,6 +382,9 @@ export function refuseTargetReason(els: PageElement[], ref: number, op: "click" 
   const el = els.find((e) => e.ref === ref)
   if (!el) return `there is no [${ref}] on this page — it lists ${els.length} elements; run elements again`
   if (!el.enabled) return `[${ref}] ${el.name} is disabled`
+  if (op === "click" && el.role === "combobox" && el.tag === "select") {
+    return `[${ref}] is a dropdown — use select with one of its options, not click`
+  }
   if (op === "click" && !CLICKABLE.has(el.role)) return `[${ref}] is a ${el.role} — not clickable`
   if (op === "type" && !TYPEABLE.has(el.role)) return `[${ref}] is a ${el.role} — not a text field`
   if (op === "select" && !(SELECTABLE.has(el.role) && el.options?.length)) {
@@ -540,6 +548,21 @@ export function errorPageReason(after: PageState): string | undefined {
   return undefined
 }
 
+/**
+ * The page's state after an action, read again once if it first looks like an error page
+ * (#193492). On 2026-11-16 Google Flights' "Select flight" went on to its return-flight page,
+ * still loading, and the first read called it an error. The agent believed it, left Google and
+ * re-entered the whole trip by hand on the airline's own site — the slowest part of the run.
+ */
+export const LANDING_RECHECK_MS = 2000
+export async function landedState<T extends PageState>(read: () => Promise<T>, before: PageState, waitMs = LANDING_RECHECK_MS): Promise<T> {
+  const first = await read()
+  const moved = before.url !== first.url || before.title !== first.title
+  if (!moved || !errorPageReason(first)) return first
+  await new Promise((r) => setTimeout(r, waitMs))
+  return read().catch(() => first)
+}
+
 /** Said with a failed landing: what to do instead of trying the same thing again. */
 export const RECOVER =
   "Do not repeat the same step: it will fail the same way. Try another route — go back to the page before ({\"action\":\"open\",\"url\":\"<that address>\"}) and pick a different control, search the page ({\"action\":\"elements\",\"query\":\"…\"}), or open the site's own address directly. If two routes fail, stop and tell the person in one line what you got done and what step they need to take."
@@ -555,7 +578,9 @@ export function describeChange(before: PageState, after: PageState): string {
   const failed = moved ? errorPageReason(after) : undefined
   if (failed) return `FAILED: that landed on ${failed} at ${after.url}${after.title ? ` ("${after.title.slice(0, 80)}")` : ""}, not the site. ${RECOVER}`
   const parts: string[] = []
-  if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
+  const other = otherPageReason(before.url, after.url)
+  if (other) parts.push(other)
+  else if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
   if (before.title !== after.title) parts.push(`title is now "${after.title}"`)
   for (const [ref, v] of Object.entries(after.values)) {
     if ((before.values[ref] ?? "") !== v) parts.push(`[${ref}] now holds ${JSON.stringify(v.slice(0, 60))}`)
@@ -566,6 +591,75 @@ export function describeChange(before: PageState, after: PageState): string {
   }
 
   return parts.length ? parts.join("; ") : "nothing changed — same url, same text, same field values"
+}
+
+/**
+ * The action took the page to a DIFFERENT page of the site, not a new state of the same one
+ * (#193442). On 2026-11-13 "Search" on Google Flights landed on /travel/explore instead of the
+ * results; the answer read "navigated to …" like any other step and the agent carried on. A
+ * changed path (or host) is said as what it is, with the path it left, so the agent checks the
+ * page before the next step. Same path with a new query or #hash is the same page, still moving.
+ */
+export function otherPageReason(beforeUrl: string, afterUrl: string): string | undefined {
+  if (beforeUrl === afterUrl) return undefined
+  let a: URL
+  let b: URL
+  try {
+    a = new URL(beforeUrl)
+    b = new URL(afterUrl)
+  } catch {
+    return undefined
+  }
+  const path = (u: URL) => u.pathname.replace(/\/+$/, "") || "/"
+  if (a.host === b.host && path(a) === path(b)) return undefined
+  // Leaving about:blank or a fresh tab is just arriving.
+  if (!/^https?:$/.test(a.protocol)) return undefined
+  const was = a.host === b.host ? path(a) : `${a.host}${path(a)}`
+  return `navigated to ${afterUrl} — a DIFFERENT PAGE (was ${was}). Read it before the next step: if it is not the page you meant (results, the form, the next step), say so and go back rather than carry on`
+}
+
+/**
+ * What a field shows after typing, said honestly (#193442). On 2026-11-13 `type` on Google
+ * Flights' Departure answered `[18] now holds "12/10/2026"`; the date never counted, and Search
+ * just reopened the calendar. A box holding text is not a site that took it:
+ *  - the page cleared it            → it is EMPTY (the old note, now read after the page settled)
+ *  - the page changed it            → it shows what it shows, not what was typed
+ *  - a picker (combobox, date box)  → the text is there, but the choice is made in its list or
+ *                                     calendar; pick it there and check the field again.
+ * A password is never read back, not even here.
+ */
+export function typeReadbackNote(r: {
+  ref: number
+  typed: string
+  /** What the field holds after the page settled; null when the field is gone (the page moved on). */
+  shown: string | null
+  /** An <input type=date>. */
+  date?: boolean
+  /** A combobox, an autocomplete, or a box that opens a list/calendar. */
+  picker?: boolean
+  /** A text box for a date (Departure, Check-in) given a date. */
+  dateBox?: boolean
+  secret?: boolean
+}): string | undefined {
+  if (r.secret || r.shown === null) return undefined
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim()
+  const typed = norm(r.typed)
+  const shown = norm(r.shown)
+  if (typed && !shown) {
+    return r.date
+      ? "the date field is still EMPTY: it did not take that date. Type it as YYYY-MM-DD (e.g. 2026-12-10), or pick it in the site's calendar."
+      : "the field is still EMPTY after typing: the site did not take the text. Look at it (screenshot) before going on."
+  }
+  const iso = normalizeDate(r.typed)
+  const same = shown === typed || (r.date && iso !== null && shown === iso)
+  if (!same) {
+    return `NOT AS TYPED: [${r.ref}] now shows ${JSON.stringify(shown.slice(0, 60))}, not ${JSON.stringify(typed.slice(0, 60))}: the site changed or rejected it. Check the field before going on.`
+  }
+  if (r.picker || r.dateBox) {
+    const what = r.dateBox ? "a date picker" : "a picker (a box with a list)"
+    return `NOT CHOSEN YET: [${r.ref}] is ${what}. The text is in the box, but sites like this only take a choice made in the list or calendar it opens. Run elements, pick the ${r.dateBox ? "day (check its month and year)" : "option"} there, or press Enter in [${r.ref}] — then check the field shows it before searching.`
+  }
+  return undefined
 }
 
 /**
@@ -610,4 +704,32 @@ export function renderInspect(ref: number, i: {
     )
   }
   return lines.join("\n")
+}
+
+/**
+ * The loop breaker (#193492). An agent shown the same thing tries the same thing: on Frontier
+ * (2026-11-14) it ran elements → click [1] → screenshot → reload for minutes, each answer
+ * identical. The model is not the problem; nothing told it the repetition was the problem.
+ *
+ * `history` is this chat's recent call signatures (action, ref, address, answer), newest last.
+ * The third identical one within the window gets a note that names the repetition and the ways
+ * out. Returns the note, or null.
+ */
+export const LOOP_WINDOW = 8
+export function loopNote(history: string[], sig: string): string | null {
+  const recent = history.slice(-LOOP_WINDOW)
+  const same = recent.filter((h) => h === sig).length
+  if (same < 2) return null
+  return (
+    `LOOP: this is the ${same + 1}${same + 1 === 3 ? "rd" : "th"} time this exact step gave this exact answer on this page. ` +
+    `Repeating it will not change the answer. Do something different: read the page (action=read) or find a word on it, ` +
+    `press Escape, scroll to the control, or open the next step's address directly. ` +
+    `If two different tries also fail, stop and tell the person what is in the way so they can do that one step in the Browser pane.`
+  )
+}
+export function loopSignature(action: string, ref: number | undefined, url: string | undefined, output: string): string {
+  const body = output.replace(/\n\npage: [^\n]*$/, "").slice(0, 2000)
+  let h = 0
+  for (let i = 0; i < body.length; i++) h = (h * 31 + body.charCodeAt(i)) | 0
+  return `${action}|${ref ?? ""}|${url ?? ""}|${h}`
 }

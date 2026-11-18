@@ -11,6 +11,7 @@ import { Panel } from "@/iris/panel"
 import {
   clampPageText,
   describeChange,
+  landedState,
   errorPageReason,
   RECOVER,
   findInPage,
@@ -26,6 +27,9 @@ import {
   renderElements,
   renderInspect,
   windowOfLines,
+  LOOP_WINDOW,
+  loopNote,
+  loopSignature,
 } from "@/iris/browser-verbs"
 import { ARTIFACT_EVENT } from "./genesis-artifact"
 import type { SessionID } from "../session/schema"
@@ -112,6 +116,8 @@ export const Parameters = Schema.Struct({
 })
 
 type Metadata = {
+  /** This call repeated an identical step and answer; the loop note was added (#193492). */
+  loop?: boolean
   url?: string
   line?: number
   ref?: number
@@ -167,6 +173,8 @@ const DEFAULT_MAX_CHARS = 3000
  * running. A process the user never started and cannot see is the thing to avoid.
  */
 const sessionsOpen = new Map<string, ScriptedPage>()
+/** Per chat: the last few call signatures, for the loop breaker (#193492). */
+const loopHistory = new Map<string, string[]>()
 
 export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
   "browser",
@@ -390,7 +398,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!before.ok) return yield* Effect.fail(new Error(before.message))
             const done = yield* attempt(() => page.scroll(dir))
             if (!done.ok) return yield* Effect.fail(new Error(done.message))
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
             const changed = describeChange(before.value, after.value)
 
@@ -418,7 +426,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!set.value) {
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
 
             return {
@@ -465,7 +473,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             if (!pressed.value) {
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
             const offOrigin = refuseNavigationReason(before.value.url, after.value.url)
             if (offOrigin && after.value.url !== before.value.url) {
@@ -524,7 +532,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               return yield* Effect.fail(new Error(`[${params.ref}] is no longer on the page — run action=elements again`))
             }
 
-            const after = yield* attempt(() => page.state())
+            const after = yield* attempt(() => landedState(() => page.state(), before.value))
             if (!after.ok) return yield* Effect.fail(new Error(after.message))
 
             // A click may take the page somewhere the agent never chose. Same rule as open: the
@@ -612,10 +620,15 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               if (!now.ok || !now.value.url) return result
               const moved = !!used.startUrl && now.value.url !== used.startUrl
               const where = `\n\npage: ${now.value.url}${now.value.title ? ` ("${now.value.title.slice(0, 80)}")` : ""}${moved ? ` · the address changed (was ${used.startUrl})` : ""}`
+              const sig = loopSignature(params.action, params.ref, now.value.url, result.output)
+              const key = String(ctx.sessionID)
+              const seen = loopHistory.get(key) ?? []
+              const loop = loopNote(seen, sig)
+              loopHistory.set(key, [...seen, sig].slice(-LOOP_WINDOW))
               return {
                 ...result,
-                output: result.output + where + tabsLine,
-                metadata: { ...result.metadata, url: now.value.url, ...(moved ? { navigated: true } : {}) },
+                output: (loop ? `${loop}\n\n` : "") + result.output + where + tabsLine,
+                metadata: { ...result.metadata, url: now.value.url, ...(moved ? { navigated: true } : {}), ...(loop ? { loop: true } : {}) },
               }
             }),
           ),

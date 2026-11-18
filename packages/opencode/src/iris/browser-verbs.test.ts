@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test"
 import {
+  loopNote,
+  loopSignature,
   VERBS,
   clampPageText,
   describeChange,
   errorPageReason,
+  landedState,
   findInPage,
   humanCheckAdvice,
   humanCheckReason,
   listingFooter,
   looksIrreversible,
   normalizeDate,
+  otherPageReason,
   refuseNavigationReason,
   refuseOptionReason,
   refuseScrollReason,
@@ -18,6 +22,7 @@ import {
   renderElements,
   renderInspect,
   shortHref,
+  typeReadbackNote,
   windowOfLines,
 } from "./browser-verbs"
 
@@ -224,6 +229,17 @@ describe("S3 — a target must be compatible with the operation", () => {
     // wrong pick structurally impossible rather than discouraged.
     expect(refuseTargetReason(els, 2, "click")).toContain("not clickable")
     expect(refuseTargetReason(els, 1, "click")).toBeNull()
+  })
+
+  test("a site-built picker (combobox) is clickable; a native <select> points at select", () => {
+    const pickers = [
+      { ref: 3, role: "combobox", name: "Round trip", tag: "div", enabled: true, inViewport: true },
+      { ref: 4, role: "combobox", name: "Size", tag: "select", options: ["S", "M"], enabled: true, inViewport: true },
+      { ref: 5, role: "gridcell", name: "20", tag: "div", enabled: true, inViewport: true },
+    ]
+    expect(refuseTargetReason(pickers as any, 3, "click")).toBeNull()
+    expect(refuseTargetReason(pickers as any, 4, "click")).toContain("use select")
+    expect(refuseTargetReason(pickers as any, 5, "click")).toBeNull()
   })
 
   test("typing into a link is refused", () => {
@@ -475,5 +491,81 @@ describe("#193442 — a step that lands on an error page says FAILED, not progre
     expect(errorPageReason({ ...before, title: "503 Service Unavailable", textLength: 50, head: "" })).toContain("503")
     expect(errorPageReason({ ...before, title: "Oops", textLength: 200, head: "Sorry, this page not found." })).toBeDefined()
     expect(errorPageReason({ ...before, title: "", textLength: 0, head: "" })).toBe("a blank page")
+  })
+})
+
+describe("#193442 — a landing on another page, and a field that did not take the text, are said plainly", () => {
+  test("a different path is a different page; a new query or hash is the same page moving", () => {
+    const s = otherPageReason("https://www.google.com/travel/flights?q=x", "https://www.google.com/travel/explore?q=x")
+    expect(s).toContain("DIFFERENT PAGE")
+    expect(s).toContain("was /travel/flights")
+    expect(otherPageReason("https://x.test/search?q=a", "https://x.test/search?q=b")).toBeUndefined()
+    expect(otherPageReason("https://x.test/a", "https://x.test/a/#top")).toBeUndefined()
+    expect(otherPageReason("https://a.test/", "https://b.test/x")).toContain("was a.test/")
+    expect(otherPageReason("about:blank", "https://b.test/x")).toBeUndefined()
+  })
+
+  test("describeChange says it, and still says navigated to", () => {
+    const before = { url: "https://g.test/travel/flights", title: "Flights", textLength: 1000, textHash: "a", values: {} }
+    const s = describeChange(before, { ...before, url: "https://g.test/travel/explore", title: "Explore", textHash: "b" })
+    expect(s).toContain("navigated to https://g.test/travel/explore")
+    expect(s).toContain("DIFFERENT PAGE")
+  })
+
+  test("type: empty, changed, a picker, or fine", () => {
+    expect(typeReadbackNote({ ref: 3, typed: "Austin", shown: "" })).toContain("still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "x", shown: "", date: true })).toContain("date field is still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "Thu, Dec 10" })).toContain("NOT AS TYPED")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "2026-12-10", date: true })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 18, typed: "12/10/2026", shown: "12/10/2026", dateBox: true })).toContain("NOT CHOSEN YET: [18] is a date picker")
+    expect(typeReadbackNote({ ref: 4, typed: "aus", shown: "aus", picker: true })).toContain("NOT CHOSEN YET")
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: "kimi" })).toBeUndefined()
+    // The field went away (the page moved on), or it is a password: nothing is said or echoed.
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: null })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 4, typed: "hunter2", shown: "x", secret: true })).toBeUndefined()
+  })
+})
+
+describe("#193492 — the loop breaker", () => {
+  test("the third identical step and answer on the same page says LOOP; a different answer does not", () => {
+    const a = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)\n\npage: https://x.test/p")
+    const b = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)")
+    expect(a).toBe(b) // the trailing page line does not make two answers different
+    expect(loopNote([], a)).toBeNull()
+    expect(loopNote([a], a)).toBeNull()
+    expect(loopNote([a, "elements|x", a], a)).toContain("LOOP")
+    const other = loopSignature("click", 1, "https://x.test/p", "navigated to /next")
+    expect(loopNote([a, a], other)).toBeNull()
+  })
+  test("it forgets steps older than the window", () => {
+    const a = loopSignature("screenshot", undefined, "https://x.test/p", "Here is the Browser pane")
+    const old = [a, a, ...Array.from({ length: 8 }, (_, i) => `x${i}`)]
+    expect(loopNote(old, a)).toBeNull()
+  })
+})
+
+describe("a landing that first looks like an error is read again (#193492)", () => {
+  const before = { url: "https://www.google.com/travel/flights/search?a", title: "Houston to Los Angeles | Google Flights", textLength: 9000, textHash: "1", values: {}, head: "Explore Flights" }
+  const loading = { ...before, url: "https://www.google.com/travel/flights/search?b", title: "Los Angeles to Houston | Google Flights", textLength: 300, textHash: "2", head: "Something went wrong" }
+  const loaded = { ...loading, textLength: 12000, textHash: "3", head: "Explore Flights Hotels Returning flights" }
+
+  test("Google's return-flight page, still loading, is not reported as an error once it loads", async () => {
+    const reads = [loading, loaded]
+    const after = await landedState(async () => reads.shift()!, before, 1)
+    expect(after).toBe(loaded)
+    expect(describeChange(before, after)).not.toContain("FAILED")
+  })
+
+  test("a real error page is still an error after the second look", async () => {
+    const err = { ...loading, title: "Error 404 (Not Found)!!1", head: "404. That’s an error." }
+    const after = await landedState(async () => err, before, 1)
+    expect(describeChange(before, after)).toContain("FAILED")
+  })
+
+  test("a normal landing is read once, with no wait", async () => {
+    let n = 0
+    const after = await landedState(async () => (n++, loaded), before, 10_000)
+    expect(n).toBe(1)
+    expect(after).toBe(loaded)
   })
 })

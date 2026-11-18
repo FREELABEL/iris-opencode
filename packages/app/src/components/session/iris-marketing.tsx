@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IrisPinnedPage } from "./iris-pinned-page"
+import { PAGE_HOST } from "./iris-pinned-page-model"
 import {
   addPin,
   EMPTY_PINS,
@@ -259,7 +260,7 @@ export function IrisMarketing(props: {
                             aria-selected={active()}
                             class="iris-subnav__item"
                             classList={{ "iris-subnav__item--active": active() }}
-                            title={`freelabel.net/p/${p.slug}`}
+                            title={`${PAGE_HOST}/p/${p.slug}`}
                             onClick={() => {
                               setPicking(false)
                               save(selectPin(state(), p.slug))

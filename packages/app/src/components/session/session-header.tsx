@@ -533,6 +533,11 @@ type SessionHeaderV2ActionsState = {
   onReviewToggle: () => void
 }
 
+/**
+ * TWO HEADER ACTION ROWS (#184891). With the new layout (`settings.general.newLayoutDesigns`, the desktop
+ * default) THIS row is drawn; the legacy icon row inside SessionHeader above is drawn otherwise. A
+ * control added to one alone compiles and never appears in the other — add it to both.
+ */
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
   const language = useLanguage()
 

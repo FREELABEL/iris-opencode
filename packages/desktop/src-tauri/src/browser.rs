@@ -320,6 +320,8 @@ fn builder(app: &AppHandle, label: &str, url: Url) -> WebviewBuilder<tauri::Wry>
     let mut b = WebviewBuilder::new(label, WebviewUrl::External(url))
         // A form that POSTs into a new window submits in this tab, so its data survives (#193441).
         .initialization_script(include_str!("browser_page.js"))
+        // The agent's page keeps running while IRIS is covered (#193492, keep_awake.rs).
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(move |url| {
             let ok = navigation_allowed(url, engine_port);
             if !ok {
@@ -412,10 +414,16 @@ pub fn ensure_browser(app: &AppHandle) -> Result<Webview, String> {
     Ok(w)
 }
 
+/// Every browser command is `async` (#193492): Tauri runs a SYNC command on the main thread,
+/// inside WebKit's URL-scheme callback for the IPC request. Creating, closing or moving pages from
+/// in there re-enters WebKit and the window library; a panic there cannot unwind past WebKit and
+/// aborts the whole app (two crashes on 1.18.201, 2026-11-14, `url_scheme_handler::start_task`).
+/// Async, each runs on Tauri's runtime and its page work is queued to the main loop at top level.
+///
 /// Show this chat's Browser over its panel, creating it on first use. Other chats' pages are
 /// left alone: a chat hides its own when it leaves (and two chats in split panes each show theirs). `url` navigates when given; a new page with no `url` reopens where this chat last was.
 #[tauri::command]
-pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
+pub async fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
     let label = label_for(&chat)?;
     let target = match url.as_deref() {
         Some(u) => Some(address_to_url(u).ok_or_else(|| format!("not a web address: {u}"))?),
@@ -452,18 +460,19 @@ pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: B
     let window = app.get_window("main").ok_or("no main window")?;
     let cookies = IMPORTED.lock().map(|c| c.clone()).unwrap_or_default();
     if cookies.is_empty() {
-        window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
+        let w = window.add_child(builder(&app, &label, start), pos, size).map_err(|e| e.to_string())?;
+        let _ = w.with_webview(crate::keep_awake::apply);
         return Ok(());
     }
     // macOS 13: this page has its own cookie jar, so it gets the Chrome sign-ins here. NEVER from
-    // this thread (#193453): this command runs on the main thread inside WebKit's message
-    // dispatch, and set_cookie there waits for WebKit in a nested run loop that cannot run
+    // the main thread (#193453): a sync command there runs inside WebKit's message dispatch, and set_cookie there waits for WebKit in a nested run loop that cannot run
     // WebKit's messages. The chat's page then asked the app a synchronous question (spell check)
     // that could never be answered: the whole app froze at 0% CPU (iMac, 2026-11-13). From
     // another thread each call is only queued for the main loop, where it runs at top level; the
     // navigation is queued after them, so the page loads signed in.
     let blank = Url::parse("about:blank").expect("static url");
     let w = window.add_child(builder(&app, &label, blank), pos, size).map_err(|e| e.to_string())?;
+    let _ = w.with_webview(crate::keep_awake::apply);
     std::thread::spawn(move || {
         for c in cookies {
             let _ = w.set_cookie(c);
@@ -476,7 +485,7 @@ pub fn browser_show(app: AppHandle, chat: String, url: Option<String>, bounds: B
 /// Follow the panel: called on resize, on a rAF, while the Browser tab is visible. A call older
 /// than the newest applied is dropped (`admit`).
 #[tauri::command]
-pub fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
+pub async fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds, seq: Option<u64>) -> Result<(), String> {
     let Some(w) = browser(&app, &chat)? else { return Ok(()) };
     if !admit_placement(w.label(), seq, false) {
         return Ok(());
@@ -488,7 +497,7 @@ pub fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds, seq: Option<
 /// Hide, never destroy: leaving the tab and coming back keeps the page (the `webMounted` rule).
 /// Also called whenever an overlay opens over the panel (the native view draws above the DOM).
 #[tauri::command]
-pub fn browser_hide(app: AppHandle, chat: String) -> Result<(), String> {
+pub async fn browser_hide(app: AppHandle, chat: String) -> Result<(), String> {
     match browser(&app, &chat)? {
         Some(w) => w.hide().map_err(|e| e.to_string()),
         None => Ok(()),
@@ -496,7 +505,7 @@ pub fn browser_hide(app: AppHandle, chat: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn browser_navigate(app: AppHandle, chat: String, url: String) -> Result<String, String> {
+pub async fn browser_navigate(app: AppHandle, chat: String, url: String) -> Result<String, String> {
     let target = address_to_url(&url).ok_or_else(|| format!("not a web address: {url}"))?;
     if !navigation_allowed(&target, crate::engine_port_hint()) {
         return Err(format!("refused: {target} is not a page the browser opens"));
@@ -510,7 +519,7 @@ pub fn browser_navigate(app: AppHandle, chat: String, url: String) -> Result<Str
 /// Close a tab's page for good (#193328): the person closed the tab, or the agent did. Forgets
 /// where it was, so the key opens blank if it is ever used again.
 #[tauri::command]
-pub fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
+pub async fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
     let label = label_for(&chat)?;
     with_tabs(|t| {
         t.urls.remove(&label);
@@ -528,7 +537,7 @@ pub fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
 
 /// back | forward | reload. History lives in the page, so back/forward are the page's own.
 #[tauri::command]
-pub fn browser_go(app: AppHandle, chat: String, action: String) -> Result<(), String> {
+pub async fn browser_go(app: AppHandle, chat: String, action: String) -> Result<(), String> {
     let w = browser(&app, &chat)?.ok_or("the browser is not open")?;
     match action.as_str() {
         "back" => w.eval("history.back()").map_err(|e| e.to_string()),
@@ -541,7 +550,7 @@ pub fn browser_go(app: AppHandle, chat: String, action: String) -> Result<(), St
 /// Where the browser really is: the address bar polls this, because a single-page app's
 /// pushState fires no page-load event.
 #[tauri::command]
-pub fn browser_state(app: AppHandle, chat: String) -> Option<BrowserState> {
+pub async fn browser_state(app: AppHandle, chat: String) -> Option<BrowserState> {
     let label = label_for(&chat).ok()?;
     let Some(w) = app.get_webview(&label) else {
         // Closed to make room: report where it was, so the tab shows it and reopens it there.
