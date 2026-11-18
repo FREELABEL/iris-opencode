@@ -1,10 +1,12 @@
-import { For, Show, createEffect, createMemo, on, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, on, onCleanup, onMount, type Accessor } from "solid-js"
 import { Portal } from "solid-js/web"
 import { createStore } from "solid-js/store"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Terminal } from "@/components/terminal"
 import { useLanguage } from "@/context/language"
-import { useTerminal } from "@/context/terminal"
+import { TerminalProvider, useTerminal } from "@/context/terminal"
+import { SDKProvider } from "@/context/sdk"
+import { useServerSync } from "@/context/server-sync"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
@@ -41,11 +43,41 @@ export function rememberPanelSurface(scope: object, surface: string) {
 
 // The split group per project folder, so it survives switching panel tabs (the pane remounts).
 const groups = new Map<string, string[]>()
+
+/** The dock under a chat. Home has none, so there the tab is the only place a terminal is drawn. */
+type Dock = { opened: () => boolean; open: () => void; close: () => void }
+
 export function SessionTerminalPane() {
+  const { view, workspaceKey } = useSessionLayout()
+  return <TerminalPane workspaceKey={workspaceKey} dock={() => view().terminal} />
+}
+
+/**
+ * The Terminal tab with no chat open (Home, the new-chat page). A terminal is a tool of the
+ * machine, not of a chat, so it should not need one: it runs in the home folder, with its own
+ * workspace of terminals that persists like a project's.
+ */
+export function HomeTerminalPane() {
+  const sync = useServerSync()
+  const home = () => sync().data.path.home || sync().data.path.directory || ""
+  return (
+    <Show when={home()} fallback={<div class="iris-empty">Loading…</div>}>
+      {(dir) => (
+        <SDKProvider directory={dir}>
+          <TerminalProvider>
+            <TerminalPane workspaceKey={() => `home:${dir()}`} />
+          </TerminalProvider>
+        </SDKProvider>
+      )}
+    </Show>
+  )
+}
+
+function TerminalPane(props: { workspaceKey: Accessor<string>; dock?: Accessor<Dock> }) {
   const terminal = useTerminal()
   const language = useLanguage()
-  const { view, workspaceKey } = useSessionLayout()
-  const docked = () => view().terminal.opened()
+  const workspaceKey = props.workspaceKey
+  const docked = () => props.dock?.().opened() ?? false
   const panelScope = useIrisPanelScope()
   const requestSurface = useRequestIrisSurface()
   const t = language.t as (key: string, vars?: Record<string, string | number | boolean>) => string
@@ -65,7 +97,7 @@ export function SessionTerminalPane() {
   }
   const moveToDock = () => {
     setStore("full", false)
-    view().terminal.open()
+    props.dock?.().open()
     requestSurface(before.get(panelScope) ?? "atlas")
   }
   const split = () => {
@@ -75,7 +107,7 @@ export function SessionTerminalPane() {
   }
 
   onMount(() => {
-    if (docked()) view().terminal.close()
+    if (docked()) props.dock?.().close()
   })
   onCleanup(() => terminal.cancelFocus())
 
@@ -114,7 +146,7 @@ export function SessionTerminalPane() {
   }
   const key = (pty: { id: string; title: string; titleNumber: number }) => String(pty.titleNumber || pty.title || pty.id)
   const showHere = () => {
-    view().terminal.close()
+    props.dock?.().close()
     const id = terminal.active()
     if (id) terminal.requestFocus(id)
   }
@@ -235,13 +267,15 @@ export function SessionTerminalPane() {
           aria-label={store.full ? "Back to the side panel" : "Full screen"}
           title={store.full ? "Back to the side panel" : "Full screen"}
         />
-        <IconButton
-          icon="layout-bottom"
-          variant="ghost"
-          onClick={moveToDock}
-          aria-label="Move to the bottom"
-          title="Move to the bottom"
-        />
+        <Show when={props.dock}>
+          <IconButton
+            icon="layout-bottom"
+            variant="ghost"
+            onClick={moveToDock}
+            aria-label="Move to the bottom"
+            title="Move to the bottom"
+          />
+        </Show>
       </div>
       <div class="iris-terminal__body">
         <Show when={terminal.ready()} fallback={<div class="iris-empty">{language.t("terminal.loading")}</div>}>

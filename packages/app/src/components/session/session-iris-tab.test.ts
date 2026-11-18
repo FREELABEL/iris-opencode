@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, IRIS_PANEL_CATALOG, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
+import { cellText, filterSurfaceChoices, detailTabsFor, IRIS_PANEL_CATALOG, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -436,5 +436,32 @@ describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
   test("Lexicon › Console is the lexicon-console page, opened signed in; Agreements stays the landing view (#192482)", () => {
     expect(resolvePane("lexicon", "console")).toMatchObject({ pane: "page", slug: "lexicon-console", sub: { signIn: true } })
     expect(resolvePane("lexicon", undefined).pane).toBe("lexicon-agreements")
+  })
+})
+
+describe("the + menu's search (2026-11-18)", () => {
+  const choices = [
+    { id: "atlas", label: "Atlas" },
+    { id: "inbox", label: "Inbox" },
+    { id: "pages", label: "Genesis" },
+    { id: "terminal", label: "Terminal" },
+    { id: "mcp", label: "MCP" },
+  ]
+  test("empty shows everything, in order", () => {
+    expect(filterSurfaceChoices(choices, "  ").map((c) => c.id)).toEqual(["atlas", "inbox", "pages", "terminal", "mcp"])
+  })
+  test("matches the name, ignoring case", () => {
+    expect(filterSurfaceChoices(choices, "TERM").map((c) => c.id)).toEqual(["terminal"])
+    expect(filterSurfaceChoices(choices, "mcp").map((c) => c.id)).toEqual(["mcp"])
+  })
+  test("a word from what the tab is for finds it, after name matches", () => {
+    expect(filterSurfaceChoices(choices, "email").map((c) => c.id)).toEqual(["inbox"])
+    expect(filterSurfaceChoices(choices, "web pages").map((c) => c.id)).toEqual(["pages"])
+  })
+  test("one or two letters match names only, not every description", () => {
+    expect(filterSurfaceChoices(choices, "at").map((c) => c.id)).toEqual(["atlas"])
+  })
+  test("no match is empty", () => {
+    expect(filterSurfaceChoices(choices, "zzzz")).toEqual([])
   })
 })

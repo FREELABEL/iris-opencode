@@ -4533,3 +4533,39 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-terminal__btn:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-base-hover, rgba(127, 127, 127, 0.12)); }
 .iris-terminal__btn:disabled { opacity: 0.45; cursor: default; }
 .iris-terminal__tab--shown { color: var(--text-base); }
+
+/* The "+" menu's search (2026-11-18): the product list passed fifteen. */
+.iris-pinsearch {
+  padding: 4px 4px 6px;
+}
+.iris-pinsearch__input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--v2-border-border-base, var(--border-weak-base));
+  background: var(--v2-background-bg-layer-01, transparent);
+  color: var(--v2-text-text-base, inherit);
+  font-size: 12.5px;
+  outline: none;
+}
+.iris-pinsearch__input:focus {
+  border-color: var(--v2-border-border-focus);
+}
+.iris-pinsearch__none {
+  padding: 6px 10px 8px;
+  font-size: 12.5px;
+  color: var(--v2-text-text-muted, var(--text-weak));
+}
+
+/* Home's tab strip scrolls on its own; no bar, the tabs are the affordance. */
+.iris-homestrip {
+  scrollbar-width: none;
+}
+.iris-homestrip::-webkit-scrollbar {
+  display: none;
+}
+.iris-homestrip > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

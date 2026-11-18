@@ -3,6 +3,7 @@ import type { Component } from "solid-js"
 import { LAST_BLOQ_KEY, useIrisPanelScope, windowIrisPanelScope } from "@/context/iris-panel-scope"
 import { usePaneFocused, useSessionParams } from "@/context/session-pane"
 import "./session-iris-tab.css"
+import { useServerSync } from "@/context/server-sync"
 import { connectsBy, healthRead, metaLine, usageBars } from "./iris-catalog"
 import { IrisIntegrationDetail } from "./iris-integration-detail"
 import {
@@ -785,6 +786,14 @@ export function registerTerminalPane(pane: Component) {
     if (--terminalPaneHolders === 0) setTerminalPane(undefined)
   }
 }
+/**
+ * The Terminal with no chat on screen (Home): its own TerminalProvider, in the home folder. A
+ * terminal is a tool of the machine, so needing a chat open first was the wrong gate.
+ */
+const [homeTerminalPane, setHomeTerminalPane] = createSignal<Component>()
+export function registerHomeTerminalPane(pane: Component) {
+  if (homeTerminalPane() !== pane) setHomeTerminalPane(() => pane)
+}
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
 // Agents › Running (#192855) reads the engine's sessions for itself.
@@ -1287,6 +1296,18 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
 }))
 
 /**
+ * The "+" menu's search (2026-11-18). By name first, then by what the tab is for — "email" finds
+ * Inbox, "pages" finds Genesis — so a person who does not know a product's name can still find it.
+ */
+export function filterSurfaceChoices<T extends { id: string; label: string }>(choices: readonly T[], query: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return [...choices]
+  const byName = choices.filter((c) => c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q))
+  const byHint = q.length < 3 ? [] : choices.filter((c) => !byName.includes(c) && (PANEL_HINTS[c.id] ?? "").toLowerCase().includes(q))
+  return [...byName, ...byHint]
+}
+
+/**
  * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
  * product, which view. Products are tabs you PIN from the + menu instead of one eight-item bar.
  */
@@ -1561,6 +1582,26 @@ export function SessionIrisTab() {
       return ""
     }
   }
+  /*
+   * Which folder's MCP servers (2026-11-18). /mcp and /config answer for a directory, and with none
+   * they answered for wherever the engine was started — on Home that is arbitrary, and in a chat it
+   * missed the project's own servers. The chat's project, else the home folder, like the Terminal.
+   */
+  const serverSync = (() => {
+    try {
+      return useServerSync()
+    } catch {
+      return undefined
+    }
+  })()
+  const mcpDirParam = () => {
+    const dir = projectDir() || serverSync?.().data.path.home || ""
+    return dir ? `directory=${encodeURIComponent(dir)}` : ""
+  }
+  const withMcpDir = (path: string) => {
+    const q = mcpDirParam()
+    return q ? `${path}${path.includes("?") ? "&" : "?"}${q}` : path
+  }
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
   const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
@@ -1769,7 +1810,7 @@ export function SessionIrisTab() {
       // MCP is two endpoints, not one: /mcp says what each server is doing, /config says what
       // each one IS. Merged here so the panel keeps ONE row shape (see mcpServerRows).
       if (which === "mcp") {
-        const [statusRes, configRes] = await Promise.all([doFetch("/mcp"), doFetch("/config")])
+        const [statusRes, configRes] = await Promise.all([doFetch(withMcpDir("/mcp")), doFetch(withMcpDir("/config"))])
         const status = statusRes.ok ? ((await statusRes.json()) as any) : {}
         const config = configRes.ok ? ((await configRes.json()) as any)?.mcp : undefined
         const servers = mcpServerRows(config, status)
@@ -3059,7 +3100,7 @@ export function SessionIrisTab() {
         : undefined
     },
     async ([, name]) => {
-      const res = await doFetch(`/mcp/${encodeURIComponent(name)}/tools`)
+      const res = await doFetch(withMcpDir(`/mcp/${encodeURIComponent(name)}/tools`))
       if (!res.ok) throw new Error(`the sidecar could not list tools (HTTP ${res.status})`)
       return (await res.json()) as { name: string; description?: string }[]
     },
@@ -4645,7 +4686,10 @@ export function SessionIrisTab() {
               </Show>
             </Match>
             <Match when={pane() === "terminal"}>
-              <Show when={terminalPane()} fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}>
+              <Show
+                when={terminalPane() ?? homeTerminalPane()}
+                fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}
+              >
                 {(pane) => {
                   const Pane = pane()
                   return <Pane />

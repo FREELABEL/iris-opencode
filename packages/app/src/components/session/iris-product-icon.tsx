@@ -11,8 +11,9 @@ import { Dynamic } from "solid-js/web"
  *
  * Colour follows the site: products in its Solutions menu carry their Tailwind colour. Two are
  * coloured here though the site leaves them plain (2026-10-13, asked for): Agents takes Heartbeat's
- * pink, since heartbeats live under Agents; Integrations takes sky, the cyan of the IRIS glow. MCP
- * stays in the text colour.
+ * pink, since heartbeats live under Agents; Integrations takes sky, the cyan of the IRIS glow.
+ * Terminal (green) and MCP (violet) were plain until 2026-11-18, when the strip had grown enough
+ * that the two uncoloured tabs read as disabled.
  */
 type Shape = [tag: "path" | "rect" | "circle" | "line", attrs: Record<string, string>]
 
@@ -155,10 +156,10 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
   marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
   browser: { shapes: GLOBE, color: "#14b8a6" }, // teal-500
-  terminal: { shapes: SQUARE_TERMINAL }, // the text colour, as MCP: a tool of the machine, not a product of the site
+  terminal: { shapes: SQUARE_TERMINAL, color: "#4ade80" }, // green-400 — the prompt's green; asked for 2026-11-18
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
-  mcp: { shapes: PLUG },
+  mcp: { shapes: PLUG, color: "#a78bfa" }, // violet-400 — a colour no other tab uses; asked for 2026-11-18
   lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
   drives: { shapes: HARD_DRIVE, color: "#94a3b8" }, // slate-400 — metal; a colour no other tab uses
 }
