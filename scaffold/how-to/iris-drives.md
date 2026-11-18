@@ -1,7 +1,7 @@
 ---
 category: Data & Atlas
 level: beginner
-tags: [drives, keep, vault, keep it safe, spare, lost copy, heal, auto sync, backup copies, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access]
+tags: [drives, keep, vault, keep it safe, spare, lost copy, heal, auto sync, backup copies, backup, hard drive, flash drive, ssd, footage, find a file, find a file on a drive, which drive has, encryption, bitlocker, veracrypt, sd card, duplicates, copies, checksum, audit, windows, full disk access, iris desktop, drives tab, side panel, screen share, hide file names]
 duration_min: 15
 ---
 # How to: Know what is on every drive you own, and find any file without plugging it in
@@ -154,6 +154,28 @@ it is not (it is still searchable). Free space and "last seen on" are as of the 
 **Backup 2** is fine: its sensitive files are on an encrypted drive. **Studio footage** is the one to
 fix first (Step 6): sensitive files on a drive anyone could read. **Client projects** has nothing
 sensitive, so not being encrypted matters less.
+
+## Step 3b: Or open the Drives tab in IRIS Desktop
+
+Everything you have cataloged is also a tab in IRIS Desktop, beside your chat. Nothing extra to
+set up: it reads the same catalog, signed in as you.
+
+1. In IRIS Desktop, click **Drives** in the bar along the top of the side panel. If it isn't there,
+   update IRIS Desktop, then open the side panel again.
+2. Pick a drive. **Folders** lists its project folders, **Findings** lists its sensitive files, and
+   **Info** shows how full it is, whether it is encrypted, and when it was last scanned.
+3. Open a folder to see only the findings inside it, or open a finding to see its path, size and
+   when it was found. **Copy path** copies it for you. The arrow at the top, or Backspace, goes back
+   a level.
+
+**What the colours mean:** a count or a finding is red only when the drive holding it is not
+encrypted. On an encrypted drive the same file shows as **contained**. Files a later scan no longer
+found are not counted; they sit under **Show moved off this drive** at the bottom of the list.
+
+**Sharing your screen?** Click the eye at the top of the tab first. Folders and files then show only
+what kind they are ("Hidden credential file"), and a path appears only when you click **Reveal** on
+that one file. Escape, or moving to another view, hides it again. The tab remembers the setting on
+that computer.
 
 ## Step 4: Find a file on any drive (`find`)
 
