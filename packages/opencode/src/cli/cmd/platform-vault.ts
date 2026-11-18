@@ -68,6 +68,7 @@ import {
 import { metaStamp, verifyReplica, fillReplica, writeBlob, blobFile, ensureReplica } from "./vault-drives"
 import { replicaRowId, refreshDriveAlerts } from "./vault-replicas"
 import { metered, type DrivesRun } from "./drives-telemetry"
+import { applyNegation } from "./negated-flag"
 
 const VAULT_ROOT = join(homedir(), ".iris", "vault")
 const KEYS_FILE = join(homedir(), ".iris", "vault-keys.json")
@@ -321,6 +322,9 @@ const CreateCommand = cmd({
     .option("lost-after", { type: "string", describe: "(with --on) a copy unseen this long counts as lost and is rebuilt on a spare (default 14d; h/d/w)" })
     .option("on-return", { type: "string", choices: ["keep", "retire"], describe: "(with --on) when a lost copy is verified again: keep both (default) or retire the spare's copy" })
     .option("auto", { type: "boolean", describe: "(with --on) catch up and heal automatically (default on; --no-auto turns it off for this vault)" })
+    // literal --no-auto: boolean-negation is off globally (src/index.ts) — #193782
+    .option("no-auto", { type: "boolean", default: false, describe: "same as --auto=false" })
+    .middleware((a) => applyNegation(a as Record<string, unknown>, "auto"), true)
     .option("bloq", { type: "number", describe: "advanced: the Drives board to use (default: your board named Drives)" })
     .option("encrypted", { type: "boolean", default: false, describe: "an encrypted PHI vault on this node: per-bloq, key in the OS keychain (or --passphrase)" })
     .option("bloq", { type: "string", describe: "(--encrypted) bind to this bloq: only its tasks can open the vault" })
