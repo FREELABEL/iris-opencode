@@ -210,6 +210,8 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   wallet: "finance",
   payments: "finance",
   commerce: "finance",
+  // What a client used (AI spend, runs, storage) — the basis for billing them (#193867).
+  usage: "finance",
 
   // Hive & Compute
   hive: "compute",
