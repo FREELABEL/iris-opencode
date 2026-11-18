@@ -78,3 +78,5 @@
 
 .iris-drv-foot { flex: 0 0 auto; display: flex; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--border-weaker-base); font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; overflow: hidden; white-space: nowrap; }
 .iris-drv-toast { position: absolute; left: 12px; right: 12px; bottom: 36px; padding: 7px 10px; border-radius: 6px; font-size: 12px; background: var(--text-strong); color: var(--background-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; z-index: 2; }
+.iris-drv-reveal { border: 0; background: none; padding: 0; color: var(--drv-accent); font: inherit; cursor: pointer; }
+.iris-drv-reveal:hover { text-decoration: underline; }

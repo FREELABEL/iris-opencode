@@ -8,6 +8,8 @@ import {
   fmtDate,
   fmtGb,
   fmtKb,
+  maskedFindingMeta,
+  maskedName,
   matches,
   moveSelection,
   neverScanned,
@@ -124,6 +126,16 @@ describe("Drives (#193705)", () => {
     expect(all.filter(onDrive)).toHaveLength(drive({ sensitiveFiles: 368 }).sensitiveFiles!)
     expect(onDrive(finding("x", "exposed"))).toBe(true)
     expect(onDrive(finding("x", "moved"))).toBe(false)
+  })
+
+  test("hidden names show the kind, never the name or the folder (#193817)", () => {
+    const f = finding("_IRIS_WORK/backups/db/2026-11-08/.env.production", "exposed")
+    expect(maskedName("file", f.kind)).toBe("Hidden db-dump file")
+    expect(maskedName("folder", "video")).toBe("Hidden folder · mostly video")
+    expect(maskedName("file", null)).toBe("Hidden file")
+    const meta = maskedFindingMeta(f)
+    expect(meta).not.toContain("_IRIS_WORK")
+    expect(meta).not.toContain(".env")
   })
 
   test("the scan command quotes the label", () => {
