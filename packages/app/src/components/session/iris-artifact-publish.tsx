@@ -365,16 +365,40 @@ export function IrisArtifactPublish(props: {
                 {p().visibility === "private" ? "Private in Genesis · " : ""}
                 {p().url.replace(/^https?:\/\//, "")}
               </span>
-              <button type="button" class="iris-card__linkbtn" onClick={() => void copy(p().url)}>
-                {copied() ? "Copied" : "Copy"}
+              {/* Icons, not words (#193844): three text links plus the address and the publish
+                  button wrapped onto two or three lines in a narrow window. Each keeps its
+                  name as the tooltip and the accessible label. */}
+              <button
+                type="button"
+                class="iris-publish__icon"
+                title={copied() ? "Copied" : "Copy link"}
+                aria-label={copied() ? "Copied" : "Copy link"}
+                onClick={() => void copy(p().url)}
+              >
+                <Icon name={copied() ? "check" : "copy"} size="small" />
               </button>
               <Show when={props.onToggleLive}>
-                <button type="button" class="iris-card__linkbtn" onClick={() => props.onToggleLive?.()}>
-                  {props.live ? "Show draft" : "View live"}
+                <button
+                  type="button"
+                  class="iris-publish__icon"
+                  classList={{ "iris-publish__icon--on": !!props.live }}
+                  aria-pressed={!!props.live}
+                  title={props.live ? "Showing the live page — click for the draft" : "View live page"}
+                  aria-label={props.live ? "Show draft" : "View live"}
+                  onClick={() => props.onToggleLive?.()}
+                >
+                  <Icon name="eye" size="small" />
                 </button>
               </Show>
-              <a class="iris-card__linkbtn" href={p().url} target="_blank" rel="noopener noreferrer">
-                Open in browser
+              <a
+                class="iris-publish__icon"
+                href={p().url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open in browser"
+                aria-label="Open in browser"
+              >
+                <Icon name="square-arrow-top-right" size="small" />
               </a>
             </span>
           )}

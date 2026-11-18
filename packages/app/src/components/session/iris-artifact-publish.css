@@ -222,3 +222,9 @@
   .iris-pubm__scope { flex-direction: row; align-items: center; gap: 10px; }
   .iris-pubm__scopehint { margin-left: auto; text-align: right; }
 }
+
+/* Toolbar icon buttons: Copy link · View live · Open in browser (#193844). */
+.iris-publish__icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--text-weak); cursor: pointer; text-decoration: none; }
+.iris-publish__icon:hover { background: var(--background-element); color: var(--text-strong); }
+.iris-publish__icon--on { color: var(--text-strong); background: var(--background-element); }
+.iris-publish__icon:focus-visible { outline: 2px solid var(--border-strong-base, currentColor); outline-offset: 1px; }

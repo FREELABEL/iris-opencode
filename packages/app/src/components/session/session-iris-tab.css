@@ -2217,6 +2217,22 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-artifacts__toolbar .iris-publish { display: contents; }
 .iris-artifacts__toolbar .iris-publish__bar { flex: 1; justify-content: flex-end; min-width: 0; }
 .iris-artifacts__toolbar .iris-publish__spacer { display: none; }
+/* Narrow windows (#193844): one line, never three. The bar stops wrapping; the address
+   truncates first, then the author/rev line and the address hide (the icons still copy and
+   open it), and the title gives up width last. */
+.iris-artifacts__toolbar { container-type: inline-size; container-name: iris-art-tb; }
+.iris-artifacts__toolbar .iris-publish__bar { flex-wrap: nowrap; gap: 4px; }
+.iris-artifacts__toolbar .iris-publish__addr { flex: 0 1 auto; gap: 2px; }
+.iris-artifacts__toolbar .iris-card__linkbtn { white-space: nowrap; flex: none; }
+.iris-artifacts__tbmeta { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+@container iris-art-tb (max-width: 820px) {
+  .iris-artifacts__tbmeta { display: none; }
+  .iris-publish__behind { display: none; }
+}
+@container iris-art-tb (max-width: 620px) {
+  .iris-publish__url { display: none; }
+  .iris-artifacts__tbtitle { max-width: 30%; }
+}
 .iris-artifacts__toolbar .iris-publish__form,
 .iris-artifacts__toolbar .iris-publish__note { flex-basis: 100%; }
 
