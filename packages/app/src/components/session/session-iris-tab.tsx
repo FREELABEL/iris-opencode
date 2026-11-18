@@ -785,6 +785,14 @@ export function registerTerminalPane(pane: Component) {
     if (--terminalPaneHolders === 0) setTerminalPane(undefined)
   }
 }
+/**
+ * The Terminal with no chat on screen (Home): its own TerminalProvider, in the home folder. A
+ * terminal is a tool of the machine, so needing a chat open first was the wrong gate.
+ */
+const [homeTerminalPane, setHomeTerminalPane] = createSignal<Component>()
+export function registerHomeTerminalPane(pane: Component) {
+  if (homeTerminalPane() !== pane) setHomeTerminalPane(() => pane)
+}
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
 // Agents › Running (#192855) reads the engine's sessions for itself.
@@ -1285,6 +1293,18 @@ export const IRIS_SURFACE_CHOICES: readonly { id: string; label: string }[] = SU
   id: s.id,
   label: s.label,
 }))
+
+/**
+ * The "+" menu's search (2026-11-18). By name first, then by what the tab is for — "email" finds
+ * Inbox, "pages" finds Genesis — so a person who does not know a product's name can still find it.
+ */
+export function filterSurfaceChoices<T extends { id: string; label: string }>(choices: readonly T[], query: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return [...choices]
+  const byName = choices.filter((c) => c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q))
+  const byHint = q.length < 3 ? [] : choices.filter((c) => !byName.includes(c) && (PANEL_HINTS[c.id] ?? "").toLowerCase().includes(q))
+  return [...byName, ...byHint]
+}
 
 /**
  * PROJECT FIRST, PRODUCTS AS TABS (#186509 nav). The panel reads top-down: which project, which
@@ -4645,7 +4665,10 @@ export function SessionIrisTab() {
               </Show>
             </Match>
             <Match when={pane() === "terminal"}>
-              <Show when={terminalPane()} fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}>
+              <Show
+                when={terminalPane() ?? homeTerminalPane()}
+                fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}
+              >
                 {(pane) => {
                   const Pane = pane()
                   return <Pane />

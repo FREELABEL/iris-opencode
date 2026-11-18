@@ -16,6 +16,10 @@ describe("IRIS product icons follow the heyiris.io nav", () => {
     expect(surfaceIds.length).toBeGreaterThan(5)
     for (const id of surfaceIds) expect(PRODUCT_ICONS[id], id).toBeDefined()
   })
+  // 2026-11-18: an uncoloured tab (Terminal, MCP) read as disabled beside the coloured ones.
+  test("every surface has a colour", () => {
+    for (const id of surfaceIds) expect(PRODUCT_ICONS[id]?.color, id).toBeTruthy()
+  })
   test("Solutions products keep the site's colour", () => {
     expect(PRODUCT_ICONS.atlas.color).toBe("#f59e0b")
     expect(PRODUCT_ICONS.pages.color).toBe("#84cc16")

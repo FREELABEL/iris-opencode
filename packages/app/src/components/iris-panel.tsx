@@ -1,5 +1,5 @@
 import { SessionWebTab } from "@/components/session/session-web-tab"
-import { For, Show } from "solid-js"
+import { For, Show, createMemo, createSignal } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
@@ -9,6 +9,7 @@ import { useIrisPanelScope } from "@/context/iris-panel-scope"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
 import {
   IRIS_SURFACE_CHOICES,
+  filterSurfaceChoices,
   SessionIrisTab,
   irisPinned,
   toggleIrisPin,
@@ -16,10 +17,15 @@ import {
   useIrisActiveSurface,
   useRequestIrisSurface,
   registerBrowserPane,
+  registerHomeTerminalPane,
 } from "@/components/session/session-iris-tab"
+import { HomeTerminalPane } from "@/pages/session/terminal-pane"
 
 // #193062: the IRIS panel draws the Browser product with this pane (see registerBrowserPane).
 registerBrowserPane(SessionWebTab)
+// #193785: with no chat on screen the Terminal runs in the home folder (a chat's side panel
+// registers its own, in the chat's project, while it is mounted).
+registerHomeTerminalPane(HomeTerminalPane)
 
 /**
  * The IRIS panel itself — one component, for every host (#192535). It used to exist only inside a
@@ -81,22 +87,50 @@ export function IrisScopeChip() {
  * above it, Home and the new-chat page show it alone.
  */
 export function IrisPinItems(props: { onOpen: (id: string) => void }) {
+  // The list passed fifteen products (2026-11-18): typing narrows it, Enter opens the first match.
+  const [query, setQuery] = createSignal("")
+  const matches = createMemo(() => filterSurfaceChoices(IRIS_SURFACE_CHOICES, query()))
+  const pick = (id: string) => {
+    if (toggleIrisPin(id)) props.onOpen(id)
+  }
   return (
-    <For each={IRIS_SURFACE_CHOICES}>
-      {(surface) => (
-        <MenuV2.Item
-          onSelect={() => {
-            if (toggleIrisPin(surface.id)) props.onOpen(surface.id)
+    <>
+      <div class="iris-pinsearch" onPointerDown={(e) => e.stopPropagation()}>
+        <input
+          ref={(el) => requestAnimationFrame(() => el.focus())}
+          type="search"
+          class="iris-pinsearch__input"
+          placeholder="Search tabs"
+          aria-label="Search tabs"
+          value={query()}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            // The menu's own keys (arrows into the list, Esc to close) still work; letters are
+            // the search's, not the menu's type-ahead.
+            if (["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(e.key)) return
+            e.stopPropagation()
+            if (e.key === "Enter") {
+              e.preventDefault()
+              const first = matches()[0]
+              if (first) pick(first.id)
+            }
           }}
-        >
-          <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
-          <span class="inline-flex items-center gap-2">
-            <IrisProductIcon id={surface.id} />
-            {surface.label}
-          </span>
-        </MenuV2.Item>
-      )}
-    </For>
+        />
+      </div>
+      <Show when={matches().length > 0} fallback={<div class="iris-pinsearch__none">No tab matches “{query()}”</div>}>
+        <For each={matches()}>
+          {(surface) => (
+            <MenuV2.Item onSelect={() => pick(surface.id)}>
+              <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
+              <span class="inline-flex items-center gap-2">
+                <IrisProductIcon id={surface.id} />
+                {surface.label}
+              </span>
+            </MenuV2.Item>
+          )}
+        </For>
+      </Show>
+    </>
   )
 }
 /** The panel for a host with no side-panel chrome of its own (Home): a row of the same surfaces, then the body. */
