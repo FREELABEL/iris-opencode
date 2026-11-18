@@ -11,6 +11,7 @@ import {
   untrack,
   type Accessor,
 } from "solid-js"
+import { chatOnScreen } from "@/utils/chat-on-screen"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
@@ -469,6 +470,10 @@ export default function LegacyLayout(props: ParentProps) {
         const currentSession = params.id
         if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
         if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
+        // Split view (#191774): a chat in ANY column already shows its request in its own composer.
+        // The route names only the focused column, so this toast covered the window for a chat the
+        // person could see, and read as "the approval is in every column".
+        if (chatOnScreen(props.sessionID) || (session?.parentID && chatOnScreen(session.parentID))) return
 
         dismissSessionAlert(sessionKey)
 

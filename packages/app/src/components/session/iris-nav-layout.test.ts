@@ -140,7 +140,7 @@ describe("Outreach is a product again (#193487; it was folded into Leads by #192
   }
   test("a saved layout with the old `outreach` id keeps Outreach where it was, shown; Leads stays as the person left it", () => {
     const l = merged(migrateNavLayout(withOutreach))
-    // Inbox, Browser and Drives were never in this layout, so they land after their default neighbours.
+    // Inbox, Browser and Drives were never (Terminal neither, and it starts hidden) in this layout, so they land after their default neighbours.
     expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "marketing", "browser", "drives", "inbox"])
     expect(isNavItemVisible(l, "leads")).toBe(false)
     expect(l.order.filter((x) => x === "outreach")).toHaveLength(1)
@@ -187,6 +187,17 @@ test("the Browser is shown by default after Marketing, also in a layout saved be
   expect(shown.indexOf("browser")).toBe(shown.indexOf("marketing") + 1)
   // A person who hid it keeps it hidden.
   expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "browser"], hidden: ["browser"] }).hidden).toContain("browser")
+})
+
+test("the Terminal is hidden by default, after Drives; turned on, it shows there (#193785, #186060)", () => {
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).not.toContain("terminal")
+  // In a layout saved before it existed it stays out of sight too: a new default reaches what was never seen.
+  const old: NavLayout = { version: 2, order: ["atlas", "browser", "pages"], hidden: [] }
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, old))).not.toContain("terminal")
+  // Someone who turned it on keeps it, after the Browser.
+  const on: NavLayout = { version: 2, order: ["atlas", "browser", "drives", "terminal", "pages"], hidden: [] }
+  const shown = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, on))
+  expect(shown.indexOf("terminal")).toBe(shown.indexOf("drives") + 1)
 })
 
 // #193705: Drives is a product in the bar, after Browser — for a new person AND a saved layout that

@@ -1,4 +1,5 @@
 import { createEffect, onCleanup, untrack } from "solid-js"
+import { chatOnScreen, markOnScreen } from "@/utils/chat-on-screen"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServerSDK } from "@/context/server-sdk"
@@ -397,18 +398,7 @@ export function usePanelControl(input: { open: () => boolean }) {
  * check. Those answer at once, saying the person is in another chat, instead of waiting on a
  * prompt nobody can see.
  */
-const onScreen = new Map<string, number>()
-export function chatOnScreen(chat: string): boolean {
-  return (onScreen.get(chat) ?? 0) > 0
-}
-export function markOnScreen(chat: string): () => void {
-  onScreen.set(chat, (onScreen.get(chat) ?? 0) + 1)
-  return () => {
-    const n = (onScreen.get(chat) ?? 1) - 1
-    if (n > 0) onScreen.set(chat, n)
-    else onScreen.delete(chat)
-  }
-}
+export { chatOnScreen, markOnScreen } from "@/utils/chat-on-screen"
 
 /** Where a page the person can't see is laid out: off screen, at a normal desktop size. */
 const OFFSCREEN = { x: -30_000, y: 0, width: 1200, height: 860 }

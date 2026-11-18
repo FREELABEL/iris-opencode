@@ -43,6 +43,7 @@ import {
   irisOpensOnAtlas,
   toggleIrisFilesPin,
   registerBrowserPane,
+  registerTerminalPane,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -53,6 +54,7 @@ const webTabPanelID = "session-side-panel-web-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
 import { SessionWebTab } from "@/components/session/session-web-tab"
+import { SessionTerminalPane, rememberPanelSurface } from "@/pages/session/terminal-pane"
 import { nativeBrowserEnabled } from "@/components/session/native-browser-model"
 import { usePlatform } from "@/context/platform"
 import { WEB_TAB, webUrl } from "@/components/session/web-nav"
@@ -123,6 +125,9 @@ export function SessionSidePanel(props: {
   const dialog = useDialog()
   const sdk = useSDK()
   const { sessionKey, tabs, view, params } = useSessionLayout()
+  // #193785: the panel's Terminal tab, while this session (and its TerminalProvider) is on screen.
+  onCleanup(registerTerminalPane(SessionTerminalPane))
+  createEffect(() => rememberPanelSurface(panelScope, irisActiveSurface()))
   const projectDirectory = createMemo(() => sdk().directory)
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
@@ -553,6 +558,9 @@ export function SessionSidePanel(props: {
                       >
                         <DragDropSensors />
                         <ConstrainDragYAxis />
+                        {/* TAB STRIP 1 OF 2 (#184891): drawn only WITHOUT `props.fileBrowserState`. The desktop
+                            app draws strip 2 below ("session-review-v2-tabs-bar"). A tab or control added
+                            here alone compiles, passes its tests and never appears — add it to both. */}
                         <Tabs value={stripValue()} onChange={activateTab}>
                           <div class="sticky top-0 shrink-0 flex">
                             <Tabs.List
@@ -806,6 +814,8 @@ export function SessionSidePanel(props: {
                         tabs().move(source.id.toString(), source.index)
                       }}
                     >
+                      {/* TAB STRIP 2 OF 2 (#184891): the one the desktop app draws (with `props.fileBrowserState`).
+                          Strip 1 above is the fallback — add any tab or control to both. */}
                       <Tabs value={stripValue()} onChange={activateTab}>
                         <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center">
                           <Tabs.List
