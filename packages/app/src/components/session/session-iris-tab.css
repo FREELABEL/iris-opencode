@@ -4412,6 +4412,65 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-held__btn:disabled { opacity: .5; cursor: default; }
 .iris-held__error { font-size: 12px; color: var(--text-on-critical-weak); margin: 0; }
 
+/* ── A card in the side panel (#193330) ─────────────────────────────────────────────────
+   The editor's own frame, as a box filling the panel instead of a pop-up. It covers the board,
+   which stays mounted underneath. Narrow, so the two columns stack: the body, then
+   Details | Tasks | Chat, in one scroll. */
+.iris-card-panel-host {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-base);
+}
+.iris-card--panel[data-slot="dialog-content"] {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.iris-card--panel [data-slot="dialog-header"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 8px 8px 8px 6px;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-card--panel [data-slot="dialog-title"] {
+  flex: 1;
+  min-width: 0;
+}
+.iris-card--panel .iris-card__hdr { gap: 6px; }
+.iris-card--panel .iris-card__htitle { font-size: 15px; }
+.iris-card--panel .iris-card__step { display: inline-flex; gap: 0; margin-inline-end: 2px; }
+.iris-card--panel .iris-card__step .iris-ib:disabled { opacity: 0.35; cursor: default; }
+.iris-card--panel [data-slot="dialog-body"] {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.iris-card--panel .iris-card__cols {
+  flex-direction: column;
+  overflow-y: auto;
+}
+.iris-card--panel .iris-card__body { flex: none; min-height: 220px; }
+.iris-card--panel .iris-card__read,
+.iris-card--panel .iris-card__doc { overflow: visible; flex: none; }
+.iris-card--panel .iris-card__side,
+.iris-card--elon.iris-card--panel .iris-card__side {
+  width: auto;
+  border-top: 1px solid var(--border-weaker-base);
+  border-left: 0;
+}
+.iris-card--panel .iris-card__cols[data-side-collapsed] .iris-card__side { display: block; }
+
 /* Terminal (#193785): the chat's terminals in the side panel. The strip is the panel's own
    sub-view strip; the shell fills the rest. */
 .iris-terminal { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%; }
