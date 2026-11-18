@@ -1,5 +1,5 @@
 import { SessionWebTab } from "@/components/session/session-web-tab"
-import { For, Show, createMemo, createSignal } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
@@ -86,22 +86,6 @@ export function IrisScopeChip() {
  * whether it is there. One list for every host (#192535): the chat's "+" adds its own file items
  * above it, Home and the new-chat page show it alone.
  */
-/**
- * For the "+" menu's Content: the menu would focus its first item on open, so letters went to its
- * type-ahead instead of the search. Put focus in the search instead.
- */
-export function focusPinSearch(e: Event) {
-  // The event's target is not always the menu element, so look in the open menu itself.
-  const el =
-    (e.currentTarget as HTMLElement | null)?.querySelector?.<HTMLInputElement>(".iris-pinsearch__input") ??
-    document.querySelector<HTMLInputElement>("[data-menu-content] .iris-pinsearch__input, .iris-pinsearch__input")
-  if (!el) return
-  e.preventDefault()
-  el.focus()
-  // Some opens restore focus to the trigger after this runs; take it back once.
-  requestAnimationFrame(() => document.activeElement !== el && el.isConnected && el.focus())
-}
-
 export function IrisPinItems(props: { onOpen: (id: string) => void }) {
   // The list passed fifteen products (2026-11-18): typing narrows it, Enter opens the first match.
   const [query, setQuery] = createSignal("")
@@ -109,19 +93,47 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
   const pick = (id: string) => {
     if (toggleIrisPin(id)) props.onOpen(id)
   }
+  /*
+   * Typing goes to the search wherever focus is. The menu keeps focus on its items (it took it back
+   * from the field, measured 2026-11-18), so the field is fed from a capture listener on the menu:
+   * letters filter, Backspace deletes, Enter opens the first match; arrows and Esc stay the menu's.
+   */
+  const onKey = (e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    if (e.target instanceof HTMLInputElement && e.target.classList.contains("iris-pinsearch__input")) return
+    if (e.key.length === 1 && (e.key !== " " || query())) {
+      e.preventDefault()
+      e.stopPropagation()
+      setQuery(query() + e.key)
+    } else if (e.key === "Backspace" && query()) {
+      e.preventDefault()
+      e.stopPropagation()
+      setQuery(query().slice(0, -1))
+    } else if (e.key === "Enter" && query()) {
+      const first = matches()[0]
+      if (!first) return
+      e.preventDefault()
+      e.stopPropagation()
+      pick(first.id)
+    }
+  }
+  let box: HTMLDivElement | undefined
+  onMount(() => {
+    const menu = box?.closest<HTMLElement>("[role='menu']") ?? box?.parentElement
+    menu?.addEventListener("keydown", onKey, true)
+    onCleanup(() => menu?.removeEventListener("keydown", onKey, true))
+  })
   return (
     <>
-      <div class="iris-pinsearch" onPointerDown={(e) => e.stopPropagation()}>
+      <div ref={box} class="iris-pinsearch" onPointerDown={(e) => e.stopPropagation()}>
         <input
           type="search"
           class="iris-pinsearch__input"
-          placeholder="Search tabs"
+          placeholder="Type to search tabs"
           aria-label="Search tabs"
           value={query()}
           onInput={(e) => setQuery(e.currentTarget.value)}
           onKeyDown={(e) => {
-            // The menu's own keys (arrows into the list, Esc to close) still work; letters are
-            // the search's, not the menu's type-ahead.
             if (["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(e.key)) return
             e.stopPropagation()
             if (e.key === "Enter") {
@@ -178,7 +190,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
             aria-label="Add a tab"
           />
           <MenuV2.Portal>
-            <MenuV2.Content style={{ "min-width": "190px" }} onOpenAutoFocus={focusPinSearch}>
+            <MenuV2.Content style={{ "min-width": "190px" }}>
               <IrisPinItems onOpen={(id) => request(id as any)} />
             </MenuV2.Content>
           </MenuV2.Portal>
