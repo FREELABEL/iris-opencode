@@ -113,6 +113,28 @@ export const MAX_FINDING_PAGES = 50
 /** Still on the drive. A `moved` finding was found by an earlier scan and is gone now (#193813). */
 export const onDrive = (f: DriveFinding) => f.status !== "moved"
 
+/** Hide names (#193817): remembered on this device. Off until the person turns it on. */
+export const HIDE_NAMES_KEY = "iris.drives.hideNames"
+export function readHideNames(): boolean {
+  try {
+    return localStorage.getItem(HIDE_NAMES_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+/** What a hidden folder or file is shown as: its kind, never its name. */
+export function maskedName(what: "folder" | "file", kind?: string | null): string {
+  const k = kind?.trim()
+  if (what === "folder") return k ? `Hidden folder · mostly ${k}` : "Hidden folder"
+  return k ? `Hidden ${k} file` : "Hidden file"
+}
+
+/** A hidden finding's second line: size and when it was found — no folder, which is part of the path. */
+export function maskedFindingMeta(f: DriveFinding): string {
+  return [fmtKb(f.sizeKb), f.found ? `found ${fmtDate(f.found)}` : null].filter(Boolean).join(" · ")
+}
+
 export type Tone = "bad" | "good" | "muted"
 /** exposed = on an unencrypted drive, anyone with the drive can read it; contained = encrypted; moved = gone. */
 export function statusTone(status: string | null | undefined): Tone {

@@ -17,6 +17,10 @@ import {
   fmtGb,
   fmtKb,
   folderMeta,
+  HIDE_NAMES_KEY,
+  maskedFindingMeta,
+  maskedName,
+  readHideNames,
   foldersOf,
   FULL_PAGE_URL,
   matches,
@@ -135,7 +139,23 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
 
   // Anything that changes the list resets the selection; leaving a scope closes the sheet.
   createEffect(on([driveId, folder, segment, query], () => setSel(-1)))
-  createEffect(on([driveId, folder], () => setSheet(undefined)))
+  // Leaving a view closes the sheet — a path revealed there must not ride along to the next one.
+  createEffect(on([driveId, folder, segment], () => setSheet(undefined)))
+  /*
+   * HIDE NAMES (#193817). The tab lists sensitive files by path — .env files, credentials, database
+   * dumps — and a screen share or a capture shows them. With names hidden, folders and files show only
+   * what kind they are, and the sheet reveals one path on request. Drive names stay: they are the
+   * labels people navigate by. Remembered on this device.
+   */
+  const [hideNames, setHideNames] = createSignal(readHideNames())
+  const toggleHideNames = () => {
+    setHideNames((v) => !v)
+    try {
+      localStorage.setItem(HIDE_NAMES_KEY, hideNames() ? "1" : "0")
+    } catch {}
+  }
+  const [revealed, setRevealed] = createSignal(false)
+  createEffect(on([sheet, hideNames], () => setRevealed(false)))
   // Moved findings are history, folded away until asked for; every new scope starts folded.
   const [showMoved, setShowMoved] = createSignal(false)
   createEffect(on([driveId, folder, segment], () => setShowMoved(false)))
@@ -146,7 +166,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
    */
   createEffect(
     on(
-      [driveId, folder, sheet],
+      [driveId, folder, sheet, revealed],
       () =>
         queueMicrotask(() => {
           const a = document.activeElement
@@ -208,7 +228,8 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
       await navigator.clipboard.writeText(text)
       setNote(`Copied ${what}`)
     } catch {
-      setNote(text)
+      // The fallback shows the text so it can be selected — never a hidden path.
+      setNote(hideNames() ? `Couldn't copy ${what}. Show file names to select it.` : text)
     }
     setTimeout(() => setNote(undefined), 2400)
   }
@@ -245,8 +266,9 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
 
   const title = () => {
     if (!drive()) return "Drives"
-    return folder() ? `${drive()!.label} / ${folder()}` : drive()!.label
+    return folder() ? `${drive()!.label} / ${shownFolder()}` : drive()!.label
   }
+  const shownFolder = () => (hideNames() ? maskedName("folder") : folder())
   const findingsCount = () => {
     const c = findingsFor(drive()?.id)
     // Every page read: count what is on the drive. Until then, the scan's own count — the same meaning.
@@ -264,7 +286,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
         </Show>
         <div class="iris-drv-title" title={title()}>
           <Show when={folder()} fallback={title()}>
-            <span class="iris-drv-crumb">{drive()!.label} /</span> {folder()}
+            <span class="iris-drv-crumb">{drive()!.label} /</span> {shownFolder()}
           </Show>
         </div>
         <Show when={data()?.state === "ok" && drives().length}>
@@ -280,6 +302,17 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
             }}
           >
             <Icon name="magnifying-glass" size="small" />
+          </button>
+        </Show>
+        <Show when={data()?.state === "ok" && drives().length}>
+          <button
+            class="iris-drv-icon-btn"
+            aria-label={hideNames() ? "Show file names" : "Hide file names"}
+            title={hideNames() ? "Show file names" : "Hide file names (for screen sharing)"}
+            aria-pressed={hideNames()}
+            onClick={toggleHideNames}
+          >
+            <Icon name="eye" size="small" />
           </button>
         </Show>
         <button class="iris-drv-icon-btn" aria-label="Open the full Drives page" title="Open the full Drives page" onClick={openFull}>
@@ -368,6 +401,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
                   index={i()}
                   selected={sel() === i() || (r.kind === "finding" && sheet()?.id === r.finding.id)}
                   driveEncrypted={drive()?.encrypted}
+                  hideNames={hideNames()}
                   onClick={() => {
                     setSel(i())
                     open(r)
@@ -396,7 +430,9 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
             {(f) => (
               <section class="iris-drv-sheet" aria-label="Finding">
                 <div class="iris-drv-sheet-hd">
-                  <span class="iris-drv-sheet-nm" title={f().path}>{baseName(f().path)}</span>
+                  <span class="iris-drv-sheet-nm" title={hideNames() && !revealed() ? undefined : f().path}>
+                    {hideNames() && !revealed() ? maskedName("file", f().kind) : baseName(f().path)}
+                  </span>
                   <span class="iris-drv-pill" data-tone={statusTone(f().status)}>{f().status ?? "—"}</span>
                   <button class="iris-drv-icon-btn" aria-label="Close" title="Close (Esc)" onClick={() => setSheet(undefined)}>
                     <Icon name="close-small" size="small" />
@@ -410,7 +446,18 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
                     {drive()?.label} · {f().driveEncrypted ? "encrypted" : "not encrypted"}
                   </dd>
                   <dt>Path</dt>
-                  <dd class="iris-drv-mono">{f().path}</dd>
+                  <dd class="iris-drv-mono">
+                    <Show
+                      when={!hideNames() || revealed()}
+                      fallback={
+                        <button class="iris-drv-reveal" onClick={() => setRevealed(true)}>
+                          Hidden · Reveal
+                        </button>
+                      }
+                    >
+                      {f().path}
+                    </Show>
+                  </dd>
                   <dt>Size</dt>
                   <dd class="iris-drv-mono">{fmtKb(f().sizeKb)}</dd>
                   <dt>Found</dt>
@@ -457,7 +504,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   )
 }
 
-function RowView(props: { row: Row; index: number; selected: boolean; driveEncrypted?: boolean; onClick: () => void }) {
+function RowView(props: { row: Row; index: number; selected: boolean; driveEncrypted?: boolean; hideNames?: boolean; onClick: () => void }) {
   const r = props.row
   const icon: IconProps["name"] =
     r.kind === "drive"
@@ -469,8 +516,17 @@ function RowView(props: { row: Row; index: number; selected: boolean; driveEncry
           : r.finding.status === "moved"
             ? "archive"
             : "lock"
-  const name = r.kind === "drive" ? r.drive.label : r.kind === "folder" ? r.folder.folder : baseName(r.finding.path)
-  const meta = r.kind === "drive" ? driveMeta(r.drive) : r.kind === "folder" ? folderMeta(r.folder) : findingMeta(r.finding)
+  // Functions, not values: the row stays mounted when names are hidden or shown.
+  const name = () => {
+    if (r.kind === "drive") return r.drive.label
+    if (props.hideNames) return r.kind === "folder" ? maskedName("folder", r.folder.mainKind) : maskedName("file", r.finding.kind)
+    return r.kind === "folder" ? r.folder.folder : baseName(r.finding.path)
+  }
+  const meta = () => {
+    if (r.kind === "drive") return driveMeta(r.drive)
+    if (r.kind === "folder") return folderMeta(r.folder)
+    return props.hideNames ? maskedFindingMeta(r.finding) : findingMeta(r.finding)
+  }
   const trail = (): JSX.Element => {
     if (r.kind === "finding") return <span class="iris-drv-pill" data-tone={statusTone(r.finding.status)}>{r.finding.status ?? "—"}</span>
     const n = r.kind === "drive" ? r.drive.sensitiveFiles : r.folder.sensitiveFiles
@@ -489,15 +545,15 @@ function RowView(props: { row: Row; index: number; selected: boolean; driveEncry
       role="option"
       data-index={props.index}
       aria-selected={props.selected}
-      title={r.kind === "finding" ? r.finding.path : name}
+      title={props.hideNames && r.kind !== "drive" ? undefined : r.kind === "finding" ? r.finding.path : name()}
       onClick={props.onClick}
     >
       <span class="iris-drv-row-ic">
         <Icon name={icon} size="small" />
       </span>
       <span class="iris-drv-row-body">
-        <span class="iris-drv-row-n">{name}</span>
-        <span class="iris-drv-row-m">{meta}</span>
+        <span class="iris-drv-row-n">{name()}</span>
+        <span class="iris-drv-row-m">{meta()}</span>
       </span>
       {trail()}
       <Show when={r.kind !== "finding"}>
