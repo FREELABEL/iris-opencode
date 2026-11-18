@@ -4470,3 +4470,52 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   border-left: 0;
 }
 .iris-card--panel .iris-card__cols[data-side-collapsed] .iris-card__side { display: block; }
+
+/* Terminal (#193785): the chat's terminals in the side panel. The strip is the panel's own
+   sub-view strip; the shell fills the rest. */
+.iris-terminal { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%; }
+.iris-terminal__tab { display: inline-flex; align-items: stretch; }
+.iris-terminal__close {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 0 4px 2px; margin-left: -6px; font-size: 13px; line-height: 1;
+  color: var(--text-weaker); border-radius: 4px;
+}
+.iris-terminal__close:hover { color: var(--text-strong); }
+.iris-terminal__body { position: relative; flex: 1 1 auto; min-height: 120px; margin-top: 6px; }
+.iris-terminal__away { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.iris-terminal__link {
+  appearance: none; background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-interactive-base); font: inherit;
+}
+.iris-terminal__link:hover { text-decoration: underline; }
+
+/* Full screen (#193785): the same tab over the window, below the title bar. */
+.iris-terminal--full {
+  /* height: auto, not the base 100%: top + bottom decide it, or it runs past the window by the title bar. */
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: auto;
+  padding: 6px 12px 10px; background: var(--background-base, var(--v2-background-bg-base));
+}
+/* Split (#193785): terminals side by side, as iTerm panes. Each pane has a full hairline frame;
+   the one you type in gets the interactive colour on all four sides, never a bar on one edge. */
+.iris-terminal__cells { position: absolute; inset: 0; display: flex; gap: 6px; }
+.iris-terminal__cell {
+  position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  border: 1px solid transparent; border-radius: 6px;
+}
+.iris-terminal__cells > .iris-terminal__cell + .iris-terminal__cell,
+.iris-terminal__cells > .iris-terminal__cell:first-child:not(:only-child) { border-color: var(--border-weaker-base); }
+.iris-terminal__cell--active { border-color: color-mix(in srgb, var(--text-interactive-base) 55%, transparent) !important; }
+.iris-terminal__cellbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 2px 4px 2px 8px; font-size: 11px; color: var(--text-weak); flex-shrink: 0;
+}
+.iris-terminal__celltitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-terminal__xterm { position: relative; flex: 1 1 auto; min-height: 0; }
+.iris-terminal__xterm > * { position: absolute; inset: 0; }
+.iris-terminal__btn {
+  appearance: none; background: none; border: 0; cursor: pointer; white-space: nowrap;
+  padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--text-weak);
+}
+.iris-terminal__btn:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-base-hover, rgba(127, 127, 127, 0.12)); }
+.iris-terminal__btn:disabled { opacity: 0.45; cursor: default; }
+.iris-terminal__tab--shown { color: var(--text-base); }

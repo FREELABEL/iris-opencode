@@ -96,6 +96,7 @@ import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
 import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
+import { IrisDrives } from "./iris-drives"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisOutreach } from "./iris-outreach"
 import { IrisLeadsTab, requestLeadOpen } from "./iris-leads-tab"
@@ -685,6 +686,9 @@ const SURFACES = [
   // Browser (#193051 / #193062): browse beside the chat. On desktop a native webview with its own
   // cookies; on the web build the framed Browser. Not board-scoped: a web page is no board's.
   { id: "browser", label: "Browser", pane: "browser", path: () => `` },
+  // Terminal (#193785): the chat's own terminals — the same ones as the dock under the chat — beside
+  // it. Not board-scoped: a shell is the project folder's. Drawn by a pane the session hands in.
+  { id: "terminal", label: "Terminal", pane: "terminal", path: () => `` },
   /*
    * GENESIS, not "Pages".
    *
@@ -709,6 +713,9 @@ const SURFACES = [
   // Lexicon (#192484, epic #192479) — legal cases' agreements, native. Account-wide: an agreement is
   // filed against a case, not a board.
   { id: "lexicon", label: "Lexicon", path: (_b: number) => `/iris/agreements` },
+  // Drives (#193705) — catalogued drives, folders and sensitive-file findings, from Atlas. Account-wide:
+  // a drive is the person's, not a board's. Built for the panel's 360px — see iris-drives.tsx.
+  { id: "drives", label: "Drives", pane: "drives", path: (_b: number) => `/iris/drives` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
   { id: "integrations", label: "Integrations", path: (b: number) => `/iris/integrations/${b}` },
 ] as const
@@ -740,11 +747,15 @@ const SELF_PANES = new Set([
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
+// Drives (#193705) draws and fetches for itself; findings load per drive.
+SELF_PANES.add("drives")
 SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
 // Browser (#193062) draws itself: SessionWebTab picks native or framed.
 SELF_PANES.add("browser")
+// Terminal (#193785) draws itself: SessionTerminalPane, registered by the session's side panel.
+SELF_PANES.add("terminal")
 
 /**
  * The Browser pane, handed in by the screens that host this panel (session side panel, home panel)
@@ -755,6 +766,24 @@ SELF_PANES.add("browser")
 const [browserPane, setBrowserPane] = createSignal<Component>()
 export function registerBrowserPane(pane: Component) {
   if (browserPane() !== pane) setBrowserPane(() => pane)
+}
+/**
+ * The Terminal pane (#193785). Registered by the SESSION's side panel while it is mounted, not at
+ * module load as the Browser is: a terminal needs the session's TerminalProvider, which the home
+ * panel does not have, and a pane registered for good would be drawn there and throw.
+ */
+const [terminalPane, setTerminalPane] = createSignal<Component>()
+// Split view mounts one side panel per column; the pane goes away when the LAST of them does.
+let terminalPaneHolders = 0
+export function registerTerminalPane(pane: Component) {
+  terminalPaneHolders++
+  setTerminalPane(() => pane)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--terminalPaneHolders === 0) setTerminalPane(undefined)
+  }
 }
 // The people inbox (#192688) fetches for itself.
 SELF_PANES.add("comms-inbox")
@@ -773,7 +802,7 @@ interface SubView {
   default?: true
   /** The empty-state sentence, when "Nothing in <view> on this board" would not be true. */
   empty?: string
-  /** A pinned Genesis page (#192480): `pane: "page"` frames freelabel.net/p/<slug>. Config, not code. */
+  /** A pinned Genesis page (#192480): `pane: "page"` frames heyiris.io/p/<slug>. Config, not code. */
   slug?: string
   /** Open that page signed in as the IRIS user — no emailed code (#192482). The page must load iris-sdk 1.0.7+. */
   signIn?: true
@@ -1234,6 +1263,7 @@ const PANEL_HINTS: Record<string, string> = {
   "integrations/add": "Connect a new account (Gmail, Slack, …)",
   lexicon: "Lexicon — legal cases: engagement letters, fee agreements and releases out for signature",
   "lexicon/agreements": "Agreements on a case: what is awaiting signature, executed or revoked — raise, issue, revoke",
+  drives: "Drives — catalogued drives, their project folders and sensitive files found by a scan; read from Atlas",
 }
 
 export const IRIS_PANEL_CATALOG: readonly {
@@ -4607,8 +4637,19 @@ export function SessionIrisTab() {
                 }}
               </Show>
             </Match>
+            <Match when={pane() === "terminal"}>
+              <Show when={terminalPane()} fallback={<div class="iris-empty">Open a chat to use the Terminal. It runs in that chat's project folder.</div>}>
+                {(pane) => {
+                  const Pane = pane()
+                  return <Pane />
+                }}
+              </Show>
+            </Match>
             <Match when={pane() === "lexicon-agreements"}>
               <IrisLexiconAgreements doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "drives"}>
+              <IrisDrives doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
             </Match>
             <Match when={pane() === "pulse-topic"}>
               <IrisPulseTopic doFetch={doFetch} project={projectDir()} />

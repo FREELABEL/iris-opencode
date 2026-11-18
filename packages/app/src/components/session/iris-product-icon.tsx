@@ -88,6 +88,13 @@ const SCALE: Shape[] = [
   ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
 ]
 
+// lucide "hard-drive" — Drives (#193705).
+const HARD_DRIVE: Shape[] = [
+  ["line", { x1: "22", x2: "2", y1: "12", y2: "12" }],
+  ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
+  ["line", { x1: "6", x2: "6.01", y1: "16", y2: "16" }],
+  ["line", { x1: "10", x2: "10.01", y1: "16", y2: "16" }],
+]
 // lucide "inbox" — Inbox (#192688).
 const INBOX: Shape[] = [
   ["path", { d: "M22 12h-6l-2 3h-4l-2-3H2" }],
@@ -103,6 +110,12 @@ const GLOBE: Shape[] = [
   ["circle", { cx: "12", cy: "12", r: "10" }],
   ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
   ["path", { d: "M2 12h20" }],
+]
+// lucide "square-terminal" — the Terminal tab (#193785).
+const SQUARE_TERMINAL: Shape[] = [
+  ["path", { d: "m7 11 2-2-2-2" }],
+  ["path", { d: "M11 13h4" }],
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
 ]
 // lucide "panels-top-left" — a landing page (#193233, Marketing › + ).
 const PANELS_TOP_LEFT: Shape[] = [
@@ -142,10 +155,12 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
   marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
   browser: { shapes: GLOBE, color: "#14b8a6" }, // teal-500
+  terminal: { shapes: SQUARE_TERMINAL }, // the text colour, as MCP: a tool of the machine, not a product of the site
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
   lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
+  drives: { shapes: HARD_DRIVE, color: "#94a3b8" }, // slate-400 — metal; a colour no other tab uses
 }
 
 export function IrisProductIcon(props: { id: string; size?: number; set?: "product" | "make"; stroke?: number }) {
