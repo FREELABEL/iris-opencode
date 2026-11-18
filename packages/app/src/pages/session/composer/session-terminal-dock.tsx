@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { formatDuration, stripAnsi, TerminalMode, type TerminalEntry } from "@/components/prompt-input/terminal-mode"
 
@@ -8,7 +8,9 @@ import { formatDuration, stripAnsi, TerminalMode, type TerminalEntry } from "@/c
  * message (see TerminalMode.close); until then nothing here is a chat turn.
  */
 export function SessionTerminalDock() {
-  const params = useParams<{ id?: string }>()
+  // The column this dock is drawn in, not the route's (the focused column): with chats side by side
+  // the route's id made every column show — and stop — the focused chat's commands (#191802).
+  const params = useSessionParams<{ id?: string }>()
   const sessionID = () => params.id
   const entries = () => TerminalMode.entries(sessionID())
   const [now, setNow] = createSignal(Date.now())
