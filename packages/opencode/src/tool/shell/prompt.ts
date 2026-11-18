@@ -18,7 +18,7 @@ export function parameterSchema() {
     timeout: Schema.optional(PositiveInt).annotate({ description: "Optional timeout in milliseconds" }),
     background: Schema.optional(Schema.Boolean).annotate({
       description:
-        "Run the command in the background (#188641) and return at once with the path of a log file. You are told in this chat when it finishes. For commands that take minutes: builds, test suites, migrations, bulk jobs. Do not sleep or poll; read the log only when you need to see progress.",
+        "Run the command in the background and return at once with the path of a log file. You are told in this chat when it finishes. For commands that take minutes: builds, test suites, migrations, bulk jobs. Do not sleep or poll; read the log only when you need to see progress.",
     }),
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
