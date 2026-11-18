@@ -4432,7 +4432,8 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 
 /* Full screen (#193785): the same tab over the window, below the title bar. */
 .iris-terminal--full {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+  /* height: auto, not the base 100%: top + bottom decide it, or it runs past the window by the title bar. */
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: auto;
   padding: 6px 12px 10px; background: var(--background-base, var(--v2-background-bg-base));
 }
 /* Split (#193785): terminals side by side, as iTerm panes. Each pane has a full hairline frame;
