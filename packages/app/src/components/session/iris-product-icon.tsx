@@ -104,6 +104,12 @@ const GLOBE: Shape[] = [
   ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
   ["path", { d: "M2 12h20" }],
 ]
+// lucide "square-terminal" — the Terminal tab (#193785).
+const SQUARE_TERMINAL: Shape[] = [
+  ["path", { d: "m7 11 2-2-2-2" }],
+  ["path", { d: "M11 13h4" }],
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
+]
 // lucide "panels-top-left" — a landing page (#193233, Marketing › + ).
 const PANELS_TOP_LEFT: Shape[] = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
@@ -142,6 +148,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
   marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
   browser: { shapes: GLOBE, color: "#14b8a6" }, // teal-500
+  terminal: { shapes: SQUARE_TERMINAL }, // the text colour, as MCP: a tool of the machine, not a product of the site
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
