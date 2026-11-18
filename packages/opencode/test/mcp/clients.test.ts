@@ -33,6 +33,79 @@ describe("McpClients registration", () => {
     expect(bin).not.toBe("iris")
   })
 
+  // #190590: `iris mcp install` run once from a throwaway HOME (an install smoke test) saved
+  // /tmp/tmp.CN1nv3EnPW/.iris/bin/iris into ~/work/.mcp.json. The folder went away and the IRIS OS
+  // tools failed to connect at the start of every session. A path in a temp folder is never saved.
+  describe("never registers a binary from a temporary folder (#190590)", () => {
+    const tmpRoots = ["/fake-tmp"]
+
+    test("a running binary under the temp folder is replaced by the stable install", async () => {
+      const stable = path.join(home, ".iris", "bin", "iris")
+      await fs.mkdir(path.dirname(stable), { recursive: true })
+      await fs.writeFile(stable, "")
+      const bin = McpClients.irisBinary({ execPath: "/fake-tmp/tmp.CN1nv3EnPW/.iris/bin/iris", tmpRoots })
+      expect(bin).toBe(stable)
+    })
+
+    test("an existing binary in a temp folder is still refused (the incident: it existed when saved)", async () => {
+      const tmp = path.join(home, "throwaway")
+      const running = path.join(tmp, ".iris", "bin", "iris")
+      const stable = path.join(home, ".iris", "bin", "iris")
+      for (const f of [running, stable]) {
+        await fs.mkdir(path.dirname(f), { recursive: true })
+        await fs.writeFile(f, "")
+      }
+      expect(McpClients.irisBinary({ execPath: running, tmpRoots: [tmp] })).toBe(await fs.realpath(stable))
+    })
+
+    test("a temporary HOME is not a stable install either", () => {
+      // No iris installed anywhere (a fresh CI runner): the answer is where it WILL be under the
+      // account home — never the throwaway $HOME. Machine-independent: the account home is given.
+      const bin = McpClients.irisBinary({
+        execPath: "/fake-tmp/tmp.X/.iris/bin/iris",
+        tmpRoots: ["/fake-tmp", home],
+        accountHome: "/no-such-account-home",
+      })
+      expect(bin).toBe(path.join("/no-such-account-home", ".iris", "bin", "iris"))
+    })
+
+    // v1.5.9 shipped the fix above and still saved /tmp/tmp.y3zXyWHlyO/.iris/bin/iris: under Bun,
+    // os.userInfo().homedir follows $HOME (Node reads the user database). These change the REAL
+    // $HOME, which is what the incident did and what the cases above never exercised.
+    test("the account home does not follow a throwaway $HOME", () => {
+      // A fresh process, started with HOME pointing into /tmp — the incident. Changing
+      // process.env.HOME inside this one is not the same thing: Bun reads HOME at start-up.
+      const src = path.resolve(import.meta.dir, "../../src/mcp/clients.ts")
+      const r = Bun.spawnSync(
+        [process.execPath, "-e", `import { McpClients } from ${JSON.stringify(src)}; console.log(McpClients.accountHome())`],
+        { env: { ...process.env, HOME: "/tmp/iris-throwaway-home" } },
+      )
+      const got = r.stdout.toString().trim()
+      expect(got).not.toBe("")
+      expect(got).not.toBe("/tmp/iris-throwaway-home")
+      expect(McpClients.isTemporaryPath(got)).toBe(false)
+    })
+
+    test("with nothing stable to point at, there is no stable binary — install must refuse", () => {
+      const bin = McpClients.stableIrisBinary({
+        execPath: "/fake-tmp/tmp.X/.iris/bin/iris",
+        tmpRoots: ["/fake-tmp", home],
+        accountHome: "/fake-tmp/also-throwaway",
+      })
+      expect(bin).toBeUndefined()
+    })
+
+    test("a running binary outside the temp folder is used as is", () => {
+      expect(McpClients.irisBinary({ execPath: "/opt/iris/bin/iris", tmpRoots })).toBe("/opt/iris/bin/iris")
+    })
+
+    test("temp detection matches the folder, not a name that starts the same", () => {
+      expect(McpClients.isTemporaryPath("/fake-tmp/a/iris", tmpRoots)).toBe(true)
+      expect(McpClients.isTemporaryPath("/fake-tmp", tmpRoots)).toBe(true)
+      expect(McpClients.isTemporaryPath("/fake-tmpfiles/iris", tmpRoots)).toBe(false)
+    })
+  })
+
   test("wires Claude Code (mcpServers format) with command + args", async () => {
     const client = McpClients.get("claude-code")!
     const res = await McpClients.wire(client, "/abs/iris")

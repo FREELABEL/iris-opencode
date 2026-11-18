@@ -1,8 +1,9 @@
 // Credential shapes that must never reach a PUBLIC artifact (#186275).
 //
-// The capability index folds PRIVATE playbook/skill prose into capabilities.json, which is committed
-// to the public iris-opencode repo and embedded in every CLI binary. Full URLs are already dropped
-// there, but a secret written without a scheme, or an API key in running text, was not. Redact by
+// The capability generator folds PRIVATE playbook/skill prose into an index. Since IP-07 (#189850)
+// that prose goes to --workspace-out (served by the private API), not to the public
+// capabilities.json — but it still leaves this machine, and redaction still runs on it. Full URLs
+// are already dropped there, but a secret written without a scheme, or an API key in running text, was not. Redact by
 // SHAPE, not by a list of known secrets: the next leak is always one nobody listed.
 export const SECRET_SHAPES: [string, RegExp][] = [
   ["discord webhook", /(?:discord(?:app)?\.com\/)?api\/webhooks\/\d{6,}(?:\/[A-Za-z0-9_-]+)?/gi],

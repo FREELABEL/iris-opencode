@@ -1,0 +1,496 @@
+== exit 0
+== stdout
+{
+  "keyword": "widget",
+  "slug": "widget",
+  "variants": [
+    "widget"
+  ],
+  "window_days": 30,
+  "sweeps": [
+    {
+      "source": "git",
+      "searched": true,
+      "hits": 2,
+      "hitsPrior": 1,
+      "lastHitEpoch": 1789214400,
+      "items": [
+        {
+          "when": "2026-09-12T12:00:00+00:00",
+          "where": "repo@cf09fff",
+          "text": "feat(Widget): panel for the widget"
+        },
+        {
+          "when": "2026-09-05T12:00:00+00:00",
+          "where": "repo@c02969f",
+          "text": "fix: widgets render twice"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "diary",
+      "searched": true,
+      "hits": 1,
+      "hitsPrior": 1,
+      "lastHitEpoch": 1789214400,
+      "items": [
+        {
+          "when": "2026-09-12T12:00:00.000Z",
+          "where": "daily-diary/2026-09-12.md",
+          "text": "- Shipped the widget panel."
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "files",
+      "searched": true,
+      "hits": 3,
+      "lastHitEpoch": 1789214400,
+      "items": [
+        {
+          "when": "2026-09-12T12:00:00.000Z",
+          "where": "src/widget-panel.ts"
+        },
+        {
+          "when": "2026-09-05T12:00:00.000Z",
+          "where": "src/widgets.ts"
+        },
+        {
+          "when": "2026-08-26T12:00:00.000Z",
+          "where": "src/widget.ts"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "claude_code",
+      "searched": true,
+      "hits": 2,
+      "lastHitEpoch": 1789300800,
+      "items": [
+        {
+          "when": "2026-09-13T12:00:00.000Z",
+          "where": "-work-demo/11111111-aaaa-4bbb-8ccc-000000000001"
+        },
+        {
+          "when": "2026-09-03T12:00:00.000Z",
+          "where": "-work-demo/11111111-aaaa-4bbb-8ccc-000000000002"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ],
+      "unavailableReason": "its transcripts only go back to 2026-07-27, so there is no earlier window to compare"
+    },
+    {
+      "source": "opencode",
+      "searched": true,
+      "hits": 1,
+      "hitsPrior": 0,
+      "lastHitEpoch": 1788955200,
+      "items": [
+        {
+          "when": "2026-09-09T12:00:00.000Z",
+          "where": "widget-app · ses_golden00",
+          "text": "Widget refactor"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "imessage",
+      "searched": false,
+      "unavailableReason": "iMessage is only readable on macOS",
+      "hits": 0,
+      "items": []
+    },
+    {
+      "source": "email",
+      "searched": true,
+      "hits": 2,
+      "lastHitEpoch": 1789387200,
+      "items": [
+        {
+          "when": "2026-09-14T12:00:00.000Z",
+          "where": "Sam Sample · Re: widget pricing"
+        },
+        {
+          "when": "2026-09-07T12:00:00.000Z",
+          "where": "Lee Placeholder · widget specs"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "gmail",
+      "searched": true,
+      "hits": 2,
+      "hitsPrior": 1,
+      "lastHitEpoch": 1789300800,
+      "items": [
+        {
+          "when": "2026-09-13T12:00:00.000Z",
+          "where": "Sam Sample <sam@example.net> · Widget demo",
+          "text": "the widget demo went well"
+        },
+        {
+          "when": "2026-09-09T12:00:00.000Z",
+          "where": "Lee Placeholder <lee@example.net> · (no subject)",
+          "text": "about the widgets"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ]
+    },
+    {
+      "source": "bloq",
+      "searched": true,
+      "hits": 1,
+      "hitsPrior": 1,
+      "lastHitEpoch": 1789300800,
+      "items": [
+        {
+          "when": "2026-09-13T12:00:00.000Z",
+          "where": "Backlog #101",
+          "text": "Widget sizing"
+        }
+      ],
+      "matchedVariants": [
+        "widget"
+      ],
+      "board": {
+        "id": 9001,
+        "name": "Widget Lab",
+        "lists": 3,
+        "items": 4,
+        "silentLists": [
+          {
+            "id": 2,
+            "name": "Auto: nightly digest",
+            "items": 0,
+            "newest": null
+          },
+          {
+            "id": 3,
+            "name": "Old ideas",
+            "items": 1,
+            "newest": "2026-04-18T12:00:00.000Z"
+          }
+        ]
+      }
+    }
+  ],
+  "observations": [
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "git",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "git_hits": 2,
+        "git_hits_prior": 1,
+        "git_last_hit_epoch": 1789214400
+      },
+      "text": "repo@cf09fff — feat(Widget): panel for the widget | repo@c02969f — fix: widgets render twice",
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": true,
+        "locators": [
+          {
+            "when": "2026-09-12T12:00:00+00:00",
+            "where": "repo@cf09fff",
+            "text": "feat(Widget): panel for the widget"
+          },
+          {
+            "when": "2026-09-05T12:00:00+00:00",
+            "where": "repo@c02969f",
+            "text": "fix: widgets render twice"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "diary",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "diary_hits": 1,
+        "diary_hits_prior": 1,
+        "diary_last_hit_epoch": 1789214400
+      },
+      "text": "daily-diary/2026-09-12.md — - Shipped the widget panel.",
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": true,
+        "locators": [
+          {
+            "when": "2026-09-12T12:00:00.000Z",
+            "where": "daily-diary/2026-09-12.md",
+            "text": "- Shipped the widget panel."
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "files",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "files_hits": 3,
+        "files_last_hit_epoch": 1789214400
+      },
+      "text": "src/widget-panel.ts | src/widgets.ts | src/widget.ts",
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": true,
+        "locators": [
+          {
+            "when": "2026-09-12T12:00:00.000Z",
+            "where": "src/widget-panel.ts"
+          },
+          {
+            "when": "2026-09-05T12:00:00.000Z",
+            "where": "src/widgets.ts"
+          },
+          {
+            "when": "2026-08-26T12:00:00.000Z",
+            "where": "src/widget.ts"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "claude_code",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "claude_code_hits": 2,
+        "claude_code_last_hit_epoch": 1789300800
+      },
+      "text": null,
+      "payload": {
+        "searched": true,
+        "unavailable_reason": "its transcripts only go back to 2026-07-27, so there is no earlier window to compare",
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": false,
+        "locators": [
+          {
+            "when": "2026-09-13T12:00:00.000Z",
+            "where": "-work-demo/11111111-aaaa-4bbb-8ccc-000000000001"
+          },
+          {
+            "when": "2026-09-03T12:00:00.000Z",
+            "where": "-work-demo/11111111-aaaa-4bbb-8ccc-000000000002"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "opencode",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "opencode_hits": 1,
+        "opencode_hits_prior": 0,
+        "opencode_last_hit_epoch": 1788955200
+      },
+      "text": null,
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": false,
+        "locators": [
+          {
+            "when": "2026-09-09T12:00:00.000Z",
+            "where": "widget-app · ses_golden00"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "imessage",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {},
+      "text": null,
+      "payload": {
+        "searched": false,
+        "unavailable_reason": "iMessage is only readable on macOS",
+        "window_days": 30,
+        "matched_variants": [],
+        "content_included": false,
+        "locators": []
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "email",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "email_hits": 2,
+        "email_last_hit_epoch": 1789387200
+      },
+      "text": null,
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": false,
+        "locators": [
+          {
+            "when": "2026-09-14T12:00:00.000Z",
+            "where": "Sam Sample · Re: widget pricing"
+          },
+          {
+            "when": "2026-09-07T12:00:00.000Z",
+            "where": "Lee Placeholder · widget specs"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "gmail",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "gmail_hits": 2,
+        "gmail_hits_prior": 1,
+        "gmail_last_hit_epoch": 1789300800
+      },
+      "text": null,
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": false,
+        "locators": [
+          {
+            "when": "2026-09-13T12:00:00.000Z",
+            "where": "Sam Sample <sam@example.net> · Widget demo"
+          },
+          {
+            "when": "2026-09-09T12:00:00.000Z",
+            "where": "Lee Placeholder <lee@example.net> · (no subject)"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    },
+    {
+      "entity_type": "topic",
+      "external_id": "topic:widget",
+      "source": "bloq",
+      "observed_at": "2026-09-15T12:00:00.000Z",
+      "metrics": {
+        "bloq_hits": 1,
+        "bloq_hits_prior": 1,
+        "bloq_last_hit_epoch": 1789300800
+      },
+      "text": null,
+      "payload": {
+        "searched": true,
+        "unavailable_reason": null,
+        "window_days": 30,
+        "matched_variants": [
+          "widget"
+        ],
+        "content_included": false,
+        "locators": [
+          {
+            "when": "2026-09-13T12:00:00.000Z",
+            "where": "Backlog #101"
+          }
+        ]
+      },
+      "display_name": "widget",
+      "handle": "widget",
+      "owner_user_id": 42
+    }
+  ],
+  "pushed": false,
+  "push_error": null,
+  "score": null,
+  "blind_spots": [
+    {
+      "source": "imessage",
+      "reason": "iMessage is only readable on macOS",
+      "full_disk_access": false,
+      "fix": null
+    }
+  ],
+  "warnings": []
+}
+
+== stderr
+

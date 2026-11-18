@@ -9,14 +9,14 @@ const invite = {
   summary: "Kickoff: Gate AI Integration",
   start: { dateTime: "2026-09-30T12:00:00-05:00" },
   end: { dateTime: "2026-09-30T13:00:00-05:00" },
-  organizer: { email: "dave@constellationnetwork.io" },
+  organizer: { email: "user1@firm-l.example.com" },
   attendees: [
-    { email: "dave@constellationnetwork.io", organizer: true, responseStatus: "accepted" },
-    { email: "alex@constellationnetwork.io", responseStatus: "accepted" },
-    { email: "amayo@mypathwaysai.com", self: true, responseStatus: "accepted" },
-    { email: "junaid@savelife.ai", responseStatus: "accepted" },
-    { email: "rdelgado@vanguardhcs.com", responseStatus: "accepted" },
-    { email: "dc@m42.com", responseStatus: "needsAction" },
+    { email: "user1@firm-l.example.com", organizer: true, responseStatus: "accepted" },
+    { email: "user2@firm-l.example.com", responseStatus: "accepted" },
+    { email: "user3@firm-d.example.com", self: true, responseStatus: "accepted" },
+    { email: "user4@firm-g.example.com", responseStatus: "accepted" },
+    { email: "user5@firm-e.example.com", responseStatus: "accepted" },
+    { email: "user6@firm-m.example.com", responseStatus: "needsAction" },
     { email: "c_room@resource.calendar.google.com", resource: true },
   ],
 }
@@ -25,12 +25,12 @@ describe("fromGoogleEvent", () => {
   test("keeps every human guest with their email, drops rooms, reads object-shaped times", () => {
     const ev = fromGoogleEvent(invite, "x@y · Work")
     expect(ev.attendees.map((a) => a.email)).toEqual([
-      "dave@constellationnetwork.io",
-      "alex@constellationnetwork.io",
-      "amayo@mypathwaysai.com",
-      "junaid@savelife.ai",
-      "rdelgado@vanguardhcs.com",
-      "dc@m42.com",
+      "user1@firm-l.example.com",
+      "user2@firm-l.example.com",
+      "user3@firm-d.example.com",
+      "user4@firm-g.example.com",
+      "user5@firm-e.example.com",
+      "user6@firm-m.example.com",
     ])
     expect(ev.start).toBe("2026-09-30T12:00:00-05:00")
     expect(ev.attendees[0].organizer).toBe(true)
@@ -48,9 +48,9 @@ describe("matchesQuery — the same rule for every source", () => {
     expect(matchesQuery(ev, "gate kickoff")).toBe(true)
     expect(matchesQuery(ev, "gate dinner")).toBe(false)
   })
-  test("matches an attendee's email or domain — 'who was on the call with m42'", () => {
-    expect(matchesQuery(ev, "m42.com")).toBe(true)
-    expect(matchesQuery(ev, "constellationnetwork")).toBe(true)
+  test("matches an attendee's email or domain — 'who was on the call with firm-m'", () => {
+    expect(matchesQuery(ev, "firm-m.example.com")).toBe(true)
+    expect(matchesQuery(ev, "firm-l")).toBe(true)
   })
 })
 
@@ -85,13 +85,13 @@ describe("mergeEvents — one meeting seen in several places is one row", () => 
 describe("uniqueAttendees", () => {
   test("excludes the user's own connected addresses and dedupes across events", () => {
     const ev = fromGoogleEvent(invite, "s")
-    const out = uniqueAttendees([ev, ev], ["AMAYO@mypathwaysai.com"])
+    const out = uniqueAttendees([ev, ev], ["User3@Firm-D.Example.Com"])
     expect(out.map((a) => a.email)).toEqual([
-      "dave@constellationnetwork.io",
-      "alex@constellationnetwork.io",
-      "junaid@savelife.ai",
-      "rdelgado@vanguardhcs.com",
-      "dc@m42.com",
+      "user1@firm-l.example.com",
+      "user2@firm-l.example.com",
+      "user4@firm-g.example.com",
+      "user5@firm-e.example.com",
+      "user6@firm-m.example.com",
     ])
   })
 })
@@ -125,22 +125,22 @@ describe("parseAppleCalendar", () => {
       calendars: 2,
       errors: [],
       events: [
-        { calendar: "Work", title: "Kickoff: Gate AI Integration", start: "2026-09-30T17:00:00.000Z", attendees: [{ email: "mailto:DC@m42.com", name: "Darren" }] },
+        { calendar: "Work", title: "Kickoff: Gate AI Integration", start: "2026-09-30T17:00:00.000Z", attendees: [{ email: "mailto:User6@Firm-M.Example.Com", name: "Darren" }] },
         { calendar: "Personal", title: "Workout", start: "2026-09-30T13:00:00.000Z", attendees: [] },
       ],
     })
     const r = parseAppleCalendar(out, "gate")
     expect(r.calendars).toBe(2)
     expect(r.events).toHaveLength(1)
-    expect(r.events[0].attendees).toEqual([{ email: "dc@m42.com", name: "Darren" }])
+    expect(r.events[0].attendees).toEqual([{ email: "user6@firm-m.example.com", name: "Darren" }])
     expect(r.events[0].seenIn).toEqual(["Apple Calendar · Work"])
   })
 })
 
 describe("parseAppleCalendar — names", () => {
   test("a participant 'name' that is just their address is dropped (EventKit does this)", () => {
-    const out = JSON.stringify({ calendars: 1, errors: [], events: [{ calendar: "W", title: "Gate", start: "2026-10-05T17:00:00Z", attendees: [{ email: "mailto:ldorsett@aiaiholdings.com", name: "ldorsett@aiaiholdings.com" }] }] })
-    expect(parseAppleCalendar(out, "gate").events[0].attendees).toEqual([{ email: "ldorsett@aiaiholdings.com" }])
+    const out = JSON.stringify({ calendars: 1, errors: [], events: [{ calendar: "W", title: "Gate", start: "2026-10-05T17:00:00Z", attendees: [{ email: "mailto:user7@firm-f.example.com", name: "user7@firm-f.example.com" }] }] })
+    expect(parseAppleCalendar(out, "gate").events[0].attendees).toEqual([{ email: "user7@firm-f.example.com" }])
   })
 })
 

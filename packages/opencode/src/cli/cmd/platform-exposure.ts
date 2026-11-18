@@ -36,10 +36,13 @@ import { getBySlug, pageGateFlags } from "./platform-pages"
 import { collectPublishedItems, apiMakePrivate, PUBLISHED_SCAN_BLOQ_CAP } from "./bloq-item-shared"
 import { privacyVerdict } from "./platform-playbook"
 import { firstArray } from "../../util/array"
+import { ACCESS_GUIDE } from "./access-guide"
+import { PUBLIC_SITE } from "./iris-api"
+import { bloqUrlFrom, itemUrlFrom } from "./bloq-web-url"
 
 // ── addressing ───────────────────────────────────────────────────────────────
 
-export type Noun = "page" | "note" | "playbook"
+export type Noun = "page" | "note" | "playbook" | "board"
 export interface Ref {
   noun: Noun
   id: string
@@ -47,7 +50,9 @@ export interface Ref {
   inferred: boolean
 }
 
-const NOUNS: Noun[] = ["page", "note", "playbook"]
+const NOUNS: Noun[] = ["page", "note", "playbook", "board"]
+/** What `audit` can sweep. A board's reach is membership, which audit does not list (yet). */
+const AUDIT_NOUNS: Noun[] = ["page", "note", "playbook"]
 
 /**
  * `page:atlas-console` · `note:182260` · `playbook:genesis-regression`
@@ -65,7 +70,9 @@ export function parseRef(input: string): Ref | { error: string } {
 
   const colon = raw.indexOf(":")
   if (colon > 0) {
-    const noun = raw.slice(0, colon).toLowerCase()
+    const typed = raw.slice(0, colon).toLowerCase()
+    // `bloq:` is what the rest of the CLI calls a board; accept both spellings.
+    const noun = typed === "bloq" ? "board" : typed
     const id = raw.slice(colon + 1).trim()
     if (!NOUNS.includes(noun as Noun)) {
       return { error: `unknown kind "${noun}" — expected one of: ${NOUNS.join(", ")}` }
@@ -87,6 +94,13 @@ export interface ExposureState {
   /** false when we could not determine it — which is NOT the same as private. */
   measured: boolean
   urls: string[]
+  /**
+   * Every working address and WHO it opens for (#190012). `urls` above stays the strangers-can-
+   * open list it always was; this adds the signed-in address a private thing still has, so the
+   * answer to "what link do I give them?" is never "none" when the truth is "this one, if they
+   * are a member".
+   */
+  addresses?: { url: string; audience: string }[]
   notes: string[]
 }
 
@@ -127,32 +141,103 @@ async function readPage(slug: string): Promise<ExposureState> {
   }
 }
 
+/**
+ * A note's tier, read from the item itself (#190012).
+ *
+ * This used to scan up to PUBLISHED_SCAN_BLOQ_CAP boards for public items and call anything it
+ * did not find "private" — true for most notes, and silent about the rest. The item endpoint
+ * returns access_level and the share gate directly, and (fl-api #190012) the signed-in address.
+ */
+function noteTier(item: any): Tier {
+  if (!item?.is_public) return "private"
+  const gated =
+    (item.access_level && item.access_level !== "public") ||
+    (Array.isArray(item.share_allowed_emails) && item.share_allowed_emails.length > 0) ||
+    (Array.isArray(item.share_allowed_domains) && item.share_allowed_domains.length > 0)
+  return gated ? "gated" : "public"
+}
+
 async function readNote(id: string): Promise<ExposureState> {
-  const userId = await requireUserId(undefined)
-  if (!userId) {
-    return { noun: "note", id, tier: "private", measured: false, urls: [], notes: ["could not resolve user"] }
-  }
-  const published = await collectPublishedItems(userId)
-  const hit = published.find((p) => String(p.id) === String(id))
-  if (!hit) {
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${encodeURIComponent(id)}`)
+  if (!res.ok) {
     return {
       noun: "note",
       id,
       tier: "private",
-      measured: true,
+      measured: false,
       urls: [],
-      notes: [`not among the ${published.length} reachable notes (scan covers ${PUBLISHED_SCAN_BLOQ_CAP} boards)`],
+      notes: [res.status === 404 ? "no item with that id visible to this account" : `HTTP ${res.status}`],
     }
   }
-  const lvl = String(hit.access_level ?? "public")
-  const tier: Tier = lvl === "public" ? "public" : "gated"
+  const body: any = await res.json().catch(() => null)
+  const item = body?.data ?? body
+  const tier = noteTier(item)
+  const notes: string[] = []
+  const addresses: { url: string; audience: string }[] = []
+
+  const signedIn = itemUrlFrom(item, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
+  if (signedIn) addresses.push({ url: signedIn, audience: "signed in — board owner and members" })
+  else notes.push("no signed-in link: the API did not say which board this item is on (fl-api older than #190012)")
+
+  if (item?.public_url) {
+    const who: string[] = []
+    if (item.share_allowed_emails?.length) who.push(`emails: ${item.share_allowed_emails.join(", ")}`)
+    if (item.share_allowed_domains?.length) who.push(`domains: ${item.share_allowed_domains.join(", ")}`)
+    if (item.access_level && item.access_level !== "public" && !who.length) who.push(`access level: ${item.access_level}`)
+    addresses.push({ url: item.public_url, audience: tier === "public" ? "anyone with the link" : `gated — ${who.join(" · ")}` })
+  }
+  if (item?.share_expires_at) notes.push(`share link expires ${item.share_expires_at}`)
+  if (item?.list_name) notes.push(`on list "${item.list_name}"${item.bloq_id ? ` of board #${item.bloq_id}` : ""}`)
+
   return {
     noun: "note",
     id,
     tier,
     measured: true,
-    urls: [hit.public_url],
-    notes: lvl === "public" ? [] : [`access level: ${lvl}`],
+    urls: tier === "public" && item?.public_url ? [item.public_url] : [],
+    addresses,
+    notes,
+  }
+}
+
+/**
+ * A board's reach is its membership (#190012). The signed-in address opens only for the owner
+ * and members; for anyone else the console silently switches to one of THEIR projects. So this
+ * names who can open it — measured 2026-10-19, a board owned by one of a person's two accounts
+ * did not open for the other.
+ */
+async function readBoard(id: string): Promise<ExposureState> {
+  const userId = await requireUserId(undefined)
+  const res = userId ? await irisFetch(`/api/v1/user/${userId}/bloqs/${encodeURIComponent(id)}`) : null
+  if (!res || !res.ok) {
+    return { noun: "board", id, tier: "private", measured: false, urls: [], notes: [res ? `HTTP ${res.status}` : "could not resolve user"] }
+  }
+  const body: any = await res.json().catch(() => null)
+  const bloq = body?.data ?? body
+  let members: any[] | null = null
+  const mres = await irisFetch(`/api/v1/user/bloqs/${encodeURIComponent(id)}/shared-users`).catch(() => null)
+  if (mres && mres.ok) {
+    const mb: any = await mres.json().catch(() => null)
+    members = firstArray(mb?.data?.shared_users, mb?.shared_users)
+  }
+  const url = bloqUrlFrom(bloq, id, PUBLIC_SITE, Boolean(process.env.IRIS_PUBLIC_URL))
+  const owner = bloq?.user_id ? `owner #${bloq.user_id}` : "owner"
+  const who = members === null
+    ? `${owner} + members (could not read the member list)`
+    : members.length
+      ? `${owner} + ${members.length} member(s): ${members.map((m) => m?.email ?? m?.name ?? m?.id).slice(0, 8).join(", ")}`
+      : `${owner} only — not shared with anyone`
+  return {
+    noun: "board",
+    id,
+    tier: members && members.length ? "team" : "private",
+    measured: members !== null,
+    urls: [],
+    addresses: [{ url, audience: `signed in — ${who}` }],
+    notes: [
+      `${bloq?.name ?? bloq?.title ?? "board"} — a signed-in link; for anyone not listed it opens a different project, silently`,
+      `share it: iris bloqs add-member ${id} --email <e>   ·   one item publicly: iris bloqs make-public <item-id>`,
+    ],
   }
 }
 
@@ -190,6 +275,7 @@ async function readPlaybook(name: string): Promise<ExposureState> {
 export async function readExposure(ref: Ref): Promise<ExposureState> {
   if (ref.noun === "page") return readPage(ref.id)
   if (ref.noun === "note") return readNote(ref.id)
+  if (ref.noun === "board") return readBoard(ref.id)
   return readPlaybook(ref.id)
 }
 
@@ -202,10 +288,10 @@ function tierBadge(t: Tier): string {
 const ShowCmd = cmd({
   command: "show <ref>",
   aliases: ["status", "get"],
-  describe: "who can reach this? — works for a page, a note or a playbook",
+  describe: "who can reach this, and the link to give a person — a page, note, board or playbook",
   builder: (y) =>
     y
-      .positional("ref", { describe: "page:<slug> · note:<id> · playbook:<name>", type: "string", demandOption: true })
+      .positional("ref", { describe: "page:<slug> · note:<id> · board:<id> · playbook:<name>", type: "string", demandOption: true })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     const ref = parseRef(String(args.ref))
@@ -229,7 +315,9 @@ const ShowCmd = cmd({
     printKV("Tier", tierBadge(st.tier))
     printKV("Reach", isOpen(st.tier) ? "anyone with the link — no sign-in" : "identity required")
     if (!st.measured) printKV("Measured", `${UI.Style.TEXT_WARNING}no — unmeasured is not the same as private${UI.Style.TEXT_NORMAL}`)
-    for (const u of st.urls) printKV("Live url", u)
+    // Every address with its audience; `Live url` kept for what a stranger can open.
+    for (const a of st.addresses ?? []) printKV("Link", `${a.url}  ${dim(`(${a.audience})`)}`)
+    for (const u of st.urls) if (!(st.addresses ?? []).some((a) => a.url === u)) printKV("Live url", u)
     for (const n of st.notes) UI.println(dim(`  ${n}`))
     printDivider()
     prompts.outro(dim(`iris exposure narrow ${ref.noun}:${ref.id}   ·   iris exposure widen ${ref.noun}:${ref.id} --to public`))
@@ -242,7 +330,7 @@ const AuditCmd = cmd({
   describe: "everything of yours a stranger can currently reach",
   builder: (y) =>
     y
-      .option("noun", { describe: "limit to one kind", type: "string", choices: NOUNS as string[] })
+      .option("noun", { describe: "limit to one kind", type: "string", choices: AUDIT_NOUNS as string[] })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     if (!(await requireAuth())) return
@@ -371,6 +459,11 @@ const NarrowCmd = cmd({
       return
     }
 
+    if (ref.noun === "board") {
+      prompts.log.warn(`A board narrows by membership: iris bloqs members ${ref.id}  then  iris bloqs remove-member ${ref.id} --email <e>`)
+      prompts.outro("Done")
+      return
+    }
     prompts.log.warn(`Narrowing a playbook is: iris playbook publish ${ref.id} --scope private`)
     prompts.outro("Done")
   },
@@ -419,7 +512,9 @@ const WidenCmd = cmd({
     }
 
     prompts.log.warn(
-      ref.noun === "note"
+      ref.noun === "board"
+        ? `A board widens by membership: iris bloqs add-member ${ref.id} --email <e>  (a board has no public link — publish an item or a page instead)`
+        : ref.noun === "note"
         ? `Widening a note is: iris atlas make-public ${ref.id} --force`
         : `Widening a playbook is: iris playbook publish ${ref.id} --scope public --force`,
     )
@@ -430,7 +525,8 @@ const WidenCmd = cmd({
 export const PlatformExposureCommand = productCommand({
   name: "exposure",
   aliases: ["reach", "sharing"],
-  purpose: "who can reach your pages, notes and playbooks — and what it takes to change that",
-  keywords: ["public", "private", "share", "gated", "unlisted", "visibility", "audit", "expose", "reach"],
+  purpose: "who can reach your pages, notes, boards and playbooks, the link to give a person, and how to change it",
+  keywords: ["public", "private", "share", "gated", "unlisted", "visibility", "audit", "expose", "reach", "url", "link"],
+  guide: ACCESS_GUIDE,
   subcommands: [ShowCmd, AuditCmd, NarrowCmd, WidenCmd],
 })

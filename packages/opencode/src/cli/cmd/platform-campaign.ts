@@ -344,7 +344,7 @@ const CampaignCreateCommand = cmd({
       prompts.log.info("")
       prompts.log.info(dim("Monitor: iris bridge runs"))
       prompts.log.info(dim(`Leads:   iris leads list --bloq-id ${boardId}`))
-      prompts.log.info(dim(`Config:  iris campaigns list`))
+      prompts.log.info(dim(`Config:  iris campaign list`))
       prompts.outro(success("Campaign created"))
 
     } catch (err) {
@@ -420,7 +420,7 @@ const CampaignListCommand = cmd({
     }
 
     if (Object.keys(campaigns).length === 0) {
-      prompts.log.warn("No campaigns found. Create one with: iris campaigns create")
+      prompts.log.warn("No campaigns found. Create one with: iris campaign create")
       prompts.outro("Done")
       return
     }
@@ -456,7 +456,7 @@ const CampaignListCommand = cmd({
 
 export const PlatformCampaignCommand = cmd({
   command: "campaign",
-  aliases: ["campaigns"],
+  // `campaigns` (plural) is the ad-campaign command now (#192625, platform-ad-campaigns.ts).
   describe: "manage outreach campaigns — create, list, monitor",
   builder: (yargs) =>
     yargs

@@ -1,0 +1,97 @@
+# Dependabot version updates — Atlas #192738 (epic #192732, SOC 2 CC7.1).
+# Version updates only. Dependabot alerts, security updates, secret scanning and push protection
+# are repository Settings and must be switched on there; security PRs ignore the limits below.
+# Minor+patch bumps are grouped into one PR per directory to keep the queue readable.
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      bun-root-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: bun
+    directory: "/github"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      bun-github-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: bun
+    directory: "/packages/console/resource"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      bun-console-resource-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: bun
+    directory: "/sdks/vscode"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      bun-vscode-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: cargo
+    directory: "/packages/desktop/src-tauri"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      cargo-desktop-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: "/packages/opencode"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      docker-opencode-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

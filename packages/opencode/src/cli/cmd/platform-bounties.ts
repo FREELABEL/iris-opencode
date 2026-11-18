@@ -929,6 +929,33 @@ const ConnectCommand = cmd({
   },
 })
 
+/**
+ * What `iris bounty claim` shows before it pays (#193085). `dryRun` is the body of
+ * POST /api/v1/marketplace/cashout {execute:false}: CashoutService's own preview, the same figure
+ * POST /api/v1/earnings/cashout then pays. That route is a dry run unless `execute` is true, on
+ * every fl-api ever deployed, so asking can never move money. With no preview (the request
+ * failed), fall back to the /bounty/me figure rather than refuse.
+ */
+export function claimPreview(dryRun: any, me: any): { payable: boolean; owed: string | null; message: string } {
+  const c = dryRun?.data ?? null
+  if (c && typeof c === "object" && "amount_cents" in c) {
+    const cents = Number(c.amount_cents) || 0
+    const owed = `$${(cents / 100).toFixed(2)}`
+    if (c.status === "ready") return { payable: true, owed, message: "" }
+    // Verified bugs are paid by the bug-bounty run straight to the connected account, not from
+    // this balance — say so, rather than "nothing owed" to someone who is owed.
+    const bugs = (me?.earnings?.unpaidCents ?? 0) > 0
+      ? ` ${me.earnings.unpaid ?? ""} of verified bugs pays out on its own once your payout account is set up (iris bounty me).`.replace("  ", " ")
+      : ""
+    if (cents <= 0) return { payable: false, owed, message: `Nothing to claim right now.${bugs}` }
+    return { payable: false, owed, message: String(c.reason ?? "Nothing can be claimed right now.") + bugs }
+  }
+  if (me?.earnings && (me.earnings.unpaidCents ?? 0) <= 0) {
+    return { payable: false, owed: null, message: "Nothing owed right now." }
+  }
+  return { payable: true, owed: me?.earnings?.unpaid ?? null, message: "" }
+}
+
 const ClaimCommand = cmd({
   command: "claim",
   aliases: ["cashout"],
@@ -941,15 +968,26 @@ const ClaimCommand = cmd({
 
     // Show the amount BEFORE asking. "Confirm cashout?" with no number is a prompt people
     // accept without reading, which is the wrong habit to build around money.
+    //
+    // The figure comes from the cash-out itself (#193085): a dry run of the same route, so what
+    // we show is what CashoutService will pay (the claim itself still posts to /earnings/cashout,
+    // which runs the same CashoutService). It used to come from /bounty/me's bug-bounty
+    // "unpaid", a different balance with different rules — a Hive seller with $20 of earnings was
+    // told "Nothing owed", and a hunter could be shown one number and paid another.
     const meRes = await irisFetch(`/api/v1/bounty/me`)
     const me = meRes.ok ? (((await meRes.json().catch(() => null)) as any) ?? {}) : {}
-    const owed = me.earnings?.unpaid ?? null
+    const previewRes = await irisFetch(`/api/v1/marketplace/cashout`, {
+      method: "POST",
+      body: JSON.stringify({ execute: false }),
+    })
+    const preview = claimPreview(previewRes.ok ? await previewRes.json().catch(() => null) : null, me)
 
-    if (me.earnings && (me.earnings.unpaidCents ?? 0) <= 0) {
-      prompts.log.info("Nothing owed right now.")
+    if (!preview.payable) {
+      prompts.log.info(preview.message)
       prompts.outro("Done")
       return
     }
+    const owed = preview.owed
 
     // An unsigned agreement will have the gate withhold this anyway. Better to say so here
     // than to let someone claim into a refusal.

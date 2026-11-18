@@ -6,7 +6,7 @@ const FDA_503 = '{"error":"No permission to read Mail — the iris daemon has no
 
 describe("#185776 — a channel that could not be read is never reported as empty", () => {
   test("the measured case: a 503 reads as COULD NOT READ, keeps the bridge's reason, and fails the run", () => {
-    const read = unavailable(`kmontero@pathwaysinjuryconsultants.com: ${describeHttpFailure("bridge /api/mail/search", 503, FDA_503)}`)
+    const read = unavailable(`user8@firm-c.example.com: ${describeHttpFailure("bridge /api/mail/search", 503, FDA_503)}`)
     const out = channelOutcome("apple_mail", read)
 
     expect(out.kind).toBe("unavailable")
@@ -82,19 +82,19 @@ describe("the closing warning", () => {
 describe("the bridge mail contract (drift found 2026-09-17)", () => {
   // The shape ~/.iris/bridge/index.js returns from /api/mail/search since the Envelope Index move.
   const envelopeResponse = {
-    emails: [{ subject: "IRIS Work", sender: "kmontero@pathwaysinjuryconsultants.com", sender_name: "Kristen Montero", date_sent: "2026-09-09T14:00:00.000Z", mailbox: "INBOX" }],
+    emails: [{ subject: "IRIS Work", sender: "user8@firm-c.example.com", sender_name: "Kristen Montero", date_sent: "2026-09-09T14:00:00.000Z", mailbox: "INBOX" }],
     count: 1,
     days: 90,
     source: "envelope-index",
   }
 
   test("reads the emails list the bridge actually returns", () => {
-    const items = bridgeMailItems(envelopeResponse, "kmontero@pathwaysinjuryconsultants.com")!
+    const items = bridgeMailItems(envelopeResponse, "user8@firm-c.example.com")!
 
     expect(items).toHaveLength(1)
     expect(items[0].sent_at).toBe("2026-09-09T14:00:00.000Z")
     expect(items[0].subject).toBe("IRIS Work")
-    expect(items[0].external_message_id).toContain("kmontero@pathwaysinjuryconsultants.com")
+    expect(items[0].external_message_id).toContain("user8@firm-c.example.com")
   })
 
   test("the OLD read of data.messages would have ingested nothing from the same response", () => {

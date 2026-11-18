@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
+import { wholeNumberError, rejectFieldErrors } from "./pagination-args"
 import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
 import { UI } from "../ui"
 import { hiveFetch } from "./platform-hive-nodes"
+import { driveSpecError } from "./platform-hive-drive"
 
 /**
  * Rent, list and release compute (#183399).
@@ -163,6 +165,20 @@ const RentalsCommand = cmd({
   },
 })
 
+/** True when the lease came back already released before this call was made (#193809). */
+export function releasedBefore(l: Pick<Lease, "released_at">, askedAtMs: number): boolean {
+  if (!l.released_at) return false
+  const t = Date.parse(l.released_at)
+  // 5 s of slack for clock skew between this machine and the server.
+  return Number.isFinite(t) && t < askedAtMs - 5000
+}
+
+function releasedAgo(l: Pick<Lease, "released_at" | "created_at">): string {
+  const at = Date.parse(l.released_at!)
+  const held = l.created_at ? Math.max(0, Math.round((at - Date.parse(l.created_at)) / 60000)) : null
+  return `at ${new Date(at).toISOString().replace("T", " ").slice(0, 16)} UTC${held === null ? "" : ` (${held} min after it was rented)`}`
+}
+
 const ReleaseCommand = cmd({
   command: "release <id>",
   describe: "release a rented machine and stop paying for it",
@@ -177,10 +193,16 @@ const ReleaseCommand = cmd({
     if (!userId) process.exit(1)
 
     try {
+      const asked = Date.now()
       const { lease } = await api(`/${argv.id}?user_id=${userId}`, { method: "DELETE" })
-      if (argv.json) return void (await writeJson(lease))
+      const earlier = releasedBefore(lease, asked)
+      if (argv.json) return void (await writeJson({ ...lease, already_released: earlier }))
       console.log()
-      console.log(success(`✓ released ${bold(lease.name)} — it is no longer billing.`))
+      // #193809: the server answers an already-released lease with the lease, not an error. Saying
+      // "it is no longer billing" then reads as "it WAS billing until now" — and sent an operator
+      // hunting for an hour-long leak that was a 3-minute rental released long before.
+      if (earlier) console.log(dim(`· ${bold(lease.name)} was already released ${releasedAgo(lease)} — nothing was billing.`))
+      else console.log(success(`✓ released ${bold(lease.name)} — it is no longer billing.`))
       console.log()
     } catch (e: any) {
       // The server distinguishes "released" from "release failed" precisely so this can too.
@@ -232,11 +254,19 @@ const SandboxCommand = cmd({
       .option("keep", { describe: "keep the sandbox after the command (reuse with --id)", type: "boolean", default: false })
       .option("internet", { describe: "let the command reach the internet (off by default)", type: "boolean", default: false })
       .option("timeout", { describe: "seconds before the command is stopped (max 120)", type: "number", default: 30 })
+      .option("drive", { describe: "mount a Hive drive at /workspace so files outlive the sandbox: <name> (read-write), <name>:ro, <name>@<machine>", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .example("iris hive sandbox \"python3 -c 'print(6*7)'\"", "42, in a fresh sandbox that is gone afterwards")
-      .example("iris hive sandbox --keep \"git clone https://github.com/x/y && ls y\" --internet", "keep it; reuse it with --id"),
+      .example("iris hive sandbox --keep \"git clone https://github.com/x/y && ls y\" --internet", "keep it; reuse it with --id")
+      .example("iris hive sandbox --drive work \"git clone https://github.com/x/y\" --internet", "the clone lands in the drive; the next fresh sandbox has it")
+      .example("iris hive sandbox --drive work:ro \"cd y && npm test\"", "read-only — any number of these at once"),
   async handler(argv) {
+    const timeoutError = wholeNumberError("timeout", argv.timeout, { min: 1, max: 120 })
+    const drive = typeof argv.drive === "string" ? argv.drive.trim() : undefined
+    const driveError = drive !== undefined ? driveSpecError(drive) : null
+    const fieldErrors = { ...(timeoutError ? { timeout: [timeoutError] } : {}), ...(driveError ? { drive: [driveError] } : {}) }
+    if (rejectFieldErrors(Object.keys(fieldErrors).length ? fieldErrors : null, argv.json)) return
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
@@ -259,7 +289,8 @@ const SandboxCommand = cmd({
       const timeoutMs = Math.max(1, Math.min(Number(argv.timeout) || 30, 120)) * 1000
       const { result } = await api(`/${id}/exec?user_id=${userId}`, {
         method: "POST",
-        body: JSON.stringify({ user_id: userId, command, timeout_ms: timeoutMs, internet: !!argv.internet }),
+        // final: this command rents and releases the sandbox, so a read-write drive's lock is let go now.
+        body: JSON.stringify({ user_id: userId, command, timeout_ms: timeoutMs, internet: !!argv.internet, ...(drive ? { drive } : {}), final: rentedHere && !argv.keep }),
       })
       if (argv.json) await writeJson({ lease_id: id, kept: !rentedHere || !!argv.keep, ...result })
       else {
@@ -267,6 +298,12 @@ const SandboxCommand = cmd({
         if (result.stderr) process.stderr.write(result.stderr)
         if (result.timedOut) console.error(warn(`  stopped after ${timeoutMs / 1000}s — raise --timeout (max 120)`))
         if (result.truncated) console.error(dim("  output was cut at 256 KB"))
+        if (result.drive) {
+          const d = result.drive
+          const t = [d.load_ms != null ? `loaded ${d.load_ms} ms` : null, d.save_ms != null ? `saved ${d.save_ms} ms` : null].filter(Boolean).join(", ")
+          console.error(dim(`  drive ${d.name} (${d.mode}) via ${d.node}${t ? ` — ${t}` : ""}${d.mode === "rw" && !d.saved ? " — NOT saved" : ""}`))
+          if (d.note) console.error(warn(`  ${d.note}`))
+        }
         if (argv.keep && rentedHere) console.error(dim(`  kept sandbox #${id} — reuse: iris hive sandbox --id ${id} "<command>"   release: iris hive release ${id}`))
       }
       process.exitCode = result.exitCode ?? 0

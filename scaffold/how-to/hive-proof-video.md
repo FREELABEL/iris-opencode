@@ -1,5 +1,5 @@
 ---
-category: Hive
+category: Infrastructure
 level: beginner
 tags: [hive, github, pull-request, video, review, proof, playwright, code]
 duration_min: 5

@@ -5,7 +5,7 @@ import type { UnloggedSend } from "./comms-send"
 const send = (over: Partial<UnloggedSend> = {}): UnloggedSend => ({
   at: "2026-09-14T21:30:00.000Z",
   channel: "apple_mail",
-  to: "rodney@entropyconsulting.me",
+  to: "user9@firm-a.example.com",
   subject: "s",
   message: "m",
   reason: "comms/log returned 500",

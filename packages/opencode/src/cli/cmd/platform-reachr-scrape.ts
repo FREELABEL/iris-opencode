@@ -76,6 +76,22 @@ export async function boardLeads(bloqId: number): Promise<any[]> {
 
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase()
 
+/**
+ * #191700 — the public-page scrape failed in the field with "browser-use not installed" before
+ * reading a URL, on a machine whose bridge already ships Playwright + its Chromium. A bridge older
+ * than the Playwright engine still says only that, so the fix is named here: the update first
+ * (it needs nothing else installed), then the alternatives. Returns "" for any other error.
+ */
+export function scrapeFixHint(error: unknown): string {
+  const e = String(error ?? "")
+  if (!/browser-use not installed|no Chrome\/Chromium found|no browser engine|playwright/i.test(e)) return ""
+  return (
+    " — fix: run `iris daemon update` (the bridge's scrape-leads.sh then drives the Playwright Chromium the daemon already provisions; " +
+    "if Chromium itself is missing: `cd ~/.iris/bridge && npx playwright install chromium`), or install browser-use: `uv tool install browser-use`. " +
+    "`iris browser doctor` checks every piece."
+  )
+}
+
 export const ReachrScrapeCmd = cmd({
   command: "scrape <bloq-id> [urls..]",
   describe: "find people on public pages (team, about, directories), Instagram (commenters, followers, profiles, your inbox) or LinkedIn (people search, your inbox) — dry run; --write adds them as leads",
@@ -230,9 +246,9 @@ export const ReachrScrapeCmd = cmd({
 
     if (data.measured === false) {
       spinner?.stop("Could not read any page", 1)
-      if (isJson) writeJson(data)
+      if (isJson) writeJson(scrapeFixHint(data.error) ? { ...data, fix: scrapeFixHint(data.error).replace(/^ — fix: /, "") } : data)
       else {
-        prompts.log.error(`could not read any page: ${data.error ?? "no reason given"}`)
+        prompts.log.error(`could not read any page: ${data.error ?? "no reason given"}${scrapeFixHint(data.error)}`)
         for (const s of data.skipped ?? []) out(dim(`  skipped ${s.url} — ${s.reason}`))
       }
       process.exitCode = 2

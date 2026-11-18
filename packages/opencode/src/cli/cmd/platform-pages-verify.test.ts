@@ -210,6 +210,18 @@ describe("publish-html keeps what the file does not decide", () => {
     expect(resolveGate(undefined, { requires_auth: true, json_content: {} }).requireOtp).toBe(false)
   })
 
+  test("requireOtp alone keeps the page gated — the server forces requires_auth on from it (#192471)", () => {
+    // fl-api's PageController::update sets requires_auth = true whenever the json it is sent has
+    // requireOtp true. Sending requires_auth: false next to it was a request the server overrode,
+    // and the CLI then printed "Gate: off — public" for a page that was gated. Ask for what the
+    // server will hold.
+    expect(resolveGate(undefined, { requires_auth: false, json_content: { requireOtp: true } })).toEqual({
+      requiresAuth: true,
+      requireOtp: true,
+      kept: true,
+    })
+  })
+
   test("an explicit flag decides; a new page with no flag is public", () => {
     expect(resolveGate(false, { requires_auth: true }).requiresAuth).toBe(false)
     expect(resolveGate(true, null)).toEqual({ requiresAuth: true, requireOtp: true, kept: false })

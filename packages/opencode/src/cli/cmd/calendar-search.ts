@@ -70,8 +70,9 @@ export function fromGoogleEvent(ev: any, seenIn: string): FoundEvent {
     .filter((a: any) => a?.email && !a.resource)
     .map((a: any) => ({
       email: String(a.email).toLowerCase(),
-      ...(a.displayName ? { name: String(a.displayName) } : {}),
-      ...(a.responseStatus ? { response: String(a.responseStatus) } : {}),
+      // Google's own names, or the server's: iris-api's `events` carries name and response_status.
+      ...(a.displayName ?? a.name ? { name: String(a.displayName ?? a.name) } : {}),
+      ...(a.responseStatus ?? a.response_status ? { response: String(a.responseStatus ?? a.response_status) } : {}),
       ...(a.organizer ? { organizer: true } : {}),
     }))
   // An organizer who is not also an attendee (common for invites you RECEIVED) still matters —

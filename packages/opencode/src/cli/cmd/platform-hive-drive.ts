@@ -95,8 +95,49 @@ export function formatArgs(name: string, metaUrl: string, storage: string, bucke
   return ["format", "--storage", storage, "--bucket", bucket, metaUrl, name]
 }
 
-export function mountArgs(metaUrl: string, mountpoint: string, cacheDir: string, identity: string = DEFAULT_IDENTITY): string[] {
-  return ["mount", "-d", "--all-squash", identity, "--cache-dir", cacheDir, metaUrl, mountpoint]
+export function mountArgs(metaUrl: string, mountpoint: string, cacheDir: string, identity: string = DEFAULT_IDENTITY, allowOther = false): string[] {
+  // allow_other: without it FUSE refuses every other user — including root's Docker daemon, so a
+  // sandbox's bind mount of the drive would see "permission denied" (#188567).
+  return ["mount", "-d", "--all-squash", identity, ...(allowOther ? ["-o", "allow_other"] : []), "--cache-dir", cacheDir, metaUrl, mountpoint]
+}
+
+/** May this user mount with allow_other? Root always; anyone else only with user_allow_other in /etc/fuse.conf. */
+export function canAllowOther(uid: number, fuseConf: string): boolean {
+  return uid === 0 || /^\s*user_allow_other\s*$/m.test(fuseConf)
+}
+
+/**
+ * `--drive` for a sandbox (#188567): "work", "work:ro", "work:rw", "work@machine". The same rule
+ * iris-api's DriveSpec and the daemon's drive-mount.js apply — checked here so a typo fails before
+ * a sandbox is rented.
+ */
+export function driveSpecError(spec: string): string | null {
+  return /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9](?::(?:ro|rw))?(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/.test(spec)
+    ? null
+    : `--drive must look like <name>, <name>:ro or <name>@<machine>, not "${spec}"`
+}
+
+/** Who holds the drive read-write (the lock in <drive>/.iris/rw that sandboxes take), or null. */
+export function rwHolder(mountpoint: string): { holder: string; expiresAt: number } | null {
+  try {
+    const [holder, exp] = fs.readFileSync(path.join(mountpoint, ".iris", "rw", "holder"), "utf8").trim().split(/\s+/)
+    return holder ? { holder, expiresAt: Number(exp) || 0 } : null
+  } catch {
+    return null
+  }
+}
+
+/** The drive's workspace — what a sandbox sees at /workspace. Top level, folders first, sorted. */
+export function workspaceListing(mountpoint: string): { name: string; bytes: number }[] {
+  try {
+    const ws = path.join(mountpoint, "workspace")
+    return fs
+      .readdirSync(ws, { withFileTypes: true })
+      .map((d) => ({ name: d.isDirectory() ? `${d.name}/` : d.name, bytes: d.isDirectory() ? 0 : fs.statSync(path.join(ws, d.name)).size }))
+      .sort((a, b) => Number(b.name.endsWith("/")) - Number(a.name.endsWith("/")) || a.name.localeCompare(b.name))
+  } catch {
+    return []
+  }
 }
 
 /** The WebDAV gateway for machines with no FUSE (a Mac without macFUSE). Loopback only. */
@@ -269,10 +310,17 @@ const MountCmd = cmd({
     fs.mkdirSync(c.mountpoint, { recursive: true })
     const { url, password } = splitMetaSecret(c.meta)
     const cache = path.join(home, ".iris", "drive-cache", c.name)
-    const r = run(j, mountArgs(url, c.mountpoint, cache, validIdentity(c.identity) ?? DEFAULT_IDENTITY), password)
+    // Docker sandboxes on this node bind the drive's workspace (#188567); that needs allow_other.
+    let fuseConf = ""
+    try { fuseConf = fs.readFileSync("/etc/fuse.conf", "utf8") } catch {}
+    const allowOther = process.platform === "linux" && canAllowOther(process.getuid?.() ?? -1, fuseConf)
+    const r = run(j, mountArgs(url, c.mountpoint, cache, validIdentity(c.identity) ?? DEFAULT_IDENTITY, allowOther), password)
     // Ask the kernel, not the exit code: a daemonised mount can exit 0 and still not be there.
     if (!r.ok || !isMounted(c.mountpoint)) return fail(`mount failed: ${lastLine(r.out)}`)
     console.log(success(`  ✓ ${bold(c.name)} mounted at ${c.mountpoint}`) + dim("  — reads stream on demand; writes are visible on every node"))
+    if (process.platform === "linux" && !allowOther)
+      console.log(dim("  Docker sandboxes on this node cannot see it: add user_allow_other to /etc/fuse.conf, then unmount and mount again."))
+    console.log(dim(`  in a sandbox: iris hive sandbox --drive ${c.name} "ls /workspace"`))
   },
 })
 
@@ -324,11 +372,30 @@ const ServeCmd = cmd({
 })
 
 const StatusCmd = cmd({
-  command: "status",
-  describe: "drives on this machine and whether each is mounted",
-  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  command: "status [name]",
+  describe: "drives on this machine and whether each is mounted; with a name, its workspace and who writes it",
+  builder: (y) => y.positional("name", { type: "string" }).option("json", { type: "boolean", default: false }),
   async handler(argv) {
     const home = os.homedir()
+    if (argv.name) {
+      const c = readConfig(home, String(argv.name))
+      if (!c) return fail(`no drive called ${argv.name} on this machine`)
+      const mounted = isMounted(c.mountpoint)
+      const files = mounted ? workspaceListing(c.mountpoint) : []
+      const rw = mounted ? rwHolder(c.mountpoint) : null
+      const writer = rw && rw.expiresAt * 1000 > Date.now() ? rw : null
+      if (argv.json) return void console.log(JSON.stringify({ name: c.name, mountpoint: c.mountpoint, mounted, workspace: files, rw_holder: writer }, null, 2))
+      console.log()
+      console.log(`  ${bold(c.name)}  ${mounted ? success("mounted") : warn("unmounted")}  ${dim(c.mountpoint)}`)
+      if (!mounted) return void console.log(dim(`  iris hive drive mount ${c.name}`) + "\n")
+      console.log(`  writer    ${writer ? `${writer.holder} ${dim(`until ${new Date(writer.expiresAt * 1000).toISOString()}`)}` : dim("nobody — the next sandbox may mount it read-write")}`)
+      console.log(`  workspace ${dim(path.join(c.mountpoint, "workspace"))}  ${dim("= /workspace in a sandbox")}`)
+      if (!files.length) console.log(dim("    (empty)"))
+      for (const f of files.slice(0, 50)) console.log(`    ${f.name}${f.name.endsWith("/") ? "" : dim(`  ${f.bytes} B`)}`)
+      if (files.length > 50) console.log(dim(`    … ${files.length - 50} more`))
+      console.log()
+      return
+    }
     const rows = listConfigs(home).map((c) => ({ name: c.name, mountpoint: c.mountpoint, mounted: isMounted(c.mountpoint), meta: redactMeta(c.meta) }))
     if (argv.json) return void console.log(JSON.stringify({ juicefs: juicefs(home), drives: rows }, null, 2))
     console.log()

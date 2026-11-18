@@ -234,7 +234,7 @@ test("surveySources: flags a source that is CONNECTED but absent from the availa
   const available = [{ type: "gmail", name: "Gmail", functions: [{ name: "search_emails" }] }]
   const connections = [
     { type: "google-drive", account_email: "alex@freelabel.net" },
-    { type: "google-drive", account_email: "amayo@mypathwaysai.com" },
+    { type: "google-drive", account_email: "user3@firm-d.example.com" },
   ]
   const out = surveySources(available, connections)
 
@@ -243,7 +243,7 @@ test("surveySources: flags a source that is CONNECTED but absent from the availa
   expect(drive.connected).toBe(true)
   expect(drive.listed).toBe(false)
   expect(drive.bulkIngestable).toBe(true)
-  expect(drive.accounts).toEqual(["alex@freelabel.net", "amayo@mypathwaysai.com"])
+  expect(drive.accounts).toEqual(["alex@freelabel.net", "user3@firm-d.example.com"])
 
   // And the hidden one sorts first — it is the reason to run the command.
   expect(normalizeSourceType(out[0].type)).toBe("google-drive")

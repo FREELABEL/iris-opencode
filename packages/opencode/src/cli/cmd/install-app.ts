@@ -8,7 +8,6 @@ import { existsSync } from "fs"
 
 export const InstallAppCommand = {
   command: "install-app",
-  aliases: ["desktop"],
   describe: "install or update the IRIS desktop app",
   builder: (yargs: Argv) => {
     return yargs

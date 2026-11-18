@@ -50,7 +50,13 @@ else
 fi
 
 # The commit the daemon is actually running. Never infer this from anything else.
-if [ -d "$HOME/.iris/bridge/.git" ]; then
+# .iris-commit first: an install from the archive writes it from the archive itself, and a .git
+# left over from an older clone-based install is KEPT by updates — it names the commit that
+# clone was on, not what runs now (#191480).
+if [ -s "$HOME/.iris/bridge/.iris-commit" ]; then
+  emit daemon_sha "$(head -c 7 "$HOME/.iris/bridge/.iris-commit")"
+  emit daemon_branch "archive"
+elif [ -d "$HOME/.iris/bridge/.git" ]; then
   emit daemon_sha "$(git -C "$HOME/.iris/bridge" rev-parse --short HEAD 2>/dev/null)"
   emit daemon_branch "$(git -C "$HOME/.iris/bridge" rev-parse --abbrev-ref HEAD 2>/dev/null)"
   emit daemon_dirty "$(git -C "$HOME/.iris/bridge" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"

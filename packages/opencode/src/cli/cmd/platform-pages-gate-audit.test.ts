@@ -15,12 +15,12 @@ describe("classifyGateEntry", () => {
   })
 
   test("an email in the DOMAIN list does not grant that person access", () => {
-    expect(classifyGateEntry("domains", "kmontero@pathwaysinjuryconsultants.com")).toContain("EMAIL in the domain list")
+    expect(classifyGateEntry("domains", "user8@firm-c.example.com")).toContain("EMAIL in the domain list")
   })
 
   test("well-formed entries are silent", () => {
-    expect(classifyGateEntry("domains", "pathwaysinjuryconsultants.com")).toBeNull()
-    expect(classifyGateEntry("emails", "kmontero@pathwaysinjuryconsultants.com")).toBeNull()
+    expect(classifyGateEntry("domains", "firm-c.example.com")).toBeNull()
+    expect(classifyGateEntry("emails", "user8@firm-c.example.com")).toBeNull()
   })
 
   test("empty and malformed entries are reported, not skipped", () => {

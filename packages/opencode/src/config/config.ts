@@ -12,7 +12,13 @@ import { lazy } from "../util/lazy"
 import { NamedError } from "@opencode-ai/util/error"
 import { Flag } from "../flag/flag"
 import { Auth } from "../auth"
-import { type ParseError as JsoncParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
+import {
+  applyEdits,
+  modify,
+  type ParseError as JsoncParseError,
+  parse as parseJsonc,
+  printParseErrorCode,
+} from "jsonc-parser"
 import { Instance } from "../project/instance"
 import { LSPServer } from "../lsp/server"
 import { BunProc } from "@/bun"
@@ -33,6 +39,16 @@ export namespace Config {
       merged.instructions = Array.from(new Set([...target.instructions, ...source.instructions]))
     }
     return merged
+  }
+
+  /**
+   * Process-local, in-memory config overlays, applied last and never written to disk. Register
+   * BEFORE the first Config read. `iris acp` uses this to offer a loopback mesh for one session
+   * (#187246 M4) without touching the user's config files.
+   */
+  const overlays: Array<(config: Info) => Info> = []
+  export function addOverlay(overlay: (config: Info) => Info) {
+    overlays.push(overlay)
   }
 
   export const state = Instance.state(async () => {
@@ -158,6 +174,8 @@ export namespace Config {
     if (Flag.OPENCODE_DISABLE_PRUNE) {
       result.compaction = { ...result.compaction, prune: false }
     }
+
+    for (const overlay of overlays) result = overlay(result)
 
     return {
       config: result,
@@ -997,7 +1015,10 @@ export namespace Config {
         if (provider && model) result.model = `${provider}/${model}`
         result["$schema"] = "https://opencode.ai/config.json"
         result = mergeDeep(result, rest)
-        await Bun.write(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
+        const target = path.join(Global.Path.config, "config.json")
+        const migrated: Record<string, any> = { ...rest, $schema: "https://opencode.ai/config.json" }
+        if (provider && model) migrated.model = `${provider}/${model}`
+        await Bun.write(target, JSON.stringify(mergeDeep(await readRaw(target), migrated), null, 2))
         await fs.unlink(path.join(Global.Path.config, "config"))
       })
       .catch(() => {})
@@ -1017,7 +1038,20 @@ export namespace Config {
     return load(text, filepath)
   }
 
+  // What the user wrote, before {env:} and {file:} are filled in. Anything written back to disk starts
+  // from this, so a resolved secret can never land in the config file.
+  function withSchema(raw: string) {
+    return applyEdits(raw, modify(raw, ["$schema"], "https://opencode.ai/config.json", {}))
+  }
+
+  async function readRaw(filepath: string): Promise<Record<string, any>> {
+    const raw = await Bun.file(filepath).text().catch(() => "")
+    const data = raw ? parseJsonc(raw, [], { allowTrailingComma: true }) : {}
+    return data && typeof data === "object" ? data : {}
+  }
+
   async function load(text: string, configFilepath: string) {
+    const original = text
     text = text.replace(/\{env:([^}]+)\}/g, (_, varName) => {
       return process.env[varName] || ""
     })
@@ -1087,7 +1121,7 @@ export namespace Config {
     if (parsed.success) {
       if (!parsed.data.$schema) {
         parsed.data.$schema = "https://opencode.ai/config.json"
-        await Bun.write(configFilepath, JSON.stringify(parsed.data, null, 2))
+        await Bun.write(configFilepath, withSchema(original))
       }
       const data = parsed.data
       if (data.plugin) {
@@ -1138,7 +1172,7 @@ export namespace Config {
 
   export async function update(config: Info) {
     const filepath = path.join(Instance.directory, "config.json")
-    const existing = await loadFile(filepath)
+    const existing = await readRaw(filepath)
     await Bun.write(filepath, JSON.stringify(mergeDeep(existing, config), null, 2))
     await Instance.dispose()
   }

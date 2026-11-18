@@ -103,12 +103,18 @@ const IntegrationsListCommand = cmd({
       const renderRow = (i: any, suffix = "") => {
         const idLabel = i.id ? dim(`#${i.id}`) : dim("(no id)")
         const account = i.account_email ?? i.name ?? null
-        const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
-        const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
-        const tail = suffix ? `  ${dim(suffix)}` : ""
-        const store = i.store ? dim(` [${i.store}]`) : ""
-        console.log(`  ${bold(String(i.type))}  ${idLabel}${store}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
-      }
+      const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
+      const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
+      const age = i.key_age_days == null ? "" : `key ${i.key_age_days}d`
+      const lastUsed = i.last_used_at ? `last used ${String(i.last_used_at).slice(0, 10)}` : "never used"
+      const rotation = i.rotation_due ? "rotation due" : ""
+      const metadata = [age, lastUsed, rotation].filter(Boolean).join(" · ")
+      const tail = [suffix, metadata].filter(Boolean).length
+        ? `  ${dim([suffix, metadata].filter(Boolean).join(" · "))}`
+        : ""
+      const store = i.store ? dim(` [${i.store}]`) : ""
+      console.log(`  ${bold(String(i.type))}  ${idLabel}${store}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
+    }
 
       if (personal.length > 0) {
         console.log()
@@ -132,6 +138,100 @@ const IntegrationsListCommand = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       if (!args.json) prompts.outro("Done")
     }
+  },
+})
+
+export const IntegrationsRotateCommand = cmd({
+  command: "rotate <id>",
+  describe: "replace a stored credential, verify it, and keep the old key if the test fails",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "integration ID", type: "number", demandOption: true })
+      .option("api-key", { describe: "replacement API key", type: "string" })
+      .option("token", { describe: "replacement access token", type: "string" })
+      .option("refresh-token", { describe: "replacement refresh token", type: "string" })
+      .option("field", { describe: "replacement credential field (key=value; repeatable)", type: "string", array: true })
+      .option("max-age-days", { describe: "optional warning threshold for this key", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Rotate Integration #${args.id}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const credentials: Record<string, string> = {}
+    if (args["api-key"]) credentials.api_key = String(args["api-key"])
+    if (args.token) credentials.token = String(args.token)
+    if (args["refresh-token"]) credentials.refresh_token = String(args["refresh-token"])
+    for (const raw of firstArray(args.field as string[] | undefined)) {
+      const i = raw.indexOf("=")
+      if (i <= 0) {
+        prompts.log.error(`Invalid --field ${raw}; use key=value`)
+        process.exitCode = 1
+        return
+      }
+      credentials[raw.slice(0, i)] = raw.slice(i + 1)
+    }
+
+    if (Object.keys(credentials).length === 0 && process.stdin.isTTY && !args.json) {
+      const value = (await prompts.text({
+        message: "Replacement credential value",
+        validate: (v) => (!v || v.length < 3 ? "Required (min 3 chars)" : undefined),
+      })) as string
+      if (prompts.isCancel(value)) { prompts.outro("Cancelled"); return }
+      credentials.api_key = value
+    }
+    if (Object.keys(credentials).length === 0) {
+      prompts.log.error("No replacement credentials provided. Use --api-key, --token, --refresh-token, or --field key=value")
+      process.exitCode = 1
+      return
+    }
+
+    const stores: Array<{ label: string; base: string }> = [
+      { label: "fl-api", base: FL_API },
+      { label: "iris-api", base: IRIS_API },
+    ]
+    const payload: Record<string, unknown> = { credentials }
+    if (typeof args["max-age-days"] === "number") payload.max_age_days = args["max-age-days"]
+
+    for (const store of stores) {
+      try {
+        const res = await irisFetch(`/api/v1/users/${userId}/integrations/${args.id}/rotate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }, store.base)
+        if (res.status === 404) continue
+        if (!res.ok) {
+          const body = await res.text().catch(() => "")
+          if (args.json) await writeJson({ success: false, store: store.label, status: res.status, error: body })
+          else prompts.log.error(`${store.label}: ${body || `HTTP ${res.status}`}`)
+          process.exitCode = 1
+          return
+        }
+        const body = await res.json()
+        if (args.json) { await writeJson({ ...body, store: store.label }); return }
+        console.log(`${success("✓")} rotated integration #${args.id} in ${store.label}`)
+        if (body.verified === false) {
+          console.log(dim("  Saved. This integration type has no live connection test, so the new key was not verified."))
+        } else {
+          console.log(dim("  The new credential passed its connection test."))
+        }
+        if (body.max_age_days) console.log(dim(`  Rotation warning threshold: ${body.max_age_days} days`))
+        prompts.outro("Done")
+        return
+      } catch (error) {
+        if (store === stores[stores.length - 1]) {
+          prompts.log.error(error instanceof Error ? error.message : String(error))
+          process.exitCode = 1
+        }
+      }
+    }
+    prompts.log.error(`Integration #${args.id} was not found in either integration store.`)
+    process.exitCode = 1
   },
 })
 
@@ -681,10 +781,11 @@ const IntegrationsExecCommand = cmd({
 export const PlatformIntegrationsCommand = cmd({
   command: "integrations",
   aliases: ["int", "connect", "apps"],
-  describe: "manage integrations — connect, call, share, list, disconnect",
+  describe: "manage integrations — connect, rotate, call, share, list, disconnect; list shows key age and last use",
   builder: (yargs) =>
     yargs
       .command(IntegrationsListCommand)
+      .command(IntegrationsRotateCommand)
       .command(IntegrationsExecCommand)
       .command(PathwaysCommand)
       .command(IntegrationsConnectCommand)

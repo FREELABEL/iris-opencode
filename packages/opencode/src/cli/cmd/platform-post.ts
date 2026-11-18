@@ -13,6 +13,7 @@ import { fetchAccounts, findBrand, connectedTargets } from "./platform-social"
  *   iris post --image https://cdn/a.png --image https://cdn/b.png --to x,instagram --profile freelabelnet
  *   iris post --video https://cdn/reel.mp4 --caption "…" --brand heyiris             # every connected account
  *   iris post --video https://cdn/reel.mp4 --caption "…" --brand heyiris --to instagram,x
+ *   iris post --video https://cdn/reel.mp4 --caption "…" --brand freelabel --to instagram --trial   # Trial Reel
  *
  * Backs the same POST /api/v1/social-media/publish the Review Studio "Publish"
  * button uses, so CLI + UI share one bulletproof path. (bug #165862)
@@ -31,6 +32,15 @@ export interface PostInput {
   video?: string
   images?: string[]
   mediaType?: string
+  /** Instagram Trial Reel (#192312): "" or "if-liked" = share with followers if it performs; "never" = non-followers only. */
+  trial?: string
+}
+
+/** upload-post `share_mode` for each --trial value. */
+export const TRIAL_SHARE_MODES: Record<string, string> = {
+  "": "TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED",
+  "if-liked": "TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED",
+  never: "TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS",
 }
 
 /** The request body, or an error saying what is missing. Video → photos → text, as the server detects it. */
@@ -41,6 +51,14 @@ export function buildPostBody(i: PostInput): { body: Record<string, unknown>; ki
   if (i.brand) body.brand = i.brand
   if (i.profile) body.user = i.profile
   if (i.mediaType) body.media_type = i.mediaType.toUpperCase()
+  if (i.trial !== undefined) {
+    const mode = TRIAL_SHARE_MODES[i.trial.trim().toLowerCase()]
+    if (!mode) return { error: `--trial takes 'if-liked' (the default) or 'never', not '${i.trial}'` }
+    if (!i.video) return { error: "--trial is for a video — Trial Reels are Reels. Pass --video <url>" }
+    if (!i.platforms.includes("instagram")) return { error: "--trial is an Instagram Reel option — add instagram to --to" }
+    if (body.media_type === "STORIES") return { error: "--trial cannot be a Story — drop --media-type STORIES" }
+    body.share_mode = mode
+  }
   const images = i.images ?? []
   if (i.video) {
     body.video_url = i.video
@@ -200,6 +218,7 @@ export const PlatformPostCommand = cmd({
       .option("image", { type: "array", describe: "image URL(s) to publish (repeatable)", string: true })
       .option("caption", { type: "string", describe: "caption for video/image (overrides text)" })
       .option("media-type", { type: "string", choices: ["REELS", "STORIES"], describe: "Instagram/Facebook placement for a video" })
+      .option("trial", { type: "string", describe: "post the Instagram Reel as a Trial Reel — shown to non-followers first. 'if-liked' (default): Instagram shares it with followers if it performs within 72h; 'never': non-followers only. Needs a public account with 1,000+ followers" })
       .option("wait", { type: "number", default: 300, describe: "seconds to wait for a background upload's per-platform result (0 = don't wait)" }),
   async handler(args) {
     UI.empty()
@@ -252,6 +271,7 @@ export const PlatformPostCommand = cmd({
       video: args.video ? String(args.video) : undefined,
       images: Array.isArray(args.image) ? (args.image as string[]).map(String) : [],
       mediaType: args.mediaType ? String(args.mediaType) : undefined,
+      trial: args.trial === undefined ? undefined : String(args.trial),
     })
     if ("error" in built) {
       prompts.log.error(built.error)

@@ -86,6 +86,20 @@ export interface ActRequest {
  * works today, before Mint issues hashes of its own. Key order must not change the identity, hence
  * the stable stringify.
  */
+/**
+ * The part of an agent that IS the agent, for sealing. One function, used by `iris kinetic seal`
+ * and `iris org explain` alike: two copies of this line would let them compute different hashes
+ * for the same agent, and the explain sheet would report no couples for an agent that has them.
+ *
+ * Ids, timestamps and counters are left out — they change without the agent changing, and a hash
+ * that moves on its own would revoke couples at random. `config` is IN, which means a governance
+ * edit to config (autonomy, policy, rate caps) changes the hash too — see #192423 before a seat
+ * starts writing those keys.
+ */
+export function sealDefinition(a: any): unknown {
+  return { name: a?.name, model: a?.model, instructions: a?.instructions ?? a?.prompt ?? null, tools: a?.tools ?? a?.config?.tools ?? null, config: a?.config ?? null }
+}
+
 export function sealAgent(definition: unknown): string {
   return "sha256:" + createHash("sha256").update(stableStringify(definition)).digest("hex")
 }

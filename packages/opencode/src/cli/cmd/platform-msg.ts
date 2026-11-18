@@ -3,10 +3,39 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success, highlight, writeJson } from "./iris-api"
 
+import { resolveMsgSender } from "./msg-sender"
+import { resolveLocalNode, type LocalNodeResolution } from "./hive-local-node"
+import { existsSync } from "fs"
+import { readFile } from "fs/promises"
+import { homedir } from "os"
+import { join } from "path"
+
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
+}
+
+/**
+ * Which node is this machine, from AUTHORITATIVE sources only: the local daemon's /health node_id,
+ * then ~/.iris/config.json node_id. No hostname heuristic — a message must not be signed by a guess.
+ */
+async function localNodeResolution(nodes: Record<string, unknown>[]): Promise<LocalNodeResolution> {
+  let configNodeId: string | null = null
+  try {
+    const cfg = join(homedir(), ".iris", "config.json")
+    if (existsSync(cfg)) configNodeId = JSON.parse(await readFile(cfg, "utf-8")).node_id || null
+  } catch { /* unreadable config = no id */ }
+  let daemonNodeId: string | null = null
+  try {
+    const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(1500) })
+    if (res.ok) daemonNodeId = ((await res.json()) as any)?.node_id ?? null
+  } catch { /* no daemon running */ }
+  return resolveLocalNode({
+    daemonNodeId,
+    configNodeId,
+    nodes: nodes.map((n) => ({ id: String(n.id), name: String(n.name) })),
+  })
 }
 
 // ============================================================================
@@ -142,10 +171,11 @@ const MsgSendCommand = cmd({
       const recipientNodeId = String(match.id)
       const recipientName = String(match.name)
 
-      // Get sender node name (first node that isn't the recipient, or fallback)
-      const senderNode = nodes.find(n => String(n.id) !== recipientNodeId) || nodes[0]
-      const senderName = senderNode ? String(senderNode.name) : "unknown"
-      const senderNodeId = senderNode ? String(senderNode.id) : ""
+      // The sender is THIS machine, by its node id — never "some other node" (#191568).
+      const sender = resolveMsgSender(nodes, await localNodeResolution(nodes))
+      const senderName = sender.name
+      const senderNodeId = sender.nodeId ?? ""
+      if (sender.warning) prompts.log.warn(sender.warning)
 
       spinner.message(`Sending to ${recipientName}...`)
 

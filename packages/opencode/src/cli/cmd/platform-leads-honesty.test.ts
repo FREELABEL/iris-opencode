@@ -444,20 +444,20 @@ describe("#184936 normalizeTaskStatus", () => {
 
 describe("#184941 taskTitleKey", () => {
   test("byte-identical titles collapse", () => {
-    expect(taskTitleKey("Map vanguardhcs.com domain to Genesis")).toBe(
-      taskTitleKey("Map vanguardhcs.com domain to Genesis"),
+    expect(taskTitleKey("Map firm-e.example.com domain to Genesis")).toBe(
+      taskTitleKey("Map firm-e.example.com domain to Genesis"),
     )
   })
 
   test("a trailing ellipsis is not a different task", () => {
-    expect(taskTitleKey("Map vanguardhcs.com domain to Genesis…")).toBe(
-      taskTitleKey("Map vanguardhcs.com domain to Genesis"),
+    expect(taskTitleKey("Map firm-e.example.com domain to Genesis…")).toBe(
+      taskTitleKey("Map firm-e.example.com domain to Genesis"),
     )
   })
 
   test("case and punctuation are not differences", () => {
-    expect(taskTitleKey("Map vanguardhcs.com domain to Genesis!")).toBe(
-      taskTitleKey("map vanguardhcs com domain to genesis"),
+    expect(taskTitleKey("Map firm-e.example.com domain to Genesis!")).toBe(
+      taskTitleKey("map firm e example com domain to genesis"),
     )
   })
 
@@ -469,8 +469,8 @@ describe("#184941 taskTitleKey", () => {
 describe("#184941 findDuplicateTaskGroups", () => {
   test("finds the #682/#685 pair that was byte-identical", () => {
     const groups = findDuplicateTaskGroups([
-      { id: 682, title: "Map vanguardhcs.com domain to Genesis" },
-      { id: 685, title: "Map vanguardhcs.com domain to Genesis" },
+      { id: 682, title: "Map firm-e.example.com domain to Genesis" },
+      { id: 685, title: "Map firm-e.example.com domain to Genesis" },
       { id: 999, title: "Send invoice" },
     ])
     expect(groups).toHaveLength(1)
@@ -479,9 +479,9 @@ describe("#184941 findDuplicateTaskGroups", () => {
 
   test("the #673/#682/#685 triple collapses into one group of three", () => {
     const groups = findDuplicateTaskGroups([
-      { id: 673, title: "Map vanguardhcs.com domain to Genesis…" },
-      { id: 682, title: "Map vanguardhcs.com domain to Genesis" },
-      { id: 685, title: "Map vanguardhcs.com domain to genesis" },
+      { id: 673, title: "Map firm-e.example.com domain to Genesis…" },
+      { id: 682, title: "Map firm-e.example.com domain to Genesis" },
+      { id: 685, title: "Map firm-e.example.com domain to genesis" },
     ])
     expect(groups).toHaveLength(1)
     expect(groups[0].ids).toEqual([673, 682, 685])
@@ -617,12 +617,12 @@ describe("normalizeTouchDate", () => {
 })
 
 describe("buildTouchPayload", () => {
-  const ci = { email: "r@vanguardhcs.com", chat_ids: ["chat1"] }
+  const ci = { email: "r@firm-e.example.com", chat_ids: ["chat1"] }
 
   test("merges into contact_info without dropping the keys beside it", () => {
     const p = buildTouchPayload({ existing: ci, lastContacted: "2026-09-13" })
     expect(p.contact_info).toEqual({
-      email: "r@vanguardhcs.com",
+      email: "r@firm-e.example.com",
       chat_ids: ["chat1"],
       last_contacted: "2026-09-13",
     })

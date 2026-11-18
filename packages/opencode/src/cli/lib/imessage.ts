@@ -8,6 +8,7 @@ import { execSync, execFileSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
+import { matchPhoneCandidates, parsePhoneIdentity, phoneSuffix } from "./phone-identity"
 
 const MESSAGES_DB = `${homedir()}/Library/Messages/chat.db`
 const SELF_CONFIG_PATH = join(homedir(), ".iris", "imessage-self.json")
@@ -34,12 +35,16 @@ export interface Chat {
  * Check if iMessage SQLite is accessible (macOS only + Full Disk Access).
  */
 export function isAvailable(): boolean {
+  if (queryOverride) return true
   if (process.platform !== "darwin") return false
   if (!existsSync(MESSAGES_DB)) return false
   try {
     execSync(`sqlite3 "${MESSAGES_DB}" "SELECT 1 FROM message LIMIT 1"`, {
       encoding: "utf-8",
       timeout: 3000,
+      // #193251: inherited stderr printed sqlite3's error — with the chat.db path — on every
+      // access probe. Capture it; diagnoseAccess() turns it into one clean sentence.
+      stdio: ["ignore", "pipe", "pipe"],
     })
     return true
   } catch {
@@ -52,11 +57,14 @@ export function isAvailable(): boolean {
  */
 export function diagnoseAccess(): string {
   if (process.platform !== "darwin") return "iMessage is only available on macOS."
-  if (!existsSync(MESSAGES_DB)) return `Messages database not found at ${MESSAGES_DB}. Is Messages.app installed?`
+  if (!existsSync(MESSAGES_DB)) return "Messages database not found (~/Library/Messages/chat.db). Is Messages.app installed?"
   try {
     execSync(`sqlite3 "${MESSAGES_DB}" "SELECT 1 FROM message LIMIT 1"`, {
       encoding: "utf-8",
       timeout: 3000,
+      // #193251: inherited stderr printed sqlite3's error — with the chat.db path — on every
+      // access probe. Capture it; diagnoseAccess() turns it into one clean sentence.
+      stdio: ["ignore", "pipe", "pipe"],
     })
     return "accessible" // shouldn't reach here if isAvailable() returned false
   } catch (err: any) {
@@ -64,7 +72,7 @@ export function diagnoseAccess(): string {
     if (msg.includes("authorization denied") || msg.includes("not permitted")) {
       return "Full Disk Access required. Go to System Settings > Privacy & Security > Full Disk Access and enable your terminal app, then restart it."
     }
-    return `Cannot read Messages database: ${msg.slice(0, 200)}`
+    return `Cannot read Messages database: ${describeQueryFailure(err).replace(/^iMessage database query failed:?\s*/, "") || "unknown error"}`
   }
 }
 
@@ -72,12 +80,43 @@ export function diagnoseAccess(): string {
  * Run a raw SQL query against the Messages database.
  * Escapes double quotes in the SQL string.
  */
+/** Tests run real SQL against a fixture chat.db through this. Production never sets it. */
+let queryOverride: ((sql: string) => string) | null = null
+export function setQueryForTests(fn: ((sql: string) => string) | null): void {
+  queryOverride = fn
+}
+
 export function query(sql: string): string {
+  if (queryOverride) return queryOverride(sql).trim()
   const escaped = sql.replace(/"/g, '\\"')
-  return execSync(`sqlite3 "${MESSAGES_DB}" "${escaped}"`, {
-    encoding: "utf-8",
-    timeout: 10000,
-  }).trim()
+  try {
+    return execSync(`sqlite3 "${MESSAGES_DB}" "${escaped}"`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      // #193251: stderr used to be inherited, so a failing query printed sqlite3's raw error, the
+      // full SQL and the user's chat.db path straight onto the terminal. Capture it instead.
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim()
+  } catch (err: any) {
+    throw new Error(describeQueryFailure(err))
+  }
+}
+
+/**
+ * One clean line saying why sqlite3 failed — never the SQL, never the database path.
+ * execSync's own message is `Command failed: sqlite3 "/Users/<you>/Library/Messages/chat.db" …`
+ * followed by the whole query, which is what leaked in #193251.
+ */
+export function describeQueryFailure(err: any): string {
+  if (err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM") return "iMessage database query timed out"
+  const stderr = String(err?.stderr ?? "")
+  const line = stderr.split("\n").map((l) => l.trim()).find(Boolean) ?? ""
+  const clean = line
+    .split(MESSAGES_DB).join("chat.db")
+    .split(homedir()).join("~")
+    .replace(/^(Parse error|Runtime error|Error)( near line \d+)?:\s*/i, "")
+    .slice(0, 160)
+  return clean ? `iMessage database query failed: ${clean}` : "iMessage database query failed"
 }
 
 // ── Self handle ("me" / "self" target) ──
@@ -248,8 +287,10 @@ export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number
         chat_identifier: senderHandle || undefined,
       } satisfies Message
     }).filter(Boolean) as Message[]
-  } catch {
-    return []
+  } catch (err) {
+    // #193251: this used to `return []`, so a query that FAILED read as "no messages" and the
+    // command exited 0. Callers (search / read / read-group) report it and exit non-zero.
+    throw err
   }
 }
 
@@ -307,6 +348,72 @@ export function searchByHandle(handle: string, days = 30, limit = 50): Message[]
   } catch {
     return []
   }
+}
+
+export type HandleMatch =
+  | { status: "matched"; identifiers: string[]; messages: Message[] }
+  | { status: "ambiguous"; identifiers: string[] }
+  | { status: "none" }
+  | { status: "invalid"; reason: string }
+
+/**
+ * Messages for the conversation that IS this handle — for anything that WRITES what it finds to a
+ * person's record (#183513). searchByHandle() is a substring search (fine for a person browsing
+ * their own messages, wrong for attribution): a 7-digit number matched every chat ending in those
+ * digits, and an email matched any longer address containing it.
+ *   - email: the chat identifier must equal the address (case-insensitive).
+ *   - phone: whole-number identity (phone-identity.ts); SQL prefilters on an anchored suffix,
+ *     each candidate is then confirmed in full. Rows for the SAME number (SMS + iMessage threads)
+ *     are one person; two DIFFERENT numbers is ambiguous and returns no messages.
+ */
+export function searchByHandleExact(handle: string, days = 30, limit = 50): HandleMatch {
+  const h = String(handle ?? "").trim()
+  if (!h) return { status: "invalid", reason: "empty handle" }
+  const cutoffSeconds = days * 86400
+
+  let identifiers: string[]
+  if (h.includes("@")) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(h)) return { status: "invalid", reason: `"${h}" is not an email address` }
+    const esc = h.toLowerCase().replace(/'/g, "''")
+    const raw = query(`SELECT DISTINCT chat_identifier FROM chat WHERE lower(chat_identifier) = '${esc}';`)
+    identifiers = raw ? raw.split("\n").filter(Boolean) : []
+    if (identifiers.length === 0) return { status: "none" }
+  } else {
+    const p = parsePhoneIdentity(h)
+    if (!p.ok) return { status: "invalid", reason: p.reason }
+    const raw = query(`SELECT DISTINCT chat_identifier FROM chat WHERE chat_identifier LIKE '%${phoneSuffix(p)}';`)
+    const rows = raw ? raw.split("\n").filter(Boolean) : []
+    const m = matchPhoneCandidates(h, rows, (r) => r)
+    if (m.status === "invalid" || m.status === "none") return m
+    if (m.status === "ambiguous") return { status: "ambiguous", identifiers: m.keys }
+    identifiers = m.candidates
+  }
+
+  const inList = identifiers.map((i) => `'${i.replace(/'/g, "''")}'`).join(",")
+  const sql = `SELECT
+    m.rowid, m.text, m.is_from_me, m.date,
+    datetime(m.date/1000000000 + strftime('%s','2001-01-01'), 'unixepoch', 'localtime') as sent_dt,
+    c.chat_identifier,
+    hex(m.attributedBody) as body_hex
+  FROM message m
+  JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+  JOIN chat c ON cmj.chat_id = c.rowid
+  WHERE c.chat_identifier IN (${inList})
+  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+  AND m.date > (strftime('%s','now') - ${cutoffSeconds} - strftime('%s','2001-01-01')) * 1000000000
+  ORDER BY m.date DESC LIMIT ${limit}`
+  const raw = query(sql)
+  const messages = (raw ? raw.split("\n") : [])
+    .map((line) => {
+      const parts = line.split("|")
+      if (parts.length < 5) return null
+      let text = parts[1]?.trim() || ""
+      if (!text && parts[6]) text = parseAttributedBody(parts[6])
+      if (!text) return null
+      return { id: parts[0], text, from_me: parts[2] === "1", date: parts[4], chat_identifier: parts[5] || identifiers[0] } satisfies Message
+    })
+    .filter(Boolean) as Message[]
+  return { status: "matched", identifiers, messages }
 }
 
 /**
@@ -669,4 +776,94 @@ export function listAttachments(
       }
     })
     .filter((a): a is Attachment => a !== null)
+}
+
+// ── Send confirmation (#193288) ──
+
+/**
+ * What chat.db says about a message we just handed to Messages.
+ *
+ * `osascript … send` returning without error only means Messages ACCEPTED the command. It says
+ * nothing about whether the message went out: an unregistered handle, a signed-out account or a
+ * network failure all return cleanly and leave a red "Not Delivered" row — or no row at all. The
+ * CLI used to print "Sent" on that return alone (#193288). These are the only honest outcomes:
+ */
+export type SendConfirmation =
+  | { state: "sent"; rowid: string; delivered: boolean }
+  | { state: "failed"; rowid: string; error: number }
+  | { state: "pending"; rowid: string }
+  | { state: "missing" }
+  | { state: "unknown"; reason: string }
+
+export interface OutgoingRow {
+  rowid: string
+  text: string
+  is_sent: boolean
+  is_delivered: boolean
+  error: number
+}
+
+/** Pure: decide from the candidate rows. Exported for tests. */
+export function classifyOutgoing(rows: OutgoingRow[], text: string): SendConfirmation | null {
+  const want = text.replace(/\s+/g, " ").trim()
+  // Prefer an exact text match; a row with unreadable text (attributedBody only) still counts,
+  // since it is from us, to this handle, inside the window.
+  const row = rows.find((r) => r.text.replace(/\s+/g, " ").trim() === want) ?? rows.find((r) => !r.text)
+  if (!row) return null
+  if (row.error !== 0) return { state: "failed", rowid: row.rowid, error: row.error }
+  if (row.is_sent || row.is_delivered) return { state: "sent", rowid: row.rowid, delivered: row.is_delivered }
+  return { state: "pending", rowid: row.rowid }
+}
+
+function outgoingRows(handle: string, sinceUnixSeconds: number): OutgoingRow[] {
+  const esc = (s: string) => s.replace(/'/g, "''")
+  const digits = handle.includes("@") ? "" : handle.replace(/\D/g, "")
+  const handleMatch = digits.length >= 7
+    ? `(h.id LIKE '%${digits.slice(-10)}' OR c.chat_identifier LIKE '%${digits.slice(-10)}')`
+    : `(lower(h.id) = lower('${esc(handle)}') OR lower(c.chat_identifier) = lower('${esc(handle)}'))`
+  const sql = `SELECT m.rowid, COALESCE(REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' '), ''),
+      COALESCE(m.is_sent, 0), COALESCE(m.is_delivered, 0), COALESCE(m.error, 0)
+    FROM message m
+    JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+    JOIN chat c ON cmj.chat_id = c.rowid
+    LEFT JOIN handle h ON m.handle_id = h.rowid
+    WHERE m.is_from_me = 1
+      AND m.date/1000000000 + 978307200 >= ${Math.floor(sinceUnixSeconds) - 5}
+      AND ${handleMatch}
+    ORDER BY m.date DESC LIMIT 10;`.replace(/\n/g, " ")
+  const raw = query(sql)
+  if (!raw) return []
+  return raw.split("\n").map((line) => {
+    const [rowid, text, isSent, isDelivered, error] = line.split("|")
+    return { rowid, text: text ?? "", is_sent: isSent === "1", is_delivered: isDelivered === "1", error: Number(error) || 0 }
+  })
+}
+
+/**
+ * Poll chat.db until Messages records the outgoing message as sent or failed, or time runs out.
+ * A row that appears but is neither sent nor failed by the deadline is "pending" — NOT sent.
+ */
+export async function confirmOutgoing(
+  handle: string,
+  text: string,
+  sinceUnixSeconds: number,
+  opts: { timeoutMs?: number; intervalMs?: number; canRead?: () => boolean } = {},
+): Promise<SendConfirmation> {
+  const timeoutMs = opts.timeoutMs ?? 15000
+  const intervalMs = opts.intervalMs ?? 500
+  const canRead = opts.canRead ?? (() => queryOverride !== null || isAvailable())
+  if (!canRead()) return { state: "unknown", reason: "chat.db is not readable (Full Disk Access not granted)" }
+
+  const deadline = Date.now() + timeoutMs
+  let last: SendConfirmation | null = null
+  while (true) {
+    try {
+      last = classifyOutgoing(outgoingRows(handle, sinceUnixSeconds), text)
+    } catch (err: any) {
+      return { state: "unknown", reason: String(err?.message ?? err) }
+    }
+    if (last && last.state !== "pending") return last
+    if (Date.now() >= deadline) return last ?? { state: "missing" }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
 }

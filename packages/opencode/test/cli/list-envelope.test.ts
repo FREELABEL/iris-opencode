@@ -41,7 +41,7 @@ describe("buildListEnvelope — truncation must declare itself", () => {
     // "complete" here is the exact failure being fixed, so assume more.
     const env = buildListEnvelope(new Array(20).fill({ id: 1 }), { limit: 20 })
     expect(env.meta.truncated).toBe(true)
-    expect(env.meta.total).toBeUndefined()
+    expect(env.meta.total).toBeNull()
   })
 
   test("a short page with no total is complete", () => {

@@ -167,7 +167,8 @@ export namespace File {
       }
 
       const set = new Set<string>()
-      for await (const file of Ripgrep.files({ cwd: Instance.directory })) {
+      // The CLI may be started anywhere, even /: index it pruned and budgeted rather than refuse (#191073).
+      for await (const file of Ripgrep.files({ cwd: Instance.directory, refuseBroad: false })) {
         result.files.push(file)
         let current = file
         while (true) {

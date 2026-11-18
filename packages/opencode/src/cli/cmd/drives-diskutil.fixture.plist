@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  HAND-WRITTEN FIXTURE, NOT RECORDED from a real Mac (#192927). It follows the shape of
+  `diskutil info -plist /Volumes/<name>` for an encrypted APFS volume on an external SSD,
+  written from Apple's documented keys. Replace with a real capture when one is taken.
+-->
+<plist version="1.0">
+<dict>
+	<key>APFSContainerFree</key>
+	<integer>612345602048</integer>
+	<key>APFSContainerReference</key>
+	<string>disk5</string>
+	<key>APFSContainerSize</key>
+	<integer>1000240963584</integer>
+	<key>APFSPhysicalStores</key>
+	<array>
+		<dict>
+			<key>APFSPhysicalStore</key>
+			<string>disk4s2</string>
+		</dict>
+	</array>
+	<key>APFSSnapshot</key>
+	<false/>
+	<key>APFSVolumeGroupID</key>
+	<string></string>
+	<key>Bootable</key>
+	<false/>
+	<key>BusProtocol</key>
+	<string>USB</string>
+	<key>CanBeMadeBootable</key>
+	<false/>
+	<key>Content</key>
+	<string>41504653-0000-11AA-AA11-00306543ECAC</string>
+	<key>DeviceIdentifier</key>
+	<string>disk5s1</string>
+	<key>DeviceNode</key>
+	<string>/dev/disk5s1</string>
+	<key>DiskUUID</key>
+	<string>0B1C2D3E-4F50-4A6B-8C7D-9E0F1A2B3C4D</string>
+	<key>Ejectable</key>
+	<true/>
+	<key>Encrypted</key>
+	<true/>
+	<key>FileVault</key>
+	<false/>
+	<key>FilesystemName</key>
+	<string>APFS (Encrypted)</string>
+	<key>FilesystemType</key>
+	<string>apfs</string>
+	<key>FilesystemUserVisibleName</key>
+	<string>APFS (Encrypted)</string>
+	<key>FreeSpace</key>
+	<integer>612345602048</integer>
+	<key>Internal</key>
+	<false/>
+	<key>Locked</key>
+	<false/>
+	<key>MediaName</key>
+	<string></string>
+	<key>MountPoint</key>
+	<string>/Volumes/BK &amp; Sessions</string>
+	<key>RemovableMedia</key>
+	<false/>
+	<key>Size</key>
+	<integer>1000240963584</integer>
+	<key>SolidState</key>
+	<true/>
+	<key>TotalSize</key>
+	<integer>1000240963584</integer>
+	<key>VolumeAllocationBlockSize</key>
+	<integer>4096</integer>
+	<key>VolumeName</key>
+	<string>BK &amp; Sessions</string>
+	<key>VolumeUUID</key>
+	<string>7A1C3E55-9B2D-4F60-8E41-2D7C5B9A0F13</string>
+	<key>WholeDisk</key>
+	<false/>
+	<key>Writable</key>
+	<true/>
+</dict>
+</plist>

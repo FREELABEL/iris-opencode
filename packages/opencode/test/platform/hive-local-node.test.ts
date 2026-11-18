@@ -99,6 +99,39 @@ describe("resolving the local node (#179064)", () => {
   })
 })
 
+describe("a name is not an identity (#191564)", () => {
+  // MEASURED 2026-10-28: `iris hive ssh iris-hive-002` run ON iris-hive-001 printed "You are on
+  // iris-hive-002 already." The caller passed only the target ([iris-hive-002]); the daemon's
+  // answer (iris-hive-001's id) was not in that list, so it was thrown away as "stale", and the
+  // hostname fallback compared stems: iris-hive-001 -> "iris-hive" == iris-hive-002 -> "iris-hive".
+  const HIVE: NodeSummary[] = [
+    { id: "01a10379-0c9f-73c5-bf83-157496a21589", name: "iris-hive-001" },
+    { id: "01a1801e-8eb0-7191-bf97-32dbb3c50f93", name: "iris-hive-002" },
+  ]
+
+  test("the daemon says who we are; a node it did not name is not us", () => {
+    const r = resolveLocalNode({ daemonNodeId: HIVE[0].id, hostname: "iris-hive-001", nodes: [HIVE[1]] })
+    expect(r.nodeId).toBeNull()
+  })
+
+  test("config says who we are, too — the hostname guess is never consulted over it", () => {
+    const r = resolveLocalNode({ configNodeId: HIVE[0].id, hostname: "iris-hive-001", nodes: [HIVE[1]] })
+    expect(r.nodeId).toBeNull()
+  })
+
+  test("an exact hostname beats a stem: iris-hive-002 is iris-hive-002, not 'ambiguous'", () => {
+    const r = resolveLocalNode({ hostname: "iris-hive-002", nodes: HIVE })
+    expect(r.nodeId).toBe(HIVE[1].id)
+    expect(r.uncertain).toBe(true)
+  })
+
+  test("an exact hostname elsewhere in the list blocks a stem match on another node", () => {
+    // iris-hive-001 asking about [002, 001]: the exact one is us, the stem-twin is not.
+    const r = resolveLocalNode({ hostname: "iris-hive-001.local", nodes: [HIVE[1], HIVE[0]] })
+    expect(r.nodeId).toBe(HIVE[0].id)
+  })
+})
+
 describe("hostnameStem", () => {
   test("strips the mDNS collision counter and .local", () => {
     // The counter is the mutating part; everything else is stable.

@@ -5,6 +5,7 @@ import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bol
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { firstArray } from "../../util/array"
+import { buildHiveSearchScript, parseHiveSearchOutput, taskOutputText, RESULT_MARKER } from "./hive-maps-search"
 
 // ============================================================================
 // Sync helpers
@@ -535,75 +536,31 @@ export async function findOnlineHiveNode(): Promise<{ id: string; name: string }
 }
 
 export async function dispatchHiveSearch(node: { id: string; name: string }, query: string, limit: number): Promise<any[]> {
-  const userId = await resolveUserId()
+  return (await dispatchHiveSearchDetailed(node, query, limit)).rows
+}
 
-  // Browser work runs through agent-browser (CDP + accessibility snapshots), invoked
-  // with `npx --yes` so the node needs no pre-installed engine. This replaced a
-  // Playwright script that also had to hunt for node_modules/playwright to set
-  // NODE_PATH — that resolution hack is gone with it.
-  //
-  // Strategy is Google Maps only, and deliberately so: the previous Bing-local-pack
-  // and DuckDuckGo fallbacks were returning nothing and could not be verified, and
-  // Bing web results yield listicles ("The 16 Best Coffee Shops in Austin") rather
-  // than venue records — plausible output that is worse than an empty one.
-  const q = encodeURIComponent(query)
-  const script = `#!/bin/bash
-set -o pipefail
-AB="npx --yes agent-browser"
+/**
+ * Run the Google-Maps scrape on a Hive node and return the rows WITH what the page showed, so a
+ * caller can say why there are none. Throws (HiveSearchError) for anything that is not a real
+ * answer — a missing dependency, a browser that never opened, a crashed reader, stale selectors.
+ * The script and its reader live in hive-maps-search.ts (#191700).
+ *
+ * Browser work runs through agent-browser (CDP + accessibility snapshots), invoked with
+ * `npx --yes` so the node needs no pre-installed engine. Strategy is Google Maps only, and
+ * deliberately so: Bing web results yield listicles ("The 16 Best Coffee Shops in Austin")
+ * rather than venue records — plausible output that is worse than an empty one.
+ */
+export async function dispatchHiveSearchDetailed(
+  node: { id: string; name: string },
+  query: string,
+  limit: number,
+  deps: { fetch?: typeof irisFetch; userId?: string | number; pollMs?: number } = {},
+): Promise<ReturnType<typeof parseHiveSearchOutput>> {
+  const fetchFn = deps.fetch ?? irisFetch
+  const userId = deps.userId ?? (await resolveUserId())
+  const script = buildHiveSearchScript(query, limit)
 
-# The agent-browser daemon PERSISTS the browser between invocations, so a stale
-# session plus a blind sleep will happily scrape the PREVIOUS query's feed and
-# return confident, well-formed, wrong venues. Start clean, then wait on the
-# thing we are about to read rather than on a timer.
-$AB close --all >/dev/null 2>&1 || true
-$AB open "https://www.google.com/maps/search/${q}" >/dev/null 2>&1 || true
-$AB wait --load networkidle >/dev/null 2>&1 || true
-$AB wait "[role=feed] a[href*='/maps/place/']" >/dev/null 2>&1 || true
-
-$AB eval --stdin --json <<'VENUE_EVAL_EOF' | node -e '
-let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
-  let r={};
-  try { r = JSON.parse(s); } catch (e) { process.stderr.write("[venue-search] unparseable eval output\n"); process.stdout.write("[]"); return; }
-  const d = (r && r.data && r.data.result) || {};
-  const rows = d.rows || [];
-  // The denominator. A page that rendered results while our selectors matched none
-  // is a STALE SELECTOR, not an empty result set, and it must not read as "no venues".
-  if (d.feed > 0 && rows.length === 0) {
-    process.stderr.write("[venue-search] SELECTORS STALE: page rendered " + d.feed + " feed item(s), extractor matched 0\n");
-  } else {
-    process.stderr.write("[venue-search] feed=" + d.feed + " extracted=" + rows.length + "\n");
-  }
-  process.stdout.write(JSON.stringify(rows));
-});
-'
-(() => {
-  const feed = document.querySelectorAll('[role=feed] > div').length;
-  const rows = [];
-  for (const el of document.querySelectorAll('[role=feed] > div')) {
-    const a = el.querySelector('a[href*="/maps/place/"]');
-    if (!a) continue;
-    const lines = el.innerText.split('\n').map(x => x.trim()).filter(Boolean);
-    const name = a.getAttribute('aria-label') || lines[0];
-    if (!name) continue;
-    const meta = lines.find(x => x.includes('·')) || '';
-    const parts = meta.split('·').map(x => x.trim()).filter(Boolean);
-    rows.push({
-      name,
-      rating: lines.find(x => /^[0-9](\.[0-9])?$/.test(x)) || null,
-      type: parts[0] || null,
-      address: parts.length > 1 ? parts[parts.length - 1] : null,
-      source_url: a.href,
-      source: 'google-maps',
-    });
-    if (rows.length >= ${limit}) break;
-  }
-  return { feed, rows };
-})()
-VENUE_EVAL_EOF
-
-$AB close --all >/dev/null 2>&1 || true`
-
-  const createRes = await irisFetch(`/api/v6/nodes/tasks`, {
+  const createRes = await fetchFn(`/api/v6/nodes/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -622,39 +579,26 @@ $AB close --all >/dev/null 2>&1 || true`
   const created = (await createRes.json()) as { task: { id: string; status: string } }
   const taskId = created.task.id
 
-  // Poll for completion
   const deadline = Date.now() + 150_000
   const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+  const ctx = { node: node.name, query }
 
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 2000))
-    const r = await irisFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`, {}, IRIS_API)
+    await new Promise((r) => setTimeout(r, deps.pollMs ?? 2000))
+    const r = await fetchFn(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`, {}, IRIS_API)
     if (!r.ok) continue
     const body = (await r.json()) as { task: any }
     const t = body.task
 
     if (terminal.has(t.status)) {
-      if (t.status === "succeeded" || t.status === "completed") {
-        // Parse JSON from task output
-        const output = t.output || t.result || ""
-        try {
-          // Output may have log lines on stderr, JSON on stdout
-          // Try parsing the whole thing first, then extract JSON array
-          const parsed = JSON.parse(typeof output === "string" ? output : JSON.stringify(output))
-          return Array.isArray(parsed) ? parsed : []
-        } catch {
-          // Try to find JSON array in output
-          const match = (typeof output === "string" ? output : "").match(/\[[\s\S]*\]/)
-          if (match) {
-            try { return JSON.parse(match[0]) } catch { /* not valid JSON */ }
-          }
-          return []
-        }
-      }
-      throw new Error(`Hive task ${t.status}: ${t.error || t.output || "unknown error"}`)
+      const text = taskOutputText(t)
+      if (t.status === "succeeded" || t.status === "completed") return parseHiveSearchOutput(text, ctx)
+      // A failed task may still carry the script's own explanation (a named missing dependency).
+      if (text.includes(RESULT_MARKER)) return parseHiveSearchOutput(text, ctx)
+      throw new Error(`Hive task ${t.status} on node ${node.name}: ${t.error || text || "unknown error"}`)
     }
   }
-  throw new Error("Hive task timed out after 150s")
+  throw new Error(`Hive task timed out after 150s on node ${node.name}`)
 }
 
 const SearchCommand = cmd({

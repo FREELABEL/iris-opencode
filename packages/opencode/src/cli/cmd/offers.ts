@@ -40,14 +40,51 @@ async function fetchPlatformOffers(): Promise<OfferPackage[] | null> {
   return body?.data ?? ((body as unknown) as OfferPackage[]) ?? []
 }
 
-async function fetchBloqOffers(bloqId: string): Promise<OfferPackage[] | null> {
-  const res = await irisFetch(`/api/v1/bloqs/${encodeURIComponent(bloqId)}/service-packages`)
+/**
+ * A board's service packages — `GET /api/v1/bloqs/{id}/packages` (BloqPackageController@index),
+ * the endpoint `iris leads packages` reads.
+ *
+ * #191705: this called `/bloqs/{id}/service-packages`, a route that exists in no API, so EVERY
+ * board answered 404 — board 80 with no packages and board 40 alike — and the audit reported
+ * "HTTP 404" for what is really an empty catalogue. The real endpoint answers
+ * `{ data: { packages: [...] } }` with `name` where the platform catalogue has `title`.
+ */
+export async function fetchBloqOffers(
+  bloqId: string,
+  fetch: (path: string, init?: RequestInit) => Promise<Response> = irisFetch,
+): Promise<OfferPackage[] | null> {
+  const res = await fetch(`/api/v1/bloqs/${encodeURIComponent(bloqId)}/packages`)
   if (!res.ok) {
     await handleApiError(res, "List service packages")
     return null
   }
-  const body = (await res.json()) as { data?: OfferPackage[] }
-  return body?.data ?? ((body as unknown) as OfferPackage[]) ?? []
+  const body = (await res.json().catch(() => ({}))) as any
+  const rows: any[] = Array.isArray(body?.data?.packages) ? body.data.packages : Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : []
+  return rows.map((p) => ({ ...p, title: p.title ?? p.name ?? null }))
+}
+
+/**
+ * The one JSON object `--json` prints on success (#191705). An empty catalogue is still an answer —
+ * `success: true, packageCount: 0` — never silence: a script cannot tell nothing from a crash.
+ */
+const emptyCatalogue = (bloq?: string) =>
+  bloq
+    ? `No service packages on board ${bloq} — nothing to audit, which is not the same as nothing wrong.`
+    : "No packages returned — nothing to audit, which is not the same as nothing wrong."
+
+export function offersAuditJson(pkgs: OfferPackage[], bloq?: string) {
+  const scope = bloq ? { bloq_id: bloq } : { scope: "platform" }
+  if (pkgs.length === 0)
+    return {
+      success: true,
+      ...scope,
+      packageCount: 0,
+      empty: true,
+      findings: [],
+      unmeasured: [],
+      message: emptyCatalogue(bloq),
+    }
+  return { success: true, ...scope, ...auditOffers(pkgs) }
 }
 
 const SEVERITY_LABEL: Record<string, string> = {
@@ -64,30 +101,31 @@ export const OffersAuditCommand = cmd({
       .option("bloq", { describe: "audit a board's service packages instead of the platform catalogue", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
-    UI.empty()
-    prompts.intro("◈  Offer audit")
+    // Under --json, stdout carries ONE object and nothing else: clack's intro writes to stdout in a
+    // terminal, so the header landed in front of the JSON (#191705).
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  Offer audit")
+    }
 
     const pkgs = args.bloq ? await fetchBloqOffers(String(args.bloq)) : await fetchPlatformOffers()
+    // A failed read has already said so — as one JSON object under --json — and set a non-zero exit.
     if (!pkgs) return
+
+    if (args.json) {
+      await writeJson(offersAuditJson(pkgs, args.bloq ? String(args.bloq) : undefined))
+      return
+    }
 
     // An empty catalogue is a RESULT, not a clean audit. Saying "no findings" over zero packages
     // is the exact instrument failure the checks below exist to name.
     if (pkgs.length === 0) {
-      prompts.log.warn(
-        args.bloq
-          ? `No service packages on board ${args.bloq} — nothing to audit, which is not the same as nothing wrong.`
-          : "No packages returned — nothing to audit, which is not the same as nothing wrong.",
-      )
+      prompts.log.warn(emptyCatalogue(args.bloq ? String(args.bloq) : undefined))
       prompts.outro(dim("Add an offer first, then re-run."))
       return
     }
 
     const audit = auditOffers(pkgs)
-
-    if (args.json) {
-      writeJson(audit)
-      return
-    }
 
     // ── The ladder, read from the catalogue's own data ────────────────────────
     const byMode = { DFY: [] as string[], DIY: [] as string[], unknown: [] as string[] }

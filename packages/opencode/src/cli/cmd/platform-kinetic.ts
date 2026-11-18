@@ -15,11 +15,12 @@ import * as prompts from "./clack"
 import { dim, bold, success, irisFetch, handleApiError, requireAuth, requireUserId } from "./iris-api"
 import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { AGENT_HASH, sealAgent, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
+import { AGENT_HASH, sealAgent, sealDefinition, normalizeBody, coupleId, decide, findCouples, type Couple } from "./kinetic-couple"
 import { revokedIds, readCouples, writeCouples, nodeKey, couplesPath, actLogPath, kineticDir, nodeIsLocked, currentActor, trustedIssuers, trustIssuer, untrustIssuer, issuerKeyPath, markRevoked, sigVerifier, recentActs, currentRunId } from "./kinetic-store"
 import { generateIssuer, signCouple, verifyCoupleSig, issuerFingerprint } from "./kinetic-sign"
 import { unknownVerbs, knownVerbs, BODY_CLASSES } from "./kinetic-bodies"
 import { spendFor } from "./kinetic-budget"
+import { guardAct, REFUSED } from "./kinetic-guard"
 
 const UI = { empty: () => console.log("") }
 
@@ -67,9 +68,8 @@ const SealCommand = cmd({
       const body = (await res.json()) as { data?: any }
       const a = body?.data ?? body
       if (!a?.id) { console.error("Agent not found"); process.exitCode = 1; return }
-      // Seal the DEFINITION, not the envelope: ids, timestamps and counters change without the
-      // agent changing, and a hash that moves on its own would revoke couples at random.
-      definition = { name: a.name, model: a.model, instructions: a.instructions ?? a.prompt ?? null, tools: a.tools ?? a.config?.tools ?? null, config: a.config ?? null }
+      // Seal the DEFINITION, not the envelope — one shared function, see sealDefinition.
+      definition = sealDefinition(a)
       label = String(a.name ?? `agent-${a.id}`)
     } else {
       console.error("Give --agent <id|name> or --file <definition.json>.")
@@ -276,6 +276,32 @@ const CheckCommand = cmd({
     }
     // A check is worth scripting against: 0 allow, 3 needs a human, 5 refused — the same 5 an act exits with.
     process.exit(d.decision === "allow" ? 0 : d.decision === "hitl" ? 3 : 5)
+  },
+})
+
+/**
+ * AN ACT PATH FOR A BODY DRIVEN OUTSIDE THIS PROCESS. A drone is flown by a Python script, so no
+ * `iris` sub-command ever touches it and the middleware never sees the act. `check` cannot stand in:
+ * it records nothing, so `--max-day-acts` and `--max-day-cents` would never count a single flight
+ * and every ceiling on a drone would be unreachable — the same trap the command gate's "record the
+ * allow too" comment describes. This goes through guardAct, which decides, records, and exits 5.
+ */
+const ActCommand = cmd({
+  command: "act <body> <verb>",
+  describe: "record an act on a body driven by a script (a drone) — refused acts exit 5, nothing recorded as allowed",
+  builder: (y) =>
+    y
+      .positional("body", { describe: "class:instance", type: "string", demandOption: true })
+      .positional("verb", { describe: "the verb the act uses", type: "string", demandOption: true })
+      .option("cents", { describe: "estimated cost of the act, in cents", type: "number" })
+      .option("yes", { describe: "confirm a couple that asks for a human (you are the human)", type: "boolean", default: false }),
+  async handler(args) {
+    const body = normalizeBody(String(args.body))
+    if (!body) {
+      console.error(`Not a body name: ${args.body} — expected class:instance, e.g. drone:mambo-716814`)
+      process.exit(REFUSED)
+    }
+    await guardAct({ body, verb: String(args.verb).trim().toLowerCase(), estimatedCents: typeof args.cents === "number" ? Number(args.cents) : null, yes: args.yes === true })
   },
 })
 
@@ -528,6 +554,7 @@ export const PlatformKineticCommand = cmd({
       .command(BodiesCommand)
       .command(SpendCommand)
       .command(CheckCommand)
+      .command(ActCommand)
       .command(LockCommand)
       .command(LogCommand)
       .demandCommand(),

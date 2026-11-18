@@ -1,0 +1,5 @@
+{
+ "key_hex": "4d321bd31e4f687585367bff30c38cab7cbc25b684c27b42e1ed92092d646d34",
+ "plaintext": "path\tbytes\tmodified\tkind\nShoots/Day1/A001.mov\t4000\t2026-11-09\tvideo\nOld Site/app/config.php\t2\t2026-11-09\tcredential\n",
+ "recorded": "2026-11-09 from scripts/drives/drive_scan.py seal() \u2014 synthetic rows, fresh key"
+}

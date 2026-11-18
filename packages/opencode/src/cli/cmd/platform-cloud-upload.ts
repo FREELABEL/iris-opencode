@@ -1,47 +1,134 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { FL_API, requireAuth, printDivider, printKV, dim, success, highlight, writeJson } from "./iris-api"
+import { FL_API, requireAuth, printDivider, printKV, dim, bold, success, highlight, warn, writeJson } from "./iris-api"
 import { existsSync, statSync, readFileSync } from "fs"
 import { basename } from "path"
 import { Auth } from "../../auth"
 
 const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
 
-interface ParsedExpiration {
+/**
+ * #193366 — the default used to be "180" days for EVERY file. A share card (og:image), an email
+ * image, a newsletter figure or an ad creative is referenced forever from a page or an email that
+ * is already out, so a 180-day link breaks it six months later with nothing to warn anybody. The
+ * server's own default is permanent (no expires_days → expires_at NULL), so the CLI was the only
+ * thing adding a fuse.
+ *
+ * Now: files that get EMBEDDED somewhere (images, HTML/CSS, PDF, video, audio, fonts) default to
+ * never. Anything else (zips, CSVs, exports, archives) keeps a 180-day default, and the output says
+ * so loudly, with the date and the flag that keeps it. An explicit --expires always wins, and a
+ * value we cannot parse is an error instead of quietly becoming 180 days.
+ */
+export const DEFAULT_EXPIRES_DAYS = 180
+
+export const PERMANENT_BY_DEFAULT_EXTENSIONS = new Set([
+  // images
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "ico", "bmp", "tif", "tiff", "heic", "heif",
+  // web documents
+  "html", "htm", "css",
+  // documents
+  "pdf",
+  // video
+  "mp4", "mov", "webm", "m4v", "mkv", "avi",
+  // audio
+  "mp3", "wav", "m4a", "aac", "ogg", "flac",
+  // fonts
+  "woff", "woff2", "ttf", "otf", "eot",
+])
+
+export interface ParsedExpiration {
   days: number
   hours: number
   label: string
 }
 
-function parseExpiration(input: string): ParsedExpiration {
+export interface ResolvedExpiration extends ParsedExpiration {
+  /** true when no expires_days is sent: the file never expires. */
+  permanent: boolean
+  /** "flag" when --expires was given, "type" when the file's kind picked the default. */
+  source: "flag" | "type"
+}
+
+/** Parse an --expires value. Returns null for anything we do not understand. */
+export function parseExpiration(input: string): ParsedExpiration | null {
   const s = (input ?? "").toString().toLowerCase().trim()
   if (["", "0", "never", "permanent", "none"].includes(s)) {
     return { days: 0, hours: 0, label: "Never (permanent)" }
   }
   const m = s.match(/^(\d+)\s*(h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|m|mo|mos|month|months|y|yr|yrs|year|years)?$/)
-  if (m) {
-    const value = parseInt(m[1], 10)
-    const unit = m[2] ?? "d"
-    if (["h", "hr", "hrs", "hour", "hours"].includes(unit)) {
-      return { days: Math.ceil(value / 24), hours: value, label: `${value} hour${value !== 1 ? "s" : ""}` }
-    }
-    if (["w", "wk", "wks", "week", "weeks"].includes(unit)) {
-      return { days: value * 7, hours: 0, label: `${value} week${value !== 1 ? "s" : ""}` }
-    }
-    if (["m", "mo", "mos", "month", "months"].includes(unit)) {
-      return { days: value * 30, hours: 0, label: `${value} month${value !== 1 ? "s" : ""}` }
-    }
-    if (["y", "yr", "yrs", "year", "years"].includes(unit)) {
-      return { days: value * 365, hours: 0, label: `${value} year${value !== 1 ? "s" : ""}` }
-    }
-    return { days: value, hours: 0, label: `${value} day${value !== 1 ? "s" : ""}` }
+  if (!m) return null
+  const value = parseInt(m[1], 10)
+  const unit = m[2] ?? "d"
+  if (["h", "hr", "hrs", "hour", "hours"].includes(unit)) {
+    return { days: Math.ceil(value / 24), hours: value, label: `${value} hour${value !== 1 ? "s" : ""}` }
   }
-  if (/^\d+$/.test(s)) {
-    const v = parseInt(s, 10)
-    return { days: v, hours: 0, label: `${v} day${v !== 1 ? "s" : ""}` }
+  if (["w", "wk", "wks", "week", "weeks"].includes(unit)) {
+    return { days: value * 7, hours: 0, label: `${value} week${value !== 1 ? "s" : ""}` }
   }
-  return { days: 180, hours: 0, label: "180 days (default)" }
+  if (["m", "mo", "mos", "month", "months"].includes(unit)) {
+    return { days: value * 30, hours: 0, label: `${value} month${value !== 1 ? "s" : ""}` }
+  }
+  if (["y", "yr", "yrs", "year", "years"].includes(unit)) {
+    return { days: value * 365, hours: 0, label: `${value} year${value !== 1 ? "s" : ""}` }
+  }
+  return { days: value, hours: 0, label: `${value} day${value !== 1 ? "s" : ""}` }
+}
+
+export function fileExtension(filename: string): string {
+  const m = (filename ?? "").toLowerCase().match(/\.([a-z0-9]{1,6})$/)
+  return m ? m[1] : ""
+}
+
+/** Should a file with this name be permanent when --expires is not given? */
+export function isPermanentByDefault(filename: string): boolean {
+  return PERMANENT_BY_DEFAULT_EXTENSIONS.has(fileExtension(filename))
+}
+
+/**
+ * The expiry actually applied. `expires` is the raw --expires value (undefined when not given).
+ * Throws on a value that cannot be parsed.
+ */
+export function resolveExpiration(expires: string | undefined, filename: string): ResolvedExpiration {
+  if (expires !== undefined && expires !== null) {
+    const parsed = parseExpiration(String(expires))
+    if (!parsed) {
+      throw new Error(
+        `Can't read --expires "${expires}". Use a number of days (90), a unit (12h, 2w, 6mo, 1y) or "never".`,
+      )
+    }
+    return { ...parsed, permanent: parsed.days === 0, source: "flag" }
+  }
+  if (isPermanentByDefault(filename)) {
+    return { days: 0, hours: 0, label: "Never (permanent)", permanent: true, source: "type" }
+  }
+  return {
+    days: DEFAULT_EXPIRES_DAYS,
+    hours: 0,
+    label: `${DEFAULT_EXPIRES_DAYS} days (default for this file type)`,
+    permanent: false,
+    source: "type",
+  }
+}
+
+/** The date a non-permanent upload stops working, as YYYY-MM-DD. */
+export function expiryDate(resolved: ResolvedExpiration, expiresAt: string | null, now = new Date()): string | null {
+  if (resolved.permanent) return null
+  if (expiresAt) {
+    const d = new Date(expiresAt)
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+  }
+  return new Date(now.getTime() + resolved.days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** The plain-language warning printed (and put in --json) when a link will die. */
+export function expiryWarning(resolved: ResolvedExpiration, date: string | null): string | null {
+  if (resolved.permanent) return null
+  const when = date ? `on ${date}` : `in ${resolved.label}`
+  return (
+    `This link STOPS WORKING ${when}. Anything that embeds it (a page, an email, a post) will break then. ` +
+    `To keep it, upload with --expires never.`
+  )
 }
 
 function formatBytes(bytes: number): string {
@@ -73,7 +160,12 @@ export const PlatformCloudUploadCommand = cmd({
       .option("url", { describe: "download from URL instead", type: "string" })
       .option("title", { alias: "t", describe: "custom title", type: "string" })
       .option("description", { alias: "d", describe: "description", type: "string" })
-      .option("expires", { alias: "e", describe: "expiration (e.g. 1d, 12h, 90, never)", type: "string", default: "180" })
+      .option("expires", {
+        alias: "e",
+        describe:
+          "expiration: 90, 12h, 2w, 6mo, 1y or never. Default: never for images, HTML/CSS, PDF, video, audio and fonts; 180 days for anything else",
+        type: "string",
+      })
       .option("bloq", { alias: "b", describe: "bloq ID to associate", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -140,7 +232,15 @@ export const PlatformCloudUploadCommand = cmd({
         return
       }
 
-      const expiration = parseExpiration(args.expires)
+      let expiration: ResolvedExpiration
+      try {
+        expiration = resolveExpiration(args.expires, originalFilename)
+      } catch (e) {
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
       const sp = prompts.spinner()
       sp.start("Uploading…")
 
@@ -185,6 +285,9 @@ export const PlatformCloudUploadCommand = cmd({
 
       sp.stop(success("Uploaded"))
 
+      const dies = expiryDate(expiration, expiresAt)
+      const warning = expiryWarning(expiration, dies)
+
       if (args.json) {
         await writeJson({
           file_id: fileId,
@@ -194,17 +297,27 @@ export const PlatformCloudUploadCommand = cmd({
           size: result.file_size ?? fileSize,
           expires_at: expiresAt,
           expires: expiration.label,
+          permanent: expiration.permanent,
+          expires_source: expiration.source,
+          warning,
         })
+        // stderr too, so a script that only keeps stdout's JSON still shows a person the warning
+        if (warning) process.stderr.write(`WARNING: ${warning}\n`)
       } else {
         printDivider()
         printKV("File ID", fileId)
         printKV("Title", title)
         printKV("Size", formatBytes(fileSize))
-        printKV("Expires", expiration.label + (expiresAt ? ` (${expiresAt})` : ""))
+        if (expiration.permanent) {
+          printKV("Expires", success("Never (permanent)"))
+        } else {
+          printKV("Expires", bold(warn(`${dies ?? expiration.label}  (${expiration.label})`)))
+        }
         console.log()
         console.log(`  ${dim("CDN:")}    ${highlight(cdnUrl)}`)
         console.log(`  ${dim("Share:")}  ${highlight(shareUrl)}`)
         printDivider()
+        if (warning) prompts.log.warn(bold(warn(warning)))
         prompts.outro("Done")
       }
     } catch (err) {

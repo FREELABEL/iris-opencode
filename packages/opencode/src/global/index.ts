@@ -33,6 +33,10 @@ await Promise.all([
   fs.mkdir(Global.Path.bin, { recursive: true }),
 ])
 
+// Prompts and command output land under data and log (#192119). chmod as well as mkdir, because an
+// existing install already has these open to other users, and mkdir leaves an existing mode alone.
+await Promise.all([fs.chmod(Global.Path.data, 0o700), fs.chmod(Global.Path.log, 0o700)]).catch(() => {})
+
 const CACHE_VERSION = "14"
 
 const version = await Bun.file(path.join(Global.Path.cache, "version"))

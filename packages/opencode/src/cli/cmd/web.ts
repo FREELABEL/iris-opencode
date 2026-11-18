@@ -4,6 +4,7 @@ import { cmd } from "./cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import open from "open"
 import { networkInterfaces } from "os"
+import { LocalAuth } from "../../server/local-auth"
 
 function getNetworkIPs() {
   const nets = networkInterfaces()
@@ -34,6 +35,10 @@ export const WebCommand = cmd({
   handler: async (args) => {
     const opts = await resolveNetworkOptions(args)
     const server = Server.listen(opts)
+    // The browser arrives signed in. The link holds the token, so it is opened and never printed;
+    // another browser gets a sign-in prompt, and the password is in the record named below.
+    const basic = Server.authHeaders()?.Authorization.replace(/^Basic\s+/, "") ?? ""
+    const signIn = (base: string) => `${base}/iris?auth_token=${encodeURIComponent(basic)}`
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
@@ -64,12 +69,18 @@ export const WebCommand = cmd({
       // when the network is down. `/iris` is served locally in about a millisecond
       // and is the page that still answers "is my server up" when nothing else does.
       // The workspace is one click away from it, and untouched.
-      open(`${localhostUrl}/iris`).catch(() => {})
+      open(signIn(localhostUrl)).catch(() => {})
     } else {
       const displayUrl = server.url.toString().replace(/\/$/, "")
       UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, `${displayUrl}/iris`)
-      open(`${displayUrl}/iris`).catch(() => {})
+      open(signIn(displayUrl)).catch(() => {})
     }
+
+    UI.println(
+      UI.Style.TEXT_INFO_BOLD + "  Sign-in:          ",
+      UI.Style.TEXT_NORMAL,
+      `username opencode, password in ${LocalAuth.recordPath(server.port!)}`,
+    )
 
     await new Promise(() => {})
     await server.stop()

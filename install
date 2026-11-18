@@ -36,7 +36,9 @@ Options:
         --skip-sandbox      Skip Docker Sandbox installation
         --skip-remotion     Skip Remotion video framework installation
         --api-url <url>     Set IRIS API URL (default: https://freelabel.net)
-        --token <token>     Pre-seed SDK token (skip interactive auth)
+        --token <token>     Pre-seed SDK token (skip interactive auth). On Linux this also makes the
+                            machine a Hive node: systemd unit, first heartbeat, then success.
+                            Or set IRIS_SDK_TOKEN in the environment to keep it out of argv.
         --user-id <id>      Pre-seed user ID (used with --token)
         --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
 
@@ -47,6 +49,7 @@ Examples:
     curl -fsSL https://heyiris.io/install-code | bash -s -- --skip-app
     curl -fsSL https://heyiris.io/install-code | bash -s -- --api-url https://custom.example.com
     curl -fsSL https://heyiris.io/install-code | bash -s -- --token api_token_xxx --user-id 42
+    curl -fsSL https://heyiris.io/install-code | IRIS_SDK_TOKEN=api_token_xxx bash
 EOF
 }
 
@@ -215,6 +218,16 @@ if ! [[ "$iris_api_url" =~ ^https?://[a-zA-Z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
     exit 1
 fi
 
+# Linux package installs below run under sudo. With a token the run is unattended (#192964 R3:
+# one command, nothing typed after it), so sudo must fail rather than stop to ask for a password.
+# As root, no sudo at all: a minimal image may not have it.
+pkg_sudo() {
+    if [ "$(id -u)" = "0" ]; then "$@"
+    elif [ -n "$pre_token" ]; then sudo -n "$@"
+    else sudo "$@"
+    fi
+}
+
 # ─── Pre-flight: verify required utilities ────────────────────────────────────
 _missing_required=""
 for _cmd in curl grep sed mktemp chmod mkdir; do
@@ -310,9 +323,9 @@ if ! command -v node >/dev/null 2>&1; then
     if command -v brew >/dev/null 2>&1; then
         brew install node >/dev/null 2>&1 || true
     elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
+        pkg_sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
+        pkg_sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
     fi
     if command -v node >/dev/null 2>&1; then
         echo -e "${GREEN}✓${NC} Node.js installed: $(node -v 2>/dev/null || echo unknown)"
@@ -333,7 +346,7 @@ if [ -n "$_missing_soft" ]; then
     if command -v brew >/dev/null 2>&1; then
         for _pkg in $_missing_soft; do brew install "$_pkg" >/dev/null 2>&1 || true; done
     elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y $_missing_soft >/dev/null 2>&1 || true
+        pkg_sudo apt-get install -y $_missing_soft >/dev/null 2>&1 || true
     else
         echo -e "${ORANGE}Could not auto-install. Please install manually:${NC}$_missing_soft"
         echo -e "${MUTED}On macOS without Homebrew, first run:${NC}"
@@ -359,11 +372,11 @@ if ! command -v tmux >/dev/null 2>&1; then
         # otherwise abort the whole installer here.
         brew install tmux >/dev/null 2>&1 || true
     elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+        pkg_sudo apt-get install -y tmux >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y tmux >/dev/null 2>&1 || true
+        pkg_sudo dnf install -y tmux >/dev/null 2>&1 || true
     elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm tmux >/dev/null 2>&1 || true
+        pkg_sudo pacman -S --noconfirm tmux >/dev/null 2>&1 || true
     else
         echo -e "${ORANGE}Could not auto-install tmux.${NC}"
         echo -e "${MUTED}Install manually: brew install tmux (macOS) or sudo apt install tmux (Linux)${NC}"
@@ -536,10 +549,14 @@ else
         # "Failed to fetch version information". The desktop app's release cadence must not be
         # able to break the CLI installer.
         #
-        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # Ask for the highest release in THIS series instead. The `"v[0-9]` anchor is what
         # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
-        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
-            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+        # HIGHEST, not first-listed (#188596): GitHub lists a release by its tag's commit date, so
+        # v1.5.0 (the v2 engine, tagged on an older commit) sat below v1.3.355 and fresh installs
+        # got v1. A field-wise numeric sort, because macOS's sort has no -V on older releases.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=100" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' \
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -1) || true
 
         if [[ -z "$specific_version" ]]; then
             # Last resort: the redirect target of /releases/latest/download still resolves by
@@ -839,7 +856,10 @@ verify_installed_cli() {
     fi
 
     # Two independent markers, so renaming one command group cannot condemn a healthy install.
-    if echo "$help" | grep -qi atlas && echo "$help" | grep -qi bloq; then
+    # Here-strings, not `echo | grep -q`: under `set -o pipefail` grep -q exits on its first match,
+    # echo can then die of SIGPIPE, and the pipeline FAILS on a correct binary. Measured: 1 in 30
+    # runs on a fresh Ubuntu VM, which aborted a whole install (#192964 R3).
+    if grep -qi atlas <<<"$help" && grep -qi bloq <<<"$help"; then
         return 0
     fi
 
@@ -1104,7 +1124,7 @@ ensure_tmux() {
         command -v tmux >/dev/null 2>&1 && return 0
     fi
     if command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+        pkg_sudo apt-get install -y tmux >/dev/null 2>&1 || true
         command -v tmux >/dev/null 2>&1 && return 0
     fi
     return 1
@@ -1490,6 +1510,12 @@ fetch_repo_archive() {
         rm -rf "$tmp"; return 1
     fi
 
+    # The exact commit this archive is: GitHub writes it into the tar header (comment=<sha>).
+    # Without it a tarball install reports "commit unknown", and an old .git kept from a clone
+    # install reports a STALE commit (#191480). `|| true`: set -euo pipefail, and head closes early.
+    local commit; commit="$( (gzip -dc "$tmp/daemon.tar.gz" 2>/dev/null | head -c 4096 | LC_ALL=C grep -aoE 'comment=[0-9a-f]{40}' | head -1 | cut -d= -f2) || true)"
+    [ -n "$commit" ] && printf '%s\n' "$commit" > "$root/.iris-commit"
+
     mkdir -p "$dest"
     # Remove only what the repo owns. node_modules, logs, .git from older clone-based
     # installs, and .env belong to the machine.
@@ -1539,9 +1565,23 @@ install_bridge() {
         return 0
     fi
 
-    (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
-        print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
-    }
+    if ! (cd "$bridge_dir" && npm install --production --silent 2>/dev/null); then
+        if [ "$(uname -s)" = "Linux" ]; then
+            # #192964 R3, measured on a fresh Ubuntu 24.04 cloud image: node-pty has no linux-x64
+            # prebuild, so npm falls back to node-gyp, which needs make/g++ — absent on a fresh VM.
+            # npm then installs NOTHING: no pusher-js, no express. The daemon heartbeats once (the
+            # hub shows it "online") and then fails every cloud connect on "Cannot find module
+            # 'pusher-js'", without ever serving /health. Retry without install scripts: every
+            # package lands, and only native builds are skipped. node-pty's one user
+            # (daemon/ssh-share.js) falls back to a plain shell without it.
+            print_message warning "${ORANGE}npm install failed (a native module could not be built — no compiler here). Retrying without native builds...${NC}"
+            (cd "$bridge_dir" && npm install --production --silent --ignore-scripts 2>/dev/null) || {
+                print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+            }
+        else
+            print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+        fi
+    fi
     if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
         print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
     fi
@@ -1642,16 +1682,30 @@ BCTL
                     launchctl bootout "gui/$(id -u)/$plist_label" 2>/dev/null \
                       || launchctl unload "$plist_dest" 2>/dev/null || true
 
+                    # bootout RETURNS BEFORE launchd has finished tearing the job down. A bootstrap
+                    # straight after it fails ("Bootstrap failed: 5: Input/output error") while the
+                    # dying job is still listed — so the check below passed, this printed "enabled",
+                    # and the daemon was gone a second later. Reproduced on a re-install 2026-10-27.
+                    for _w in 1 2 3 4 5 6 7 8 9 10; do
+                        launchctl print "gui/$(id -u)/$plist_label" >/dev/null 2>&1 || break
+                        sleep 1
+                    done
+
                     # Keep stderr. "Load failed: 5: Input/output error" is the whole diagnosis,
                     # and 2>/dev/null is what made this bug invisible for as long as it was.
                     # -w on the legacy fallback so a previously-disabled job is re-enabled.
-                    lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1) \
-                      || lc_err=$(launchctl load -w "$plist_dest" 2>&1) \
-                      || true
+                    for _b in 1 2 3; do
+                        if lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1); then lc_err=""; break; fi
+                        sleep 1
+                    done
+                    if [ -n "$lc_err" ]; then lc_err=$(launchctl load -w "$plist_dest" 2>&1) || true; fi
 
                     # Ask launchd what it has, rather than trusting the exit code: legacy
-                    # `launchctl load` returns 0 for jobs it never actually registered.
-                    if launchctl list 2>/dev/null | grep -q "$plist_label"; then
+                    # `launchctl load` returns 0 for jobs it never actually registered. A label in
+                    # the list is not enough either (see above) — it must have a PID.
+                    sleep 2
+                    local lc_pid; lc_pid="$(launchctl list 2>/dev/null | awk -v l="$plist_label" '$3 == l { print $1 }')"
+                    if [ -n "$lc_pid" ] && [ "$lc_pid" != "-" ]; then
                         autostart_ok="true"
                     else
                         autostart_reason="launchd did not register $plist_label"
@@ -1774,11 +1828,13 @@ if [ "$ACTION" = "whoami" ]; then
         exit 1
     fi
     # Fetch user info from API
-    ME_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
-        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
-    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
-    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
-    ME_ID=$(json_nested "$ME_RESP" "data.id")
+    # /api/v1/cli/auth/me, not /api/v1/me: that route does not exist (404), so whoami showed no
+    # email and --token always failed (#187775). It answers {user_id, email, subscription_active}.
+    ME_RESP=$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -s --max-time 10 -H @- -H "Accept: application/json" \
+        "$API_BASE/api/v1/cli/auth/me" 2>/dev/null || echo '{}')
+    ME_NAME=$(json_field "$ME_RESP" "full_name")
+    ME_EMAIL=$(json_field "$ME_RESP" "email")
+    ME_ID=$(json_field "$ME_RESP" "user_id")
     if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
         ME_ID="$USERID"
     fi
@@ -1801,9 +1857,9 @@ if [ -n "$PRE_TOKEN" ]; then
     fi
     # Validate token against API
     echo -e "${MUTED}  Validating token...${NC}"
-    VALIDATE_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $PRE_TOKEN" -H "Accept: application/json" \
-        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
-    VALIDATE_ID=$(json_nested "$VALIDATE_RESP" "data.id")
+    VALIDATE_RESP=$(printf 'Authorization: Bearer %s\n' "$PRE_TOKEN" | curl -s --max-time 10 -H @- -H "Accept: application/json" \
+        "$API_BASE/api/v1/cli/auth/me" 2>/dev/null || echo '{}')
+    VALIDATE_ID=$(json_field "$VALIDATE_RESP" "user_id")
     if [ -z "$VALIDATE_ID" ] || [ "$VALIDATE_ID" = "" ] || [ "$VALIDATE_ID" = "null" ]; then
         echo -e "${RED}Token validation failed — API rejected the token.${NC}"
         echo -e "${MUTED}Check that the token is correct and not expired.${NC}"
@@ -2661,7 +2717,238 @@ print(d)" 2>/dev/null || echo ""
     fi
 }
 
+# ─── Linux: a machine joins the Hive in ONE command (#192964 W3, #187775, #191476) ──────────
+#
+#   curl -fsSL https://heyiris.io/install-code | bash -s -- --token <t>
+#   curl -fsSL https://heyiris.io/install-code | IRIS_SDK_TOKEN=<t> bash      (token kept out of argv)
+#
+# On Linux this used to sign in and then print "Next: iris-daemon start". Nothing supervised the
+# daemon, nothing started it at boot, ~/.iris/bin was not on PATH for non-interactive shells, and
+# with --token alone IRIS_USER_ID was written as 0, which the daemon reads as "not signed in" and
+# never enrolls. A fresh VM therefore never appeared in `iris hive nodes list`.
+#
+# Now, on Linux with a token: resolve the account, put the CLIs on PATH, hand the daemon to systemd
+# (`iris-daemon supervise`: a user unit plus linger, or a system unit as root), then wait until the
+# HUB has seen this machine's first heartbeat. Success is printed only after that. On any failure
+# the installer exits non-zero and prints the daemon's last log lines.
+#
+# THE TOKEN NEVER GOES ON A COMMAND LINE (#192131). Every request that carries it reads the
+# Authorization header from stdin (`curl -H @-`), so it does not show in `ps` on this machine.
+#
+# Each step is a function so install-linux-enroll.test.ts can run it against stubbed systemctl,
+# loginctl, curl and daemonctl. Those stubs cannot see a real systemd or a real reboot, so
+# script/hive-r3-vm-join.sh checks both on a fresh VM.
+IRIS_AUTH_API="${IRIS_AUTH_API:-https://raichu.heyiris.io}"
+IRIS_ENROLL_TIMEOUT="${IRIS_ENROLL_TIMEOUT:-90}"
+IRIS_DAEMON_LOG_DIR="${IRIS_DAEMON_LOG_DIR:-$HOME/.iris/logs}"
+
+# GET with the bearer token read from stdin, never argv. $1 = token, $2 = URL.
+# `|| true`: this runs inside $(…) under set -euo pipefail, where a network blip must be an empty
+# answer the caller handles, not the installer dying mid-step.
+curl_with_token() {
+    printf 'Authorization: Bearer %s\n' "$1" \
+        | curl -s --max-time 15 -H @- -H 'Accept: application/json' "$2" 2>/dev/null || true
+}
+
+# Run a command as root: directly when we are root, through passwordless sudo otherwise. Never
+# prompts — the one command must not need anything typed after it.
+as_root() {
+    if [ "$(id -u)" = "0" ]; then "$@"; return; fi
+    command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null && sudo -n "$@"
+}
+
+# One field of a JSON document on stdin, with node (the daemon's runtime, so it is here).
+# $1 = a JS expression over `d`, e.g. `d.user_id`.
+# Values the expression needs come in through the environment (J_*), never spliced into the code.
+json_eval() {
+    node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const e=process.env;const d=JSON.parse(s);const v=('"$1"');if(v!==undefined&&v!==null)process.stdout.write(String(v))}catch(x){}})' || true
+}
+
+# The account id behind a token, from the hub. Empty when the token is rejected.
+resolve_account_user_id() {
+    curl_with_token "$1" "$IRIS_AUTH_API/api/v1/cli/auth/me" | json_eval 'd.user_id || (d.data && d.data.user_id) || ""'
+}
+
+# #187775 (b): ~/.iris/bin is on PATH only for shells that source ~/.iris/env. `ssh host iris …`,
+# cron and systemd do not. Symlink the CLIs into /usr/local/bin when this account may write there.
+# Never replaces a real file someone else put there.
+link_bins_into_usr_local() {
+    local dir="${IRIS_USR_LOCAL_BIN:-/usr/local/bin}" linked="" b src dest
+    for b in iris iris-daemon iris-login; do
+        src="$INSTALL_DIR/$b"; dest="$dir/$b"
+        [ -e "$src" ] || continue
+        if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+            print_message warning "  PATH: $dest exists and is not ours — left alone"
+            continue
+        fi
+        if [ -w "$dir" ]; then
+            ln -sf "$src" "$dest" 2>/dev/null && linked="$linked $b"
+        elif as_root ln -sf "$src" "$dest" 2>/dev/null; then
+            linked="$linked $b"
+        fi
+    done
+    if [ -n "$linked" ]; then
+        print_message info "${MUTED}  PATH: linked${NC}$linked${MUTED} into $dir (works in non-interactive shells)${NC}"
+    else
+        print_message warning "  PATH: $dir is not writable — non-interactive shells need: export PATH=\"$INSTALL_DIR:\$PATH\""
+    fi
+}
+
+# The user's systemd manager must be running for `systemctl --user` to work. With nobody logged in
+# (cloud-init, `sudo -u`, a bare `ssh host cmd`), enabling linger is what starts it.
+ensure_user_manager() {
+    local uid; uid="$(id -u)"
+    local user; user="$(id -un)"
+    if [ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null)" != "yes" ]; then
+        loginctl enable-linger "$user" 2>/dev/null || as_root loginctl enable-linger "$user" 2>/dev/null || true
+    fi
+    if [ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null)" != "yes" ]; then
+        ENROLL_ERROR="could not enable linger for $user — without it the daemon stops at logout and does not start at boot. Ask an admin to run: sudo loginctl enable-linger $user"
+        return 1
+    fi
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    local i
+    for i in $(seq 1 20); do
+        systemctl --user show-environment >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    ENROLL_ERROR="the systemd user manager for $user did not come up ($XDG_RUNTIME_DIR)"
+    return 1
+}
+
+# Hand the daemon to systemd. daemonctl owns the unit (one writer — iris-daemon supervise): a
+# user unit + linger for a normal account, a system unit when run as root.
+supervise_daemon() {
+    local daemonctl="$INSTALL_DIR/iris-daemon"
+    if [ ! -x "$daemonctl" ]; then
+        ENROLL_ERROR="the Hive daemon was not installed (${BRIDGE_FETCH_ERROR:-see the Agent Bridge step above})"
+        return 1
+    fi
+    if [ ! -d "${IRIS_SYSTEMD_RUN_DIR:-/run/systemd/system}" ]; then
+        # A container or a non-systemd init. Run it, and say plainly that nothing restarts it.
+        print_message warning "  systemd is not running here — starting the daemon UNSUPERVISED (it will not survive a reboot)"
+        "$daemonctl" start || { ENROLL_ERROR="iris-daemon start failed"; return 1; }
+        ENROLL_SUPERVISOR="none (no systemd)"
+        return 0
+    fi
+    if [ "$(id -u)" != "0" ]; then
+        ensure_user_manager || return 1
+    fi
+    if ! "$daemonctl" supervise; then
+        ENROLL_ERROR="iris-daemon supervise failed"
+        return 1
+    fi
+    # Observe, do not trust the exit code: the unit must be enabled, so it comes back at boot.
+    if [ "$(id -u)" = "0" ] && systemctl is-enabled --quiet iris-daemon.service 2>/dev/null; then
+        ENROLL_SUPERVISOR="systemd system unit iris-daemon.service (enabled at boot)"
+    elif systemctl --user is-enabled --quiet iris-daemon.service 2>/dev/null; then
+        ENROLL_SUPERVISOR="systemd user unit iris-daemon.service + linger (enabled at boot)"
+    else
+        ENROLL_ERROR="the daemon started, but no enabled iris-daemon.service unit was found — it would not survive a reboot"
+        return 1
+    fi
+    return 0
+}
+
+# This node's id, from the local daemon once it has enrolled.
+local_node_id() {
+    { curl -s --max-time 3 "http://127.0.0.1:${IRIS_BRIDGE_PORT:-3200}/health" 2>/dev/null || true; } \
+        | json_eval 'd.node_id || (d.daemon && d.daemon.node_id) || ""'
+}
+
+# The ids of every node the hub lists for this account, one per line.
+hub_node_ids() {
+    curl_with_token "$1" "$iris_api_url/api/v6/nodes/?user_id=$2" \
+        | json_eval '(d.nodes||[]).map(n=>n.id).join("\n")'
+}
+
+# "<connection_status> <last_heartbeat_at> <fresh>" for one node, as the HUB sees it. fresh=1 when
+# that heartbeat is no older than J_SINCE (epoch seconds, less 10 s for clock skew).
+hub_node_state() {
+    curl_with_token "$1" "$iris_api_url/api/v6/nodes/?user_id=$2" \
+        | J_ID="$3" J_SINCE="${4:-0}" json_eval '(()=>{const n=(d.nodes||[]).find(n=>n.id===e.J_ID);if(!n)return "";const hb=n.last_heartbeat_at||"";const t=Date.parse(hb);return n.connection_status+" "+(hb||"-")+" "+(t>=(Number(e.J_SINCE)-10)*1000?1:0)})()'
+}
+
+# #191476: success means the hub saw a heartbeat from THIS daemon — not that a process exists.
+# $1 token, $2 user id, $3 epoch the daemon was (re)started, $4 node ids listed before that.
+# A node that is new to the account counts as soon as it is online. One that was listed before (a
+# re-install) must show a heartbeat from after the restart, or the success would be the old
+# daemon's. Sets ENROLL_NODE_ID / ENROLL_HEARTBEAT.
+wait_for_first_heartbeat() {
+    local token="$1" uid="$2" since="$3" known="$4"
+    local deadline=$(( $(date +%s) + IRIS_ENROLL_TIMEOUT ))
+    local id="" state=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        [ -n "$id" ] || id="$(local_node_id)"
+        if [ -n "$id" ]; then
+            state="$(hub_node_state "$token" "$uid" "$id" "$since")"
+            case "$state" in
+                "online "*)
+                    if [ "${state##* }" = "1" ] || ! printf '%s\n' "$known" | grep -qxF "$id"; then
+                        ENROLL_NODE_ID="$id"; ENROLL_HEARTBEAT="$(printf '%s' "$state" | cut -d' ' -f2)"
+                        return 0
+                    fi ;;
+            esac
+        fi
+        sleep 3
+    done
+    if [ -z "$id" ]; then
+        ENROLL_ERROR="the daemon never reported a node id on /health within ${IRIS_ENROLL_TIMEOUT}s — it did not enroll"
+    else
+        ENROLL_ERROR="node $id never showed a new heartbeat at the hub within ${IRIS_ENROLL_TIMEOUT}s (last seen: ${state:-not listed})"
+    fi
+    return 1
+}
+
+print_daemon_log_tail() {
+    local f
+    for f in "$IRIS_DAEMON_LOG_DIR/daemon.stderr.log" "$IRIS_DAEMON_LOG_DIR/daemon.stdout.log"; do
+        [ -s "$f" ] || continue
+        echo -e "${MUTED}  ── last lines of $f ──${NC}" >&2
+        tail -n 25 "$f" >&2
+    done
+    if command -v journalctl >/dev/null 2>&1; then
+        if [ "$(id -u)" = "0" ]; then
+            journalctl -u iris-daemon.service -n 15 --no-pager 2>/dev/null >&2 || true
+        else
+            journalctl --user -u iris-daemon.service -n 15 --no-pager 2>/dev/null >&2 || true
+        fi
+    fi
+}
+
+# The whole step. Exits the installer non-zero on failure.
+linux_join_hive() {
+    local token="$1" uid="$2"
+    ENROLL_ERROR=""; ENROLL_SUPERVISOR=""; ENROLL_NODE_ID=""; ENROLL_HEARTBEAT=""
+    print_message info "${CYAN}→${NC} Joining the Hive (Linux, --token)"
+    link_bins_into_usr_local
+    local known since
+    known="$(hub_node_ids "$token" "$uid")"
+    since="$(date +%s)"
+    if supervise_daemon && wait_for_first_heartbeat "$token" "$uid" "$since" "$known"; then
+        print_message info "${GREEN}✓ Hive: $(hostname 2>/dev/null) is ONLINE${NC} ${MUTED}— node ${ENROLL_NODE_ID}, first heartbeat at the hub ${ENROLL_HEARTBEAT}${NC}"
+        print_message info "${MUTED}  Supervised by: ${NC}${ENROLL_SUPERVISOR}"
+        return 0
+    fi
+    echo -e "${RED}✗ Hive: this machine did NOT come online.${NC} ${ENROLL_ERROR}" >&2
+    print_daemon_log_tail
+    echo -e "${MUTED}  Diagnose: ${NC}iris-daemon status${MUTED}   ${NC}iris-daemon doctor" >&2
+    exit 1
+}
+
 # ─── Pre-seeded token (non-interactive auth) ────────────────────────────────
+if [ -n "$pre_token" ] && [ "$os" = "linux" ] && { [ -z "$pre_user_id" ] || [ "$pre_user_id" = "0" ]; }; then
+    # The daemon treats IRIS_USER_ID=0 as "not signed in" and never enrolls. Ask the hub whose
+    # token this is. (Linux only: macOS/Windows behave exactly as before.)
+    if command -v node >/dev/null 2>&1; then
+        pre_user_id="$(resolve_account_user_id "$pre_token")"
+    fi
+    if [ -z "$pre_user_id" ]; then
+        echo -e "${RED}✗ The token was rejected by the hub (or the hub could not be reached).${NC}" >&2
+        echo -e "${MUTED}  Get a token from: ${NC}https://web.heyiris.io/settings/api-keys" >&2
+        exit 1
+    fi
+fi
 if [ -n "$pre_token" ]; then
     mkdir -p "$HOME/.iris/sdk"
     cat > "$HOME/.iris/sdk/.env" << ENVFILE
@@ -2683,6 +2970,12 @@ ENVFILE
     # No node registration here: the daemon enrolls this machine itself from the account just
     # saved — it is the ONE writer of the node key (#185896). This block minted keys through a
     # different endpoint, with no machine fingerprint, and truncated config.json with `>`.
+fi
+
+# Linux + token = "make this machine a Hive node now". --skip-bridge / --only-code opt out.
+# IRIS_JOIN_HIVE=0 opts out too (an image build that must not enroll the build machine).
+if [ -n "$pre_token" ] && [ "$os" = "linux" ] && [ "$skip_bridge" = "false" ] && [ "${IRIS_JOIN_HIVE:-1}" != "0" ]; then
+    linux_join_hive "$pre_token" "$pre_user_id"
 fi
 
 tty_available=false
@@ -2807,8 +3100,9 @@ fi
 # via the device-code flow. Existing customers skip this entirely — they're
 # done in ~10 seconds.
 if [ "$AUTH_SUCCESS" = "true" ] && [ -n "$SDK_TOKEN" ] && [ "$tty_available" = "true" ]; then
-    SUB_RESPONSE=$(curl -s --max-time 10 -w '\n%{http_code}' \
-        -H "Authorization: Bearer $SDK_TOKEN" \
+    # The header comes from stdin, not argv, so the token is not in `ps` (#192131).
+    SUB_RESPONSE=$(printf 'Authorization: Bearer %s\n' "$SDK_TOKEN" | curl -s --max-time 10 -w '\n%{http_code}' \
+        -H @- \
         "https://raichu.heyiris.io/api/v1/cli/auth/me" 2>/dev/null || printf '\n0')
     SUB_STATUS=$(printf '%s' "$SUB_RESPONSE" | tail -n1)
     SUB_BODY=$(printf '%s' "$SUB_RESPONSE" | sed '$d')

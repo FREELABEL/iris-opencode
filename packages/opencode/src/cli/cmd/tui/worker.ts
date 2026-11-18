@@ -37,6 +37,7 @@ export const rpc = {
       server = Server.listen(input)
       return {
         url: server.url.toString(),
+        headers: Server.authHeaders(),
       }
     } catch (e) {
       console.error(e)

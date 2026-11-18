@@ -28,3 +28,22 @@ logs/
 # `iris atlas export` writes here. Generated data, and an untracked directory
 # blocks script/release, which refuses on a dirty tree.
 iris-export/
+
+# Working copies written by `iris pages pull` / `iris partials pull` land in ./pages and
+# ./partials of whatever directory you run them from. In this repo that is client data,
+# not source, and this repo is public (#189851). The canonical copies live in the private
+# workspace repo.
+/pages/
+/partials/
+packages/opencode/pages/
+packages/opencode/partials/
+
+# Stray run output: Playwright results, transcripts, rendered carousels.
+test-results/
+iris-dl-*-transcript.txt
+carousel-*/
+
+# The fl-api + iris-api route table snapshot used by `bun run routes:check`. It lists our
+# private API surface, so it is not committed; `routes:refresh` writes it here and the check
+# also reads it from the workspace repo (see script/check-routes.ts).
+packages/opencode/script/routes.snapshot.json

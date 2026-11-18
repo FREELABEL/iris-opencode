@@ -22,8 +22,15 @@
  * one bus and the registry was a part that did not need to exist.
  */
 
+import { LocalAuth } from "@/server/local-auth"
+
 /** The port `iris serve` documents and defaults to. */
 export const DEFAULT_SERVER = "http://127.0.0.1:4096"
+
+/** Every server requires a token since #192113. Sent only to the server whose record holds it. */
+function authFor(base: string) {
+  return LocalAuth.headersFor(base) ?? {}
+}
 
 /**
  * Where to look for a live server, in priority order: an explicit `--url`, then the environment,
@@ -84,20 +91,22 @@ export function candidateServers(input: {
  * non-fatal.
  */
 function discoverLocalServerPorts(): number[] {
+  // Servers publish a record since #192113; lsof still finds an older one that did not.
+  const recorded = LocalAuth.recordedPorts()
   const proc = Bun.spawnSync([
     "sh",
     "-c",
     "lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -i iris | awk '{print $9}'",
   ])
-  if (!proc.success) return []
+  if (!proc.success) return recorded
   return [
     ...new Set(
-      new TextDecoder()
+      [...recorded, ...new TextDecoder()
         .decode(proc.stdout)
         .split("\n")
         .map((l) => l.trim().split(":").pop() ?? "")
         .filter((p) => /^\d+$/.test(p))
-        .map(Number),
+        .map(Number)],
     ),
   ]
 }
@@ -118,6 +127,7 @@ export async function findLiveServer(
   for (const base of candidates) {
     try {
       const res = await fetch(`${base}/session/${encodeURIComponent(sessionID)}`, {
+        headers: authFor(base),
         signal: AbortSignal.timeout(timeoutMs),
       })
       if (!res.ok) continue
@@ -153,7 +163,7 @@ export async function deliverLive(
   try {
     const res = await fetch(`${base}/session/${encodeURIComponent(sessionID)}/message`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authFor(base) },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -213,7 +223,7 @@ export interface LiveSession {
  */
 export async function fetchLiveSessions(base: string, timeoutMs = 4000): Promise<LiveSession[] | null> {
   try {
-    const res = await fetch(`${base}/session`, { signal: AbortSignal.timeout(timeoutMs) })
+    const res = await fetch(`${base}/session`, { headers: authFor(base), signal: AbortSignal.timeout(timeoutMs) })
     if (!res.ok) return null
     const body = await res.json()
     return Array.isArray(body) ? (body as LiveSession[]) : null

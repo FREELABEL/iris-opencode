@@ -35,6 +35,12 @@ function advertisedNegations(src: string): Set<string> {
   for (const m of src.matchAll(describeRe)) {
     for (const f of m[2].matchAll(/--no-([a-z0-9][a-z0-9-]*)/g)) out.add(f[1])
   }
+  // Long help text too: `.epilogue([...].join("\n"))` / `.usage(...)` carry the same promise.
+  // `iris mcp serve --help` said "(--no-playbooks to omit)" from its epilogue and the parser
+  // refused it (#193782) — the describe-only scan above could not see it.
+  for (const block of src.matchAll(/\.(?:epilogue|epilog|usage)\(([\s\S]*?)\)\s*\n?\s*\./g)) {
+    for (const f of block[1].matchAll(/--no-([a-z0-9][a-z0-9-]*)/g)) out.add(f[1])
+  }
   return out
 }
 
@@ -59,6 +65,11 @@ describe("every --no-* the help text promises is a flag the parser accepts", () 
     const sample = `.option("sync", { describe: "regenerate (--no-sync to skip)" })`
     expect([...advertisedNegations(sample)]).toEqual(["sync"])
     expect(registeredNegations(sample).has("sync")).toBe(false)
+  })
+
+  test("the scan reads epilogue help text, not only describe strings (#193782)", () => {
+    const sample = `.epilogue(["  playbook_*  (--no-playbooks to omit)"].join("\\n"))\n      .option("playbooks", { type: "boolean" })`
+    expect([...advertisedNegations(sample)]).toEqual(["playbooks"])
   })
 
   test("no command advertises a negated flag it did not register", () => {

@@ -35,3 +35,57 @@ export function bloqUrlFrom(
   if (!siteOverridden && /^https?:\/\/[^/]+\/atlas\?project=[^&]+/.test(api)) return api
   return bloqWebUrl(id as string | number, site)
 }
+
+// ── one item (#190012) ───────────────────────────────────────────────────────
+//
+// A board link is not a link to the thing you just filed. The Atlas console opens one card
+// from four of its declared urlState keys — verified in a browser 2026-10-19 by clicking a
+// card, then cold-loading the address it wrote:
+//
+//     /atlas?project={bloq}&source=memory&row={list}&card={item}
+//
+// `source=memory` is the console tab that holds lists, `row` the list, `card` the item. It is
+// the SIGNED-IN address — owner and board members only. A private item has no other URL, and
+// before this an agent asked for "the link" built one by hand from an old diary and handed out
+// the retired Elon /iris/bloq/{id} route (#190012).
+
+export function atlasItemUrl(
+  bloqId: string | number | null | undefined,
+  listId: string | number | null | undefined,
+  itemId: string | number | null | undefined,
+  site: string,
+): string | null {
+  // Half an address is worse than none: the console falls back to ANOTHER project when the
+  // one asked for is missing, and says nothing. Refuse rather than open the wrong board.
+  if (!bloqId || !listId || !itemId) return null
+  const q = new URLSearchParams({
+    project: String(bloqId),
+    source: "memory",
+    row: String(listId),
+    card: String(itemId),
+  })
+  return `${site.replace(/\/+$/, "")}/atlas?${q.toString()}`
+}
+
+/** The API's `atlas_url` when it is an Atlas card address, otherwise built locally. */
+export function itemUrlFrom(
+  item: { id?: unknown; atlas_url?: unknown; bloq_id?: unknown; bloq_list_id?: unknown; list_id?: unknown } | null | undefined,
+  site: string,
+  siteOverridden = false,
+  fallback: { bloqId?: unknown; listId?: unknown } = {},
+): string | null {
+  const api = typeof item?.atlas_url === "string" ? item.atlas_url : ""
+  if (!siteOverridden && /^https?:\/\/[^/]+\/atlas\?project=[^&]+&.*card=/.test(api)) return api
+  return atlasItemUrl(
+    (item?.bloq_id ?? fallback.bloqId) as any,
+    (item?.bloq_list_id ?? item?.list_id ?? fallback.listId) as any,
+    item?.id as any,
+    site,
+  )
+}
+
+/**
+ * Patterns of every address the product has RETIRED for a board or an item. A link matching
+ * one of these must never be printed — the guard test scans the CLI source for them.
+ */
+export const RETIRED_BOARD_URL = /web\.(heyiris\.io|freelabel\.net)\/(iris\/)?bloq\b/

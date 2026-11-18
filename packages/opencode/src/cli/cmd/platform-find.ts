@@ -3,6 +3,7 @@ import { UI } from "../ui"
 import { dim, bold, highlight, printDivider, writeJson } from "./iris-api"
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
+import { RemoteCapabilities } from "./remote-capabilities"
 
 // EMBEDDED at build time. This import is the only reason `iris find` works in a shipped
 // binary: `bun build --compile` bundles JS and static imports, but it does NOT carry along
@@ -10,7 +11,11 @@ import { join } from "path"
 // the index purely by path, which worked in dev (`bun run src/index.ts` reads the real file
 // off disk) and failed on EVERY installed binary with "capability index not found" — the
 // index shipped nowhere, and dev was the one surface that could never expose it.
-// ~870KB of JSON against a ~100MB binary, to make the discovery layer actually reachable.
+// ~1.2MB of JSON against a ~100MB binary, to make the discovery layer actually reachable.
+//
+// IP-07 phase 2 (#189850): the embedded index holds COMMANDS and HOW-TOS only. Workspace
+// playbooks and skills are private prose and come from the IRIS API at runtime — see
+// loadMergedIndex() and remote-capabilities.ts.
 import embeddedIndex from "../../../capabilities.json"
 
 /**
@@ -29,7 +34,8 @@ import embeddedIndex from "../../../capabilities.json"
  *
  * Reads capabilities.json, which is GENERATED from the live command tree and the content
  * directories. A curated catalog cannot survive this surface area — it had already drifted
- * to 15 of 120 before anyone noticed.
+ * to 15 of 120 before anyone noticed. Workspace playbooks and skills are merged in from the
+ * private API for a signed-in user (IP-07 #189850).
  */
 
 export type Entry = {
@@ -73,6 +79,51 @@ export function loadIndex(): Index {
     }
   }
   return embeddedIndex as Index
+}
+
+/** Recount after a merge — the committed index only counts the kinds it carries. */
+function countsOf(entries: Entry[]): Record<string, number> {
+  const counts: Record<string, number> = { command: 0, "how-to": 0, playbook: 0, skill: 0 }
+  for (const e of entries) counts[e.kind] = (counts[e.kind] ?? 0) + 1
+  counts.total = entries.length
+  return counts
+}
+
+/**
+ * The embedded index plus workspace entries. An embedded entry always wins a kind:name clash —
+ * the remote adds what the binary does not carry; it never rewrites what it does.
+ */
+export function mergeIndex(base: Index, workspace: Entry[]): Index {
+  const have = new Set(base.entries.map((e) => `${e.kind}:${e.name}`))
+  const extra = workspace.filter((e) => {
+    const k = `${e.kind}:${e.name}`
+    if (have.has(k)) return false
+    have.add(k)
+    return true
+  })
+  const entries = extra.length ? [...base.entries, ...extra] : base.entries
+  return { ...base, counts: countsOf(entries), entries }
+}
+
+/**
+ * Every reader that wants the WHOLE index (find, intent) goes through here: embedded entries
+ * plus the signed-in user's workspace playbooks and skills. One fetch per process, cached,
+ * never throws — signed out or offline with no cache, this is the embedded index alone.
+ */
+export async function loadMergedIndex(): Promise<{ index: Index; workspace: RemoteCapabilities.Source }> {
+  const base = loadIndex()
+  const remote = await RemoteCapabilities.load().catch(() => ({ entries: [] as Entry[], source: "unavailable" as const }))
+  return { index: mergeIndex(base, remote.entries), workspace: remote.source }
+}
+
+/**
+ * One line telling a person WHY there are no playbooks or skills, rather than silently returning
+ * fewer results. Undefined when the workspace entries are present.
+ */
+export function workspaceNotice(source: RemoteCapabilities.Source): string | undefined {
+  if (source === "signed-out") return "workspace playbooks and skills need sign-in — iris auth login"
+  if (source === "unavailable") return "workspace playbooks and skills unavailable right now — showing commands and how-tos"
+  return undefined
 }
 
 /**
@@ -234,8 +285,12 @@ export const PlatformFindCommand = cmd({
       .option("json", { describe: "JSON output (for agents)", type: "boolean", default: false }),
 
   async handler(args) {
-    // Always resolves — the index is embedded, so there is no "unavailable" path to handle.
-    const index = loadIndex()
+    // Always resolves — the embedded index is the floor; workspace entries are added on top
+    // when signed in (or cached). Never throws.
+    const { index, workspace } = await loadMergedIndex()
+    const notice = workspaceNotice(workspace)
+    const workspaceJson = { loaded: !notice, reason: workspace, ...(notice ? { notice } : {}) }
+    const printNotice = () => notice && console.log(`  ${dim(notice)}`)
 
     const raw = ((args.query as string[]) ?? []).join(" ").trim().toLowerCase()
 
@@ -243,7 +298,7 @@ export const PlatformFindCommand = cmd({
     // "what is there", and an empty prompt is a worse answer than an overview.
     if (!raw) {
       if (args.json) {
-        await writeJson({ counts: index.counts, terms: index.terms })
+        await writeJson({ counts: index.counts, terms: index.terms, workspace: workspaceJson })
         return
       }
       UI.empty()
@@ -255,6 +310,7 @@ export const PlatformFindCommand = cmd({
       }
       console.log(`  ${dim("─────")}`)
       console.log(`  ${String(index.counts.total).padStart(5)}  ${bold("total")}`)
+      printNotice()
       printDivider()
       console.log(`  ${dim("search by what you want to DO:")}`)
       console.log(`    ${highlight('iris find "branded html page"')}`)
@@ -269,7 +325,12 @@ export const PlatformFindCommand = cmd({
     if (args.json) {
       console.log(
         JSON.stringify(
-          { query: raw, matched: hits.length, results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })) },
+          {
+            query: raw,
+            matched: hits.length,
+            results: hits.map((h) => ({ ...h.e, haystack: undefined, score: h.s })),
+            workspace: workspaceJson,
+          },
           null,
           2,
         ),
@@ -281,6 +342,7 @@ export const PlatformFindCommand = cmd({
     if (!hits.length) {
       console.log(`  ${dim(`nothing matched "${raw}"`)}`)
       console.log(`  ${dim("try a broader word, or browse:")} ${highlight("iris find")}`)
+      printNotice()
       UI.empty()
       process.exitCode = 1
       return
@@ -295,6 +357,7 @@ export const PlatformFindCommand = cmd({
       console.log(`  ${" ".repeat(9)} ${highlight(e.run)}`)
     }
     printDivider()
+    printNotice()
     console.log(`  ${dim("machine-readable:")} ${highlight(`iris find "${raw}" --json`)}`)
     // find lists; intent picks. The one line that tells a person the second exists (#186677).
     console.log(`  ${dim("pick one for me:  ")} ${highlight(`iris intent "${raw}"`)}`)

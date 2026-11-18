@@ -2,7 +2,7 @@ import { describe, expect, test, afterAll } from "bun:test"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { fetchDaemon, nodeVersion, PRESERVE, planAutostart, INSTALLER_LABEL, CLI_LABEL } from "./platform-node"
+import { fetchDaemon, gitignoreMatcher, nodeVersion, PRESERVE, planAutostart, INSTALLER_LABEL, CLI_LABEL } from "./platform-node"
 
 /**
  * `iris node install` exists to break the loop in #184597: when the daemon was
@@ -83,6 +83,47 @@ describe("the preserve list is the machine's state, not the repo's", () => {
     expect(PRESERVE).not.toContain("daemon.js")
     expect(PRESERVE).not.toContain("package.json")
   })
+})
+
+/**
+ * An update deleted som/ wholesale, and som/ is where each machine keeps its Instagram logins
+ * and campaign cache — six saved sessions on iris-hive-001 on 2026-10-24. What belongs to the
+ * machine is exactly what the daemon's own .gitignore names.
+ */
+describe("an update keeps what the daemon's .gitignore says is the machine's", () => {
+  // From iris-daemon's .gitignore, 2026-10-24.
+  const keep = gitignoreMatcher(
+    ["node_modules/", ".env", "daemon-data/", "*.log", "# Secrets", "youtube-auth.json", "som/youtube-auth.json",
+     "instagram-auth-*.json", "test-results/", "som/test-results/", "som/.som-campaigns-cache.json", "r1-devices.json"].join("\n"),
+  )
+  test("logins, caches and logs are kept, wherever they sit", () => {
+    for (const p of ["som/instagram-auth-heyiris.io.json", "instagram-auth-x.json", "som/.som-campaigns-cache.json",
+      "som/youtube-auth.json", "daemon.log", "som/test-results/a/trace.zip", "node_modules/x/index.js", "r1-devices.json"])
+      expect(keep(p)).toBe(true)
+  })
+  test("source is not kept, so a file deleted upstream really goes", () => {
+    for (const p of ["som/som-all.js", "som/batch-with-login.spec.ts", "daemon.js", "som/helpers/auth-helper.ts",
+      "som/.som-campaigns-cache.json.bak", "x/som/.som-campaigns-cache.json"])
+      expect(keep(p)).toBe(false)
+  })
+  test("a dir/ rule matches the directory, not a file of that name", () => {
+    const m = gitignoreMatcher("cache/\n")
+    expect(m("cache/a.json")).toBe(true)
+    expect(m("cache")).toBe(false)
+  })
+
+  test("a real update keeps the sessions and removes a file the new version no longer has", () => {
+    const d = join(tmp(), "bridge")
+    expect(fetchDaemon(d).ok).toBe(true)
+    writeFileSync(join(d, "som", "instagram-auth-heyiris.io.json"), '{"cookies":[]}')
+    writeFileSync(join(d, "som", ".som-campaigns-cache.json"), "{}")
+    writeFileSync(join(d, "som", "removed-upstream.js"), "// gone in the next version")
+    expect(fetchDaemon(d).ok).toBe(true)
+    expect(readFileSync(join(d, "som", "instagram-auth-heyiris.io.json"), "utf8")).toBe('{"cookies":[]}')
+    expect(existsSync(join(d, "som", ".som-campaigns-cache.json"))).toBe(true)
+    expect(existsSync(join(d, "som", "removed-upstream.js"))).toBe(false)
+    expect(existsSync(join(d, "som", "som-all.js"))).toBe(true)
+  }, 360000)
 })
 
 describe("nodeVersion — the prerequisite that cost two hours", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { describeAge, markerFor, formatRow, formatSummary } from "./integration-health"
+import { describeAge, markerFor, formatRow, formatSummary, irisRowToHealth } from "./integration-health"
 
 /**
  * IH-08 — the CLI half of integration health (epic bloq #503 list #2315, closes #182476).
@@ -117,5 +117,34 @@ describe("formatSummary", () => {
     const s = formatSummary([row({ state: "never_checked" }), row({ state: "never_checked" })])
     expect(s).toContain("0 working")
     expect(s).toContain("2 never checked")
+  })
+})
+
+describe("irisRowToHealth (#186971 — the store the health API cannot see)", () => {
+  const mj = { id: 138, type: "mailjet", name: "Mailjet", account_email: null, status: "active" }
+
+  test("a probe that called the provider and passed is working", () => {
+    const r = irisRowToHealth(mj, { success: true, message: "Connected to Mailjet" }, "2026-10-13T17:00:00Z")
+    expect(r.state).toBe("working")
+    expect(r.store).toBe("iris-api")
+    expect(r.last_tested).toBe("2026-10-13T17:00:00Z")
+  })
+
+  test("'credentials are present (live test not implemented)' is not a pass", () => {
+    const r = irisRowToHealth(mj, {
+      success: true,
+      message: "Integration credentials are present (live test not implemented)",
+    })
+    expect(r.state).toBe("never_checked")
+  })
+
+  test("a refused probe is failing, and carries the provider's reason", () => {
+    const r = irisRowToHealth(mj, { success: false, error: "Mailjet user failed with HTTP 401" })
+    expect(r.state).toBe("failing")
+    expect(r.last_error).toContain("HTTP 401")
+  })
+
+  test("an unprobed row is never_checked, not working and not absent", () => {
+    expect(irisRowToHealth(mj, null).state).toBe("never_checked")
   })
 })

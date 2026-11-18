@@ -32,13 +32,28 @@ A list of your Mailjet contact lists (or an empty list) means it works. If it sa
 "did not accept the API key/secret pair", one half is wrong: check both at
 https://app.mailjet.com/account/apikeys and run `connect` again.
 
-> Known gap: `iris integrations test mailjet` and `iris integrations health` do not report
-> Mailjet correctly yet. Use the `exec` command above to check the connection.
+> `iris integrations test mailjet` and `iris integrations health` only report Mailjet correctly
+> from v1.3.345 on. On an older CLI, use the `exec` command above to check the connection.
+
+## Dry run first, --apply to do it
+
+Reads (`get_*`) run straight away. Anything that writes or sends (`send_*`, `create_*`, `add_*`,
+`update_*`, `delete_*`) is a **dry run unless you add `--apply`**. A dry run prints the connection it
+would use, the parameters (long bodies cut short) and how many recipients it would reach, sends
+nothing, and exits 0. With `--json` it prints `{"dry_run": true, "executed": false, …}`.
+
+```bash
+iris integrations exec mailjet send_transactional_email --integration-id <ID> --params-file msg.json          # preview
+iris integrations exec mailjet send_transactional_email --integration-id <ID> --params-file msg.json --apply  # send
+```
+
+A script that sends in a loop must pass `--apply` on every call, and should check that each result
+has a message id: a call without it is a preview, not a send. CLI versions before this change could
+send without `--apply` — upgrade (`iris update`) before relying on the preview.
 
 ## 3. Build a list
 
 ```bash
-# Writes are a dry run unless you add --apply (shows what would happen, changes nothing).
 iris integrations exec mailjet create_contact_list name="NCMA Members" --apply
 iris integrations exec mailjet add_contact_to_list list_id=<LIST_ID> email=jane@example.com name="Jane Doe" --apply
 ```
@@ -51,13 +66,22 @@ Adding a contact never re-subscribes someone who unsubscribed. For many contacts
 One email, now:
 
 ```bash
-iris integrations exec mailjet send_transactional_email \
+iris integrations exec mailjet send_transactional_email --integration-id <ID> \
   to=jane@example.com subject="Chapter update" \
   html_body="<p>Hello</p>" from_email=you@yourdomain.com from_name="NCMA Fort Worth" --apply
 ```
 
-`from_email` is required, and it must be a sender your Mailjet account has validated. IRIS never
-picks a sender for you.
+`from_email` must be a sender your Mailjet account has validated. You can leave it out when a
+sender is saved on the connection — the send then uses that one. With neither, the send is refused
+and nothing goes out; IRIS never invents a sender. An operator saves (or shows) the sender with:
+
+```bash
+php artisan integrations:mailjet-sender <integration-id> you@yourdomain.com --name="NCMA Fort Worth"
+php artisan integrations:mailjet-sender <integration-id>          # show what is saved
+```
+
+Pass `--integration-id` when you can see more than one Mailjet connection (your own, or ones shared
+with your boards), so the email goes out through the account you mean.
 
 A campaign to a list:
 

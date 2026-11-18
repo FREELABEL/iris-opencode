@@ -8,6 +8,7 @@ import { Command } from "../../command"
 import { EOL } from "os"
 import { select } from "./clack"
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2"
+import { LocalAuth } from "@/server/local-auth"
 import { Server } from "../../server/server"
 import { Provider } from "../../provider/provider"
 import { Agent } from "../../agent/agent"
@@ -82,6 +83,14 @@ export const RunCommand = cmd({
       .option("attach", {
         type: "string",
         describe: "attach to a running opencode server (e.g., http://localhost:4096)",
+      })
+      .option("password", {
+        type: "string",
+        describe: "password for --attach (default on this machine: OPENCODE_SERVER_PASSWORD, or the server's record; another machine only gets this flag)",
+      })
+      .option("username", {
+        type: "string",
+        describe: "username for --attach (default: OPENCODE_SERVER_USERNAME, or opencode)",
       })
       .option("port", {
         type: "number",
@@ -285,7 +294,13 @@ export const RunCommand = cmd({
     }
 
     if (args.attach) {
-      const sdk = createOpencodeClient({ baseUrl: args.attach })
+      const headers = LocalAuth.headersFor(args.attach, { password: args.password, username: args.username })
+      const problem = await LocalAuth.attachProblem(args.attach, headers)
+      if (problem) {
+        UI.error(problem)
+        process.exit(1)
+      }
+      const sdk = createOpencodeClient({ baseUrl: args.attach, headers })
 
       const sessionID = await (async () => {
         if (args.continue) {
@@ -328,7 +343,10 @@ export const RunCommand = cmd({
 
     await bootstrap(process.cwd(), async () => {
       const server = Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
-      const sdk = createOpencodeClient({ baseUrl: `http://${server.hostname}:${server.port}` })
+      const sdk = createOpencodeClient({
+        baseUrl: `http://${server.hostname}:${server.port}`,
+        headers: Server.authHeaders(),
+      })
 
       if (args.command) {
         const exists = await Command.get(args.command)

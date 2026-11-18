@@ -379,7 +379,7 @@ const STEPS: StepDef[] = [
       prompts.log.info(`Content strategy saved locally: ${frequency}, topics: ${topics}`)
       console.log()
       console.log(`  Next: Create a content agent with scheduled heartbeat:`)
-      console.log(`  ${highlight("iris agents create")}     — create content agent`)
+      console.log(`  ${highlight("iris agents create --bloq <id>")} — create content agent`)
       console.log(`  ${highlight("iris schedules create")}  — schedule recurring content`)
 
       progress.steps.content = { completed: true, frequency: String(frequency), topics: String(topics) }

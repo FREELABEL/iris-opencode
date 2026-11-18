@@ -2034,7 +2034,7 @@ echo ok
     expect(steps[0].mode).toBe("manual")
   })
 
-  test("step heading with no title is skipped (regex requires same-line title)", () => {
+  test("step heading with no title is a step titled by its id (#190875)", () => {
     const md = `
 ### step:nospace
 
@@ -2047,8 +2047,12 @@ echo ok
 \`\`\`
 `
     const steps = parseSteps(md)
-    // Fixed: regex uses ` +` (space only) instead of `\s+` (which ate newlines)
-    expect(steps).toHaveLength(0)
+    // It used to be dropped silently: `test` said valid, `run` said completed, nothing ran.
+    // Still horizontal-whitespace only, so the next line is never swallowed as the title.
+    expect(steps).toHaveLength(1)
+    expect(steps[0].id).toBe("nospace")
+    expect(steps[0].title).toBe("nospace")
+    expect(steps[0].code).toBe("echo ok")
   })
 
   test("YAML mode with leading/trailing spaces doesn't match switch cases", () => {
@@ -2684,5 +2688,39 @@ describe("isDangerousCommand — 'format' means disk formatting, not the word", 
     "rm -rf /tmp/x",
   ])("dangerous: %s", (cmd) => {
     expect(isDangerousCommand(cmd)).toBe(true)
+  })
+})
+
+// #192802 — on Windows a playbook step over 8,191 characters was cut off: the whole step went to
+// bash as one `-c` argument. deal-scenarios step 1 (19,909 chars) lost everything past engine
+// line 122 and failed "unterminated string". A step must reach bash as a FILE, never as argv.
+describe("shell steps run from a script file, not a command-line argument (#192802)", () => {
+  const { shellInvocation, executeShellStep } = require("./executor") as typeof import("./executor")
+
+  test("the step's code is never on the command line", () => {
+    const code = "echo " + "x".repeat(20_000)
+    const inv = shellInvocation("bash", code)
+    try {
+      expect(inv.argv.join(" ")).not.toContain("x".repeat(100))
+      expect(inv.argv.join(" ").length).toBeLessThan(1_000)
+      expect(require("fs").readFileSync(inv.script, "utf8")).toBe(code)
+    } finally {
+      inv.cleanup()
+    }
+    expect(require("fs").existsSync(inv.script)).toBe(false)
+  })
+
+  test("a 20 KB heredoc step writes exactly the bytes it was given, em dashes included", async () => {
+    const out = require("path").join(require("os").tmpdir(), `iris-192802-${process.pid}.py`)
+    const body = Array.from({ length: 400 }, (_, i) => `LINE_${i} = "Package with a co-builder — shared costs, split money"`).join("\n")
+    const code = `cat > "${out}" <<'PYEOF'\n${body}\nPYEOF\n`
+    expect(code.length).toBeGreaterThan(20_000)
+    const r = await executeShellStep(code, 30_000)
+    try {
+      expect(r.exit_code).toBe(0)
+      expect(require("fs").readFileSync(out, "utf8")).toBe(body + "\n")
+    } finally {
+      require("fs").rmSync(out, { force: true })
+    }
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { normaliseSetPath, pageGateFlags } from "./platform-pages"
+import { gateReport, normaliseSetPath, pageGateFlags } from "./platform-pages"
 
 /**
  * #181940 — the OTP gate, and why lifting it looked impossible.
@@ -78,5 +78,42 @@ describe("pageGateFlags", () => {
     const g = pageGateFlags({ requires_auth: true, json_content: { requireOtp: true, json_content: { requireOtp: false } } })
     expect(g.gated).toBe(true)
     expect(g.requireOtp).toBe(true)
+  })
+})
+
+/**
+ * #192471 — report the gate the SERVER holds, and name the half gate.
+ *
+ * publish-html printed "Gate: off — public" from the flag it meant to send, while the server had
+ * forced requires_auth on (requireOtp was true). And `pages set <slug> requireOtp false` cleared
+ * one flag and left requires_auth on: sign-in without a code, which the renderer then refuses —
+ * the loop Pathways staff hit on 2026-11-03. Both states must be said out loud.
+ */
+describe("gateReport", () => {
+  test("both flags on: a code gate", () => {
+    const r = gateReport({ requires_auth: true, json_content: { requireOtp: true } })
+    expect(r.line).toBe("on — visitors sign in with a code")
+    expect(r.warning).toBeNull()
+  })
+
+  test("neither flag: public", () => {
+    const r = gateReport({ requires_auth: false, json_content: {} })
+    expect(r.line).toBe("off — public")
+    expect(r.warning).toBeNull()
+  })
+
+  test("requires_auth without requireOtp is named as the half gate, with the way out", () => {
+    const r = gateReport({ requires_auth: true, json_content: { requireOtp: false } }, "my-page")
+    expect(r.line).toContain("half")
+    expect(r.warning).toContain("iris pages ungate my-page")
+  })
+
+  test("requireOtp without requires_auth is still a gate", () => {
+    const r = gateReport({ requires_auth: false, json_content: { requireOtp: true } })
+    expect(r.line).toBe("on — visitors sign in with a code")
+  })
+
+  test("an unreadable page says so instead of guessing", () => {
+    expect(gateReport(null).line).toContain("could not read")
   })
 })

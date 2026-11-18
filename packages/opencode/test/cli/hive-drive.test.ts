@@ -61,3 +61,41 @@ describe("one identity per drive (measured: without it, 100/100 cross-machine wr
     expect(serveArgs("redis://h/1", 9007, "/c")).toEqual(["webdav", "--cache-dir", "/c", "redis://h/1", "127.0.0.1:9007"])
   })
 })
+
+// #188567 (sandbox half) — the drive at /workspace in a sandbox.
+import { driveSpecError, canAllowOther, rwHolder, workspaceListing } from "../../src/cli/cmd/platform-hive-drive"
+import fs from "fs"
+import os from "os"
+import path from "path"
+
+describe("sandbox --drive", () => {
+  test("name, name:ro, name:rw, name@machine — the same rule iris-api and the daemon apply", () => {
+    for (const ok of ["work", "work:ro", "work:rw", "work@iris-hive-001", "work:ro@iris-hive-001"]) expect(driveSpecError(ok)).toBeNull()
+    for (const bad of ["", "a", "Work", "work:rx", "../x", "work;rm -rf /", "work@", "work@a b"]) expect(driveSpecError(bad)).not.toBeNull()
+  })
+})
+
+describe("Docker sandboxes can see the drive only with allow_other", () => {
+  test("root may; a user may only when /etc/fuse.conf says user_allow_other (commented out does not count)", () => {
+    expect(canAllowOther(0, "")).toBe(true)
+    expect(canAllowOther(1000, "user_allow_other\n")).toBe(true)
+    expect(canAllowOther(1000, "#user_allow_other\n")).toBe(false)
+    expect(canAllowOther(1000, "# user_allow_other - Using the allow_other mount option works fine as root\n#user_allow_other\n")).toBe(false)
+  })
+  test("mountArgs adds -o allow_other only when asked, and still never the password", () => {
+    expect(mountArgs("redis://h:6379/1", "/m", "/c", DEFAULT_IDENTITY, true)).toEqual(["mount", "-d", "--all-squash", DEFAULT_IDENTITY, "-o", "allow_other", "--cache-dir", "/c", "redis://h:6379/1", "/m"])
+  })
+})
+
+describe("status <name> shows the workspace and who writes it", () => {
+  test("lists the workspace (the folder sandboxes see) and reads the rw lock the daemon and iris-api take", () => {
+    const mp = fs.mkdtempSync(path.join(os.tmpdir(), "drv-"))
+    fs.mkdirSync(path.join(mp, "workspace", "repo"), { recursive: true })
+    fs.writeFileSync(path.join(mp, "workspace", "x"), "hello from A\n")
+    expect(workspaceListing(mp).map((e) => e.name)).toEqual(["repo/", "x"])
+    expect(rwHolder(mp)).toBeNull()
+    fs.mkdirSync(path.join(mp, ".iris", "rw"), { recursive: true })
+    fs.writeFileSync(path.join(mp, ".iris", "rw", "holder"), "sandbox-lease-42 4102444800\n")
+    expect(rwHolder(mp)).toEqual({ holder: "sandbox-lease-42", expiresAt: 4102444800 })
+  })
+})

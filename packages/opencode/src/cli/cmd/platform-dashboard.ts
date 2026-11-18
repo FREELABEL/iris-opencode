@@ -4,6 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API, PUBLIC_SITE } from "./iris-api"
 import { firstArray } from "../../util/array"
+import { brandBackground, hex, isLight, logoFor } from "./brand-logo"
 
 function dashFetch(path: string, options?: RequestInit): Promise<Response> {
   return irisFetch(path, options ?? {}, IRIS_API)
@@ -16,33 +17,55 @@ function publicUrl(slug: string): string {
     : `${PUBLIC_SITE}/p/${slug}`
 }
 
-interface DesignTokens {
-  colors?: { primary?: string; secondary?: string; background?: string; text?: string }
-  fonts?: { heading?: string; body?: string }
-}
+/** A brand's design_tokens, as stored (any shape — read through hex()/logoFor(), never directly). */
+export type DesignTokens = Record<string, any>
 
+/**
+ * The client's kit (#110009). The public endpoint answers `{brand, name, design_tokens}`; this
+ * used to read `.colors` off that envelope, find nothing, and give every client the default green.
+ */
 async function fetchDesignTokens(slug: string): Promise<DesignTokens> {
   try {
     const res = await dashFetch(`/api/v1/public/brands/${slug}/design-tokens`)
-    if (res.ok) {
-      const data = await res.json() as any
-      return data?.data ?? data ?? {}
-    }
+    if (res.ok) return dashboardTokensFrom(await res.json())
   } catch {}
   return {}
 }
 
-function buildDashboardJson(client: string, title: string, tokens?: DesignTokens) {
+/** The design_tokens out of whatever the endpoint wrapped them in. */
+export function dashboardTokensFrom(body: unknown): DesignTokens {
+  const b = (body ?? {}) as Record<string, any>
+  const t = b.design_tokens ?? b.data?.design_tokens ?? b.data ?? b
+  return t && typeof t === "object" && !Array.isArray(t) ? t : {}
+}
+
+/** The dashboard is a light page: the brand's primary, its ground only when light, its mark for that ground. */
+export function dashboardKit(tokens?: DesignTokens) {
+  const t = tokens ?? {}
+  const primary = hex(t.semantic?.bg_brand) ?? hex(t.colors?.primary) ?? hex(t.colors?.brand) ?? "#34d399"
+  const ground = brandBackground(t)
+  const background = ground && isLight(ground) ? ground : "#f8fafc"
+  const logo = logoFor(t, background)
+  return { primary, background, logoUrl: logo?.url ?? null, faviconUrl: (t.brand?.logo?.icon as string | undefined) ?? logo?.url ?? null }
+}
+
+export function buildDashboardJson(client: string, title: string, tokens?: DesignTokens) {
   const slug = `${client}-dashboard`
-  const primary = tokens?.colors?.primary ?? "#34d399"
-  const background = tokens?.colors?.background ?? "#f8fafc"
+  const kit = dashboardKit(tokens)
+  const { primary, background } = kit
   return {
     version: "2.0",
     type: "dashboard",
     theme: {
       mode: "light",
       backgroundColor: background,
-      branding: { name: title, primaryColor: primary, description: `${title} Operations Dashboard` },
+      branding: {
+        name: title,
+        primaryColor: primary,
+        description: `${title} Operations Dashboard`,
+        ...(kit.logoUrl ? { logoUrl: kit.logoUrl } : {}),
+        ...(kit.faviconUrl ? { faviconUrl: kit.faviconUrl } : {}),
+      },
     },
     layout: {
       type: "dashboard",
@@ -167,8 +190,9 @@ const CreateCmd = cmd({
     // Step 2: Fetch brand design tokens for theming
     sp.start("Loading brand design tokens...")
     const tokens = await fetchDesignTokens(client)
-    if (tokens.colors?.primary) {
-      sp.stop(success(`Brand colors: ${tokens.colors.primary}`))
+    if (Object.keys(tokens).length) {
+      const kit = dashboardKit(tokens)
+      sp.stop(success(`Brand kit: ${kit.primary}${kit.logoUrl ? ` · logo ${kit.logoUrl}` : " · no logo"}`))
     } else {
       sp.stop(dim("No brand tokens found — using defaults"))
     }

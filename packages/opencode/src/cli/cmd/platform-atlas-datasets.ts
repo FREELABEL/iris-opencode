@@ -5,9 +5,12 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, IRIS_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
+import * as os from "os"
 import { firstArray } from "../../util/array"
 import { DatasetHooksGroup } from "./platform-atlas-dataset-hooks"
+import { DatasetPullCommand, DatasetPushCommand, DatasetSyncCommand, DatasetStatusCommand, DatasetResolveCommand } from "./platform-atlas-dataset-sync"
 import { DRAFT_SYSTEM_PROMPT, checkFields, fieldsForCreate, normalizeDraft, parseModelJson } from "./atlas-schema-draft"
+import { DatasetPublicSubmitGroup } from "./platform-atlas-public-submit"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -23,6 +26,67 @@ function fmtCents(c?: number | null): string {
 
 function printDivider() { console.log(dim("  " + "─".repeat(72))) }
 
+/**
+ * Every dataset read builds its query here, so a board pin cannot be added to one verb and
+ * forgotten in the next. A slug is unique per (user, bloq) — not per account — so without
+ * bloq_id a read spans every board that happens to use the name. Measured 2026-10-22
+ * (#190579): `summary` reported 2 records across boards 766 and 754, and `export` wrote
+ * both rows. `list` could be pinned; `search`, `summary`, `export` and `delete` could not.
+ */
+export function buildDatasetQuery(opts: {
+  limit?: number
+  sort?: string
+  search?: string
+  bloq?: number
+  filters?: string[]
+}): URLSearchParams {
+  const p = new URLSearchParams()
+  if (opts.limit != null) p.set("per_page", String(opts.limit))
+  if (opts.sort) p.set("sort", opts.sort)
+  if (opts.search) p.set("search", opts.search)
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  for (const f of opts.filters ?? []) {
+    const [key, ...rest] = f.split("=")
+    if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
+  }
+  return p
+}
+
+export function buildSummaryQuery(opts: { bloq?: number; groupBy?: string; sum?: string }): URLSearchParams {
+  const p = new URLSearchParams()
+  if (opts.groupBy) p.set("group_by", opts.groupBy)
+  if (opts.sum) p.set("sum", opts.sum)
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  return p
+}
+
+/**
+ * A schema delete is the one call that cannot be undone, so the scope is explicit in the
+ * URL: `bloq_id` for one board, `all_boards=true` for every version. With neither, the
+ * server refuses a slug that spans boards (#190580).
+ */
+export function buildSchemaDeleteQuery(opts: { cascade?: boolean; bloq?: number; allBoards?: boolean }): string {
+  const p = new URLSearchParams()
+  if (opts.cascade) p.set("cascade", "true")
+  if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
+  if (opts.allBoards) p.set("all_boards", "true")
+  const s = p.toString()
+  return s ? `?${s}` : ""
+}
+
+/**
+ * Which schema answered, when the caller did not pin a board — and how to pin the next read.
+ *
+ * `GET /atlas/schemas` returns only the latest version of each slug, so the CLI cannot count
+ * the boards a slug lives on. It can still do what `list` already does: name the resolved
+ * schema and say how to scope it. Silence here is the dangerous part of #190579 — a summary
+ * that spans two boards looks exactly like a summary of one.
+ */
+export function resolutionHint(slug: string, schemaId: number | null | undefined, bloq: number | undefined): string | null {
+  if (bloq != null || schemaId == null) return null
+  return `Resolved '${slug}' -> schema #${schemaId}. If you have this slug on more than one bloq, pin it with --bloq=<id>.`
+}
+
 // A schema's `settings` blob is not decoration — an ONBOARDING FLOW lives entirely
 // in it (`flow_type: "onboarding"` plus steps/branding/completion). Both the create
 // and update endpoints have always accepted it; the CLI just never passed it, which
@@ -37,6 +101,60 @@ function readJsonArg(v: string | undefined, label: string): { ok: boolean; value
     prompts.log.error(`Invalid JSON for --${label}`)
     return { ok: false }
   }
+}
+
+// ── --data: inline JSON or a file path (#193517) ─────────────────────────────
+//
+// `records upsert --data ~/x/rec.json` printed "Invalid JSON" then "Done" and exited 0: upsert
+// fed the PATH to JSON.parse, never read the file, and then reported like a success. Three runs
+// in a loop each tailed as "Done" and nothing was written. `add` read a path only when it ended
+// in .json, `update` never did. All three now go through here, and every failure exits non-zero.
+
+/** Read and parse a JSON file. Shared by `records add/update/upsert --data <path>` and `import`. */
+export function loadJsonFile(file: string): { ok: true; value: any } | { ok: false; error: string } {
+  let raw: string
+  try { raw = fs.readFileSync(file, "utf8") } catch (e: any) { return { ok: false, error: `Cannot read ${file}: ${e?.message ?? e}` } }
+  try { return { ok: true, value: JSON.parse(raw) } } catch (e: any) { return { ok: false, error: `Invalid JSON in ${file}: ${e?.message ?? e}` } }
+}
+
+function expandHome(p: string): string {
+  return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p
+}
+
+/**
+ * `--data` is "JSON data or path to .json file". Inline JSON (starts with { or [) is parsed;
+ * anything else that names an existing file is read (`@file` also works, and `~/` is expanded
+ * for `--data=~/x.json` where the shell does not). The value must be a JSON object.
+ */
+export function parseDataArg(v: string): { ok: true; value: Record<string, any> } | { ok: false; error: string } {
+  const raw = String(v ?? "").trim()
+  if (!raw) return { ok: false, error: "--data is empty" }
+  let value: any
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try { value = JSON.parse(raw) } catch (e: any) { return { ok: false, error: `Invalid JSON for --data: ${e?.message ?? e}` } }
+  } else {
+    const file = expandHome(raw.startsWith("@") ? raw.slice(1) : raw)
+    let isFile = false
+    try { isFile = fs.statSync(file).isFile() } catch { /* not a file */ }
+    if (isFile) {
+      const r = loadJsonFile(file)
+      if (!r.ok) return r
+      value = r.value
+    } else if (raw.startsWith("@") || /[\/]/.test(raw) || /\.json$/i.test(raw)) {
+      return { ok: false, error: `File not found for --data: ${file}` }
+    } else {
+      try { value = JSON.parse(raw) } catch (e: any) { return { ok: false, error: `Invalid JSON for --data (and no file named "${raw}"): ${e?.message ?? e}` } }
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, error: "--data must be a JSON object, e.g. '{\"name\": \"value\"}'" }
+  return { ok: true, value }
+}
+
+/** A failed command says so and exits non-zero. It never prints "Done". */
+function failed(message?: string): void {
+  if (message) prompts.log.error(message)
+  prompts.outro("Failed")
+  process.exitCode = 1
 }
 
 // ── SCHEMAS ──────────────────────────────────────────────────────────────────
@@ -387,10 +505,12 @@ const SchemaUpdateCommand = cmd({
 const SchemaDeleteCommand = cmd({
   command: "delete <slug>",
   aliases: ["rm", "destroy"],
-  describe: "delete a dataset schema (all versions)",
+  describe: "delete a dataset schema — one board, or every version with --all-boards",
   builder: (y) =>
     y
       .positional("slug", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", describe: "delete only this board's version of the slug" })
+      .option("all-boards", { type: "boolean", default: false, describe: "delete every board's version of a shared slug" })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .option("cascade", { describe: "also delete the dataset's records", type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
@@ -415,7 +535,7 @@ const SchemaDeleteCommand = cmd({
     }
     if (!confirmed || prompts.isCancel(confirmed)) { if (!isJson) prompts.outro("Cancelled"); return }
 
-    const query = args.cascade ? "?cascade=true" : ""
+    const query = buildSchemaDeleteQuery({ cascade: args.cascade, bloq: args.bloq, allBoards: args["all-boards"] })
     const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}${query}`, { method: "DELETE" })
     if (!(await handleApiError(res, "Delete schema"))) {
       process.exitCode = 1
@@ -470,14 +590,14 @@ const RecordsListCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Loading…")
     try {
-      const p = new URLSearchParams({ per_page: String(args.limit), sort: args.sort })
-      if (args.search) p.set("search", args.search)
-      if (args.bloq != null) p.set("bloq_id", String(args.bloq))
       // Parse --filter stage_name=Negotiating into filter[stage_name]=Negotiating
-      for (const f of args.filter ?? []) {
-        const [key, ...rest] = f.split("=")
-        if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
-      }
+      const p = buildDatasetQuery({
+        limit: args.limit,
+        sort: args.sort,
+        search: args.search,
+        bloq: args.bloq,
+        filters: args.filter,
+      })
 
       const PER_PAGE_CAP = 200
       if (args.all) p.set("per_page", String(PER_PAGE_CAP))
@@ -558,21 +678,23 @@ const RecordsSearchCommand = cmd({
     y
       .positional("query", { type: "string", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s", describe: "schema slug" })
+      .option("bloq", { type: "number", describe: "pin the read to one board when the slug is shared across bloqs" })
       .option("where", { type: "string", alias: "filter", describe: "field=value filter (repeatable)", array: true })
       .option("limit", { type: "number", default: 25 })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Search: ${args.schema} · "${args.query}"`)
+    prompts.intro(`◈  Search: ${args.schema} · "${args.query}"${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
     const spinner = prompts.spinner()
     spinner.start("Searching…")
     try {
-      const p = new URLSearchParams({ per_page: String(args.limit), search: String(args.query) })
-      for (const f of (args.where as string[] | undefined) ?? []) {
-        const [key, ...rest] = f.split("=")
-        if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
-      }
+      const p = buildDatasetQuery({
+        limit: args.limit,
+        search: String(args.query),
+        bloq: args.bloq,
+        filters: args.where as string[] | undefined,
+      })
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
       const ok = await handleApiError(res, "Search records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
@@ -651,17 +773,16 @@ const RecordsSummaryCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the summary to one board when the slug is shared across bloqs" })
       .option("group-by", { type: "string", describe: "field to group by" })
       .option("sum", { type: "string", describe: "money field to sum" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Dataset Summary: ${args.schema}`)
+    prompts.intro(`◈  Dataset Summary: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
-    const p = new URLSearchParams()
-    if (args["group-by"]) p.set("group_by", args["group-by"])
-    if (args.sum) p.set("sum", args.sum)
+    const p = buildSummaryQuery({ bloq: args.bloq, groupBy: args["group-by"], sum: args.sum })
 
     const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/summary?${p}`)
     const ok = await handleApiError(res, "Summary"); if (!ok) { prompts.outro("Done"); return }
@@ -669,6 +790,9 @@ const RecordsSummaryCommand = cmd({
     const data = body?.data
 
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+    const hint = resolutionHint(args.schema, data?.schema?.id, args.bloq)
+    if (hint) prompts.log.info(dim(hint))
 
     printDivider()
     console.log(`  ${bold("Total Records:")} ${data?.total_records ?? 0}`)
@@ -692,7 +816,7 @@ const RecordsSummaryCommand = cmd({
 // present the result as complete, dropping ~91% of a 2143-row dataset (#137273).
 export async function fetchDatasetRecords(
   schema: string,
-  opts: { limit: number; all: boolean },
+  opts: { limit: number; all: boolean; bloq?: number },
 ): Promise<{ records: any[]; total: number; truncated: boolean }> {
   const perPage = opts.all ? 200 : opts.limit
   let page = 1
@@ -700,6 +824,9 @@ export async function fetchDatasetRecords(
   let total = 0
   while (true) {
     const p = new URLSearchParams({ per_page: String(perPage), page: String(page) })
+    // Every page carries the pin. A board-scoped export that pins only its first request
+    // would still pull the other board's rows on page 2 (#190579).
+    if (opts.bloq != null) p.set("bloq_id", String(opts.bloq))
     const res = await irisFetch(`/api/v1/atlas/datasets/${schema}?${p}`)
     const ok = await handleApiError(res, "List records")
     if (!ok) throw new Error("Failed to list records")
@@ -723,6 +850,7 @@ const ExportCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the export to one board when the slug is shared across bloqs" })
       .option("out", { type: "string", alias: "o", describe: "output file path" })
       .option("format", { type: "string", default: "csv", describe: "csv|json" })
       .option("fields", { type: "string", describe: "comma-separated fields to include" })
@@ -730,21 +858,24 @@ const ExportCommand = cmd({
       .option("limit", { type: "number", default: 200 }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Export: ${args.schema}`)
+    prompts.intro(`◈  Export: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Fetching records…")
 
     try {
-      // Get schema for field labels
-      const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args.schema}`)
+      // Get schema for field labels — pinned too, or a shared slug would take its labels
+      // from whichever board the server resolved first.
+      const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args.schema}${args.bloq != null ? `?bloq_id=${args.bloq}` : ""}`)
       const schemaOk = await handleApiError(schemaRes, "Get schema"); if (!schemaOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const schemaBody = (await schemaRes.json()) as any
       const schema = schemaBody?.data?.schema ?? schemaBody?.data
+      const hint = resolutionHint(args.schema, schema?.id, args.bloq)
+      if (hint) prompts.log.info(dim(hint))
 
       // Get records (paginate the full dataset with --all; otherwise capped by --limit)
-      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all })
+      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all, bloq: args.bloq })
       spinner.stop(truncated ? `${records.length} of ${total} record(s) — PARTIAL` : `${records.length} record(s)`)
       if (truncated) {
         prompts.log.warn(`Exporting only ${records.length} of ${total} records (--limit ${args.limit}). Pass --all to export the entire dataset, or raise --limit.`)
@@ -958,21 +1089,19 @@ const RecordsAddCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Add Record: ${args.schema}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let data: any = {}
     if (args.data) {
-      try {
-        if (args.data.endsWith(".json") && fs.existsSync(args.data)) {
-          data = JSON.parse(fs.readFileSync(args.data, "utf8"))
-        } else {
-          data = JSON.parse(args.data)
-        }
-      } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+      const parsed = parseDataArg(args.data)
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     } else {
       const raw = await prompts.text({ message: "Record data (JSON):", placeholder: '{"name": "value"}' })
-      if (prompts.isCancel(raw)) { prompts.outro("Done"); return }
-      try { data = JSON.parse(String(raw)) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+      if (prompts.isCancel(raw)) { prompts.outro("Cancelled"); process.exitCode = 1; return }
+      const parsed = parseDataArg(String(raw))
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     }
 
     const body: Record<string, any> = { data }
@@ -983,14 +1112,13 @@ const RecordsAddCommand = cmd({
     spinner.start("Creating…")
     try {
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}`, { method: "POST", body: JSON.stringify(body) })
-      const ok = await handleApiError(res, "Create record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Create record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       const result = ((await res.json()) as any)?.data
       spinner.stop(`Created #${result?.id ?? "?"}`)
       prompts.outro(`iris atlas:datasets records show ${result?.id ?? ""} -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1003,16 +1131,18 @@ const RecordsUpdateCommand = cmd({
     y
       .positional("id", { type: "number", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s" })
-      .option("data", { type: "string", describe: "JSON data to merge" })
+      .option("data", { type: "string", describe: "JSON data to merge, or path to a .json file" })
       .option("set", { type: "string", describe: "key=value pairs (repeatable)", array: true }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Record #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let data: any = {}
     if (args.data) {
-      try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+      const parsed = parseDataArg(args.data)
+      if (!parsed.ok) return failed(parsed.error)
+      data = parsed.value
     }
     // Parse --set key=value pairs
     for (const s of args.set ?? []) {
@@ -1025,9 +1155,7 @@ const RecordsUpdateCommand = cmd({
     }
 
     if (Object.keys(data).length === 0) {
-      prompts.log.error("No data provided. Use --data '{...}' or --set key=value")
-      prompts.outro("Done")
-      return
+      return failed("No data provided. Use --data '{...}' (or a .json path) or --set key=value")
     }
 
     const spinner = prompts.spinner()
@@ -1037,13 +1165,12 @@ const RecordsUpdateCommand = cmd({
         method: "PATCH",
         body: JSON.stringify({ data }),
       })
-      const ok = await handleApiError(res, "Update record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Update record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       spinner.stop("Updated")
       prompts.outro(`iris atlas:datasets records show ${args.id} -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1056,11 +1183,12 @@ const RecordsDeleteCommand = cmd({
     y
       .positional("id", { type: "number", demandOption: true })
       .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("bloq", { type: "number", describe: "pin the delete to one board when the slug is shared across bloqs" })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Record #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     if (!args.force) {
       const confirm = await prompts.confirm({ message: `Delete record #${args.id}?` })
@@ -1070,14 +1198,14 @@ const RecordsDeleteCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
     try {
-      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}`, { method: "DELETE" })
-      const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const q = args.bloq != null ? `?bloq_id=${args.bloq}` : ""
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}${q}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       spinner.stop("Deleted")
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1090,15 +1218,16 @@ const RecordsUpsertCommand = cmd({
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
       .option("external-id", { type: "string", demandOption: true, describe: "external ID for dedup" })
-      .option("data", { type: "string", demandOption: true, describe: "JSON data" })
+      .option("data", { type: "string", demandOption: true, describe: "JSON data or path to .json file" })
       .option("bloq", { type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Upsert: ${args["external-id"]}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
-    let data: any
-    try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+    const parsed = parseDataArg(args.data)
+    if (!parsed.ok) return failed(parsed.error)
+    const data = parsed.value
 
     const body: Record<string, any> = { external_id: args["external-id"], data }
     if (args.bloq != null) body.bloq_id = args.bloq
@@ -1107,14 +1236,13 @@ const RecordsUpsertCommand = cmd({
     spinner.start("Upserting…")
     try {
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/upsert`, { method: "POST", body: JSON.stringify(body) })
-      const ok = await handleApiError(res, "Upsert"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Upsert"); if (!ok) { spinner.stop("Failed", 1); return failed() }
       const result = ((await res.json()) as any)
-      spinner.stop(result?.message ?? "Done")
-      prompts.outro("Done")
+      spinner.stop(result?.message ?? "Upserted")
+      prompts.outro(`iris atlas:datasets records list -s ${args.schema}`)
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      failed(err instanceof Error ? err.message : String(err))
     }
   },
 })
@@ -1385,11 +1513,10 @@ const IMPORT_CHUNK = 500
  * worse than an import that failed.
  */
 function readImportRows(file: string, idField: string): { rows: any[]; error?: string } {
-  const raw = fs.readFileSync(file, "utf8")
-
   if (file.toLowerCase().endsWith(".json")) {
-    let parsed: any
-    try { parsed = JSON.parse(raw) } catch (e: any) { return { rows: [], error: `Invalid JSON: ${e.message}` } }
+    const loaded = loadJsonFile(file)
+    if (!loaded.ok) return { rows: [], error: loaded.error }
+    const parsed = loaded.value
     const list = Array.isArray(parsed) ? parsed : parsed?.records ?? parsed?.data
     if (!Array.isArray(list)) return { rows: [], error: "Expected a JSON array, or {records:[…]}" }
 
@@ -1406,6 +1533,7 @@ function readImportRows(file: string, idField: string): { rows: any[]; error?: s
   }
 
   // Minimal CSV: comma-separated, optional double quotes, no embedded newlines.
+  const raw = fs.readFileSync(file, "utf8")
   const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== "")
   if (lines.length < 2) return { rows: [], error: "CSV needs a header row and at least one data row" }
   const split = (line: string) =>
@@ -1448,10 +1576,10 @@ const ImportCommand = cmd({
     prompts.intro(`◈  Import → ${args.schema}`)
 
     const file = String(args.file)
-    if (!fs.existsSync(file)) { prompts.log.error(`File not found: ${file}`); prompts.outro("Done"); return }
+    if (!fs.existsSync(file)) return failed(`File not found: ${file}`)
 
     const { rows, error } = readImportRows(file, String(args["id-field"]))
-    if (error) { prompts.log.error(error); prompts.outro("Done"); return }
+    if (error) return failed(error)
 
     console.log(`  ${bold("Parsed")}    ${rows.length} row(s) from ${path.basename(file)}`)
     if (args["dry-run"]) {
@@ -1460,7 +1588,7 @@ const ImportCommand = cmd({
       prompts.outro("Done"); return
     }
 
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const token = await requireAuth(); if (!token) return failed()
 
     let created = 0, updated = 0, failedCount = 0, totalActive = 0
     const failures: any[] = []
@@ -1479,7 +1607,7 @@ const ImportCommand = cmd({
       const ok = await handleApiError(res, `Import chunk ${c + 1}/${chunks}`)
       // Stop on a failed chunk rather than pressing on — continuing would report a total that
       // mixes written and unwritten rows.
-      if (!ok) { prompts.outro("Done"); return }
+      if (!ok) return failed()
 
       const d = ((await res.json()) as any)?.data
       created += d?.created ?? 0
@@ -1492,7 +1620,8 @@ const ImportCommand = cmd({
 
     if (args.json) {
       await writeJson({ created, updated, failed_count: failedCount, total_active: totalActive, failed: failures })
-      prompts.outro("Done"); return
+      if (failedCount > 0) process.exitCode = 1
+      return
     }
 
     printDivider()
@@ -1509,6 +1638,7 @@ const ImportCommand = cmd({
       if (failures.length > 10) console.log(`    ${dim(`… ${failures.length - 10} more`)}`)
     }
     printDivider()
+    if (failedCount > 0) return failed(`${failedCount} row(s) were not written`)
     prompts.outro("Done")
   },
 })
@@ -1868,6 +1998,8 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(DatasetHooksGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
+     .command(FeedsGroup).command(DatasetHooksGroup).command(DatasetPublicSubmitGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup)
+     // #189972 — a local copy kept in step: pull merges, push names its base revision
+     .command(DatasetPullCommand).command(DatasetPushCommand).command(DatasetSyncCommand).command(DatasetStatusCommand).command(DatasetResolveCommand).demandCommand(),
   async handler() {},
 })

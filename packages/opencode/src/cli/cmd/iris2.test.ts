@@ -26,7 +26,7 @@ const BEFORE_SWITCH: Release[] = [
   { tag_name: "v1.3.319" },
   { tag_name: "iris2-v1.5.0-beta.10", prerelease: true },
   { tag_name: "v1.3.318" },
-  { tag_name: "v1.4.11" }, // stray April tag: older by recency, so never the stable pick
+  { tag_name: "v1.3.320" }, // cut from main AFTER v1.3.319 was listed: listed lower, higher version
 ]
 const AFTER_SWITCH: Release[] = [{ tag_name: "v1.5.0" }, ...BEFORE_SWITCH]
 
@@ -81,12 +81,18 @@ describe("planUpdate — every scenario", () => {
 
   test("rollback: iris --channel stable installs newest stable even though it is a lower version", () => {
     const p = planUpdate({ slot: "iris", current: "1.5.0-beta.10", requested: "stable", releases: BEFORE_SWITCH })
-    expect(p).toMatchObject({ kind: "install", channel: "stable", tag: "v1.3.319", version: "1.3.319" })
+    expect(p).toMatchObject({ kind: "install", channel: "stable", tag: "v1.3.320", version: "1.3.320" })
     expect(p.kind === "install" && p.note).toContain("switching")
   })
 
-  test("stable picks by recency like iris update does — the stray v1.4.11 tag is not chosen", () => {
-    expect(pickLatest(BEFORE_SWITCH, "stable")).toEqual({ tag: "v1.3.319", version: "1.3.319" })
+  test("stable picks the highest version, not the newest listing", () => {
+    expect(pickLatest(BEFORE_SWITCH, "stable")).toEqual({ tag: "v1.3.320", version: "1.3.320" })
+  })
+
+  test("a v1.3.x cut from main after the switch never outranks the v2 engine", () => {
+    const releases: Release[] = [{ tag_name: "v1.3.360" }, { tag_name: "v1.5.0" }, ...BEFORE_SWITCH]
+    expect(pickLatest(releases, "stable")).toEqual({ tag: "v1.5.0", version: "1.5.0" })
+    expect(planUpdate({ slot: "iris", current: "1.5.0", releases })).toMatchObject({ kind: "current" })
   })
 
   test("after the switch, iris2 says it has graduated and installs nothing", () => {

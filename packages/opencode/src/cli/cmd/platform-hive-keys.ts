@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { dim, bold, success, highlight } from "./iris-api"
-import { hiveFetch } from "./platform-hive-nodes"
+import { nodeKeyFetch, readNodeApiKey } from "./hive-e2e"
 import { generateKeypair, ENVELOPE_VERSION } from "../lib/envelope"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, statSync } from "fs"
 import { join } from "path"
@@ -74,6 +74,15 @@ const HiveKeysRegisterCommand = cmd({
       .option("tenant", { type: "string", describe: "tenant slug this node belongs to" })
       .option("json", { type: "boolean", default: false }),
   async handler(argv) {
+    // A key is registered FOR a node, with that node's own credential. Checked before generating
+    // anything, so a non-node machine doesn't end up holding a secret the server never accepted.
+    if (!readNodeApiKey()) {
+      const message = "this machine is not a Hive node (no node_api_key in ~/.iris/config.json) — run `iris node install` first"
+      if (argv.json) console.log(JSON.stringify({ success: false, error: "not_a_node", message }))
+      else UI.error(message)
+      process.exit(1)
+    }
+
     const existing = loadLocalKeypair()
 
     if (existing && !argv.rotate) {
@@ -99,7 +108,8 @@ const HiveKeysRegisterCommand = cmd({
     const body: Record<string, string> = { public_key: publicKey.toString("base64") }
     if (argv.tenant) body.tenant_slug = argv.tenant as string
 
-    const res = await hiveFetch("/api/v6/hive/keys", {
+    // auth.node: the endpoint takes this machine's node API key, not the user token (#191654).
+    const res = await nodeKeyFetch("/api/v6/hive/keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

@@ -119,7 +119,9 @@ export const UpgradeCommand = {
 
     if (Installation.isIris()) {
       // Verify the update actually took effect
-      const { $ } = await import("bun")
+      // NOT `await import("bun")`: Bun's bundler emitted it as `awaitPromise.resolve(globalThis.Bun)`
+      // (no space), a ReferenceError that fired right after every successful update (#189993).
+      const $ = Bun.$
       const verifyResult = await $`${process.execPath} --version`.nothrow().quiet().text()
       const installedVersion = verifyResult.trim()
       if (installedVersion && installedVersion !== target) {

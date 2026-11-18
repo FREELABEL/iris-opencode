@@ -203,7 +203,6 @@ const WalletCashoutCommand = cmd({
 
 export const PlatformWalletCommand = cmd({
   command: "wallet",
-  aliases: ["payments"],
   describe: "manage agent A2P wallets (balance, fund, transactions)",
   builder: (yargs) =>
     yargs

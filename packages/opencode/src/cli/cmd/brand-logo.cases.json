@@ -1,0 +1,392 @@
+{
+  "_about": "Copy of fl-iris-api tests/Fixtures/brand-logo-cases.json (#192664) \u2014 the same cases the server resolver (PHP + TS) is tested against. Keep the two files identical.",
+  "brands": {
+    "iris": {
+      "brand": {
+        "logo": {
+          "icon": "https://freelabel.net/favicon.svg",
+          "social": "https://freelabel.net/images/iris-logo-social-share-preview.png",
+          "on_dark": "https://freelabel.net/images/iris-logo-white-transparent.png",
+          "primary": "https://freelabel.net/images/iris-logo-white-transparent.png",
+          "on_light": "https://freelabel.net/images/iris-logo-dark-transparent.png"
+        }
+      },
+      "colors": {
+        "background": {
+          "DEFAULT": "#000000"
+        },
+        "primary": {
+          "DEFAULT": "#34d399"
+        }
+      }
+    },
+    "iris_before_327": {
+      "brand": {
+        "logo": {
+          "icon": "https://freelabel.net/favicon.svg",
+          "primary": "https://freelabel.net/images/iris-logo-white-transparent.png"
+        }
+      },
+      "colors": {
+        "background": {
+          "DEFAULT": "#000000"
+        }
+      }
+    },
+    "freelabel": {
+      "brand": {
+        "logo": {
+          "full": "https://freelabel.net/images/logos/freelabel-logo-full-text.png",
+          "icon": "https://freelabel.net/images/fllogo.png",
+          "icon-description": "White FL monogram on red square"
+        }
+      },
+      "colors": {
+        "background": {
+          "DEFAULT": "#0a0a0a"
+        }
+      }
+    },
+    "catodrive": {
+      "branding": {
+        "logoUrl": "https://cdn.example/cato.png",
+        "faviconUrl": "https://cdn.example/cato-icon.png"
+      },
+      "colors": {
+        "background": {
+          "DEFAULT": "#ffffff"
+        }
+      }
+    },
+    "moody_beauty": {
+      "logo": {
+        "alt": "Moody Beauty",
+        "url": "https://cdn.example/moody.png",
+        "height": "48px"
+      },
+      "logos": {
+        "primary": {
+          "alt": "Moody Beauty",
+          "url": "https://cdn.example/moody.png"
+        }
+      },
+      "semantic": {
+        "bg_page": "#F5EFE8"
+      }
+    },
+    "no_ground": {
+      "logo": "https://cdn.example/plain.png"
+    },
+    "empty": {},
+    "junk": {
+      "brand": {
+        "logo": {
+          "primary": "javascript:alert(1)",
+          "on_dark": "//evil.example/x.png"
+        }
+      }
+    }
+  },
+  "variants": [
+    {
+      "brand": "iris",
+      "expect": {
+        "primary": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "on_dark": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "on_light": "https://freelabel.net/images/iris-logo-dark-transparent.png",
+        "icon": "https://freelabel.net/favicon.svg",
+        "social": "https://freelabel.net/images/iris-logo-social-share-preview.png"
+      }
+    },
+    {
+      "brand": "freelabel",
+      "expect": {
+        "primary": "https://freelabel.net/images/logos/freelabel-logo-full-text.png",
+        "on_dark": null,
+        "on_light": null,
+        "icon": "https://freelabel.net/images/fllogo.png",
+        "social": null
+      }
+    },
+    {
+      "brand": "catodrive",
+      "expect": {
+        "primary": "https://cdn.example/cato.png",
+        "on_dark": null,
+        "on_light": null,
+        "icon": "https://cdn.example/cato-icon.png",
+        "social": null
+      }
+    },
+    {
+      "brand": "moody_beauty",
+      "expect": {
+        "primary": "https://cdn.example/moody.png",
+        "on_dark": null,
+        "on_light": null,
+        "icon": null,
+        "social": null
+      }
+    },
+    {
+      "brand": "no_ground",
+      "expect": {
+        "primary": "https://cdn.example/plain.png",
+        "on_dark": null,
+        "on_light": null,
+        "icon": null,
+        "social": null
+      }
+    },
+    {
+      "brand": "empty",
+      "expect": {
+        "primary": null,
+        "on_dark": null,
+        "on_light": null,
+        "icon": null,
+        "social": null
+      }
+    },
+    {
+      "brand": "junk",
+      "expect": {
+        "primary": null,
+        "on_dark": null,
+        "on_light": null,
+        "icon": null,
+        "social": null
+      }
+    }
+  ],
+  "logoFor": [
+    {
+      "brand": "iris",
+      "background": "#ffffff",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-dark-transparent.png",
+        "variant": "on_light",
+        "tile": null,
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": "light",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-dark-transparent.png",
+        "variant": "on_light",
+        "tile": null,
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": "#0a0a0a",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "on_dark",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": "dark",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "on_dark",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": "#34d399",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-dark-transparent.png",
+        "variant": "on_light",
+        "tile": null,
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": "#4f46e5",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "on_dark",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "iris",
+      "background": null,
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "on_dark",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "iris_before_327",
+      "background": "#ffffff",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "primary",
+        "tile": "#000000",
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "iris_before_327",
+      "background": "#000000",
+      "expect": {
+        "url": "https://freelabel.net/images/iris-logo-white-transparent.png",
+        "variant": "primary",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "freelabel",
+      "background": "#ffffff",
+      "expect": {
+        "url": "https://freelabel.net/images/logos/freelabel-logo-full-text.png",
+        "variant": "primary",
+        "tile": "#0a0a0a",
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "freelabel",
+      "background": "#0a0a0a",
+      "expect": {
+        "url": "https://freelabel.net/images/logos/freelabel-logo-full-text.png",
+        "variant": "primary",
+        "tile": null,
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "catodrive",
+      "background": "#ffffff",
+      "expect": {
+        "url": "https://cdn.example/cato.png",
+        "variant": "primary",
+        "tile": null,
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "catodrive",
+      "background": "#0a0a0a",
+      "expect": {
+        "url": "https://cdn.example/cato.png",
+        "variant": "primary",
+        "tile": "#ffffff",
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "moody_beauty",
+      "background": "#111111",
+      "expect": {
+        "url": "https://cdn.example/moody.png",
+        "variant": "primary",
+        "tile": "#F5EFE8",
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "no_ground",
+      "background": "#ffffff",
+      "expect": {
+        "url": "https://cdn.example/plain.png",
+        "variant": "primary",
+        "tile": "#0a0a0a",
+        "ground": "light"
+      }
+    },
+    {
+      "brand": "no_ground",
+      "background": "#000000",
+      "expect": {
+        "url": "https://cdn.example/plain.png",
+        "variant": "primary",
+        "tile": "#ffffff",
+        "ground": "dark"
+      }
+    },
+    {
+      "brand": "empty",
+      "background": "#ffffff",
+      "expect": null
+    },
+    {
+      "brand": "junk",
+      "background": "#000000",
+      "expect": null
+    }
+  ],
+  "isLight": [
+    [
+      "#ffffff",
+      true
+    ],
+    [
+      "#fff",
+      true
+    ],
+    [
+      "#000000",
+      false
+    ],
+    [
+      "#0a0a0a",
+      false
+    ],
+    [
+      "#F5EFE8",
+      true
+    ],
+    [
+      "#34d399",
+      true
+    ],
+    [
+      "#6366f1",
+      true
+    ],
+    [
+      "#4f46e5",
+      false
+    ],
+    [
+      "#FF192C",
+      true
+    ],
+    [
+      "light",
+      true
+    ],
+    [
+      "dark",
+      false
+    ],
+    [
+      "#ffffff80",
+      true
+    ],
+    [
+      "not-a-colour",
+      null
+    ],
+    [
+      null,
+      null
+    ]
+  ]
+}

@@ -36,7 +36,7 @@ interface ParsedStep {
 
 function parse(md: string): ParsedStep[] {
   const out: ParsedStep[] = []
-  const heads = [...md.matchAll(/^### step:([\w-]+) +(.+)$/gm)]
+  const heads = [...md.matchAll(/^### step:([\w-]+)(?:[ \t]+(.*?))?[ \t\r]*$/gm)]
   for (let i = 0; i < heads.length; i++) {
     const start = heads[i].index! + heads[i][0].length
     const end = i + 1 < heads.length ? heads[i + 1].index! : md.length
