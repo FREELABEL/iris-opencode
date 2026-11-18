@@ -1,5 +1,5 @@
 import { SessionWebTab } from "@/components/session/session-web-tab"
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
@@ -177,9 +177,24 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
 export function IrisPanel(props: { onClose?: () => void }) {
   const active = useIrisActiveSurface()
   const request = useRequestIrisSurface()
+  let strip: HTMLDivElement | undefined
+  // A tab opened from the + menu may be past the strip's edge: bring it into the strip's view.
+  createEffect(
+    on(active, () =>
+      requestAnimationFrame(() =>
+        strip?.querySelector<HTMLElement>("[aria-selected='true']")?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+      ),
+    ),
+  )
   return (
     <div class="flex h-full min-h-0 flex-col">
-      <div class="flex h-10 shrink-0 items-center gap-1 border-b border-v2-border-border-base px-2" role="tablist">
+      <div class="flex h-10 shrink-0 items-center gap-1 border-b border-v2-border-border-base px-2">
+        {/*
+         * The tabs scroll in their OWN strip (2026-11-18). They used to overflow the panel, so
+         * focus landing on "+" (the menu hands it back on close) scrolled the whole panel sideways
+         * and the body slid under Home — MCP's server names were off-screen to the left.
+         */}
+        <div ref={strip} class="iris-homestrip flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist">
         <For each={irisStripTabs(active())}>
           {(tab) => (
             <button
@@ -194,6 +209,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
             </button>
           )}
         </For>
+        </div>
         <MenuV2 gutter={6} modal={false} placement="bottom-end">
           <MenuV2.Trigger
             as={IconButtonV2}
@@ -208,7 +224,6 @@ export function IrisPanel(props: { onClose?: () => void }) {
             </MenuV2.Content>
           </MenuV2.Portal>
         </MenuV2>
-        <div class="ml-auto" />
         <IrisScopeChip />
         <Show when={props.onClose}>
           <IconButton

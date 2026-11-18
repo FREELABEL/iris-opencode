@@ -4543,3 +4543,15 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   font-size: 12.5px;
   color: var(--v2-text-text-muted, var(--text-weak));
 }
+
+/* Home's tab strip scrolls on its own; no bar, the tabs are the affordance. */
+.iris-homestrip {
+  scrollbar-width: none;
+}
+.iris-homestrip::-webkit-scrollbar {
+  display: none;
+}
+.iris-homestrip > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
