@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Scope, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -21,6 +21,8 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { BackgroundJob } from "@/background/job"
+import type { TaskPromptOps } from "./task"
 
 export { Parameters } from "./shell/prompt"
 
@@ -335,6 +337,9 @@ const parser = lazy(async () => {
   return { bash, ps }
 })
 
+/** A background command is stopped after this long unless it asked for its own timeout (#188641). */
+const BACKGROUND_TIMEOUT_MS = 6 * 60 * 60 * 1000
+
 export const ShellTool = Tool.define(
   ShellID.ToolID,
   Effect.gen(function* () {
@@ -345,6 +350,8 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
+    const background = yield* BackgroundJob.Service
+    const scope = yield* Scope.Scope
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
       const lines = yield* spawner
@@ -432,6 +439,8 @@ export const ShellTool = Tool.define(
         cwd: string
         env: NodeJS.ProcessEnv
         timeout: number
+        /** Write every chunk here from the first byte (a background command's log). */
+        log?: string
       },
       ctx: Tool.Context,
     ) {
@@ -441,8 +450,10 @@ export const ShellTool = Tool.define(
       let last = ""
       const list: Chunk[] = []
       let used = 0
-      let file = ""
-      let sink: ReturnType<typeof createWriteStream> | undefined
+      let file = input.log ?? ""
+      let sink: ReturnType<typeof createWriteStream> | undefined = input.log
+        ? createWriteStream(input.log, { flags: "a" })
+        : undefined
       let cut = false
       let expired = false
       let aborted = false
@@ -594,6 +605,67 @@ export const ShellTool = Tool.define(
       }
     })
 
+    /**
+     * A command that outlives the turn (#188641). Agents kept hitting the 2-minute timeout on long
+     * jobs, shrank the batches, retried, and finally wrote a Hive script to get round it, while the
+     * person watched "Thinking". Same model as a background subagent (task.ts): a BackgroundJob,
+     * and a message into this chat when it ends. Permission was already asked, exactly as for a
+     * foreground command.
+     */
+    const startBackground = Effect.fn("ShellTool.background")(function* (
+      input: { shell: string; command: string; cwd: string; env: NodeJS.ProcessEnv; timeout: number },
+      ctx: Tool.Context,
+    ) {
+      const log = yield* trunc.write("")
+      // The tool call is over once this returns: its part must not be rewritten by the job, and the
+      // turn ending is not a reason to kill the command.
+      const quiet: Tool.Context = { ...ctx, metadata: () => Effect.void, abort: new AbortController().signal }
+      const info = yield* background.start({
+        type: "shell",
+        title: input.command,
+        metadata: { sessionID: ctx.sessionID, log },
+        run: run({ ...input, log }, quiet).pipe(
+          Effect.map((r) => `exit code: ${r.metadata.exit ?? "none"}\nlog: ${log}\n\n${r.output}`),
+        ),
+      })
+      const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
+      if (ops) {
+        yield* background.wait({ id: info.id }).pipe(
+          Effect.flatMap((result) => {
+            const status = result.info?.status
+            if (status !== "completed" && status !== "error") return Effect.void
+            return ops.prompt({
+              sessionID: ctx.sessionID,
+              agent: ctx.agent,
+              parts: [
+                {
+                  type: "text",
+                  synthetic: true,
+                  text: [
+                    `<background_shell id="${info.id}" state="${status}">`,
+                    `<command>${input.command}</command>`,
+                    status === "completed" ? (result.info?.output ?? "") : `failed: ${result.info?.error ?? ""}\nlog: ${log}`,
+                    "</background_shell>",
+                  ].join("\n"),
+                },
+              ],
+            })
+          }),
+          Effect.ignore,
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+      }
+      return {
+        title: input.command,
+        metadata: { output: "", exit: null, truncated: false, background: true, jobId: info.id, outputPath: log },
+        output: [
+          `Running in the background (job ${info.id}).`,
+          `Output is being written to: ${log}`,
+          "You will be told in this chat when it finishes. Do not sleep or poll; read the log only when you need to see progress.",
+        ].join("\n"),
+      }
+    })
+
     return () =>
       Effect.gen(function* () {
         const cfg = yield* config.get()
@@ -627,6 +699,19 @@ export const ShellTool = Tool.define(
                   yield* ask(ctx, scan, params)
                 }),
               )
+
+              if (params.background) {
+                return yield* startBackground(
+                  {
+                    shell,
+                    command: params.command,
+                    cwd,
+                    env: yield* shellEnv(ctx, cwd),
+                    timeout: params.timeout ?? BACKGROUND_TIMEOUT_MS,
+                  },
+                  ctx,
+                )
+              }
 
               return yield* run(
                 {
