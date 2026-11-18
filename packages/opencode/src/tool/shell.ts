@@ -623,7 +623,9 @@ export const ShellTool = Tool.define(
       const info = yield* background.start({
         type: "shell",
         title: input.command,
-        metadata: { sessionID: ctx.sessionID, log },
+        // `sessionId` is the key the chat's Stop looks for (session cancelBackgroundJobs, as for a
+        // background subagent): with `sessionID` here, Stop left the command running.
+        metadata: { sessionId: ctx.sessionID, log },
         run: run({ ...input, log }, quiet).pipe(
           Effect.map((r) => `exit code: ${r.metadata.exit ?? "none"}\nlog: ${log}\n\n${r.output}`),
         ),
@@ -633,10 +635,13 @@ export const ShellTool = Tool.define(
         yield* background.wait({ id: info.id }).pipe(
           Effect.flatMap((result) => {
             const status = result.info?.status
-            if (status !== "completed" && status !== "error") return Effect.void
+            if (status !== "completed" && status !== "error" && status !== "cancelled") return Effect.void
             return ops.prompt({
               sessionID: ctx.sessionID,
               agent: ctx.agent,
+              // Stopped by the person: say so in the chat (the card reads it to drop its Stop
+              // button) but do not start a turn about it — they already know, they pressed it.
+              ...(status === "cancelled" ? { noReply: true } : {}),
               parts: [
                 {
                   type: "text",
@@ -644,7 +649,11 @@ export const ShellTool = Tool.define(
                   text: [
                     `<background_shell id="${info.id}" state="${status}">`,
                     `<command>${input.command}</command>`,
-                    status === "completed" ? (result.info?.output ?? "") : `failed: ${result.info?.error ?? ""}\nlog: ${log}`,
+                    status === "completed"
+                      ? (result.info?.output ?? "")
+                      : status === "cancelled"
+                        ? `stopped before it finished\nlog: ${log}`
+                        : `failed: ${result.info?.error ?? ""}\nlog: ${log}`,
                     "</background_shell>",
                   ].join("\n"),
                 },

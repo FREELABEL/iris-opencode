@@ -1749,3 +1749,30 @@ body:not([data-new-layout]) {
   line-height: 1.4;
   color: var(--v2-text-text-muted);
 }
+
+/* A background shell command (#188641): its state, and Stop while it runs. */
+[data-slot="bash-background"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-weak);
+}
+[data-slot="bash-background"][data-state="error"] {
+  color: var(--text-danger, var(--text-weak));
+}
+[data-slot="bash-background-stop"] {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-weak-base);
+  background: transparent;
+  color: var(--text-base);
+  font-size: 12px;
+  cursor: pointer;
+}
+[data-slot="bash-background-stop"]:hover {
+  background: var(--surface-raised-base-hover, var(--background-element));
+}

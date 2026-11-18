@@ -78,6 +78,12 @@ export function DirectoryDataProvider(
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
           onReportCommand={(report) => dialog.show(() => <DialogReportCommand report={report} doFetch={localFetch} />)}
+          onStopBackground={(jobID) =>
+            localFetch(
+              `/experimental/background/${encodeURIComponent(jobID)}/cancel?directory=${encodeURIComponent(directory)}`,
+              { method: "POST" },
+            ).then(async (res) => res.ok && (await res.json()) === true)
+          }
         >
           <LocalProvider>{props.children}</LocalProvider>
         </DataProvider>

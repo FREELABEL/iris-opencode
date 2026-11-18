@@ -171,6 +171,17 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return promoted.some((job) => job !== undefined)
     })
 
+    // The Stop on a background command's card (#188641). Shell jobs only: a background subagent
+    // is a session, and stopping a session is the session's own route.
+    const backgroundCancel = Effect.fn("ExperimentalHttpApi.backgroundCancel")(function* (ctx: {
+      params: { jobID: string }
+    }) {
+      const job = yield* background.get(ctx.params.jobID)
+      if (!job || job.type !== "shell" || job.status !== "running") return false
+      const after = yield* background.cancel(job.id)
+      return after?.status === "cancelled"
+    })
+
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
       return yield* mcp.resources()
     })
@@ -188,6 +199,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeReset", worktreeReset)
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
+      .handle("backgroundCancel", backgroundCancel)
       .handle("resource", resource)
   }),
 )
