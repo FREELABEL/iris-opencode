@@ -89,9 +89,22 @@ export function IrisScopeChip() {
 export function IrisPinItems(props: { onOpen: (id: string) => void }) {
   // The list passed fifteen products (2026-11-18): typing narrows it, Enter opens the first match.
   const [query, setQuery] = createSignal("")
+  let box: HTMLDivElement | undefined
   const matches = createMemo(() => filterSurfaceChoices(IRIS_SURFACE_CHOICES, query()))
   const pick = (id: string) => {
     if (toggleIrisPin(id)) props.onOpen(id)
+  }
+  // Enter from the search acts as a click on the first match, so the menu closes the way it does
+  // for a click. A tab already in the strip is opened, not unpinned: you searched to GO to it.
+  const enter = () => {
+    const first = matches()[0]
+    if (!first) return
+    if (irisPinned().includes(first.id as any)) {
+      props.onOpen(first.id)
+      box?.closest<HTMLElement>("[role='menu']")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+      return
+    }
+    box?.parentElement?.querySelector<HTMLElement>(`[data-pin-id="${first.id}"]`)?.click()
   }
   /*
    * Typing goes to the search wherever focus is. The menu keeps focus on its items (it took it back
@@ -110,14 +123,11 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
       e.stopPropagation()
       setQuery(query().slice(0, -1))
     } else if (e.key === "Enter" && query()) {
-      const first = matches()[0]
-      if (!first) return
       e.preventDefault()
       e.stopPropagation()
-      pick(first.id)
+      enter()
     }
   }
-  let box: HTMLDivElement | undefined
   onMount(() => {
     const menu = box?.closest<HTMLElement>("[role='menu']") ?? box?.parentElement
     menu?.addEventListener("keydown", onKey, true)
@@ -138,8 +148,7 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
             e.stopPropagation()
             if (e.key === "Enter") {
               e.preventDefault()
-              const first = matches()[0]
-              if (first) pick(first.id)
+              enter()
             }
           }}
         />
@@ -147,7 +156,7 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
       <Show when={matches().length > 0} fallback={<div class="iris-pinsearch__none">No tab matches “{query()}”</div>}>
         <For each={matches()}>
           {(surface) => (
-            <MenuV2.Item onSelect={() => pick(surface.id)}>
+            <MenuV2.Item data-pin-id={surface.id} onSelect={() => pick(surface.id)}>
               <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
               <span class="inline-flex items-center gap-2">
                 <IrisProductIcon id={surface.id} />
