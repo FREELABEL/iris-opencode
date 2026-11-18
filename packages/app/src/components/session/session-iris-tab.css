@@ -2217,6 +2217,20 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-artifacts__toolbar .iris-publish { display: contents; }
 .iris-artifacts__toolbar .iris-publish__bar { flex: 1; justify-content: flex-end; min-width: 0; }
 .iris-artifacts__toolbar .iris-publish__spacer { display: none; }
+/* Narrow windows (#193844): one line, never three, the Genesis Pages toolbar's way. The
+   controls never shrink; the author/rev line hides first, then the title truncates. */
+.iris-artifacts__toolbar { container-type: inline-size; container-name: iris-art-tb; }
+.iris-artifacts__toolbar .iris-publish__bar { flex-wrap: nowrap; gap: 4px; flex: 1 1 auto; min-width: min-content; }
+.iris-artifacts__toolbar .iris-publish__addr { flex: 0 1 auto; gap: 2px; }
+.iris-artifacts__toolbar .iris-publish__addr > * { flex: none; }
+.iris-artifacts__toolbar { flex-wrap: nowrap; }
+.iris-artifacts__tbtitle { min-width: 0; flex: 0 1 auto; }
+.iris-artifacts__toolbar .iris-card__linkbtn { white-space: nowrap; flex: none; }
+.iris-artifacts__tbmeta { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+@container iris-art-tb (max-width: 820px) {
+  .iris-artifacts__tbmeta { display: none; }
+  .iris-publish__behind { display: none; }
+}
 .iris-artifacts__toolbar .iris-publish__form,
 .iris-artifacts__toolbar .iris-publish__note { flex-basis: 100%; }
 
