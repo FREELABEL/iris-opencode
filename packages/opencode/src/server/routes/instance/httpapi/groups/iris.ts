@@ -1910,6 +1910,66 @@ const AgreementSummary = Schema.Struct({
   expiringSoon: Schema.Finite,
   revoked: Schema.Finite,
 }).annotate({ identifier: "IrisAgreementSummary" })
+/*
+ * Drives (#193705). EVERY FIELD THE PANEL READS IS DECLARED — src/iris/drives.ts builds exactly these
+ * names and test/server/httpapi-iris-drives.test.ts proves each survives the route (PR #459).
+ */
+const DriveNum = Schema.NullOr(Schema.Finite)
+const DriveRow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  kind: NullStr,
+  node: NullStr,
+  encrypted: Schema.Boolean,
+  sizeGb: DriveNum,
+  usedGb: DriveNum,
+  freeGb: DriveNum,
+  files: DriveNum,
+  folders: DriveNum,
+  sensitiveFiles: DriveNum,
+  lastScanned: described(NullStr, "Null = catalogued but never scanned."),
+  lastSeenOn: NullStr,
+  lastSeenAt: NullStr,
+  lastBackupAt: NullStr,
+}).annotate({ identifier: "IrisDrive" })
+const DriveFolderRow = Schema.Struct({
+  id: Schema.String,
+  driveId: Schema.String,
+  folder: Schema.String,
+  mainKind: NullStr,
+  kinds: NullStr,
+  files: DriveNum,
+  sizeGb: DriveNum,
+  newest: NullStr,
+  sensitiveFiles: DriveNum,
+}).annotate({ identifier: "IrisDriveFolder" })
+const DriveFindingRow = Schema.Struct({
+  id: Schema.String,
+  driveId: Schema.String,
+  path: Schema.String,
+  kind: NullStr,
+  sizeKb: DriveNum,
+  status: described(NullStr, "exposed | contained | moved"),
+  found: NullStr,
+  driveEncrypted: Schema.Boolean,
+}).annotate({ identifier: "IrisDriveFinding" })
+const DrivesResponse = Schema.Struct({
+  ...Measured,
+  state: described(
+    Schema.Literals(["ok", "signed_out", "no_datasets", "unreachable"]),
+    "Why there is nothing, when there is nothing. no_datasets = this account never ran `iris drives scan`.",
+  ),
+  drives: Schema.Array(DriveRow),
+  folders: Schema.Array(DriveFolderRow),
+}).annotate({ identifier: "IrisDrivesResponse" })
+const DriveFindingsResponse = Schema.Struct({
+  ...Measured,
+  findings: Schema.Array(DriveFindingRow),
+  page: Schema.Finite,
+  total: described(Schema.NullOr(Schema.Finite), "NULL means not measured. Never render it as zero."),
+  hasMore: Schema.Boolean,
+}).annotate({ identifier: "IrisDriveFindingsResponse" })
+
 const AgreementsResponse = Schema.Struct({
   ...Measured,
   summary: AgreementSummary,
@@ -2020,6 +2080,8 @@ export const IrisPaths = {
   outreachCampaigns: `${root}/outreach/campaigns`,
   outreachAudience: `${root}/outreach/campaigns/:campaignID/audience`,
   outreachStrategies: `${root}/outreach/strategies`,
+  drives: `${root}/drives`,
+  driveFindings: `${root}/drives/findings`,
   agreements: `${root}/agreements`,
   agreement: `${root}/agreements/:agreementID`,
   agreementIssue: `${root}/agreements/:agreementID/issue`,
@@ -4341,6 +4403,22 @@ export const IrisApi = HttpApi.make("iris").add(
           description: "Approving records a decision and sends nothing. There is deliberately no send action here: a message only leaves through a schedule.",
         }),
       ),
+      HttpApiEndpoint.get("drives", IrisPaths.drives, {
+        success: described(DrivesResponse, "Catalogued drives and their project folders (iris drives list)"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.drives",
+          summary: "List catalogued drives (iris drives list)",
+          description: "#193705. Read from Atlas only — a path is valid only where its drive is plugged in. Findings are NOT included; ask /iris/drives/findings per drive.",
+        }),
+      ),
+      HttpApiEndpoint.get("driveFindings", IrisPaths.driveFindings, {
+        query: Schema.Struct({
+          drive: described(Schema.String, "The drive's id (external_id), e.g. fs:<uuid> or dir:<node>:<path>."),
+          page: Schema.optional(Schema.NumberFromString),
+        }),
+        success: described(DriveFindingsResponse, "One page of one drive's sensitive-file findings"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.driveFindings", summary: "One drive's findings, a page at a time" })),
       HttpApiEndpoint.get("agreements", IrisPaths.agreements, {
         query: Schema.Struct({
           case: described(Schema.optional(Schema.String), "A case id (the lead id) or synced case ref. Absent = every case."),

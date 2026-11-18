@@ -88,6 +88,13 @@ const SCALE: Shape[] = [
   ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
 ]
 
+// lucide "hard-drive" — Drives (#193705).
+const HARD_DRIVE: Shape[] = [
+  ["line", { x1: "22", x2: "2", y1: "12", y2: "12" }],
+  ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
+  ["line", { x1: "6", x2: "6.01", y1: "16", y2: "16" }],
+  ["line", { x1: "10", x2: "10.01", y1: "16", y2: "16" }],
+]
 // lucide "inbox" — Inbox (#192688).
 const INBOX: Shape[] = [
   ["path", { d: "M22 12h-6l-2 3h-4l-2-3H2" }],
@@ -146,6 +153,7 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
   lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
+  drives: { shapes: HARD_DRIVE, color: "#94a3b8" }, // slate-400 — metal; a colour no other tab uses
 }
 
 export function IrisProductIcon(props: { id: string; size?: number; set?: "product" | "make"; stroke?: number }) {
