@@ -51,6 +51,52 @@ fn kill_sidecar(app: AppHandle) {
     stop_engine_child(&app);
 }
 
+/// Before the Windows updater runs the installer: stop EVERY iris-cli.exe this user runs, and
+/// return only once they are gone (#193840).
+///
+/// `kill_sidecar` stops the engine THIS window started, and only signals it. An engine left by
+/// an earlier launch, or respawned in the gap, kept iris-cli.exe locked, and the installer
+/// then failed with "Error opening file for writing … iris-cli.exe" (2026-11-18, a client on
+/// a call). The installer kills too, but anything it cannot kill ends the update, so the app,
+/// which can, does it first. Async so the window is not frozen while it waits.
+#[tauri::command]
+async fn prepare_for_update(app: AppHandle) -> Result<(), String> {
+    kill_sidecar(app);
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(|| stop_all_cli_processes(Duration::from_secs(10)))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    Ok(())
+}
+
+/// Kill every iris-cli.exe and wait until none is listed, or say which are left.
+#[cfg(windows)]
+fn stop_all_cli_processes(limit: Duration) -> Result<(), String> {
+    use std::process::Command;
+    let listed = || -> bool {
+        cli::no_window(Command::new("tasklist").args(["/FI", "IMAGENAME eq iris-cli.exe", "/NH"]))
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains("iris-cli.exe"))
+            // If tasklist itself cannot run, do not block the update on it; the installer checks
+            // the file directly anyway.
+            .unwrap_or(false)
+    };
+    let start = Instant::now();
+    loop {
+        if !listed() {
+            return Ok(());
+        }
+        let _ = cli::no_window(Command::new("taskkill").args(["/F", "/T", "/IM", "iris-cli.exe"])).output();
+        if start.elapsed() >= limit {
+            return Err("iris-cli.exe is still running after 10 s".into());
+        }
+        // A killed process releases its file a moment after it is signalled, not at once.
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
 /// Kill the engine this app started, if any, without touching supervision. The supervisor uses
 /// this before a respawn; `kill_sidecar` uses it after pausing.
 fn stop_engine_child(app: &AppHandle) {
@@ -161,6 +207,7 @@ fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         browser::browser_cookie_domains,
             browser::browser_eval,
             kill_sidecar,
+            prepare_for_update,
             engine_credentials,
             log_renderer,
             copy_logs_to_clipboard,
