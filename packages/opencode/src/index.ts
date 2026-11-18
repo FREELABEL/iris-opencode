@@ -4,7 +4,7 @@ import { argvShape } from "./util/argv-shape"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { Log } from "./util/log"
-import { AuthCommand } from "./cli/cmd/auth"
+import { AuthCommand, AuthLoginCommand } from "./cli/cmd/auth"
 import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
@@ -403,6 +403,8 @@ const cli = yargs(rawArgs)
   .command(reg(GenerateCommand))
   .command(reg(DebugCommand))
   .command(reg(AuthCommand))
+  // Top-level alias for `iris auth login` — same command module, so behavior can't drift.
+  .command(reg(AuthLoginCommand))
   .command(reg(AgentCommand))
   .command(reg(UpgradeCommand))
   .command(reg(UninstallCommand))
