@@ -303,7 +303,13 @@ export function findMalformedStepHeadings(markdownBody: string, lineOffset = 0):
  * Body wins when both are present: prose under the heading is the authored prompt, and the
  * fence is its payload.
  */
-export function aiPromptFrom(body?: string | null, code?: string | null): string {
+export function aiPromptFrom(body?: string | null, code?: string | null, instructions?: string | null): string {
+  // #193829: prose AND a fence means the fence is part of the prompt — usually its payload (the
+  // client's words, a template, the data to work on). `body` is the prose with EVERY fence
+  // stripped and `code` is only the first TAGGED fence, so "body wins" sent the instructions
+  // without the thing they were about. Send the step as written instead: prose and fences in
+  // order, yaml header removed (`instructions`). Fence-only and prose-only steps are unchanged.
+  if (body?.trim() && instructions?.trim() && instructions.includes(FENCE)) return instructions
   return body?.trim() ? body : (code ?? "")
 }
 
@@ -2148,7 +2154,7 @@ export async function executeSkill(
           // test` had just called valid, which sends the author to debug the model instead
           // of their fence. Body wins when both are present: prose is the authored prompt
           // and the fence is then its payload.
-          const aiPrompt = aiPromptFrom(interpolatedBody, interpolatedCode)
+          const aiPrompt = aiPromptFrom(interpolatedBody, interpolatedCode, interpolatedInstructions)
           lastResult = await executeAi(aiPrompt, aiModel, context)
           break
         }
@@ -2545,7 +2551,7 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
       issues.push({ level: "error", message: "schedule step requires cron expression", stepId: step.id })
     }
 
-    if (step.mode === "ai" && !aiPromptFrom(step.body, step.code).trim()) {
+    if (step.mode === "ai" && !aiPromptFrom(step.body, step.code, step.instructions).trim()) {
       issues.push({ level: "error", message: "AI step has no prompt body", stepId: step.id })
     }
 
