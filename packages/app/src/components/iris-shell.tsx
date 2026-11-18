@@ -172,6 +172,7 @@ export function IrisShell(props: ParentProps) {
                 state={panelOpen() ? "pressed" : undefined}
                 onClick={() => setPanelOpen(!panelOpen())}
                 aria-label="Toggle the IRIS panel"
+                data-callout="iris-panel"
                 aria-expanded={panelOpen()}
                 title="IRIS panel"
                 icon={<IconV2 name="sidebar-right" />}

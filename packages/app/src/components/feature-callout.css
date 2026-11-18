@@ -1,0 +1,105 @@
+/* "New" callout (#193866). Solid accent card with an arrow pointing at its control.
+   Colours come from theme tokens, so light and dark follow the app. */
+.iris-callout {
+  --iris-callout-bg: var(--border-interactive-focus, #034cff);
+  --iris-callout-fg: var(--text-on-interactive-base, #fcfcfc);
+  position: fixed;
+  z-index: 60;
+  width: min(340px, calc(100vw - 24px));
+  padding: 14px 14px 14px 16px;
+  border-radius: 14px;
+  background: var(--iris-callout-bg);
+  color: var(--iris-callout-fg);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.25));
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+.iris-callout[data-ready] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.iris-callout[data-side="above"] {
+  transform: translateY(4px);
+}
+.iris-callout[data-side="above"][data-ready] {
+  transform: none;
+}
+
+/* The arrow: a rotated square on the edge facing the control. */
+.iris-callout::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--iris-callout-arrow, 24px) - 7px);
+  width: 14px;
+  height: 14px;
+  background: var(--iris-callout-bg);
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+.iris-callout[data-side="below"]::before {
+  top: -6px;
+}
+.iris-callout[data-side="above"]::before {
+  bottom: -6px;
+}
+
+.iris-callout-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.iris-callout-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.iris-callout-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: color-mix(in srgb, var(--iris-callout-fg) 88%, transparent);
+  color: var(--iris-callout-bg);
+}
+.iris-callout-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  border-radius: 6px;
+  color: inherit;
+  opacity: 0.85;
+}
+.iris-callout-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--iris-callout-fg) 16%, transparent);
+}
+.iris-callout-close:focus-visible {
+  outline: 2px solid var(--iris-callout-fg);
+  outline-offset: 1px;
+}
+.iris-callout-body {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.94;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iris-callout,
+  .iris-callout[data-side="above"] {
+    transition: none;
+    transform: none;
+  }
+}
