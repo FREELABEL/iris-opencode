@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, FL_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
+import { irisFetch, FL_API, requireAuth, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { aiGenerateCarouselProps, fetchBrandTokens, resolveRemotionDir } from "./platform-remotion"
 import { Auth } from "../../auth"
 import { spawnSync } from "child_process"
@@ -131,8 +131,13 @@ async function uploadFileToCDN(filePath: string, bloqId?: number): Promise<{ cdn
   form.append("type", "digital_product")
   form.append("title", basename(filePath))
   if (bloqId) form.append("bloq_id", String(bloqId))
-  const userId = process.env.IRIS_USER_ID ?? "193"
-  form.append("user_id", userId)
+  // The signed-in account, never a fixed fallback (#193865).
+  const userId = await resolveUserId()
+  if (!userId) {
+    prompts.log.error("Could not tell which account you are signed in as. Run `iris login` and try again.")
+    return null
+  }
+  form.append("user_id", String(userId))
 
   const token = await resolveUploadToken()
   const headers: Record<string, string> = { Accept: "application/json" }
