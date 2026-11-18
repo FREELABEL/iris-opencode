@@ -21,6 +21,7 @@ import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
+import { BackgroundJob } from "@/background/job"
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
@@ -32,6 +33,7 @@ const shellLayer = Layer.mergeAll(
       Config.node,
       Agent.node,
       RuntimeFlags.node,
+      BackgroundJob.node,
     ]),
   ),
   testInstanceStoreLayer,
@@ -1196,4 +1198,66 @@ describe("tool.shell truncation", () => {
       }),
     ),
   )
+
+  if (process.platform !== "win32") {
+    // #188641: a long command runs in the background, returns at once, and reports into its chat.
+    const backgroundCtx = (said: string[]) => ({
+      ...ctx,
+      extra: {
+        promptOps: {
+          cancel: () => Effect.void,
+          resolvePromptParts: () => Effect.succeed([]),
+          prompt: (input: { parts: Array<{ text?: string }> }) =>
+            Effect.sync(() => {
+              said.push(input.parts.map((p) => p.text ?? "").join(""))
+              return {} as never
+            }),
+        },
+      },
+    })
+
+    it.live(
+      "background: returns at once with a log, finishes later and says so in the chat",
+      () =>
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const said: string[] = []
+            const started = Date.now()
+            const result = yield* run({ command: `sleep 1 && echo bg_done_188641`, background: true }, backgroundCtx(said))
+            expect(Date.now() - started).toBeLessThan(900)
+            expect(result.metadata.background).toBe(true)
+            const log = String(result.metadata.outputPath)
+            expect(result.output).toContain(log)
+
+            const jobs = yield* BackgroundJob.Service
+            const done = yield* jobs.wait({ id: String(result.metadata.jobId), timeout: 10_000 })
+            expect(done.info?.status).toBe("completed")
+            expect(done.info?.output).toContain("bg_done_188641")
+            expect(yield* Effect.promise(() => Bun.file(log).text())).toContain("bg_done_188641")
+
+            for (let i = 0; i < 40 && said.length === 0; i++) yield* Effect.sleep("50 millis")
+            expect(said[0]).toContain('state="completed"')
+            expect(said[0]).toContain("bg_done_188641")
+          }),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "background: the foreground default timeout does not stop it",
+      () =>
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({ command: `sleep 1 && echo still_here`, background: true }, backgroundCtx([]))
+            const jobs = yield* BackgroundJob.Service
+            const done = yield* jobs.wait({ id: String(result.metadata.jobId), timeout: 10_000 })
+            expect(done.info?.output).toContain("still_here")
+            expect(done.info?.output).not.toContain("exceeding timeout")
+          }),
+        ).pipe(Effect.provide(RuntimeFlags.layer({ bashDefaultTimeoutMs: 500 }))),
+      15_000,
+    )
+  }
 })
