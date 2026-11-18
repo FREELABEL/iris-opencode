@@ -91,20 +91,23 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
   const [query, setQuery] = createSignal("")
   let box: HTMLDivElement | undefined
   const matches = createMemo(() => filterSurfaceChoices(IRIS_SURFACE_CHOICES, query()))
+  let searched = false
   const pick = (id: string) => {
+    // From the search, a tab already in the strip is opened, not unpinned: you searched to GO to it.
+    if (searched && irisPinned().includes(id as any)) return props.onOpen(id)
     if (toggleIrisPin(id)) props.onOpen(id)
   }
-  // Enter from the search acts as a click on the first match, so the menu closes the way it does
-  // for a click. A tab already in the strip is opened, not unpinned: you searched to GO to it.
+  // Enter from the search selects the first match the way the menu's own Enter does — the item
+  // gets the key — so the menu closes exactly as it does for a pick. (A click() does not select:
+  // the menu acts on pointer-up and keys.)
   const enter = () => {
     const first = matches()[0]
-    if (!first) return
-    if (irisPinned().includes(first.id as any)) {
-      props.onOpen(first.id)
-      box?.closest<HTMLElement>("[role='menu']")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
-      return
-    }
-    box?.parentElement?.querySelector<HTMLElement>(`[data-pin-id="${first.id}"]`)?.click()
+    const item = first && box?.parentElement?.querySelector<HTMLElement>(`[data-pin-id="${first.id}"]`)
+    if (!item) return
+    searched = true
+    item.focus()
+    item.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))
+    searched = false
   }
   /*
    * Typing goes to the search wherever focus is. The menu keeps focus on its items (it took it back
@@ -113,6 +116,7 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
    */
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return
+    if (searched) return
     if (e.target instanceof HTMLInputElement && e.target.classList.contains("iris-pinsearch__input")) return
     if (e.key.length === 1 && (e.key !== " " || query())) {
       e.preventDefault()
