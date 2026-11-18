@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, requireUserId, resolveUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
 import { deliverToInbox, resolveOwnOrPeerNode, senderNodeName } from "./platform-hive-peer"
 import { Auth } from "../../auth"
@@ -200,10 +200,7 @@ async function uploadToCloud(filePath: string, filename: string): Promise<{ cdn_
   form.append("title", `hive-send: ${filename}`)
   // Short expiration — daemon downloads immediately, CDN copy is just transit
   form.append("expires_days", "1")
-  // The signed-in account, never a fixed fallback (#193865).
-  const userId = await resolveUserId()
-  if (!userId) throw new Error("Could not tell which account you are signed in as. Run `iris login` and try again.")
-  form.append("user_id", String(userId))
+  // No user_id: fl-api takes the account from the login token (#193867).
 
   const token = await resolveToken()
   const headers: Record<string, string> = { Accept: "application/json" }
