@@ -65,7 +65,7 @@ describe("/iris/page-signin (#192482)", () => {
       const res = yield* postJson("/iris/page-signin", { slug: "lexicon-console" })
       expect(res.status).toBe(200)
       const body = (yield* res.json) as any
-      expect(body).toEqual({ measured: true, url: `https://freelabel.net/p/lexicon-console#atlas_code=${CODE}`, expiresIn: 90 })
+      expect(body).toEqual({ measured: true, url: `https://heyiris.io/p/lexicon-console#atlas_code=${CODE}`, expiresIn: 90 })
       expect(seen[0].path).toBe("/api/v1/atlas/page-codes")
       expect(seen[0].init?.method).toBe("POST")
       expect(JSON.parse(String(seen[0].init?.body))).toEqual({ page_slug: "lexicon-console" })

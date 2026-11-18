@@ -14,6 +14,7 @@ import {
   type FrameCheckAnswer,
   type PageSignInAnswer,
   type PageVerdict,
+  PAGE_HOST,
 } from "./iris-pinned-page-model"
 import "./iris-pinned-page.css"
 
@@ -95,7 +96,7 @@ export function IrisPinnedPage(props: {
         .catch(() => undefined)
         .then(async (answer) => {
           if (slug !== props.slug || key !== reloadKey()) return // a later reload won the race
-          const v = pageVerdict(slug, answer)
+          const v = pageVerdict(slug, answer, location.origin)
           if (!v.show) return setPhase({ at: "error", ...v })
           retries = 0
           if (props.signIn) {
@@ -136,7 +137,7 @@ export function IrisPinnedPage(props: {
     >
       <div class="iris-pinned__bar">
         <span class="iris-pinned__where" title={url()}>
-          freelabel.net/p/<b>{props.slug}</b>
+          {PAGE_HOST}/p/<b>{props.slug}</b>
         </span>
         <Show when={signIn().state === "signed_in"}>
           <span class="iris-pinned__signin" data-slot="pinned-signed-in" title="Signed in with your IRIS account — no emailed code">
