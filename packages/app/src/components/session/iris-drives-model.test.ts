@@ -11,6 +11,7 @@ import {
   matches,
   moveSelection,
   neverScanned,
+  onDrive,
   scanCommand,
   statusTone,
   usedOf,
@@ -115,6 +116,14 @@ describe("Drives (#193705)", () => {
     expect(baseName("a/b/c.sql")).toBe("c.sql")
     expect(dirName("a/b/c.sql")).toBe("a/b")
     expect(dirName("c.sql")).toBe("")
+  })
+
+  test("a finding counts only while it is on the drive (#193813)", () => {
+    // Measured on BK-03: 368 contained + 14 moved = 382 records; the drive's own count is 368.
+    const all = [...Array(368)].map((_, i) => finding(`a/${i}`, "contained")).concat([...Array(14)].map((_, i) => finding(`b/${i}`, "moved")))
+    expect(all.filter(onDrive)).toHaveLength(drive({ sensitiveFiles: 368 }).sensitiveFiles!)
+    expect(onDrive(finding("x", "exposed"))).toBe(true)
+    expect(onDrive(finding("x", "moved"))).toBe(false)
   })
 
   test("the scan command quotes the label", () => {

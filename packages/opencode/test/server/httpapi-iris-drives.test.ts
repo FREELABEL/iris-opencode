@@ -120,6 +120,16 @@ describe("/iris/drives (#193705)", () => {
     }),
   )
 
+  it.live("findings take a page size, clamped to 200", () =>
+    Effect.gen(function* () {
+      flApi()
+      yield* get("/iris/drives/findings?drive=fs%3Aaaaa&page=2&perPage=500")
+      const q = new URLSearchParams(seen.find((p) => p.includes("drive-findings"))!.split("?")[1])
+      expect(q.get("per_page")).toBe("200")
+      expect(q.get("page")).toBe("2")
+    }),
+  )
+
   it.live("signed out is a state, never zero drives", () =>
     Effect.gen(function* () {
       flApi({ signedIn: false })

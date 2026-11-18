@@ -5,6 +5,9 @@ import "./iris-drives.css"
 import {
   baseName,
   countBy,
+  FINDINGS_PER_PAGE,
+  MAX_FINDING_PAGES,
+  onDrive,
   driveMeta,
   emptyDrive,
   findingMeta,
@@ -92,21 +95,25 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   const driveFolders = createMemo(() => (drive() ? foldersOf(drive()!.id, data()?.folders ?? []) : []))
 
   /*
-   * FINDINGS, LAZILY, PER DRIVE. Pages accumulate in a cache keyed by drive so going back and forth
-   * does not refetch. Asked for only when the Findings segment or a folder is open.
+   * FINDINGS, LAZILY, PER DRIVE — and then ALL of them (#193814). Asked for only when the Findings
+   * segment or a folder opens; the first page paints at once and the rest load behind it, 200 at a
+   * time, so search and folders cover every finding, not the first hundred. The largest drive measured
+   * held 433 records (3 requests). MAX_FINDING_PAGES is a safety stop, and the footer says when it hits.
+   * Cached per drive, so going back and forth does not refetch.
    */
   type FindingsCache = { rows: DriveFinding[]; page: number; total: number | null; hasMore: boolean; loading: boolean; error?: string }
   const [cache, setCache] = createSignal<Record<string, FindingsCache>>({})
   const findingsFor = (id?: string) => (id ? cache()[id] : undefined)
-  const loadFindings = async (id: string, all = false) => {
+  const loadFindings = async (id: string) => {
     const cur = cache()[id]
     if (cur?.loading || (cur && !cur.hasMore)) return
     setCache((c) => ({ ...c, [id]: { ...(cur ?? { rows: [], page: 0, total: null, hasMore: true }), loading: true, error: undefined } }))
     let state = cache()[id]!
-    // Bounded: all=true pages through at most 10 pages (1,000 findings) for a folder view.
-    for (let i = 0; i < (all ? 10 : 1) && state.hasMore; i++) {
+    while (state.hasMore && state.page < MAX_FINDING_PAGES) {
       try {
-        const p = await readJson<FindingsPayload>(`/iris/drives/findings?drive=${encodeURIComponent(id)}&page=${state.page + 1}`)
+        const p = await readJson<FindingsPayload>(
+          `/iris/drives/findings?drive=${encodeURIComponent(id)}&page=${state.page + 1}&perPage=${FINDINGS_PER_PAGE}`,
+        )
         if (!p.measured) {
           state = { ...state, loading: false, error: p.reason ?? "could not read findings" }
           break
@@ -122,13 +129,16 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   }
   createEffect(
     on([driveId, segment, folder], ([id, seg, f]) => {
-      if (id && (seg === "findings" || f)) void loadFindings(id, !!f)
+      if (id && (seg === "findings" || f)) void loadFindings(id)
     }),
   )
 
   // Anything that changes the list resets the selection; leaving a scope closes the sheet.
   createEffect(on([driveId, folder, segment, query], () => setSel(-1)))
   createEffect(on([driveId, folder], () => setSheet(undefined)))
+  // Moved findings are history, folded away until asked for; every new scope starts folded.
+  const [showMoved, setShowMoved] = createSignal(false)
+  createEffect(on([driveId, folder, segment], () => setShowMoved(false)))
   /*
    * KEEP THE KEYBOARD AFTER A DRILL. The row a person clicked or pressed Enter on is replaced by the
    * next level's rows, and focus falls to <body> — after which arrows and Backspace reach nothing.
@@ -162,19 +172,27 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
     setQuery("")
   }
 
+  /*
+   * ONE MEANING OF "FINDINGS" (#193813): sensitive files ON THE DRIVE NOW — what the drive row's count
+   * (the scan's sensitive_files) means. Records the scan marked `moved` are no longer on the drive;
+   * they list below a fold, never in the count.
+   */
+  const scopedFindings = createMemo(() => {
+    const all = findingsFor(drive()?.id)?.rows ?? []
+    const inScope = folder() ? findingsUnder(folder()!, all) : all
+    const q = query()
+    const hit = inScope.filter((f) => matches(q, f.path, f.kind, f.status))
+    return { current: hit.filter(onDrive), moved: hit.filter((f) => !onDrive(f)) }
+  })
   const rows = createMemo<Row[]>(() => {
     const q = query()
     if (!drive()) return drives().filter((d) => matches(q, d.label, d.kind, d.node)).map((d) => ({ kind: "drive", drive: d }))
-    if (folder()) {
-      return findingsUnder(folder()!, findingsFor(drive()!.id)?.rows ?? [])
-        .filter((f) => matches(q, f.path, f.kind, f.status))
-        .map((f) => ({ kind: "finding", finding: f }))
+    if (!folder() && segment() === "folders") {
+      return driveFolders().filter((f) => matches(q, f.folder, f.kinds)).map((f) => ({ kind: "folder", folder: f }))
     }
-    if (segment() === "folders") return driveFolders().filter((f) => matches(q, f.folder, f.kinds)).map((f) => ({ kind: "folder", folder: f }))
-    if (segment() === "findings") {
-      return (findingsFor(drive()!.id)?.rows ?? []).filter((f) => matches(q, f.path, f.kind, f.status)).map((f) => ({ kind: "finding", finding: f }))
-    }
-    return []
+    if (!folder() && segment() !== "findings") return []
+    const f = scopedFindings()
+    return [...f.current, ...(showMoved() ? f.moved : [])].map((finding) => ({ kind: "finding", finding }))
   })
 
   const open = (r: Row) => {
@@ -231,7 +249,9 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
   }
   const findingsCount = () => {
     const c = findingsFor(drive()?.id)
-    return c?.total ?? drive()?.sensitiveFiles ?? null
+    // Every page read: count what is on the drive. Until then, the scan's own count — the same meaning.
+    if (c && !c.hasMore && !c.error) return c.rows.filter(onDrive).length
+    return drive()?.sensitiveFiles ?? null
   }
 
   return (
@@ -327,10 +347,22 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
               />
             </Show>
             <Show when={drive() && segment() === "info" && !folder()}>
-              <DriveInfo drive={drive()!} folders={driveFolders()} findings={findingsFor(drive()!.id)?.rows ?? []} />
+              <DriveInfo
+                drive={drive()!}
+                folders={driveFolders()}
+                findings={findingsFor(drive()!.id)?.rows ?? []}
+                complete={findingsFor(drive()!.id)?.hasMore === false}
+              />
             </Show>
             <For each={rows()}>
               {(r, i) => (
+                <>
+                <Show when={showMoved() && r.kind === "finding" && i() === scopedFindings().current.length}>
+                  <button class="iris-drv-fold" aria-expanded="true" onClick={() => setShowMoved(false)}>
+                    <Icon name="chevron-down" size="small" />
+                    Hide {fmtCount(scopedFindings().moved.length)} moved off this drive
+                  </button>
+                </Show>
                 <RowView
                   row={r}
                   index={i()}
@@ -341,15 +373,19 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
                     open(r)
                   }}
                 />
+                </>
               )}
             </For>
             <FindingsFooter
               show={!!drive() && (segment() === "findings" || !!folder())}
               state={findingsFor(drive()?.id)}
-              shown={rows().length}
+              current={scopedFindings().current.length}
+              moved={scopedFindings().moved.length}
+              showMoved={showMoved()}
+              toggleMoved={() => setShowMoved((v) => !v)}
               filtered={!!query()}
               folder={folder()}
-              more={() => drive() && loadFindings(drive()!.id, !!folder())}
+              retry={() => drive() && loadFindings(drive()!.id)}
             />
             <Show when={query() && rows().length === 0 && (drive() ? segment() !== "info" : true)}>
               <div class="iris-drv-weak iris-drv-pad">Nothing matches “{query()}”.</div>
@@ -473,7 +509,7 @@ function RowView(props: { row: Row; index: number; selected: boolean; driveEncry
   )
 }
 
-function DriveInfo(props: { drive: Drive; folders: DriveFolder[]; findings: DriveFinding[] }) {
+function DriveInfo(props: { drive: Drive; folders: DriveFolder[]; findings: DriveFinding[]; complete: boolean }) {
   const d = props.drive
   const usedPct = () => (d.usedGb != null && d.sizeGb ? Math.min(100, (d.usedGb / d.sizeGb) * 100) : null)
   return (
@@ -501,7 +537,7 @@ function DriveInfo(props: { drive: Drive; folders: DriveFolder[]; findings: Driv
           <Show when={props.findings.length}>
             {" "}
             <span class="iris-drv-weak">
-              ({countBy(props.findings, "exposed")} exposed of {props.findings.length} loaded)
+              ({countBy(props.findings, "exposed")} exposed{props.complete ? "" : " so far"})
             </span>
           </Show>
         </dd>
@@ -524,18 +560,23 @@ function DriveInfo(props: { drive: Drive; folders: DriveFolder[]; findings: Driv
 
 function FindingsFooter(props: {
   show: boolean
-  state?: { rows: DriveFinding[]; total: number | null; hasMore: boolean; loading: boolean; error?: string }
-  shown: number
+  state?: { rows: DriveFinding[]; page: number; total: number | null; hasMore: boolean; loading: boolean; error?: string }
+  current: number
+  moved: number
+  showMoved: boolean
+  toggleMoved: () => void
   filtered: boolean
   folder?: string
-  more: () => void
+  retry: () => void
 }) {
+  const done = () => !!props.state && !props.state.loading && !props.state.error
+  const capped = () => done() && props.state!.hasMore
   return (
     <Show when={props.show}>
       <Show when={props.state?.error}>
         <div class="iris-drv-callout" data-tone="bad">
           Couldn't read findings: {props.state!.error}
-          <button class="iris-drv-btn" onClick={props.more}>
+          <button class="iris-drv-btn" onClick={props.retry}>
             Try again
           </button>
         </div>
@@ -543,22 +584,31 @@ function FindingsFooter(props: {
       <Show when={props.state?.loading}>
         <div class="iris-drv-loading">
           <Spinner class="iris-drv-spin" /> Reading findings…
+          <Show when={props.state!.total != null}>
+            <span class="iris-drv-mono">
+              {fmtCount(props.state!.rows.length)} of {fmtCount(props.state!.total)}
+            </span>
+          </Show>
+          <Show when={props.filtered}>
+            <span>· results so far</span>
+          </Show>
         </div>
       </Show>
-      <Show when={props.state && !props.state.loading && !props.state.error && props.shown === 0 && !props.filtered}>
+      <Show when={done() && props.current === 0 && props.moved === 0 && !props.filtered}>
         <div class="iris-drv-weak iris-drv-pad">{props.folder ? "No sensitive files found in this folder." : "No sensitive files found on this drive."}</div>
       </Show>
-      <Show when={props.state && !props.state.loading && props.state.hasMore && !props.folder}>
-        <div class="iris-drv-pad">
-          <button class="iris-drv-btn" onClick={props.more}>
-            Load more
-            <Show when={props.state!.total != null}>
-              {" "}
-              <span class="iris-drv-mono iris-drv-weak">
-                {props.state!.rows.length} of {fmtCount(props.state!.total)}
-              </span>
-            </Show>
-          </button>
+      <Show when={done() && props.current === 0 && props.moved > 0 && !props.filtered && !props.showMoved}>
+        <div class="iris-drv-weak iris-drv-pad">No sensitive files on this drive now. The ones found earlier were moved off it.</div>
+      </Show>
+      <Show when={props.moved > 0 && done() && !props.showMoved}>
+        <button class="iris-drv-fold" aria-expanded="false" onClick={props.toggleMoved}>
+          <Icon name="chevron-right" size="small" />
+          Show {fmtCount(props.moved)} moved off this drive
+        </button>
+      </Show>
+      <Show when={capped()}>
+        <div class="iris-drv-weak iris-drv-pad">
+          Showing the first {fmtCount(props.state!.rows.length)} of {fmtCount(props.state!.total)} findings. Open the full page to see the rest.
         </div>
       </Show>
     </Show>

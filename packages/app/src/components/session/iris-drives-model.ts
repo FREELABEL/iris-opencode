@@ -106,6 +106,13 @@ export const dirName = (p: string) => {
   return i > 0 ? p.slice(0, i) : ""
 }
 
+/** Findings are read 200 at a time, up to this many pages per drive (10,000). The footer says when it stops. */
+export const FINDINGS_PER_PAGE = 200
+export const MAX_FINDING_PAGES = 50
+
+/** Still on the drive. A `moved` finding was found by an earlier scan and is gone now (#193813). */
+export const onDrive = (f: DriveFinding) => f.status !== "moved"
+
 export type Tone = "bad" | "good" | "muted"
 /** exposed = on an unencrypted drive, anyone with the drive can read it; contained = encrypted; moved = gone. */
 export function statusTone(status: string | null | undefined): Tone {

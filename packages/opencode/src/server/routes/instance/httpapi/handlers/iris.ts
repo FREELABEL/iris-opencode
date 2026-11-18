@@ -1215,8 +1215,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     // Drives (#193705) — catalogued drives from Atlas; findings asked for per drive, a page at a time.
     const drives = Effect.fn("IrisHttpApi.drives")(() => Effect.promise(() => fetchDrives()))
-    const driveFindings = Effect.fn("IrisHttpApi.driveFindings")((ctx: { query: { drive: string; page?: number } }) =>
-      Effect.promise(() => fetchDriveFindings(ctx.query.drive, ctx.query.page ?? 1)),
+    const driveFindings = Effect.fn("IrisHttpApi.driveFindings")((ctx: { query: { drive: string; page?: number; perPage?: number } }) =>
+      Effect.promise(() => fetchDriveFindings(ctx.query.drive, ctx.query.page ?? 1, ctx.query.perPage ?? 100)),
     )
     // Lexicon › Agreements (#192484). The payload is built field by field in @/iris/agreements so the
     // Schema has nothing undeclared to strip.
