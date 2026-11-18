@@ -71,6 +71,8 @@
 .iris-drv-state-t { font-size: 14px; font-weight: 600; color: var(--text-strong); }
 .iris-drv-state p { margin: 0 0 4px; color: var(--text-weak); font-size: 12.5px; line-height: 1.5; max-width: 36ch; }
 .iris-drv-callout { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 12px; padding: 7px 10px; border-radius: 6px; font-size: 12px; background: color-mix(in srgb, var(--drv-bad) 10%, transparent); }
+.iris-drv-fold { display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--border-weaker-base); background: none; color: var(--text-weak); font-size: 12px; cursor: pointer; text-align: start; }
+.iris-drv-fold:hover { color: var(--text-strong); background: var(--background-element); }
 .iris-drv-loading { display: flex; align-items: center; gap: 8px; padding: 14px 12px; color: var(--text-weak); font-size: 12px; }
 .iris-drv-spin { width: 14px; }
 

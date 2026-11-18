@@ -4416,6 +4416,7 @@ export const IrisApi = HttpApi.make("iris").add(
         query: Schema.Struct({
           drive: described(Schema.String, "The drive's id (external_id), e.g. fs:<uuid> or dir:<node>:<path>."),
           page: Schema.optional(Schema.NumberFromString),
+          perPage: described(Schema.optional(Schema.NumberFromString), "1-200, default 100."),
         }),
         success: described(DriveFindingsResponse, "One page of one drive's sensitive-file findings"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.driveFindings", summary: "One drive's findings, a page at a time" })),
