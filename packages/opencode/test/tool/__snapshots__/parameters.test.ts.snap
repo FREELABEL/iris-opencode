@@ -20,6 +20,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Run the command in the background and return at once with the path of a log file. You are told in this chat when it finishes. For commands that take minutes: builds, test suites, migrations, bulk jobs. Do not sleep or poll; read the log only when you need to see progress.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",
