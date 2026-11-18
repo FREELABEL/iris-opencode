@@ -217,6 +217,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
             variant="ghost-muted"
             size="large"
             aria-label="Add a tab"
+            data-callout="add-tab"
           />
           <MenuV2.Portal>
             <MenuV2.Content style={{ "min-width": "190px" }}>
