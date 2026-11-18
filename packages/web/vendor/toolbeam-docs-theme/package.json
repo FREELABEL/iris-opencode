@@ -1,0 +1,26 @@
+{
+  "name": "toolbeam-docs-theme",
+  "version": "0.4.8-iris.1",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./styles/*": "./styles/*",
+    "./components": "./src/components.ts",
+    "./overrides/Head.astro": "./src/overrides/Head.astro",
+    "./overrides/Header.astro": "./src/overrides/Header.astro",
+    "./overrides/Footer.astro": "./src/overrides/Footer.astro",
+    "./overrides/PageTitle.astro": "./src/overrides/PageTitle.astro"
+  },
+  "author": "SST <hello@sst.dev>",
+  "files": [
+    "index.ts",
+    "styles",
+    "src"
+  ],
+  "peerDependencies": {
+    "@astrojs/starlight": "^0.43.1",
+    "astro": "^7.4.0"
+  },
+  "description": "Vendored from toolbeam-docs-theme@0.4.8 (MIT, SST). Upstream still peers astro ^5 / starlight ^0.34; this copy targets Astro 7 / Starlight 0.43."
+}
