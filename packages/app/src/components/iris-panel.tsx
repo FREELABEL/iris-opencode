@@ -86,6 +86,17 @@ export function IrisScopeChip() {
  * whether it is there. One list for every host (#192535): the chat's "+" adds its own file items
  * above it, Home and the new-chat page show it alone.
  */
+/**
+ * For the "+" menu's Content: the menu would focus its first item on open, so letters went to its
+ * type-ahead instead of the search. Put focus in the search instead.
+ */
+export function focusPinSearch(e: Event) {
+  const el = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>(".iris-pinsearch__input")
+  if (!el) return
+  e.preventDefault()
+  el.focus()
+}
+
 export function IrisPinItems(props: { onOpen: (id: string) => void }) {
   // The list passed fifteen products (2026-11-18): typing narrows it, Enter opens the first match.
   const [query, setQuery] = createSignal("")
@@ -97,7 +108,6 @@ export function IrisPinItems(props: { onOpen: (id: string) => void }) {
     <>
       <div class="iris-pinsearch" onPointerDown={(e) => e.stopPropagation()}>
         <input
-          ref={(el) => requestAnimationFrame(() => el.focus())}
           type="search"
           class="iris-pinsearch__input"
           placeholder="Search tabs"
@@ -163,7 +173,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
             aria-label="Add a tab"
           />
           <MenuV2.Portal>
-            <MenuV2.Content style={{ "min-width": "190px" }}>
+            <MenuV2.Content style={{ "min-width": "190px" }} onOpenAutoFocus={focusPinSearch}>
               <IrisPinItems onOpen={(id) => request(id as any)} />
             </MenuV2.Content>
           </MenuV2.Portal>

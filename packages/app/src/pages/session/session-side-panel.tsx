@@ -77,7 +77,7 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
-import { IrisPanelBody, IrisPinItems, IrisScopeChip } from "@/components/iris-panel"
+import { IrisPanelBody, IrisPinItems, IrisScopeChip, focusPinSearch } from "@/components/iris-panel"
 import { needsAttention, surfaceCount, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
@@ -247,7 +247,7 @@ export function SessionSidePanel(props: {
   }
 
   const AddMenuItems = (props: { onOpenFile: () => void }) => (
-    <MenuV2.Content style={{ "min-width": "190px" }}>
+    <MenuV2.Content style={{ "min-width": "190px" }} onOpenAutoFocus={focusPinSearch}>
       <MenuV2.Item onSelect={props.onOpenFile} shortcut={command.keybind("file.open")}>
         {language.t("command.file.open")}
       </MenuV2.Item>
