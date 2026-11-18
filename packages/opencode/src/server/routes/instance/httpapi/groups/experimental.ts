@@ -98,6 +98,7 @@ export const ExperimentalPaths = {
   worktreeReset: "/experimental/worktree/reset",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
+  backgroundCancel: "/experimental/background/:jobID/cancel",
   resource: "/experimental/resource",
 } as const
 
@@ -243,6 +244,18 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Background subagents",
             description:
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
+          }),
+        ),
+        HttpApiEndpoint.post("backgroundCancel", ExperimentalPaths.backgroundCancel, {
+          params: { jobID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Whether a running background command was stopped"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.background.cancel",
+            summary: "Stop a background command",
+            description:
+              "Stop one shell command started with background=true (#188641). False if there is no such command or it already ended.",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

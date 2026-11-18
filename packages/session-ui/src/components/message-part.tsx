@@ -15,6 +15,7 @@ import {
   type ComponentProps,
 } from "solid-js"
 import { ToolMark } from "./tool-mark"
+import { backgroundShellEnd } from "./background-shell"
 import { panelStep } from "./browser-step"
 import { browserStep } from "./browser-step"
 import { readAloudAvailable, readAloudOptions, readingId, toggleReading } from "./read-aloud"
@@ -2279,6 +2280,21 @@ ToolRegistry.register({
       return `$ ${cmd}${out ? "\n\n" + out : ""}`
     })
     const [copied, setCopied] = createSignal(false)
+    // A command started with background=true (#188641): the call returns at once and the command
+    // keeps running, so the card says so, and offers Stop until the chat records its end.
+    const data = useData()
+    const jobID = () => (props.metadata.background === true && typeof props.metadata.jobId === "string" ? props.metadata.jobId : "")
+    const ended = createMemo(() => (jobID() ? backgroundShellEnd(data.store as any, data.sessionID, jobID()) : undefined))
+    const [stopping, setStopping] = createSignal(false)
+    const stop = (e: MouseEvent) => {
+      e.stopPropagation()
+      const run = data.stopBackground
+      if (!run || stopping()) return
+      setStopping(true)
+      void run(jobID())
+        .catch(() => false)
+        .then((ok) => !ok && setStopping(false))
+    }
 
     const handleCopy = async () => {
       const content = text()
@@ -2304,6 +2320,21 @@ ToolRegistry.register({
                 <ShellSubmessage text={props.input.command} animate={sawPending} />
               </Show>
             </div>
+            <Show when={jobID()}>
+              <span data-slot="bash-background" data-state={ended() ?? "running"}>
+                <Show
+                  when={!ended()}
+                  fallback={ended() === "cancelled" ? "Stopped" : ended() === "error" ? "Failed in the background" : "Finished in the background"}
+                >
+                  <TextShimmer text={stopping() ? "Stopping…" : "Running in the background"} active={!stopping()} />
+                  <Show when={data.stopBackground && !stopping()}>
+                    <button type="button" data-slot="bash-background-stop" onClick={stop} title="Stop this command">
+                      Stop
+                    </button>
+                  </Show>
+                </Show>
+              </span>
+            </Show>
           </div>
         )}
       >

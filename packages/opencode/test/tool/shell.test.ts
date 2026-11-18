@@ -1246,6 +1246,45 @@ describe("tool.shell truncation", () => {
     )
 
     it.live(
+      "background: Stop kills the command, and the chat is told without a new turn",
+      () =>
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const said: Array<{ text: string; noReply?: boolean }> = []
+            const marker = path.join(os.tmpdir(), `bg-stop-188641-${process.pid}-${Date.now()}`)
+            const c = {
+              ...backgroundCtx([]),
+              extra: {
+                promptOps: {
+                  cancel: () => Effect.void,
+                  resolvePromptParts: () => Effect.succeed([]),
+                  prompt: (input: { parts: Array<{ text?: string }>; noReply?: boolean }) =>
+                    Effect.sync(() => {
+                      said.push({ text: input.parts.map((p) => p.text ?? "").join(""), noReply: input.noReply })
+                      return {} as never
+                    }),
+                },
+              },
+            }
+            const result = yield* run({ command: `sleep 2 && touch ${marker}`, background: true }, c)
+            const id = String((result.metadata as Record<string, unknown>).jobId)
+            const jobs = yield* BackgroundJob.Service
+            // The key the chat's Stop (session cancelBackgroundJobs) matches on.
+            expect((yield* jobs.get(id))?.metadata?.sessionId).toBe(c.sessionID)
+            const stopped = yield* jobs.cancel(id)
+            expect(stopped?.status).toBe("cancelled")
+            yield* Effect.sleep("3 seconds")
+            expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+            for (let i = 0; i < 40 && said.length === 0; i++) yield* Effect.sleep("50 millis")
+            expect(said[0]?.text).toContain('state="cancelled"')
+            expect(said[0]?.noReply).toBe(true)
+          }),
+        ),
+      15_000,
+    )
+
+    it.live(
       "background: the foreground default timeout does not stop it",
       () =>
         runIn(

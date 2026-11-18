@@ -49,6 +49,8 @@ export type SessionHrefFn = (sessionID: string) => string
 /** A failed command, as the Report button sends it (#189435). The app decides what happens next. */
 export type CommandReportInput = { tool: string; command: string; error: string; output?: string }
 export type ReportCommandFn = (report: CommandReportInput) => void
+/** Stop one background shell command (#188641). Resolves true when it was running and stopped. */
+export type StopBackgroundFn = (jobID: string) => Promise<boolean>
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
@@ -59,6 +61,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     onNavigateToSession?: NavigateToSessionFn
     onSessionHref?: SessionHrefFn
     onReportCommand?: ReportCommandFn
+    onStopBackground?: StopBackgroundFn
   }) => {
     return {
       get store() {
@@ -74,6 +77,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sessionHref: props.onSessionHref,
       get reportCommand() {
         return props.onReportCommand
+      },
+      get stopBackground() {
+        return props.onStopBackground
       },
     }
   },
