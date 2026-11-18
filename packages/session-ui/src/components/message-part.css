@@ -1760,9 +1760,6 @@ body:not([data-new-layout]) {
   font-size: 12px;
   color: var(--text-weak);
 }
-[data-slot="bash-background"][data-state="error"] {
-  color: var(--text-danger, var(--text-weak));
-}
 [data-slot="bash-background-stop"] {
   height: 22px;
   padding: 0 8px;
