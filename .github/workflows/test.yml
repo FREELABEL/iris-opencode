@@ -20,6 +20,9 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# GitHub-hosted runners (#193816). Upstream used blacksmith-* runners, which FREELABEL does not have,
+# so every desktop PR's unit and e2e checks sat QUEUED forever and PRs merged on local test runs alone.
+# Not the self-hosted `hive` runners: those are working machines, and a PR's code would run on them.
 jobs:
   unit:
     name: unit (${{ matrix.settings.name }})
@@ -28,9 +31,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-24.04
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-2025
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -86,9 +89,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-24.04
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-2025
     runs-on: ${{ matrix.settings.host }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
