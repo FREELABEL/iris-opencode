@@ -1042,7 +1042,7 @@
       "describe": "restore my setup on this machine from a bundle or bloq — rewrites paths, backs up, then checks the result",
       "aliases": [],
       "run": "iris app-config apply <app>",
-      "haystack": "app-config apply restore my setup on this machine from a bundle or bloq — rewrites paths, backs up, then checks the result from bundle file, or a bloq id (newest bundle attached) bloq restore the newest bundle attached to this bloq (same as --from <id>) quit-app quit the app if it is running, without asking (it rewrites its config on quit) launch start the app afterwards and check its log (--no-launch to skip) check-timeout seconds to wait for the app rig mixxx: which rig on the board (default: the only one, or this machine prefer mixxx: when the rig force replace an existing setup, after a backup map-media rewrite a path prefix: <old>=<new> (repeatable) dry-run report what would change and what is missing; write nothing config-dir the app user-id user id, for a bloq source json json output"
+      "haystack": "app-config apply restore my setup on this machine from a bundle or bloq — rewrites paths, backs up, then checks the result from bundle file, or a bloq id (newest bundle attached) bloq restore the newest bundle attached to this bloq (same as --from <id>) quit-app quit the app if it is running, without asking (it rewrites its config on quit) launch start the app afterwards and check its log (--no-launch to skip) no-launch same as --launch=false check-timeout seconds to wait for the app rig mixxx: which rig on the board (default: the only one, or this machine prefer mixxx: when the rig force replace an existing setup, after a backup map-media rewrite a path prefix: <old>=<new> (repeatable) dry-run report what would change and what is missing; write nothing config-dir the app user-id user id, for a bloq source json json output"
     },
     {
       "kind": "command",
@@ -3715,7 +3715,7 @@
       "describe": "submit a bug report to the IRIS team",
       "aliases": [],
       "run": "iris bug report [title..]",
-      "haystack": "bug report submit new submit a bug report to the iris team description detailed description severity bug severity command the command that failed (optional) error error output (optional) bounty post as exchange listing with bounty in dollars (e.g. --bounty 25) repo repo url for exchange listing (used with --bounty) user-id user id (for exchange listing) reporter-lead lead id of the person who actually reported the bug (for bounty attribution) reporter-name display name of the reporter (optional, used with --reporter-lead) project file into a registered client bug list instead of the iris board (slug) project-token token for a private client intake (only if that intake requires one) title short bug title — quote it, or pass --title \\ json json output"
+      "haystack": "bug report submit new submit a bug report to the iris team description detailed description severity bug severity command the command that failed (optional) error error output (optional) bounty post as exchange listing with bounty in dollars (e.g. --bounty 25) repo repo url for exchange listing (used with --bounty) user-id user id (for exchange listing) reporter-lead lead id of the person who actually reported the bug (for bounty attribution) reporter-name display name of the reporter (optional, used with --reporter-lead) project file into a registered client bug list instead of the iris board (slug) project-token token for a private client intake (only if that intake requires one) title short bug title — quote it, or pass --title \\ force-new skip the check for an existing report with a similar title json json output"
     },
     {
       "kind": "command",
@@ -8376,7 +8376,7 @@
       "describe": "send a file, text, or link to another Hive node",
       "aliases": [],
       "run": "iris hive send <content> [rest..]",
-      "haystack": "hive send send a file, text, or link to another hive node to target node name/id, or  message optional message (for file/link sends) user-id user id envelope end-to-end encryption (on by default when the recipient has a key). --envelope: refuse to send without it. --no-envelope: turn it off tenant tenant slug, for escrow policy resolution class transfer class for escrow policy: phi, financial, general json json output"
+      "haystack": "hive send send a file, text, or link to another hive node to target node name/id, or  message optional message (for file/link sends) user-id user id envelope end-to-end encryption (on by default when the recipient has a key). --envelope: refuse to send without it. --no-envelope: turn it off no-envelope same as --envelope=false tenant tenant slug, for escrow policy resolution class transfer class for escrow policy: phi, financial, general json json output"
     },
     {
       "kind": "command",
@@ -8520,7 +8520,7 @@
       "describe": "create a vault — replicated across your machines, or with --encrypted a PHI vault on THIS node",
       "aliases": [],
       "run": "iris hive vault create <name>",
-      "haystack": "hive vault create create a vault — replicated across your machines, or with --encrypted a phi vault on this node replicas minimum copies of each file, this machine included (default 2; with --on: every place listed plus this machine) on put copies on these drives and machines, e.g. --on  spare (with --on) where a lost copy may be rebuilt — these and nowhere else, e.g. --spare  lost-after (with --on) a copy unseen this long counts as lost and is rebuilt on a spare (default 14d; h/d/w) on-return (with --on) when a lost copy is verified again: keep both (default) or retire the spare auto (with --on) catch up and heal automatically (default on; --no-auto turns it off for this vault) bloq advanced: the drives board to use (default: your board named drives) encrypted an encrypted phi vault on this node: per-bloq, key in the os keychain (or --passphrase) bloq (--encrypted) bind to this bloq: only its tasks can open the vault node (--encrypted) must be this machine — keys never travel passphrase (--encrypted) key from a passphrase; stays locked after restarts until unlocked passphrase-stdin (--encrypted) read the passphrase from stdin user-id json"
+      "haystack": "hive vault create create a vault — replicated across your machines, or with --encrypted a phi vault on this node replicas minimum copies of each file, this machine included (default 2; with --on: every place listed plus this machine) on put copies on these drives and machines, e.g. --on  spare (with --on) where a lost copy may be rebuilt — these and nowhere else, e.g. --spare  lost-after (with --on) a copy unseen this long counts as lost and is rebuilt on a spare (default 14d; h/d/w) on-return (with --on) when a lost copy is verified again: keep both (default) or retire the spare auto (with --on) catch up and heal automatically (default on; --no-auto turns it off for this vault) no-auto same as --auto=false bloq advanced: the drives board to use (default: your board named drives) encrypted an encrypted phi vault on this node: per-bloq, key in the os keychain (or --passphrase) bloq (--encrypted) bind to this bloq: only its tasks can open the vault node (--encrypted) must be this machine — keys never travel passphrase (--encrypted) key from a passphrase; stays locked after restarts until unlocked passphrase-stdin (--encrypted) read the passphrase from stdin user-id json"
     },
     {
       "kind": "command",
@@ -9683,7 +9683,7 @@
       "describe": "create a new lead",
       "aliases": [],
       "run": "iris leads create",
-      "haystack": "leads create create a new lead name lead name email primary email address emails additional emails (comma-separated) phone phone number company company name source lead source (e.g. referral, inbound, outreach) status initial status (canonical crm taxonomy) bid deal amount — counts toward board pipeline value mrr monthly recurring revenue notes initial note to attach title job title (e.g. superintendent, capture manager) external-id the source product which product they are a prospect for segment segment (e.g. contractors-tx, robotics-founders) name-verified the name is real and complete (--no-name-verified for a partly hidden name) bloq-id board (bloq) this lead belongs to — required; prompted for when interactive json json output (returns the created lead — capture the new id)"
+      "haystack": "leads create create a new lead name lead name email primary email address emails additional emails (comma-separated) phone phone number company company name source lead source (e.g. referral, inbound, outreach) status initial status (canonical crm taxonomy) bid deal amount — counts toward board pipeline value mrr monthly recurring revenue notes initial note to attach title job title (e.g. superintendent, capture manager) external-id the source product which product they are a prospect for segment segment (e.g. contractors-tx, robotics-founders) name-verified the name is real and complete (--no-name-verified for a partly hidden name) no-name-verified same as --name-verified=false bloq-id board (bloq) this lead belongs to — required; prompted for when interactive json json output (returns the created lead — capture the new id)"
     },
     {
       "kind": "command",
@@ -10219,7 +10219,7 @@
       "describe": "update a lead",
       "aliases": [],
       "run": "iris leads update <id>",
-      "haystack": "leads update update a lead name new name email new email phone new phone company new company status new status (canonical crm taxonomy) bloq-id attach this lead to a bloq/project (same as  website website url source lead source stage pipeline stage bid price bid amount mrr monthly recurring revenue amount title job title (e.g. superintendent, capture manager) external-id the source product which product they are a prospect for segment segment (e.g. contractors-tx, robotics-founders) name-verified the name is real and complete (--no-name-verified for a partly hidden name) revenue-type revenue type payment-method how they pay chat-id link an imessage chat id (e.g. chat713220476491386040) whatsapp-group link a whatsapp group chat by name (e.g.  add-email add an alternate email address (for multi-email inbox scanning) last-contacted date you last spoke to them (yyyy-mm-dd or  next-follow-up date of the next scheduled touch (yyyy-mm-dd) — suppresses already-scheduled pulse recs json json output (returns the updated lead)"
+      "haystack": "leads update update a lead name new name email new email phone new phone company new company status new status (canonical crm taxonomy) bloq-id attach this lead to a bloq/project (same as  website website url source lead source stage pipeline stage bid price bid amount mrr monthly recurring revenue amount title job title (e.g. superintendent, capture manager) external-id the source product which product they are a prospect for segment segment (e.g. contractors-tx, robotics-founders) name-verified the name is real and complete (--no-name-verified for a partly hidden name) no-name-verified same as --name-verified=false revenue-type revenue type payment-method how they pay chat-id link an imessage chat id (e.g. chat713220476491386040) whatsapp-group link a whatsapp group chat by name (e.g.  add-email add an alternate email address (for multi-email inbox scanning) last-contacted date you last spoke to them (yyyy-mm-dd or  next-follow-up date of the next scheduled touch (yyyy-mm-dd) — suppresses already-scheduled pulse recs json json output (returns the updated lead)"
     },
     {
       "kind": "command",
@@ -11095,7 +11095,7 @@
       "describe": "start IRIS MCP gateway server (stdio, or streamable HTTP with --http)",
       "aliases": [],
       "run": "iris mcp serve",
-      "haystack": "mcp serve start iris mcp gateway server (stdio, or streamable http with --http) playbooks expose playbooks as typed tools + readable resources http serve streamable http on loopback instead of stdio port port for --http token bearer token for --http (generated and printed if omitted) stateful keep mcp session state (blocks serverless/edge and horizontal scaling)"
+      "haystack": "mcp serve start iris mcp gateway server (stdio, or streamable http with --http) playbooks expose playbooks as typed tools + readable resources no-playbooks same as --playbooks=false http serve streamable http on loopback instead of stdio port port for --http token bearer token for --http (generated and printed if omitted) stateful keep mcp session state (blocks serverless/edge and horizontal scaling)"
     },
     {
       "kind": "command",
@@ -14850,7 +14850,7 @@
       "describe": "view or set a site's sign-in policy (settings.gate) that member pages inherit",
       "aliases": [],
       "run": "iris sites access <site>",
-      "haystack": "sites access view or set a site's sign-in policy (settings.gate) that member pages inherit allow-domain admit every address at this domain (repeatable) allow-email admit this exact address (repeatable) remove-domain take a domain off the list (repeatable) remove-email take an address off the list (repeatable) require-otp require an emailed sign-in code (--no-require-otp to turn off) dry-run show the change without saving it json"
+      "haystack": "sites access view or set a site's sign-in policy (settings.gate) that member pages inherit allow-domain admit every address at this domain (repeatable) allow-email admit this exact address (repeatable) remove-domain take a domain off the list (repeatable) remove-email take an address off the list (repeatable) require-otp require an emailed sign-in code (--no-require-otp to turn off) no-require-otp same as --require-otp=false dry-run show the change without saving it json"
     },
     {
       "kind": "command",
@@ -15417,10 +15417,10 @@
     {
       "kind": "command",
       "name": "som ledger",
-      "describe": "view per-lead outreach results from today's ledger",
+      "describe": "view per-lead outreach results from today's ledger (local file, or --server)",
       "aliases": [],
       "run": "iris som ledger [campaign]",
-      "haystack": "som ledger view per-lead outreach results from today's ledger date date (yyyy-mm-dd, default today) retryable show only retryable failures failures show only failures json json output"
+      "haystack": "som ledger view per-lead outreach results from today's ledger (local file, or --server) server read the server ledger: every machine bloq with --server: board id (default: the campaign since with --server: totals since this date/time (iso) date date (yyyy-mm-dd, default today) retryable show only retryable failures failures show only failures json json output"
     },
     {
       "kind": "command",
@@ -15953,7 +15953,7 @@
       "describe": "create a vault — replicated across your machines, or with --encrypted a PHI vault on THIS node",
       "aliases": [],
       "run": "iris vault create <name>",
-      "haystack": "vault create create a vault — replicated across your machines, or with --encrypted a phi vault on this node replicas minimum copies of each file, this machine included (default 2; with --on: every place listed plus this machine) on put copies on these drives and machines, e.g. --on  spare (with --on) where a lost copy may be rebuilt — these and nowhere else, e.g. --spare  lost-after (with --on) a copy unseen this long counts as lost and is rebuilt on a spare (default 14d; h/d/w) on-return (with --on) when a lost copy is verified again: keep both (default) or retire the spare auto (with --on) catch up and heal automatically (default on; --no-auto turns it off for this vault) bloq advanced: the drives board to use (default: your board named drives) encrypted an encrypted phi vault on this node: per-bloq, key in the os keychain (or --passphrase) bloq (--encrypted) bind to this bloq: only its tasks can open the vault node (--encrypted) must be this machine — keys never travel passphrase (--encrypted) key from a passphrase; stays locked after restarts until unlocked passphrase-stdin (--encrypted) read the passphrase from stdin user-id json"
+      "haystack": "vault create create a vault — replicated across your machines, or with --encrypted a phi vault on this node replicas minimum copies of each file, this machine included (default 2; with --on: every place listed plus this machine) on put copies on these drives and machines, e.g. --on  spare (with --on) where a lost copy may be rebuilt — these and nowhere else, e.g. --spare  lost-after (with --on) a copy unseen this long counts as lost and is rebuilt on a spare (default 14d; h/d/w) on-return (with --on) when a lost copy is verified again: keep both (default) or retire the spare auto (with --on) catch up and heal automatically (default on; --no-auto turns it off for this vault) no-auto same as --auto=false bloq advanced: the drives board to use (default: your board named drives) encrypted an encrypted phi vault on this node: per-bloq, key in the os keychain (or --passphrase) bloq (--encrypted) bind to this bloq: only its tasks can open the vault node (--encrypted) must be this machine — keys never travel passphrase (--encrypted) key from a passphrase; stays locked after restarts until unlocked passphrase-stdin (--encrypted) read the passphrase from stdin user-id json"
     },
     {
       "kind": "command",
