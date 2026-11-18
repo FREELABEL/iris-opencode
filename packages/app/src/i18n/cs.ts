@@ -852,6 +852,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} další)",
   "common.requestFailed": "Požadavek se nezdařil",
   "common.moreOptions": "Více možností",
+  "session.pinned.title": "Připnuté zprávy",
+  "session.pinned.empty": "Žádné připnuté zprávy",
   "common.learnMore": "Zjistěte více",
   "common.rename": "Přejmenovat",
   "common.export": "Exportovat",

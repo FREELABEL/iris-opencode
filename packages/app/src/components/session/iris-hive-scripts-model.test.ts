@@ -29,11 +29,27 @@ import {
   skillsOf,
   stageStates,
   taskStatusWord,
+  highlightLine,
+  runArgs,
+  missingRequired,
   topFix,
   type Doctor,
   type HiveNodeRow,
   type ScriptRow,
-  type TaskView,
+  type TaskView, plugged,
+  accessLabel,
+  boardNames,
+  planAccess,
+  readAccess,
+  routing,
+  runRef,
+  sharedVia,
+  shareLink,
+  unshareMakesPrivate,
+  versionChoices,
+  versionWord,
+  type Board,
+  type SharedScript,
 } from "./iris-hive-scripts-model"
 
 // #188817 — every rule the Scripts tab draws from, over a REAL snapshot of account #193 on
@@ -302,5 +318,197 @@ describe("find · sort · page", () => {
     expect(shortAgo(undefined, now)).toBe("")
     expect(readSort("name")).toBe("name")
     expect(readSort("junk")).toBe("recent")
+  })
+})
+
+// #189589 — a run Constellation Gate held has not been sent; "Queued" would read as on its way.
+test("a held run reads as waiting for approval, not queued", () => {
+  const held = { id: "t1", status: "awaiting_approval", terminal: false, stdout: "", stderr: "", exitCode: null, exitCodeSource: null, error: null, nodeName: null, durationMs: null, held: true } as any
+  expect(taskStatusWord(held)).toBe("Waiting for your approval")
+})
+
+describe("highlightLine (script view colour)", () => {
+  const kinds = (line: string, lang: "python" | "bash" | "js") =>
+    highlightLine(line, lang).filter((t) => t.k).map((t) => `${t.k}:${t.t}`)
+
+  test("the iris header is its own colour — it decides where the script runs", () => {
+    expect(highlightLine("# iris: requires=bluetooth,python3", "python")).toEqual([{ t: "# iris: requires=bluetooth,python3", k: "dir" }])
+  })
+
+  test("python: keywords, calls, strings, numbers, trailing comment", () => {
+    expect(kinds('def hop(n=2): print("up", 1)  # go', "python")).toEqual(["kw:def", "fn:hop", "num:2", "fn:print", 'str:"up"', "num:1", "com:# go"])
+  })
+
+  test("a # inside a string is not a comment", () => {
+    expect(kinds('x = "a # b"', "python")).toEqual(['str:"a # b"'])
+  })
+
+  test("bash: variables and keywords; $# is a variable, not a comment", () => {
+    expect(kinds('if [ $# -gt 0 ]; then echo "$HOME"; fi', "bash")).toEqual(["kw:if", "var:$#", "num:0", "kw:then", "kw:echo", 'str:"$HOME"', "kw:fi"])
+  })
+
+  test("the text is never changed, only wrapped", () => {
+    const line = 'VENV = os.path.expanduser("~/.iris/venvs/mambo")'
+    expect(highlightLine(line, "python").map((t) => t.t).join("")).toBe(line)
+  })
+})
+
+describe("script settings (#189589)", () => {
+  const h = parseHeader("#!/bin/sh\n# iris: arg=mode default=status choices=status|hop|spin\n# iris: arg=note\n# iris: arg=fixture required\necho\n")
+
+  test("choices= makes a pick-list", () => {
+    expect(h.args[0]).toMatchObject({ name: "mode", default: "status", choices: ["status", "hop", "spin"] })
+    expect(h.args[1].choices).toBeUndefined()
+  })
+
+  test("a run sends picked values, else defaults; empty optional settings are left out", () => {
+    expect(runArgs(h.args, { mode: "hop", fixture: "case-1" })).toEqual({ mode: "hop", fixture: "case-1" })
+    expect(runArgs(h.args, { fixture: "x" })).toEqual({ mode: "status", fixture: "x" })
+  })
+
+  test("Run names the required settings that are still empty", () => {
+    expect(missingRequired(h.args, {})).toEqual(["fixture"])
+    expect(missingRequired(h.args, { fixture: "a" })).toEqual([])
+  })
+})
+
+// #189589 — the card names a plugged-in webcam; the laptop's own camera is not news.
+test("plugged names external cameras only", () => {
+  const base = { id: "1", name: "mac", online: true, lastHeartbeat: null }
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera", "OBSBOT Tiny Camera"] })).toEqual(["OBSBOT Tiny Camera"])
+  expect(plugged({ ...base, cameras: ["FaceTime HD Camera"] })).toEqual([])
+  expect(plugged({ ...base })).toEqual([])
+})
+
+// ── #191674: who can open a script, shared with me, where it runs, which version ────────────────
+describe("sharing (#191674)", () => {
+  const sharing = snap.sharing
+  const boards = sharing.boards as Board[]
+  const mine = (slug: string): ScriptRow => ({ ...scripts.find((s) => s.slug === slug)!, ...sharing.mine[slug] })
+  const shared = sharing.shared as SharedScript[]
+
+  test("the badge speaks the person's words, never the hub's", () => {
+    expect(accessLabel(undefined, [], boards).short).toBe("Only me")
+    expect(accessLabel("private", [7], boards).short).toBe("Only me")
+    expect(accessLabel("project", [12], boards).short).toBe("My team: Mambo crew")
+    expect(accessLabel(mine("nyc-budget").visibility, mine("nyc-budget").bloqIds, boards).short).toBe(
+      "My team: Deals board, Mambo crew and 1 more",
+    )
+    expect(accessLabel("unlisted", [], boards).short).toBe("Anyone with the link")
+    expect(accessLabel("public", [], boards)).toMatchObject({ short: "Public gallery", icon: "globe" })
+    // nothing the hub calls it leaks into what a person reads
+    for (const v of ["private", "project", "unlisted", "public", "PUBLIC", "nonsense"]) {
+      const l = accessLabel(v, [7, 12], boards)
+      expect(`${l.short} ${l.long}`).not.toMatch(/\bprivate\b|\bproject\b|unlisted|bloq|visibility|#\d/i)
+    }
+  })
+
+  test("anything unrecognised is private — a typo never reads as public", () => {
+    expect(readAccess("PUBLIC")).toBe("private")
+    expect(readAccess(null)).toBe("private")
+    expect(readAccess("public")).toBe("public")
+  })
+
+  test("a board I am not on is named as such, not by its number", () => {
+    expect(boardNames([7, 99], boards)).toEqual(["Deals board", "a board you're not on"])
+    expect(boardNames([12], undefined)).toEqual(["a board you're not on"])
+  })
+
+  test("Only me is one unpublish; already private is nothing", () => {
+    expect(planAccess(mine("photo-resize"), { visibility: "private" })).toEqual({ steps: [{ action: "unpublish" }], confirm: false })
+    expect(planAccess({ visibility: "private" }, { visibility: "private" })).toEqual({ steps: [], confirm: false })
+  })
+
+  test("My team needs a board, and is refused before any call without one", () => {
+    expect(planAccess({ visibility: "private" }, { visibility: "project", bloqIds: [] })).toEqual({
+      error: "Pick at least one board to share it with.",
+    })
+    expect(planAccess({ visibility: "private" }, { visibility: "project", bloqIds: [7] })).toEqual({
+      steps: [{ action: "publish", visibility: "project", bloqIds: [7] }],
+      confirm: false,
+    })
+  })
+
+  test("changing a team's boards shares the new ones BEFORE unsharing the old — never private in between", () => {
+    const plan = planAccess(mine("mambo-status"), { visibility: "project", bloqIds: [40] })
+    expect(plan).toEqual({ steps: [{ action: "share", bloqId: 40 }, { action: "unshare", bloqId: 12 }], confirm: false })
+    expect(planAccess(mine("nyc-budget"), { visibility: "project", bloqIds: [40, 12, 7] })).toEqual({ steps: [], confirm: false })
+    expect(planAccess(mine("nyc-budget"), { visibility: "project", bloqIds: [7] })).toEqual({
+      steps: [
+        { action: "unshare", bloqId: 12 },
+        { action: "unshare", bloqId: 40 },
+      ],
+      confirm: false,
+    })
+  })
+
+  test("going public asks first; narrowing from public never does", () => {
+    expect(planAccess({ visibility: "private" }, { visibility: "public" })).toEqual({
+      steps: [{ action: "publish", visibility: "public" }],
+      confirm: true,
+    })
+    expect(planAccess(mine("mambo-status"), { visibility: "public" })).toMatchObject({ confirm: true })
+    expect(planAccess(mine("photo-resize"), { visibility: "public" })).toEqual({ steps: [], confirm: false })
+    expect(planAccess(mine("photo-resize"), { visibility: "unlisted" })).toEqual({
+      steps: [{ action: "publish", visibility: "unlisted" }],
+      confirm: false,
+    })
+  })
+
+  test("leaving a team for public moves it to the gallery and leaves it to the hub whether the boards stay", () => {
+    expect(planAccess(mine("mambo-status"), { visibility: "unlisted" })).toEqual({
+      steps: [{ action: "publish", visibility: "unlisted" }],
+      confirm: false,
+    })
+    // from public to a team: the boards are published to, and none dropped
+    expect(planAccess(mine("photo-resize"), { visibility: "project", bloqIds: [12] })).toEqual({
+      steps: [{ action: "publish", visibility: "project", bloqIds: [12] }],
+      confirm: false,
+    })
+  })
+
+  test("the last board out of a team makes it private", () => {
+    expect(unshareMakesPrivate(mine("mambo-status"), 12)).toBe(true)
+    expect(unshareMakesPrivate(mine("nyc-budget"), 12)).toBe(false)
+    expect(unshareMakesPrivate(mine("photo-resize"), 12)).toBe(false)
+  })
+
+  test("a link exists for 'anyone with the link' and the gallery, never for a team", () => {
+    expect(shareLink("unlisted", "hello-fleet")).toBe("https://heyiris.io/api/v1/public/scripts/hello-fleet")
+    expect(shareLink("public", "photo-resize")).toContain("/photo-resize")
+    expect(shareLink("project", "nyc-budget")).toBeNull()
+    expect(shareLink(undefined, "x")).toBeNull()
+  })
+
+  test("a shared script names the board it came through — only boards I am on", () => {
+    expect(sharedVia(shared[0], boards)).toBe("Deals board")
+    expect(sharedVia(shared[1], boards)).toBe("Mambo crew")
+    expect(sharedVia({ bloqIds: [99] }, boards)).toBe("a board you're on")
+  })
+
+  test("runs-on a machine: nothing to pick; any or a capability still takes a pick", () => {
+    expect(routing(mine("mambo-status").runsOn)).toEqual({ routed: true, node: "Alexs-MacBook-Pro-11711", label: "Runs on Alexs-MacBook-Pro-11711" })
+    expect(routing(shared[1].runsOn)).toMatchObject({ routed: true, node: "studio-mac" })
+    expect(routing(mine("photo-resize").runsOn)).toEqual({ routed: false })
+    expect(routing(mine("hello-fleet").runsOn)).toEqual({ routed: false })
+    expect(routing(undefined)).toEqual({ routed: false })
+  })
+
+  test("versions: latest first; latest runs as the plain name, an older one pins @N", () => {
+    expect(versionChoices(4)).toEqual([4, 3, 2, 1])
+    expect(versionChoices(1)).toEqual([1])
+    expect(versionChoices(null)).toEqual([])
+    expect(versionChoices(50).length).toBe(20)
+    expect(runRef({ slug: "mambo-status" }, null, 4)).toBe("mambo-status")
+    expect(runRef({ slug: "mambo-status" }, 4, 4)).toBe("mambo-status")
+    expect(runRef({ slug: "mambo-status" }, 2, 4)).toBe("mambo-status@2")
+    expect(versionWord(null, 4)).toBe("v4")
+    expect(versionWord(2, 4)).toBe("v2 of 4")
+  })
+
+  test("a shared script always runs by its id — a slug names a script in ONE account", () => {
+    const s = shared[0]
+    expect(runRef({ slug: s.slug, id: s.id, shared: true }, null, s.version)).toBe(s.id)
+    expect(runRef({ slug: s.slug, id: s.id, shared: true }, 3, s.version)).toBe(`${s.id}@3`)
   })
 })

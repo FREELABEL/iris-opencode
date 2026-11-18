@@ -860,6 +860,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} daugiau)",
   "common.requestFailed": "Užklausa nepavyko",
   "common.moreOptions": "Daugiau parinkčių",
+  "session.pinned.title": "Prisegtos žinutės",
+  "session.pinned.empty": "Prisegtų žinučių nėra",
   "common.learnMore": "Sužinokite daugiau",
   "common.rename": "Pervardyti",
   "common.export": "Eksportuoti",

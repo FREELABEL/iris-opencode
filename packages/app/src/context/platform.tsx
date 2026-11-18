@@ -28,7 +28,52 @@ export type FatalRendererErrorLog = {
   os?: DesktopOS
 }
 
+/** A rectangle in the app webview's CSS pixels, already multiplied by the app's zoom. */
+export type NativeBrowserBounds = { x: number; y: number; width: number; height: number }
+export type NativeBrowserState = { url: string; title?: string | null; loading: boolean }
+
+/**
+ * The desktop app's native Browser (#193051 / spike #193062): a separate webview drawn OVER the
+ * side panel. It is not part of this document: its pages can't reach the app, and it can't
+ * draw under our menus. So the app hides it whenever something must draw on top.
+ */
+export type NativeBrowser = {
+  /** `seq` numbers placements (#193405): the native side drops one older than the newest applied. */
+  show(url: string | undefined, bounds: NativeBrowserBounds, seq?: number): Promise<void>
+  bounds(bounds: NativeBrowserBounds, seq?: number): Promise<void>
+  hide(): Promise<void>
+  /** Close this tab's page for good (#193328). Absent on an older desktop. */
+  close?(): Promise<void>
+  navigate(url: string): Promise<string>
+  go(action: "back" | "forward" | "reload"): Promise<void>
+  state(): Promise<NativeBrowserState | null>
+  /** Run a page script in the pane and return its JSON envelope {ok,value|error} (#193145). */
+  eval(script: string): Promise<string>
+  /** A JPEG (base64) of what the Browser shows: the agent's eyes on maps and charts. macOS for now. */
+  screenshot?(): Promise<string>
+  /** Address/title/loading as the page changes. Returns the unsubscribe. */
+  onState(handler: (state: NativeBrowserState) => void): () => void
+  /** Chrome-family profiles and the sites each is signed into: names and counts only (S3b). */
+  importSources?(): Promise<NativeBrowserImportSource[]>
+  /** Copy the picked sites' sign-ins from one profile into the Browser. macOS asks for the key. */
+  importSignIns?(source: string, sites: string[]): Promise<NativeBrowserImported>
+}
+
+export type NativeBrowserImportSource = {
+  id: string
+  browser: string
+  profile: string
+  sites: { site: string; cookies: number }[]
+}
+export type NativeBrowserImported = { imported: number; skipped: number; sites: string[]; persistent: boolean }
+
 type PlatformBase = {
+  /** Desktop only: the native Browser. Absent on the web build, which keeps the iframe. */
+  /** One page per chat: the Browser of chat `chat` (a session id, or "new" before it has one). */
+  nativeBrowser?: (chat: string) => NativeBrowser
+  /** A page in the Browser asked for a new window: `chat` is that page's key (#193328). */
+  onBrowserNewTab?(handler: (e: { chat: string; url: string }) => void): () => void
+
   /** App version */
   version?: string
 
@@ -46,6 +91,12 @@ type PlatformBase = {
 
   /** Restart the app  */
   restart(): Promise<void>
+
+  /**
+   * Run one of the desktop's allowlisted IRIS maintenance actions and return its output
+   * (#192660). Desktop only — the Tauri command maps the name to argv, never to a shell.
+   */
+  irisAction?(action: "daemon-status" | "daemon-restart" | "daemon-register"): Promise<string>
 
   /** Open the IRIS sign-in window (desktop). Absent where there is nothing to open. */
   openSignIn?(): void
@@ -122,8 +173,17 @@ type PlatformBase = {
   /** Force focus styles on interactive elements through desktop devtools (desktop only) */
   setForceFocus?(enabled: boolean): Promise<void>
 
+  /**
+   * The local engine's base URL (desktop sidecar). The crash screen reports through it (#191430):
+   * the top-level error boundary sits above the server providers, so it cannot ask them.
+   */
+  engineUrl?: string
+
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
+
+  /** iris:// links that opened or focused the app (#190233). Returns an unsubscribe. Desktop only. */
+  onDeepLink?(handler: (url: string) => void): () => void
 }
 
 export type Platform = PlatformBase &

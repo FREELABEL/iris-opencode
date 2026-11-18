@@ -48,7 +48,7 @@ const MARKET = [
   { slug: "deal-scenarios", name: "Deal Scenarios", author: "FREELABEL", version: 2, requires: [] },
   { slug: "csv-tidy", name: "CSV Tidy", author: "FREELABEL", version: 2, requires: [] },
 ]
-function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {}) {
+function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[]; sharing?: boolean } = {}) {
   const calls: { path: string; method: string; body?: any }[] = []
   let polled = 0
   const doFetch = async (path: string, init?: RequestInit) => {
@@ -57,10 +57,18 @@ function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {
     if (path === "/iris/hive/scripts")
       return json({
         measured: true,
-        scripts: opts.empty ? [] : snap.scripts.map((s: any) => ({ ...s, tags: (opts.tagged ?? []).includes(s.slug) ? ["ops", "project:7"] : ["ops"] })),
+        scripts: opts.empty
+          ? []
+          : snap.scripts.map((s: any) => ({
+              ...s,
+              tags: (opts.tagged ?? []).includes(s.slug) ? ["ops", "project:7"] : ["ops"],
+              ...(opts.sharing ? ((snap.sharing.mine as any)[s.slug] ?? {}) : {}),
+            })),
         account: opts.empty ? 2945 : 193,
       })
     if (path === "/iris/hive/market") return json({ measured: true, scripts: MARKET })
+    if (path === "/iris/hive/shared-scripts" && opts.sharing) return json({ measured: true, scripts: snap.sharing.shared })
+    if (path.endsWith("/access")) return json({ ok: true, visibility: "project", bloqIds: [12, 40] })
     if (path.endsWith("/install")) return json({ ok: true, sha256: "z", assetsLeft: 1 })
     if (path.endsWith("/tags")) return json({ ok: true, sha256: "x" })
     if (path.startsWith("/iris/hive/market/"))
@@ -83,7 +91,17 @@ function mount(opts: { empty?: boolean; bloqId?: number; tagged?: string[] } = {
   }
   const host = document.createElement("div")
   document.body.append(host)
-  const dispose = render(() => createComponent(IrisHiveScripts, { doFetch, now: () => NOW, bloqId: opts.bloqId, bloqName: opts.bloqId ? "Deals board" : undefined }), host)
+  const dispose = render(
+    () =>
+      createComponent(IrisHiveScripts, {
+        doFetch,
+        now: () => NOW,
+        bloqId: opts.bloqId,
+        bloqName: opts.bloqId ? "Deals board" : undefined,
+        boards: opts.sharing ? snap.sharing.boards : undefined,
+      }),
+    host,
+  )
   return { host, calls, dispose }
 }
 
@@ -137,16 +155,15 @@ test("⌘K runs console-demo on iris-hive-001: stages, output, and the card that
   await wait(() => calls.some((c) => c.path.endsWith("/run")))
   const runCall = calls.find((c) => c.path.endsWith("/run"))!
   expect(runCall.path).toBe("/iris/hive/scripts/console-demo/run")
-  // sent to the node it named, the timeout from the header — and NO arguments: the daemon drops them
+  // sent to the node it named, the timeout from the header — and the settings typed (#189589):
+  // they used to be dropped by the daemon; now the hub checks them and the node passes them on
   expect(runCall.body.node).toBe(snap.nodes.find((n: any) => n.name === "iris-hive-001" && n.online)!.id)
   expect(runCall.body.timeout).toBe(120)
-  expect("args" in runCall.body).toBe(false)
+  expect(runCall.body.args).toMatchObject({ seconds: "20" })
 
   await wait(() => host.querySelector(".hsc-track") !== null)
   // the edit/run toggle moved to Run
   expect(host.querySelector(".hsc")?.getAttribute("data-mode")).toBe("run")
-  // the arguments typed are SAID to be dropped, not silently dropped
-  await wait(() => host.querySelector(".hsc-term")?.textContent?.includes("not delivered") ?? false)
 
   // polled to completion: five stages done, the real output, exit 0
   await wait(() => host.querySelector(".hsc-term")?.textContent?.includes("console demo done") ?? false, 5000)
@@ -341,4 +358,188 @@ test("search finds a script by any word, last-edited orders the list, and A–Z 
   dispose()
   host.remove()
   localStorage.removeItem("iris.hive.scripts.sort")
+})
+
+// #189589 follow-ups, rendered: "it doesn't tell me why" and "flat and not scannable".
+test("a machine that cannot run the script says why on its card, and the code is coloured", async () => {
+  const { host, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => host.querySelectorAll(".hsc-code--view li").length > 0)
+
+  const blocked = [...host.querySelectorAll(".hsc-cc.no")]
+  if (blocked.length) {
+    // the reason is TEXT on the card, not only a hover
+    expect(blocked.every((c) => (c.querySelector('[data-action="hive-cant-run-why"]')?.textContent ?? "").length > 0)).toBe(true)
+  }
+  const spans = [...host.querySelectorAll(".hsc-code--view [class^='hl-']")]
+  expect(spans.length).toBeGreaterThan(0)
+  // the header lines that decide routing get their own colour
+  expect(spans.some((s) => s.className === "hl-dir" && s.textContent?.includes("iris:"))).toBe(true)
+  dispose()
+  host.remove()
+})
+
+test("a running run has a Stop button that cancels it on the hub", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+
+  // first poll answers "running" — Stop must be there
+  await wait(() => host.querySelector('[data-action="hive-stop"]') !== null)
+  ;(host.querySelector('[data-action="hive-stop"]') as HTMLButtonElement).click()
+  await wait(() => calls.some((c) => c.method === "POST" && c.path.endsWith("/cancel")))
+  expect(calls.find((c) => c.path.endsWith("/cancel"))!.path).toMatch(/^\/iris\/hive\/tasks\/[^/]+\/cancel$/)
+  await wait(() => (host.querySelector(".hsc-term")?.textContent ?? "").includes("Stopped"))
+  dispose()
+  host.remove()
+})
+
+
+// #189589 — settings are editable for the next run; a choices= setting is a dropdown; the run
+// sends what was picked. And the output can go full screen, where long lines do not wrap.
+test("settings are fields the run sends, and the output opens full screen", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo seconds=7 on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  expect(calls.find((c) => c.path.endsWith("/run"))!.body.args).toMatchObject({ seconds: "7" })
+
+  // the setting is now a field holding the value that was sent
+  await wait(() => host.querySelector('[data-action="hive-setting"]') !== null)
+  expect((host.querySelector('[data-action="hive-setting"]') as HTMLInputElement).value).toBe("7")
+
+  const full = host.querySelector('[data-action="hive-output-full"]') as HTMLButtonElement
+  full.click()
+  await wait(() => host.querySelector(".hsc-console")?.hasAttribute("data-full") ?? false)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  await wait(() => !(host.querySelector(".hsc-console")?.hasAttribute("data-full") ?? true))
+  dispose()
+  host.remove()
+})
+
+test("one button reloads the list, the open script and the computers — no app reload", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  const count = (p: (s: string) => boolean) => calls.filter((c) => c.method === "GET" && p(c.path)).length
+  const before = {
+    list: count((s) => s === "/iris/hive/scripts"),
+    nodes: count((s) => s.startsWith("/iris/hive?")),
+    source: count((s) => /^\/iris\/hive\/scripts\/[^/]+$/.test(s)),
+  }
+  ;(host.querySelector('[data-action="hive-refresh"]') as HTMLButtonElement).click()
+  await wait(() => count((s) => s === "/iris/hive/scripts") > before.list)
+  await wait(() => count((s) => s.startsWith("/iris/hive?")) > before.nodes)
+  await wait(() => count((s) => /^\/iris\/hive\/scripts\/[^/]+$/.test(s)) > before.source)
+  dispose()
+  host.remove()
+})
+
+test("the output has a copy button next to full screen, and it copies the run's text", async () => {
+  const { host, calls, dispose } = mount()
+  await wait(() => host.querySelectorAll(".hsc-ilist li").length > 0 && host.querySelectorAll(".hsc-cc").length > 0)
+  let copied = ""
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: async (t: string) => void (copied = t) }, configurable: true })
+  const input = host.querySelector(".hsc-cmdk input") as HTMLInputElement
+  input.value = "run console-demo on iris-hive-001"
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+  host.querySelector(".hsc-cmdk")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  const copy = () => host.querySelector('[data-action="hive-output-copy"]') as HTMLButtonElement
+  expect(copy()).not.toBeNull()
+  expect(copy().nextElementSibling?.getAttribute("data-action")).toBe("hive-output-full")
+  await wait(() => !copy().disabled)
+  copy().click()
+  await wait(() => copied.length > 0)
+  expect(copied).toContain(host.querySelector(".hsc-term div:not(.hsc-dim)")?.textContent ?? "")
+  dispose()
+  host.remove()
+})
+
+// #191674 — who can see a script, scripts shared with me, and a run the Hive routes itself.
+test("sharing: the access badge and picker, Shared with me, and a runs-on script sends no computer", async () => {
+  localStorage.removeItem("iris.hive.scripts.view")
+  localStorage.setItem("iris.hive.scripts.slug", "mambo-status")
+  const { host, calls, dispose } = mount({ sharing: true })
+  await wait(() => host.querySelector('[data-action="hive-access"]') !== null && host.querySelectorAll(".hsc-cc").length > 0)
+  const text = () => host.textContent ?? ""
+
+  // the badge speaks plainly; version and where it runs are beside it
+  expect(host.querySelector('[data-action="hive-access"]')?.textContent).toBe("My team: Mambo crew")
+  expect(host.querySelector('[data-action="hive-runs-on"]')?.textContent).toBe("Runs on Alexs-MacBook-Pro-11711")
+  expect([...host.querySelectorAll('[data-action="hive-version"] option')].map((o) => o.textContent)).toEqual(["Latest (v4)", "v3", "v2", "v1"])
+  expect(host.querySelector('[data-action="hive-routed"]')?.textContent).toContain("nothing to choose")
+  // no hub word, no board number, no uuid anywhere on screen
+  expect(text()).not.toMatch(/unlisted|bloq|visibility|0b6f8a52|7e9a1c3b/i)
+
+  // the picker: swap Mambo crew for Ops — shares Ops first, then unshares Mambo crew
+  ;(host.querySelector('[data-action="hive-access"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-action="hive-access-panel"]') !== null)
+  const box = (id: number) => host.querySelector(`[data-board="${id}"]`) as HTMLInputElement
+  expect(box(12).checked).toBe(true)
+  box(40).click()
+  box(12).click()
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/access")).length === 2)
+  expect(calls.filter((c) => c.path.endsWith("/access")).map((c) => c.body)).toEqual([
+    { action: "share", bloqId: 40 },
+    { action: "unshare", bloqId: 12 },
+  ])
+
+  // public asks first, and nothing is sent until it is confirmed
+  await wait(() => host.querySelector('[data-action="hive-access-panel"]') === null)
+  ;(host.querySelector('[data-action="hive-access"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-choice="public"] input') !== null)
+  ;(host.querySelector('[data-choice="public"] input') as HTMLInputElement).click()
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => host.querySelector('[data-action="hive-access-confirm"]') !== null)
+  expect(host.querySelector('[data-action="hive-access-confirm"]')?.textContent).toContain("public gallery")
+  expect(calls.filter((c) => c.path.endsWith("/access")).length).toBe(2)
+  expect(host.querySelector('[data-action="hive-access-save"]')?.textContent).toBe("Make it public")
+  ;(host.querySelector('[data-action="hive-access-save"]') as HTMLButtonElement).click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/access")).length === 3)
+  expect(calls.filter((c) => c.path.endsWith("/access"))[2].body).toEqual({ action: "publish", visibility: "public" })
+
+  // Run: no computer to pick, none sent; an older version pins @N
+  const version = host.querySelector('[data-action="hive-version"]') as HTMLSelectElement
+  version.value = "2"
+  version.dispatchEvent(new Event("change", { bubbles: true }))
+  const runBtn = [...host.querySelectorAll(".hsc-edbar .hsc-run")].find((b) => b.textContent?.includes("Run")) as HTMLButtonElement
+  expect(runBtn.disabled).toBe(false)
+  runBtn.click()
+  await wait(() => calls.some((c) => c.path.endsWith("/run")))
+  const run = calls.find((c) => c.path.endsWith("/run"))!
+  expect(run.path).toBe("/iris/hive/scripts/mambo-status%402/run")
+  expect("node" in run.body).toBe(false)
+
+  // Shared with me: author, the board it came through, run by id — the id never shown
+  const sharedRows = () => [...host.querySelectorAll(".hsc-shlist li")]
+  expect(sharedRows().map((l) => l.querySelector(".hsc-mono")?.textContent)).toEqual(["lead-dedupe", "studio-render"])
+  ;(sharedRows()[0] as HTMLElement).click()
+  await wait(() => host.querySelector('[data-action="hive-shared-via"]') !== null)
+  expect(host.querySelector('[data-action="hive-shared-via"]')?.textContent).toBe("Shared through Deals board")
+  expect(host.querySelector(".hsc-ed")?.textContent).toContain("Dana Ruiz")
+  const sharedRun = host.querySelector('[data-action="hive-shared-run"]') as HTMLButtonElement
+  // the first run's dispatch has to have answered before Run is pressable again
+  await wait(() => !sharedRun.disabled)
+  expect(sharedRun.getAttribute("title")).toBe("Run on iris-hive-001")
+  sharedRun.click()
+  await wait(() => calls.filter((c) => c.path.endsWith("/run")).length === 2)
+  const shared = calls.filter((c) => c.path.endsWith("/run"))[1]
+  expect(shared.path).toBe(`/iris/hive/scripts/${snap.sharing.shared[0].id}/run`)
+  // a shared script with no runs-on goes to the computer picked, as today
+  expect(typeof shared.body.node).toBe("string")
+  expect(text()).not.toMatch(/7e9a1c3b|0b6f8a52/)
+  dispose()
+  host.remove()
+  localStorage.removeItem("iris.hive.scripts.slug")
 })

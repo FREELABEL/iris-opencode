@@ -847,6 +847,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} fleiri)",
   "common.requestFailed": "Umbønin miseydnaðist",
   "common.moreOptions": "Fleiri møguleikar",
+  "session.pinned.title": "Fest boð",
+  "session.pinned.empty": "Eingi fest boð",
   "common.learnMore": "Lær meira",
   "common.rename": "Umnevna",
   "common.export": "Útflutningur",

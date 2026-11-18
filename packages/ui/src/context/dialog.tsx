@@ -67,6 +67,8 @@ function init() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
+      // A pop-up open inside the dialog (a picker, a menu) closes first; the dialog on the next Escape.
+      if (document.querySelector("[data-dismiss-first]")) return
       close()
       event.preventDefault()
       event.stopPropagation()

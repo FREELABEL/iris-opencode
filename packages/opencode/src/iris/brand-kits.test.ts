@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { isDrawableColor, isFontStack, kitOf, kitToCss, normalizeTokens, sectionProblem } from "./brand-kits"
+import { isDrawableColor, isEase, isFontStack, kitOf, kitToCss, logosOf, normalizeTokens, probeTarget, sectionProblem } from "./brand-kits"
 
 // Genesis › Brand kits (#188816). Shapes taken from the real `iris` brand kit (2026-10-09):
 // flat legacy colours ("primary": "#34d399") and type sizes filed under typography.
@@ -113,5 +113,99 @@ describe("the kit as CSS (what Use hands the agent)", () => {
     const css = kitToCss(kit)
     expect(css).not.toMatch(/[<>]/)
     expect(css.match(/[{}]/g)).toEqual(["{", "}"]) // exactly the one :root rule
+  })
+})
+
+// ── #192667: the editor ────────────────────────────────────────────────────────
+
+// The IRIS kit (#8) as fl-api held it on 2026-11-05: marks under brand.logo, voice/tone beside them,
+// stacks and sizes both filed under typography, motion with a spring.
+const IRIS_NOW = {
+  brand: {
+    name: "IRIS",
+    logo: {
+      icon: "https://freelabel.net/favicon.svg",
+      social: "https://freelabel.net/images/iris-logo-social-share-preview.png",
+      primary: "https://freelabel.net/images/iris-logo-white-transparent.png",
+    },
+    tone: "Professional yet bold.",
+    voice: "Confident, technical but approachable.",
+    urls: { website: "https://heyiris.io" },
+  },
+  colors: { accent: { DEFAULT: "#f59e0b" }, background: { DEFAULT: "#000000" }, surface: { DEFAULT: "#171717" } },
+  typography: { "font-family": { family: "Inter, sans-serif" }, "font-size-lg": { family: "1.125rem" } },
+  motion: { ease: "cubic-bezier(.45,0,.15,1)", spring: { damping: 26, stiffness: 170 }, character: "smooth", duration_ms: 320 },
+}
+
+describe("the editor reads every part it edits (#192667)", () => {
+  test("logo variants come from brand.logo, voice and tone from brand, the spring from motion", () => {
+    const kit = kitOf({ id: 8, name: "IRIS", slug: "iris" }, IRIS_NOW)
+    expect(kit.logos).toEqual({
+      icon: IRIS_NOW.brand.logo.icon,
+      social: IRIS_NOW.brand.logo.social,
+      primary: IRIS_NOW.brand.logo.primary,
+    })
+    expect(kit.logoUrl).toBe(IRIS_NOW.brand.logo.primary)
+    expect(kit.voice).toBe(IRIS_NOW.brand.voice)
+    expect(kit.tone).toBe(IRIS_NOW.brand.tone)
+    expect(kit.motion).toEqual({ ease: "cubic-bezier(.45,0,.15,1)", durationMs: 320, character: "smooth", stiffness: 170, damping: 26 })
+    expect(kit.fontSection).toBe("typography")
+    expect(JSON.parse(kit.sections.brand).urls).toEqual({ website: "https://heyiris.io" })
+  })
+
+  test("on_light / on_dark (fl-iris-api #327) are read, and brand.logo wins over the older logos.*", () => {
+    const logos = logosOf({
+      logos: { primary: { url: "https://x.test/old.png" }, icon: { url: "https://x.test/old-icon.png" } },
+      brand: { logo: { primary: "https://x.test/new.png", on_light: "https://x.test/dark-ink.png", on_dark: "https://x.test/white.png" } },
+    })
+    expect(logos).toEqual({
+      primary: "https://x.test/new.png",
+      icon: "https://x.test/old-icon.png",
+      on_light: "https://x.test/dark-ink.png",
+      on_dark: "https://x.test/white.png",
+    })
+    expect(logosOf({ brand: { logo: { primary: "javascript:alert(1)" } } })).toEqual({})
+  })
+
+  test("stacks filed under fonts are read from there, and the kit says so — a save writes them back there", () => {
+    const kit = kitOf({ id: 1, name: "Atlas" }, { fonts: { sans: { DEFAULT: "Inter, sans-serif" } } })
+    expect(kit.fonts).toEqual([{ role: "sans", family: "Inter, sans-serif" }])
+    expect(kit.fontSection).toBe("fonts")
+    expect(kit.sections.fonts).toBe(JSON.stringify({ sans: { DEFAULT: "Inter, sans-serif" } }))
+  })
+})
+
+describe("what a save may send (#192667)", () => {
+  test("brand, fonts and motion are writable; logos and personas are not", () => {
+    expect(sectionProblem("brand", { logo: { on_light: "https://x.test/a.png" }, voice: "plain" })).toBeNull()
+    expect(sectionProblem("fonts", { sans: { DEFAULT: "Inter" } })).toBeNull()
+    expect(sectionProblem("personas", {})).toContain("not editable")
+  })
+
+  test("a logo that is not an http(s) URL is refused, naming the variant", () => {
+    expect(sectionProblem("brand", { logo: { on_dark: "javascript:alert(1)" } })).toContain('"on_dark"')
+    expect(sectionProblem("brand", { logo: "https://x.test/a.png" })).toContain("object")
+    expect(sectionProblem("brand", { voice: 3 })).toContain("voice")
+  })
+
+  test("motion must be something a browser can play", () => {
+    expect(sectionProblem("motion", { ease: "cubic-bezier(.45,0,.15,1)", duration_ms: 320 })).toBeNull()
+    expect(sectionProblem("motion", { ease: "ease-in-out" })).toBeNull()
+    expect(sectionProblem("motion", { ease: "cubic-bezier(1,2,3); } body {" })).toContain("ease")
+    expect(sectionProblem("motion", { duration_ms: 20000 })).toContain("duration")
+    expect(sectionProblem("motion", { spring: { stiffness: 170 } })).toContain("spring")
+    expect(isEase("steps(4, end)")).toBe(true)
+  })
+
+  test("a font stack cannot close a rule", () => {
+    expect(sectionProblem("typography", { body: { family: "Georgia; } body { display:none" } })).toContain('"body"')
+  })
+})
+
+describe("the logo probe never reaches this machine (#192667)", () => {
+  test("public http(s) only", () => {
+    expect(probeTarget("https://freelabel.net/favicon.svg")?.hostname).toBe("freelabel.net")
+    for (const bad of ["file:///etc/passwd", "http://localhost:4096/", "http://127.0.0.1/x.png", "http://10.0.0.4/x.png", "http://192.168.1.2/a", "http://172.20.0.1/a", "http://[::1]/a", "http://printer.local/a", "not a url"])
+      expect(probeTarget(bad)).toBeUndefined()
   })
 })

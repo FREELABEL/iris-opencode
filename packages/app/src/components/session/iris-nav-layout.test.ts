@@ -1,0 +1,212 @@
+import { describe, expect, test } from "bun:test"
+import {
+  DEFAULT_NAV_LAYOUT,
+  FILES_ITEM,
+  type NavLayout,
+  isNavItemVisible,
+  legacyNavLayout,
+  mergeNavLayout,
+  migrateNavLayout,
+  parseNavLayout,
+  setNavItemVisible,
+  visibleNavItems,
+} from "./iris-nav-layout"
+
+const DEF = DEFAULT_NAV_LAYOUT
+const merged = (saved: NavLayout | null) => mergeNavLayout(DEF, saved)
+
+describe("the shipped default (#191509)", () => {
+  test("first run: Atlas first, Genesis second, Files & folders hidden", () => {
+    const l = merged(null)
+    expect(visibleNavItems(l).slice(0, 2)).toEqual(["atlas", "pages"])
+    expect(isNavItemVisible(l, FILES_ITEM)).toBe(false)
+    expect(l.order).toContain(FILES_ITEM) // still reachable, just not shown
+    expect(l.version).toBe(DEF.version)
+  })
+  test("first run returns a copy — editing it cannot change the default", () => {
+    const l = merged(null)
+    l.hidden.push("atlas")
+    expect(DEF.hidden).not.toContain("atlas")
+  })
+})
+
+describe("a saved layout always wins on upgrade", () => {
+  test("a person who reordered keeps their order", () => {
+    const saved: NavLayout = { version: 1, order: ["pulse", "agents", "pages", "atlas", FILES_ITEM], hidden: [FILES_ITEM] }
+    const l = merged(saved)
+    expect(visibleNavItems(l).slice(0, 4)).toEqual(["pulse", "agents", "pages", "atlas"])
+  })
+  test("a person who un-hid Files & folders keeps it shown", () => {
+    const saved: NavLayout = { version: 1, order: [FILES_ITEM, "pages", "atlas"], hidden: [] }
+    expect(isNavItemVisible(merged(saved), FILES_ITEM)).toBe(true)
+  })
+  test("a person who hid Atlas keeps it hidden", () => {
+    const saved: NavLayout = { version: 1, order: ["pages", "atlas", "agents"], hidden: ["atlas"] }
+    const l = merged(saved)
+    expect(isNavItemVisible(l, "atlas")).toBe(false)
+    expect(visibleNavItems(l)[0]).toBe("pages")
+  })
+  test("a hidden item missing from `order` is still a choice, not a new item", () => {
+    const saved: NavLayout = { version: 2, order: ["pages"], hidden: ["atlas"] }
+    expect(isNavItemVisible(merged(saved), "atlas")).toBe(false)
+  })
+  test("ids the app no longer knows are dropped; duplicates removed", () => {
+    const saved: NavLayout = { version: 1, order: ["gone", "atlas", "atlas", "pages"], hidden: ["gone"] }
+    const l = merged(saved)
+    expect(l.order).not.toContain("gone")
+    expect(l.hidden).not.toContain("gone")
+    expect(l.order.filter((x) => x === "atlas")).toHaveLength(1)
+  })
+})
+
+describe("a new item in a later version", () => {
+  const v3: NavLayout = {
+    version: 3,
+    order: ["atlas", "pages", "studio", "agents", "pulse", FILES_ITEM, "inbox"],
+    hidden: [FILES_ITEM, "inbox"],
+  }
+  const saved: NavLayout = { version: 2, order: ["agents", "atlas", "pages", "pulse", FILES_ITEM], hidden: ["pulse"] }
+  test("lands at the default's position, after the item that precedes it", () => {
+    const l = mergeNavLayout(v3, saved)
+    expect(l.order).toEqual(["agents", "atlas", "pages", "studio", "pulse", FILES_ITEM, "inbox"])
+    expect(l.version).toBe(3)
+  })
+  test("takes the default's visibility; the person's own choices are untouched", () => {
+    const l = mergeNavLayout(v3, saved)
+    expect(isNavItemVisible(l, "studio")).toBe(true)
+    expect(isNavItemVisible(l, "inbox")).toBe(false)
+    expect(isNavItemVisible(l, "pulse")).toBe(false) // they hid it; v3 shows it by default
+    expect(isNavItemVisible(l, FILES_ITEM)).toBe(true) // they showed it; v3 hides it by default
+  })
+  test("a new item first in the default goes first", () => {
+    const v4: NavLayout = { version: 4, order: ["home", ...v3.order], hidden: v3.hidden }
+    expect(mergeNavLayout(v4, saved).order[0]).toBe("home")
+  })
+})
+
+describe("showing and hiding", () => {
+  test("hiding keeps the slot; showing moves it after the last shown item", () => {
+    const l = merged(null)
+    const off = setNavItemVisible(l, "atlas", false)
+    expect(off.order).toEqual(l.order)
+    expect(isNavItemVisible(off, "atlas")).toBe(false)
+    const files = setNavItemVisible(l, FILES_ITEM, true)
+    const shown = visibleNavItems(files)
+    expect(shown[shown.length - 1]).toBe(FILES_ITEM)
+  })
+  test("a choice survives the next upgrade", () => {
+    const chosen = setNavItemVisible(merged(null), FILES_ITEM, true)
+    const reread = parseNavLayout(JSON.stringify(chosen))
+    expect(isNavItemVisible(merged(reread), FILES_ITEM)).toBe(true)
+  })
+})
+
+describe("reading storage", () => {
+  test("nothing, garbage or a non-layout is null — i.e. the default", () => {
+    expect(parseNavLayout(null)).toBeNull()
+    expect(parseNavLayout("{nope")).toBeNull()
+    expect(parseNavLayout(JSON.stringify(["atlas"]))).toBeNull()
+  })
+})
+
+describe("carrying over the pre-#191509 pins", () => {
+  test("nothing saved before → no layout, so the new default applies", () => {
+    expect(legacyNavLayout(null, null, DEF)).toBeNull()
+  })
+  test("pins keep their order; unpinned products stay hidden; the file tree they had stays", () => {
+    const legacy = legacyNavLayout(JSON.stringify(["pages", "atlas", "agents", "pulse"]), null, DEF)
+    const l = merged(legacy)
+    expect(visibleNavItems(l).filter((x) => x !== FILES_ITEM)).toEqual(["pages", "atlas", "agents", "pulse"])
+    expect(isNavItemVisible(l, "hive")).toBe(false)
+    expect(isNavItemVisible(l, FILES_ITEM)).toBe(true)
+    expect(l.order.slice(0, 4)).toEqual(["pages", "atlas", "agents", "pulse"])
+  })
+  test("a stored file-tree choice is kept either way", () => {
+    expect(isNavItemVisible(merged(legacyNavLayout(null, "1", DEF)), FILES_ITEM)).toBe(true)
+    expect(isNavItemVisible(merged(legacyNavLayout(JSON.stringify(["atlas"]), "0", DEF)), FILES_ITEM)).toBe(false)
+  })
+  test("only a file-tree choice: the new default order, with that choice", () => {
+    const l = merged(legacyNavLayout(null, "1", DEF))
+    expect(visibleNavItems(l).filter((x) => x !== FILES_ITEM).slice(0, 2)).toEqual(["atlas", "pages"])
+  })
+})
+
+describe("Outreach is a product again (#193487; it was folded into Leads by #192544)", () => {
+  // The layout #469 shipped to previews: Outreach shown, Leads hidden.
+  const withOutreach: NavLayout = {
+    version: 2,
+    order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "marketing", "leads", "playbooks", "hive", "integrations", "mcp"],
+    hidden: [FILES_ITEM, "leads", "playbooks", "hive", "integrations", "mcp"],
+  }
+  test("a saved layout with the old `outreach` id keeps Outreach where it was, shown; Leads stays as the person left it", () => {
+    const l = merged(migrateNavLayout(withOutreach))
+    // Inbox, Browser and Drives were never (Terminal neither, and it starts hidden) in this layout, so they land after their default neighbours.
+    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "marketing", "browser", "drives", "inbox"])
+    expect(isNavItemVisible(l, "leads")).toBe(false)
+    expect(l.order.filter((x) => x === "outreach")).toHaveLength(1)
+  })
+  test("a saved layout that hid the old Outreach keeps it hidden", () => {
+    const saved: NavLayout = { version: 2, order: ["atlas", "outreach", "pages", "leads"], hidden: ["outreach"] }
+    const l = merged(migrateNavLayout(saved))
+    expect(isNavItemVisible(l, "outreach")).toBe(false)
+    expect(visibleNavItems(l)).not.toContain("outreach")
+    expect(isNavItemVisible(l, "leads")).toBe(true)
+  })
+  test("migration renames nothing now: every layout is returned as it was", () => {
+    const saved: NavLayout = { version: 2, order: ["leads", "atlas", "outreach", "pages"], hidden: ["leads"] }
+    expect(migrateNavLayout(saved)).toEqual(saved)
+  })
+  test("a fresh layout shows Outreach, right before Leads", () => {
+    const shown = visibleNavItems(merged(null))
+    expect(shown).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "leads", "inbox", "marketing", "browser", "drives"])
+    expect(DEF.hidden).not.toContain("outreach")
+  })
+  test("a layout migrated by #192544 (no `outreach`, Leads hidden): Outreach lands where the default puts it, shown; Leads stays hidden", () => {
+    const saved: NavLayout = { version: 2, order: ["atlas", "leads", "pages"], hidden: ["leads"] }
+    const l = merged(migrateNavLayout(saved))
+    expect(isNavItemVisible(l, "outreach")).toBe(true)
+    expect(isNavItemVisible(l, "leads")).toBe(false)
+    // Their order is untouched; Outreach goes in after the items that precede it in the default.
+    const theirs = l.order.filter((x) => ["atlas", "leads", "pages"].includes(x))
+    expect(theirs).toEqual(["atlas", "leads", "pages"])
+    expect(l.order.indexOf("outreach")).toBeGreaterThan(l.order.indexOf("pages"))
+  })
+  test("a person who later hides Outreach keeps it hidden on the next upgrade", () => {
+    const off = setNavItemVisible(merged(null), "outreach", false)
+    expect(isNavItemVisible(merged(parseNavLayout(JSON.stringify(off))), "outreach")).toBe(false)
+  })
+})
+
+// #193062: the Browser was unfindable (it only appeared after clicking a chat link). It is a shown
+// product now, after Marketing, for a new person AND for a saved layout that never had it.
+test("the Browser is shown by default after Marketing, also in a layout saved before it existed", () => {
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toContain("browser")
+  const saved: NavLayout = { version: 2, order: ["atlas", "marketing", "pages"], hidden: [] }
+  const l = mergeNavLayout(DEFAULT_NAV_LAYOUT, saved)
+  const shown = visibleNavItems(l)
+  expect(shown.indexOf("browser")).toBe(shown.indexOf("marketing") + 1)
+  // A person who hid it keeps it hidden.
+  expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "browser"], hidden: ["browser"] }).hidden).toContain("browser")
+})
+
+test("the Terminal is hidden by default, after Drives; turned on, it shows there (#193785, #186060)", () => {
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).not.toContain("terminal")
+  // In a layout saved before it existed it stays out of sight too: a new default reaches what was never seen.
+  const old: NavLayout = { version: 2, order: ["atlas", "browser", "pages"], hidden: [] }
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, old))).not.toContain("terminal")
+  // Someone who turned it on keeps it, after the Browser.
+  const on: NavLayout = { version: 2, order: ["atlas", "browser", "drives", "terminal", "pages"], hidden: [] }
+  const shown = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, on))
+  expect(shown.indexOf("terminal")).toBe(shown.indexOf("drives") + 1)
+})
+
+// #193705: Drives is a product in the bar, after Browser — for a new person AND a saved layout that
+// never had it. A person who hides it keeps it hidden.
+test("Drives is shown by default after Browser, also in a layout saved before it existed", () => {
+  const shownFresh = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))
+  expect(shownFresh.indexOf("drives")).toBe(shownFresh.indexOf("browser") + 1)
+  const saved: NavLayout = { version: 2, order: ["atlas", "lexicon", "browser", "pages"], hidden: [] }
+  const shown = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, saved))
+  expect(shown.indexOf("drives")).toBe(shown.indexOf("browser") + 1)
+  expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "drives"], hidden: ["drives"] }).hidden).toContain("drives")
+})

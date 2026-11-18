@@ -846,6 +846,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} მეტი)",
   "common.requestFailed": "მოთხოვნა ვერ მოხერხდა",
   "common.moreOptions": "მეტი პარამეტრები",
+  "session.pinned.title": "მიმაგრებული შეტყობინებები",
+  "session.pinned.empty": "მიმაგრებული შეტყობინებები არ არის",
   "common.learnMore": "შეიტყვეთ მეტი",
   "common.rename": "გადარქმევა",
   "common.export": "ექსპორტი",

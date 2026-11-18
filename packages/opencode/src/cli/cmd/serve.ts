@@ -12,12 +12,46 @@ export const ServeCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.serve")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
-    if (!Flag.OPENCODE_SERVER_PASSWORD) {
-      console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
-    }
+    // #190647: take the Host allowlist out of the environment children inherit (see host-guard.ts).
+    const { pinAllowedHostsFromEnv } = yield* Effect.promise(() => import("../../server/shared/host-guard"))
+    pinAllowedHostsFromEnv()
     const opts = yield* resolveNetworkOptions(args)
+    // #192113: a server nobody gave a password to makes its own.
+    const { LocalAuth } = yield* Effect.promise(() => import("../../server/shared/local-auth"))
+    const auth = LocalAuth.prepareListener({ hostname: opts.hostname })
+    if (!Flag.OPENCODE_SERVER_PASSWORD) {
+      console.log(`Warning: ${LocalAuth.AUTH_ENV}=off; any process on this machine can reach this server.`)
+    }
     const server = yield* Effect.promise(() => Server.listen(opts))
+    if (auth.credentials) LocalAuth.publishRecord({ port: server.port, hostname: opts.hostname, credentials: auth.credentials })
+    if (auth.generated) {
+      console.log(`Password: username ${LocalAuth.USERNAME}, in ${LocalAuth.recordPath(server.port)}`)
+    }
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
+    // #193427: an engine the desktop app started exits when that app is gone (crash, force quit).
+    const { exitWithParent } = yield* Effect.promise(() => import("../../iris/parent-watch"))
+    exitWithParent()
+    // The signed-in account's IRIS agents into the picker (#189448 S1). In the background, AFTER
+    // listen: lib.rs exits the app if the engine is not up within 7s. Never fatal — see
+    // iris/desktop-agent-sync.ts. If files changed, reload config so this launch already shows them.
+    void (async () => {
+      const [{ syncDesktopAgents }, os] = await Promise.all([import("../../iris/desktop-agent-sync"), import("os")])
+      const out = await syncDesktopAgents({ home: os.homedir(), env: process.env }).catch(() => null)
+      if (out) console.error(`iris agent sync: ${JSON.stringify(out)}`)
+      if (out?.ran && out.ok && (out.changed ?? 0) > 0) {
+        const [{ AppRuntime }, { Config }, { disposeAllInstancesAndEmitGlobalDisposed }] = await Promise.all([
+          import("../../effect/app-runtime"),
+          import("../../config/config"),
+          import("../../server/global-lifecycle"),
+        ])
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            yield* (yield* Config.Service).invalidate()
+            yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
+          }),
+        ).catch((e) => console.error(`iris agent sync: reload failed: ${e}`))
+      }
+    })()
 
     // #186171: the desktop app starting its engine is the desktop's app_open. Only when the
     // desktop is the client (spawn_sidecar sets OPENCODE_CLIENT=desktop), so a headless

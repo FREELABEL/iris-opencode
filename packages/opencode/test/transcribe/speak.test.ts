@@ -17,6 +17,8 @@ const relay = Bun.serve<Seen>({
     message(ws, message) {
       const m = JSON.parse(String(message))
       ws.data.received.push(m)
+      if (m.type === "text.delta" && m.delta === "IDLE")
+        return void ws.send(JSON.stringify({ type: "relay.error", code: "idle", message: "Speech stopped after nothing happened for a while." }))
       if (m.type === "text.delta" && m.delta === "FAIL")
         ws.send(JSON.stringify({ type: "relay.error", code: "x", message: "Upstream said no." }))
       else if (m.type === "text.delta") ws.send(JSON.stringify({ type: "audio.delta", delta: Buffer.from(m.delta).toString("base64") }))
@@ -69,6 +71,22 @@ describe("spoken replies: sidecar -> relay", () => {
   test("a relay error becomes one unavailable event with its message", async () => {
     const result = await run((s) => s.text("FAIL"), (e) => e.length > 0)
     expect(result.events).toEqual([{ type: "unavailable", reason: "Upstream said no." }])
+  })
+})
+
+describe("spoken replies: the relay's idle close (#189517)", () => {
+  test("is a quiet close, not an error the window turns into a toast", async () => {
+    const result = await new Promise<{ events: SpeakEvent[]; closed: boolean }>((resolve) => {
+      const events: SpeakEvent[] = []
+      const session = openSpeakSession(cfg(), {
+        onAudio: () => {},
+        onEvent: (e) => events.push(e),
+        onClose: () => resolve({ events, closed: true }),
+      })
+      session.text("IDLE")
+      setTimeout(() => resolve({ events, closed: false }), 3000)
+    })
+    expect(result).toEqual({ events: [], closed: true })
   })
 })
 

@@ -7,6 +7,10 @@ import { SessionQuestionDock } from "@/pages/session/composer/session-question-d
 import { SessionFollowupDock } from "@/pages/session/composer/session-followup-dock"
 import { SessionRevertDock } from "@/pages/session/composer/session-revert-dock"
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
+import { SessionAllowanceDock } from "@/pages/session/composer/session-allowance-dock"
+import { SessionTerminalDock } from "@/pages/session/composer/session-terminal-dock"
+import { SessionBrowserAskDock } from "@/pages/session/composer/session-browser-ask-dock"
+import { askedSite } from "@/components/session/browser-grants"
 import type { SessionComposerRegionController } from "./session-composer-region-controller"
 
 export function SessionComposerRegion(props: {
@@ -37,6 +41,7 @@ export function SessionComposerRegion(props: {
     <div
       ref={controller.setDockRef}
       data-component="session-prompt-dock"
+      data-chat-text
       classList={{
         "w-full shrink-0 flex flex-col justify-center items-center pb-3 pointer-events-none": true,
         "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),
@@ -70,6 +75,15 @@ export function SessionComposerRegion(props: {
               />
             </div>
           )}
+        </Show>
+
+        {/* The Browser's ask (#193051): also shown here, where IRIS asks for everything else. */}
+        <Show when={askedSite()}>
+          <div class="pb-2">
+            <div {...waitGlow()}>
+              <SessionBrowserAskDock />
+            </div>
+          </div>
         </Show>
 
         <Show when={controller.showComposer()}>
@@ -144,6 +158,8 @@ export function SessionComposerRegion(props: {
                 "margin-top": `${-controller.lift()}px`,
               }}
             >
+              <SessionTerminalDock />
+              <SessionAllowanceDock />
               <Show when={controller.followup()?.items.length}>
                 <SessionFollowupDock
                   items={controller.followup()!.items}
@@ -154,7 +170,12 @@ export function SessionComposerRegion(props: {
               </Show>
               <Show
                 when={controller.child()}
-                fallback={<Show when={!controller.state.blocked()}>{props.promptInput}</Show>}
+                fallback={
+                  <Show when={!controller.state.blocked()}>
+                    {/* Above the allowance tab, which tucks 18px behind it (#190087). */}
+                    <div class="relative z-[1]">{props.promptInput}</div>
+                  </Show>
+                }
               >
                 <div
                   ref={controller.setPromptRef}

@@ -14,7 +14,8 @@ You are running inside the **IRIS CLI** — an AI coding assistant from the IRIS
 | Command | What it does |
 |---|---|
 | `iris-login` | Interactive auth — writes `~/.iris/sdk/.env`. Run after install. |
-| `iris-daemon start \| stop \| status \| register` | Local Hive daemon (port 3200) for distributed compute |
+| `iris hive connect` | Add THIS machine to the Hive, or bring it back online. The ONE instruction for both. |
+| `iris-daemon start \| stop \| status` | Local Hive daemon (port 3200) for distributed compute |
 
 ### Two different credentials — do not confuse them
 
@@ -23,11 +24,15 @@ There are TWO keys, and telling a user to refresh the wrong one wastes their tim
 | credential | where | what it proves | refreshed by |
 |---|---|---|---|
 | **account key** `IRIS_API_KEY` | `~/.iris/sdk/.env` | who the user is | `iris-login` |
-| **node key** `node_api_key` | `~/.iris/config.json` | that THIS machine is a registered Hive node | `iris-daemon register` |
+| **node key** `node_api_key` | `~/.iris/config.json` | that THIS machine is a registered Hive node | `iris hive connect` |
 
 So **"`iris auth whoami` works but `iris-daemon status` says offline / HTTP 401 Invalid API
 key" is normal and expected** when the node key is missing or stale. The account key is fine;
-the node is not registered. The fix is `iris-daemon register`, then `iris-daemon restart`.
+the node is not registered. The fix is `iris hive connect`: it restarts the daemon, and the daemon
+enrolls the machine itself (a missing or dead node key is replaced on start), then waits until it
+is online. `iris-daemon register` does the same restart and is fine too — but say `iris hive
+connect`, so every surface gives one instruction (#191478). A brand-new machine needs nothing else:
+the installer and `iris hive connect` both end with the daemon enrolling it.
 
 `iris-login` does NOT issue a node key. Do not tell a user it "refreshes both" — it does not,
 and they will run it, see no change, and lose confidence in the answer.

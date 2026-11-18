@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, Match, on, Show, Switch } from 
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
+import { useSessionParams } from "@/context/session-pane"
 import { needsSystemBrowser,
   addressToUrl,
   knownEmbeddable,
@@ -14,6 +15,10 @@ import { needsSystemBrowser,
   webReloadKey,
   webUrl,
 } from "./web-nav"
+import { GithubPrView } from "./github-pr-view"
+import { NativeBrowserTabs } from "./native-browser-tabs"
+import { nativeBrowserEnabled } from "./native-browser-model"
+import { isGithubPrUrl } from "./github-pr-model"
 import "./session-web-tab.css"
 
 /**
@@ -42,8 +47,36 @@ type Check =
   | { state: "embeddable" }
   | { state: "refused"; reason: string; opened?: boolean }
   | { state: "unknown" }
+  | { state: "github-pr" }
 
 export function SessionWebTab() {
+  const platform = usePlatform()
+  // Desktop: the native Browser (#193062). Decided once per mount, not reactively: switching
+  // engines under a loaded page would drop it.
+  const native = platform.nativeBrowser
+  const params = useSessionParams()
+  if (native && nativeBrowserEnabled(globalThis.localStorage, true)) {
+    // Each chat its own tabs (2026-11-11: one page shared by every chat meant changing it in one
+    // changed it in all; #193328: several pages per chat). Switching chats remounts on that chat's.
+    return (
+      <Show when={params.id ?? "new"} keyed>
+        {(chat) => (
+          <NativeBrowserTabs
+            chat={chat}
+            native={native}
+            zoom={() => platform.webviewZoom?.() ?? 1}
+            openExternal={(u) => platform.openExternal(u)}
+            onNewTab={platform.onBrowserNewTab}
+          />
+        )}
+      </Show>
+    )
+  }
+  return <FramedWebTab />
+}
+
+/** The iframe Browser (#187864): the web build, and desktop with iris.browser.native=0. */
+function FramedWebTab() {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
   const base = createMemo(() => serverSDK().url.replace(/\/$/, ""))
@@ -54,6 +87,9 @@ export function SessionWebTab() {
     on([webUrl, webReloadKey], ([url]) => {
       setAddress(url ?? "")
       if (!url) return
+      // github.com refuses every frame (X-Frame-Options: DENY). A PR is drawn from the GitHub API
+      // instead of bouncing to the system browser (#192937).
+      if (isGithubPrUrl(url)) return setCheck({ state: "github-pr" })
       if (knownEmbeddable(url)) return setCheck({ state: "embeddable" })
       // A sign-in page that reached the panel some other way (typed, pasted, opened by an agent)
       // goes to the browser too — it cannot complete in a frame (#188639).
@@ -156,6 +192,9 @@ export function SessionWebTab() {
             <div class="session-web__note">
               Links you click in the chat open here. Cmd-click opens them in your browser.
             </div>
+          </Match>
+          <Match when={check().state === "github-pr" && webUrl()}>
+            {(url) => <GithubPrView url={url()} base={base()} reloadKey={webReloadKey()} />}
           </Match>
           <Match when={check().state === "checking"}>
             <div class="session-web__note">Loading {host()}…</div>

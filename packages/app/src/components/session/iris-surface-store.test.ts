@@ -1,0 +1,106 @@
+import { beforeEach, describe, expect, test } from "bun:test"
+import {
+  MAX_HELD,
+  heldPayload,
+  holdPayload,
+  needsAttention,
+  resetSurfaceStore,
+  setSurfaceSync,
+  surfaceSync,
+  syncLabel,
+  syncOfPayload,
+} from "./iris-surface-store"
+
+// #190231 phase 2: going back to a view draws what the panel held, and every surface says whether
+// what is on screen is current.
+
+beforeEach(() => resetSurfaceStore())
+
+describe("held payloads", () => {
+  test("a view you had comes back as you left it", () => {
+    holdPayload("b|42|atlas|lists|", { lists: [1] })
+    expect(heldPayload<any>("b|42|atlas|lists|")).toEqual({ lists: [1] })
+    expect(heldPayload<any>("b|42|atlas|schemas|")).toBeUndefined()
+  })
+
+  test("bounded: past the limit the least recently used view goes, not the one just read", () => {
+    for (let i = 0; i < MAX_HELD; i++) holdPayload(`k${i}`, i)
+    heldPayload("k0") // read: now the most recent
+    holdPayload("new", "x")
+    expect(heldPayload<any>("k0")).toBe(0)
+    expect(heldPayload<any>("k1")).toBeUndefined()
+    expect(heldPayload<any>("new")).toBe("x")
+  })
+})
+
+describe("sync state of what is on screen", () => {
+  test("a live answer is synced, stamped when it arrived", () => {
+    expect(syncOfPayload({ measured: true, __at: 1000 })).toEqual({ state: "synced", at: 1000 })
+  })
+  test("drawn from what we held, or from the board's copy, or mid-refresh: checking", () => {
+    expect(syncOfPayload({ measured: true, __held: true }).state).toBe("checking")
+    expect(syncOfPayload({ measured: true, source: "copy" }).state).toBe("checking")
+    expect(syncOfPayload({ measured: true, __at: 1 }, true).state).toBe("checking")
+  })
+  test("offline wins over everything, and carries the copy's age", () => {
+    expect(syncOfPayload({ measured: true, source: "copy", offline: true, copiedAt: "2026-10-22T10:00:00Z" }, true)).toEqual({
+      state: "offline",
+      copiedAt: "2026-10-22T10:00:00Z",
+      reason: undefined,
+    })
+  })
+  test("the server answered without data: error — but not while a retry is in flight", () => {
+    expect(syncOfPayload({ measured: false, reason: "not signed in" })).toEqual({ state: "error", reason: "not signed in" })
+    expect(syncOfPayload({ measured: false }, true).state).toBe("checking")
+  })
+})
+
+describe("what the chip and the tab strip say", () => {
+  const now = Date.parse("2026-10-22T12:00:00Z")
+  test("each state in words", () => {
+    expect(syncLabel(undefined, now)).toBeNull()
+    expect(syncLabel({ state: "checking" }, now)!.text).toBe("Checking…")
+    expect(syncLabel({ state: "synced", at: now - 10_000 }, now)!.text).toBe("Synced · just now")
+    expect(syncLabel({ state: "synced", at: now - 5 * 60_000 }, now)!.text).toBe("Synced · 5m ago")
+    expect(syncLabel({ state: "offline", copiedAt: "2026-10-22T11:48:00Z" }, now)!.text).toBe("Offline · copy from 12m ago")
+    expect(syncLabel({ state: "error", reason: "fl-api 403" }, now)!.title).toContain("fl-api 403")
+  })
+  test("only a tab showing something not current gets a dot", () => {
+    setSurfaceSync("atlas", { state: "offline" })
+    setSurfaceSync("agents", { state: "synced", at: now })
+    setSurfaceSync("pages", { state: "error" })
+    expect(needsAttention(surfaceSync("atlas"))).toBe(true)
+    expect(needsAttention(surfaceSync("pages"))).toBe(true)
+    expect(needsAttention(surfaceSync("agents"))).toBe(false)
+    expect(needsAttention(surfaceSync("hive"))).toBe(false)
+  })
+})
+
+// #190537 W3: edits made offline wait on this computer; the chip counts them.
+describe("edits waiting to be sent", () => {
+  const now = Date.parse("2026-10-22T12:00:00Z")
+  test("a payload carries the board's waiting and held counts into the sync state", () => {
+    const s = syncOfPayload({ measured: true, offline: true, copiedAt: "2026-10-22T11:48:00Z", outbox: { waiting: 3, held: 0, heldItems: [] } })
+    expect(s).toMatchObject({ state: "offline", waiting: 3, held: 0 })
+    expect(syncOfPayload({ measured: true, __at: now }).waiting).toBeUndefined()
+  })
+  test("the chip says how many wait, offline or sending", () => {
+    expect(syncLabel({ state: "offline", copiedAt: "2026-10-22T11:48:00Z", waiting: 3 }, now)!.text).toBe("Offline · 3 waiting")
+    expect(syncLabel({ state: "synced", at: now, waiting: 1 }, now)!.text).toBe("1 waiting · sending…")
+    expect(syncLabel({ state: "synced", at: now, waiting: 0 }, now)!.text).toBe("Synced · just now")
+  })
+  test("an edit held for a person outranks everything, and dots the tab", () => {
+    expect(syncLabel({ state: "synced", at: now, waiting: 2, held: 1 }, now)!.text).toBe("1 needs you")
+    expect(syncLabel({ state: "offline", held: 2 }, now)!.text).toBe("2 need you")
+    expect(needsAttention({ state: "synced", at: now, held: 1 })).toBe(true)
+    expect(needsAttention({ state: "synced", at: now, waiting: 4 })).toBe(false)
+  })
+})
+
+test("a new sync state REPLACES the old one: once the queue empties, '1 needs you' does not stick (found in the preview)", () => {
+  const now = Date.parse("2026-10-22T12:00:00Z")
+  setSurfaceSync("atlas", syncOfPayload({ measured: true, __at: now, outbox: { waiting: 0, held: 1, heldItems: [] } }))
+  expect(syncLabel(surfaceSync("atlas"), now)!.text).toBe("1 needs you")
+  setSurfaceSync("atlas", syncOfPayload({ measured: true, __at: now }))
+  expect(syncLabel(surfaceSync("atlas"), now)!.text).toBe("Synced · just now")
+})

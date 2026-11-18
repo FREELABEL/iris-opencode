@@ -850,6 +850,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} бештар)",
   "common.requestFailed": "Дархост иҷро нашуд",
   "common.moreOptions": "Имконоти бештар",
+  "session.pinned.title": "Паёмҳои часпонида",
+  "session.pinned.empty": "Паёмҳои часпонида нест",
   "common.learnMore": "Бисёр омӯхтан",
   "common.rename": "Номи дигар",
   "common.export": "Содирот",

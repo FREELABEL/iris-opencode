@@ -2,6 +2,7 @@ import { createEffect, createMemo, createResource, createRoot, For, onCleanup, o
 import { createStore } from "solid-js/store"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { DragDropProvider, PointerSensor } from "@dnd-kit/solid"
+import { endTabDrag, moveTabDrag, startTabDrag } from "@/context/split-drag"
 import { isSortable, useSortable } from "@dnd-kit/solid/sortable"
 import { Accessibility, AutoScroller, Feedback, PointerActivationConstraints } from "@dnd-kit/dom"
 import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers"
@@ -61,6 +62,7 @@ function SessionTabSlot(props: {
         fallbackTitle={props.fallbackTitle}
         onRename={props.onRename}
         onNavigate={() => props.onNavigate(ref)}
+        navigateOnRelease
         onClose={props.onClose}
         active={props.active()}
         forceTruncate={props.forceTruncate}
@@ -312,12 +314,31 @@ export function TitlebarTabStrip(props: {
             if (!source) return
             const tab = props.tabs.find((item) => tabKey(item) === source.id.toString())
             if (!tab) return
+            // A session tab can be dragged down into the chat area to open beside it (#191484).
+            // Selecting it on drag start would make it the session you drop it beside, so a
+            // session tab is selected when the drag ends in the strip instead.
+            if (tab.type === "session") {
+              const { x, y } = event.operation.position.current
+              startTabDrag({ server: tab.server, sessionId: tab.sessionId, x, y })
+              return
+            }
             const tabEl = source.element?.querySelector<HTMLDivElement>("[data-titlebar-tab]")
             props.onNavigate(tab, tabEl ?? undefined)
+          }}
+          onDragMove={(event) => {
+            const { x, y } = event.operation.position.current
+            moveTabDrag(x, y)
           }}
           onDragEnd={(event) => {
             const current = visibleTabIds()
             const source = event.operation.source
+            // Dropped into the chat area: the split view opened it there. No reorder, no select.
+            if (endTabDrag(event.canceled)) return
+            const tab = source ? props.tabs.find((item) => tabKey(item) === source.id.toString()) : undefined
+            if (tab?.type === "session" && !event.canceled) {
+              const tabEl = source?.element?.querySelector<HTMLDivElement>("[data-titlebar-tab]")
+              props.onNavigate(tab, tabEl ?? undefined)
+            }
             if (event.canceled || !isSortable(source)) return
 
             const { initialIndex, index } = source

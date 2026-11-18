@@ -844,6 +844,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} ច្រើនទៀត)",
   "common.requestFailed": "សំណើបានបរាជ័យ",
   "common.moreOptions": "ជម្រើសច្រើនទៀត",
+  "session.pinned.title": "សារដែលបានខ្ទាស់",
+  "session.pinned.empty": "គ្មានសារដែលបានខ្ទាស់",
   "common.learnMore": "ស្វែងយល់បន្ថែម",
   "common.rename": "ប្តូរឈ្មោះ",
   "common.export": "នាំចេញ",

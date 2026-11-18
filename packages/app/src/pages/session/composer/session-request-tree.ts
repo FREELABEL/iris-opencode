@@ -5,6 +5,7 @@ function sessionTreeRequest<T>(
   request: Record<string, T[] | undefined>,
   sessionID?: string,
   include: (item: T) => boolean = () => true,
+  elsewhere: ReadonlySet<string> = new Set(),
 ) {
   if (!sessionID) return
 
@@ -23,6 +24,9 @@ function sessionTreeRequest<T>(
     if (!list) continue
     for (const child of list) {
       if (seen.has(child)) continue
+      // A subagent with a column of its own shows its requests there, not here as well (#191772):
+      // shown twice, it was answered twice, and the second answer came back "not found".
+      if (elsewhere.has(child)) continue
       seen.add(child)
       ids.push(child)
     }
@@ -38,8 +42,9 @@ export function sessionPermissionRequest(
   request: Record<string, PermissionRequest[] | undefined>,
   sessionID?: string,
   include?: (item: PermissionRequest) => boolean,
+  elsewhere?: ReadonlySet<string>,
 ) {
-  return sessionTreeRequest(session, request, sessionID, include)
+  return sessionTreeRequest(session, request, sessionID, include, elsewhere)
 }
 
 export function sessionQuestionRequest(
@@ -47,6 +52,7 @@ export function sessionQuestionRequest(
   request: Record<string, QuestionRequest[] | undefined>,
   sessionID?: string,
   include?: (item: QuestionRequest) => boolean,
+  elsewhere?: ReadonlySet<string>,
 ) {
-  return sessionTreeRequest(session, request, sessionID, include)
+  return sessionTreeRequest(session, request, sessionID, include, elsewhere)
 }

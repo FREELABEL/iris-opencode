@@ -852,6 +852,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} till)",
   "common.requestFailed": "Begäran misslyckades",
   "common.moreOptions": "Fler alternativ",
+  "session.pinned.title": "Fästa meddelanden",
+  "session.pinned.empty": "Inga fästa meddelanden",
   "common.learnMore": "Läs mer",
   "common.rename": "Byt namn",
   "common.export": "Exportera",

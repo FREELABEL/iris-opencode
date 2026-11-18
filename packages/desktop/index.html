@@ -43,10 +43,24 @@
         }
       })()
     </script>
+    <style id="iris-boot-style">
+      /* Boot splash (#192535): until the app's first render the window was a blank ground. */
+      #iris-boot { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center;
+        background: var(--v2-background-bg-deep, #131312); pointer-events: none; transition: opacity .2s ease, visibility 0s linear .2s; }
+      html[data-color-scheme="light"] #iris-boot { background: var(--v2-background-bg-deep, #f6f5f1); }
+      #iris-boot img { width: 40px; height: 40px; display: block; margin: 0 auto; opacity: .92; }
+      #iris-boot i { display: block; width: 72px; height: 2px; margin: 18px auto 0; border-radius: 2px;
+        background: linear-gradient(90deg, transparent, rgba(156,156,146,.55), transparent) 0 0 / 200% 100%;
+        animation: iris-boot 1.2s linear infinite; }
+      @keyframes iris-boot { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+      @media (prefers-reduced-motion: reduce) { #iris-boot i { animation: none; } }
+      #root:not(:empty) ~ #iris-boot { opacity: 0; visibility: hidden; }
+    </style>
   </head>
   <body class="antialiased overscroll-none text-12-regular overflow-hidden">
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root" class="flex flex-col h-screen"></div>
+    <div id="iris-boot" aria-hidden="true"><div><img src="/favicon.svg" alt="" /><i></i></div></div>
     <script src="/src/index.tsx" type="module"></script>
   </body>
 </html>

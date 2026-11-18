@@ -19,6 +19,12 @@ export type DialogGoUpsellProps = {
   actionLabel: string
   /** Risk reversal next to the ask. Pass UPGRADE_GUARANTEE when the action leads to paying. */
   guarantee?: string
+  /**
+   * Run this instead of opening `link` (#190190). The IRIS limit uses it to open the in-app plans
+   * dialog: the server's link is a web pricing page, and paying there meant a second sign-in on
+   * an app that is being retired.
+   */
+  onAction?: () => void
   onClose?: (dontShowAgain?: boolean) => void
 }
 
@@ -28,9 +34,11 @@ export function DialogUsageExceeded(props: DialogGoUpsellProps) {
   const platform = usePlatform()
 
   const runAction = () => {
-    if (props.link) platform.openExternal(props.link)
+    if (!props.onAction && props.link) platform.openExternal(props.link)
     props.onClose?.()
     dialog.close()
+    // After close: the action usually opens the next dialog, and only one is shown at a time.
+    props.onAction?.()
   }
 
   const dismiss = () => {

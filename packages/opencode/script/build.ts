@@ -191,6 +191,12 @@ for (const item of targets) {
       outfile: `dist/${name}/bin/iris`,
       execArgv: [`--user-agent=iris/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
+      // Bun's own download of the baseline runtime fails to extract on Windows CI runners
+      // ("Failed to extract executable ... download may be incomplete"). CI downloads it
+      // itself and points here, so the no-AVX2 build never depends on that flaky step.
+      ...(item.avx2 === false && process.env.BUN_BASELINE_EXECUTABLE
+        ? { executablePath: process.env.BUN_BASELINE_EXECUTABLE }
+        : {}),
     },
     files: {
       [treeSitterWorkerPath]: treeSitterWorker,

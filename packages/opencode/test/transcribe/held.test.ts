@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, statSync, utimesSync } from "fs"
+import { existsSync, mkdtempSync, rmSync, statSync, utimesSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { hold, listHeld, readHeld, release } from "../../src/transcribe/held"
+import { discard, hold, keepRecording, listHeld, readHeld, readHeldMeta, release } from "../../src/transcribe/held"
 
 const dir = mkdtempSync(join(tmpdir(), "held-test-"))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -41,5 +41,20 @@ describe("held recordings", () => {
 
   test("a missing directory lists as empty", () => {
     expect(listHeld(join(dir, "does-not-exist"))).toEqual([])
+  })
+
+  test("a touched take's recording is kept out of the held list, one file, the newest (#191998)", () => {
+    const first = hold(wav, dir, { review: true })
+    expect(readHeldMeta(first.id, dir).review).toBe(true)
+    const kept = keepRecording(first.id, dir)!
+    expect(kept.path).toEndWith(`kept/${first.id}.wav`)
+    expect(statSync(kept.path).mode & 0o777).toBe(0o600)
+    expect(listHeld(dir).map((h) => h.id)).not.toContain(first.id)
+    const second = hold(wav, dir, { review: true })
+    const next = keepRecording(second.id, dir)!
+    expect(existsSync(kept.path)).toBe(false)
+    expect(existsSync(next.path)).toBe(true)
+    discard(second.id, dir)
+    expect(existsSync(next.path)).toBe(false)
   })
 })

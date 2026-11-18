@@ -1,3 +1,4 @@
+import { IrisShell } from "@/components/iris-shell"
 import "@/index.css"
 import * as Sentry from "@sentry/solid"
 import { I18nProvider } from "@opencode-ai/ui/context"
@@ -5,7 +6,7 @@ import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { FileComponentProvider } from "@opencode-ai/ui/context/file"
 import { File } from "@opencode-ai/session-ui/file"
 import { Font } from "@opencode-ai/ui/font"
-import { Splash } from "@opencode-ai/ui/logo"
+import { IrisMark } from "@/components/iris-mark"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
 import {
@@ -55,7 +56,10 @@ import { resolveAccountScope } from "@/utils/account-scope"
 import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider, useSettings } from "@/context/settings"
+import { MessagePinsProvider } from "@/context/message-pins"
 import { TabsProvider, useTabs, type DraftTab } from "@/context/tabs"
+import { SplitProvider } from "@/context/split"
+import { SessionSplitRoute } from "@/pages/session/split-view"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout"
@@ -66,7 +70,12 @@ import { useCheckServerHealth } from "./utils/server-health"
 import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 
-import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
+// The chat page (with its timeline, diffs and side panel) is its own chunk, so Home does not parse
+// it on the way in (#192535); the shell preloads it once the browser is idle.
+const sessionPage = () => import("@/pages/session")
+const SessionPage = lazy(() => sessionPage().then((m) => ({ default: m.SessionPage })))
+const SessionRouteErrorBoundary = lazy(() => sessionPage().then((m) => ({ default: m.SessionRouteErrorBoundary })))
+const TargetSessionRouteContent = lazy(() => sessionPage().then((m) => ({ default: m.TargetSessionRouteContent })))
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
 
@@ -108,11 +117,13 @@ const SessionRoute = () => {
   )
 }
 
-function TargetServerRoute(props: ParentProps) {
+// `serverKey` is for a split column on a server other than the route's (#191484).
+function TargetServerRoute(props: ParentProps<{ serverKey?: () => string }>) {
   const params = useParams<{ serverKey: string; id: string }>()
   const global = useGlobal()
+  const key = () => props.serverKey?.() ?? params.serverKey
   const conn = createMemo(() => {
-    const key = requireServerKey(params.serverKey)
+    const key = requireServerKey(props.serverKey?.() ?? params.serverKey)
     return global.servers.list().find((item) => ServerConnection.key(item) === key)
   })
 
@@ -120,7 +131,7 @@ function TargetServerRoute(props: ParentProps) {
     // Owns the server-identity remount. Session changes must NOT remount this
     // subtree (SessionRouteErrorBoundary resets and createSessionLineage
     // re-resolves reactively instead); both rely on this key for server changes.
-    <Show when={requireServerKey(params.serverKey)} keyed>
+    <Show when={requireServerKey(key())} keyed>
       <ServerSDKProvider server={conn}>
         <ServerSyncProvider server={conn}>{props.children}</ServerSyncProvider>
       </ServerSDKProvider>
@@ -128,11 +139,7 @@ function TargetServerRoute(props: ParentProps) {
   )
 }
 
-const TargetSessionRoute = () => (
-  <TargetServerRoute>
-    <TargetSessionRouteContent />
-  </TargetServerRoute>
-)
+const TargetSessionRoute = () => <SessionSplitRoute server={TargetServerRoute} content={TargetSessionRouteContent} />
 
 function LegacyTargetSessionRoute() {
   const params = useParams<{ serverKey: string; id: string }>()
@@ -410,7 +417,7 @@ export function AppBaseProviders(
             <ErrorBoundary
               fallback={(error) => {
                 Sentry.captureException(error)
-                return <ErrorPage error={error} />
+                return <ErrorPage error={error} reportCrash />
               }}
             >
               <QueryProvider>
@@ -500,7 +507,10 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean; start
       </Show>
       <Show when={loading()}>
         <div class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background-base">
-          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+          {/* The IRIS mark, as the boot splash in index.html shows it, so one hands over to the other unseen.
+              The cube itself never animates (brand kit); the bar says it is loading. */}
+          <IrisMark class="size-10 rounded-[9px]" />
+          <i class="iris-loading-bar" aria-hidden="true" />
         </div>
       </Show>
     </>
@@ -521,7 +531,7 @@ function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key:
   return (
     <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
       <div class="flex flex-col items-center max-w-md text-center">
-        <Splash class="w-12 h-15 mb-4" />
+        <IrisMark class="size-12 mb-4 rounded-[10px]" />
         <p class="text-14-regular text-text-base">
           {unreachable()[0]}
           <span class="text-text-strong font-medium">{name()}</span>
@@ -593,28 +603,32 @@ export function AppInterface(props: {
     >
       <GlobalProvider>
         <SettingsProvider>
-          <ConnectionGate disableHealthCheck={props.disableHealthCheck} startup={props.startup}>
-            <Show when={useSettings().general.newLayoutDesigns().toString()} keyed>
-              <Dynamic
-                component={props.router ?? Router}
-                root={(routerProps) => (
-                  <TabsProvider>
-                    <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                          </Show>
-                        </ServerShell>
-                      </NotificationProvider>
-                    </PermissionProvider>
-                  </TabsProvider>
-                )}
-              >
-                <Routes serverScoped={props.serverScoped} />
-              </Dynamic>
-            </Show>
-          </ConnectionGate>
+          <MessagePinsProvider>
+            <ConnectionGate disableHealthCheck={props.disableHealthCheck} startup={props.startup}>
+              <Show when={useSettings().general.newLayoutDesigns().toString()} keyed>
+                <Dynamic
+                  component={props.router ?? Router}
+                  root={(routerProps) => (
+                    <TabsProvider>
+                      <SplitProvider>
+                        <PermissionProvider>
+                          <NotificationProvider>
+                            <ServerShell>
+                              <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                                <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                              </Show>
+                            </ServerShell>
+                          </NotificationProvider>
+                        </PermissionProvider>
+                      </SplitProvider>
+                    </TabsProvider>
+                  )}
+                >
+                  <Routes serverScoped={props.serverScoped} />
+                </Dynamic>
+              </Show>
+            </ConnectionGate>
+          </MessagePinsProvider>
         </SettingsProvider>
       </GlobalProvider>
     </ServerProvider>
@@ -645,11 +659,17 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
-        <Route path="/" component={NewHome} />
-        <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
-        <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+        {/* One shell, mounted once: only the left side changes between these (#192535). */}
+        <Route component={(routeProps) => <IrisShell>{routeProps.children}</IrisShell>}>
+          <Route path="/" component={NewHome} />
+          <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
+          <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+          <Route path="/new-session" component={DraftRoute} />
+        </Route>
       </Show>
-      <Route path="/new-session" component={DraftRoute} />
+      <Show when={!settings.general.newLayoutDesigns()}>
+        <Route path="/new-session" component={DraftRoute} />
+      </Show>
     </>
   )
 }

@@ -5,6 +5,16 @@ import { fileURLToPath } from "url"
 
 const theme = fileURLToPath(new URL("./public/oc-theme-preload.js", import.meta.url))
 
+/**
+ * THE OLDEST WEBKIT WE DRAW IN (#191625). On macOS the desktop app renders in the system WebKit,
+ * which only moves when the user updates Safari: an Intel iMac on Ventura runs Safari 16.6. CSS
+ * that WebKit does not know is dropped without a sound — light-dark() (Safari 17.5) took the
+ * Hive cards' borders, fills and buttons with it. Lightning CSS lowers newer syntax to what this
+ * target understands when the bundle is minified; light-dark() becomes color-scheme variables,
+ * switched by the theme's [data-color-scheme] rules. JS for the same WebKit: src/polyfills.ts.
+ */
+export const CSS_TARGETS = { safari: 16 << 16 }
+
 const channel = (() => {
   const raw = process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
@@ -30,6 +40,15 @@ export default [
         },
         worker: {
           format: "es",
+        },
+        css: {
+          lightningcss: { targets: CSS_TARGETS },
+        },
+        build: {
+          cssMinify: "lightningcss",
+          // Minifying takes its targets from cssTarget, which otherwise inherits build.target
+          // "esnext" — lowering nothing. Measured: the bundle kept all 42 light-dark() without it.
+          cssTarget: "safari16",
         },
       }
     },

@@ -11,7 +11,6 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import type { EventSource } from "@opencode-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
-import { ServerAuth } from "@/server/auth"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
 
@@ -255,11 +254,13 @@ export const TuiThreadCommand = cmd({
       const network = resolveNetworkOptionsNoConfig(args)
       const external = hasArg("--port") || hasArg("--hostname") || network.mdns === true
 
-      const headers = external ? ServerAuth.headers() : undefined
+      // The worker makes this server's token, so only it can say what to send (#192113).
+      const server = external ? await client.call("server", network) : undefined
+      const headers = server?.headers
 
-      const transport = external
+      const transport = server
         ? {
-            url: (await client.call("server", network)).url,
+            url: server.url,
             fetch: undefined,
             events: undefined,
             headers,

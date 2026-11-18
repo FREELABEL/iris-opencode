@@ -4,14 +4,15 @@ import { usePlatform } from "@/context/platform"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { atlasNoteUrl } from "./iris-atlas-artifacts-model"
 import { focusAtlasNote, requestIrisNav } from "./iris-nav"
-import { linkAction, navigateWeb, WEB_TAB } from "./web-nav"
+import { nativeBrowserEnabled } from "./native-browser-model"
+import { claimLinkClick, navigateWeb, WEB_TAB } from "./web-nav"
 
 /**
  * Links in the chat open in the side panel's Browser tab (#187864) instead of leaving the app.
  *
  * Scoped to the chat timeline on purpose: a link in a dialog, the settings or the error page
- * keeps its old behaviour. Listens in the CAPTURE phase so it runs before tauri-plugin-opener's
- * window listener, which skips a click that is already defaultPrevented — see web-nav.ts.
+ * keeps its old behaviour. Listens in the CAPTURE phase and stops the click there, so neither
+ * plugin's injected link script (opener on window, shell on body) also opens it — see claimLinkClick.
  */
 export function useLinksOpenInPanel(root: () => HTMLElement | undefined) {
   const layout = useLayout()
@@ -38,6 +39,11 @@ export function useLinksOpenInPanel(root: () => HTMLElement | undefined) {
       return showTab("iris")
     }
     navigateWeb(href)
+    // Desktop (#193062): the Browser product, where the native webview lives.
+    if (platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)) {
+      requestIrisNav({ surface: "browser" })
+      return showTab("iris")
+    }
     showTab(WEB_TAB)
   }
 
@@ -45,23 +51,10 @@ export function useLinksOpenInPanel(root: () => HTMLElement | undefined) {
     const el = root()
     if (!el) return
     const onClick = (event: MouseEvent) => {
-      const anchor = event
-        .composedPath()
-        .find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement && !!node.href)
-      if (!anchor) return
-      const action = linkAction({
-        href: anchor.href,
-        button: event.button,
-        meta: event.metaKey,
-        ctrl: event.ctrlKey,
-        shift: event.shiftKey,
-        alt: event.altKey,
-        appOrigin: location.origin,
-      })
-      if (action === "default") return
-      event.preventDefault()
-      if (action === "system") return platform.openExternal(anchor.href)
-      openInPanel(anchor.href)
+      const claimed = claimLinkClick(event, location.origin)
+      if (!claimed) return
+      if (claimed.action === "system") return platform.openExternal(claimed.href)
+      openInPanel(claimed.href)
     }
     el.addEventListener("click", onClick, true)
     onCleanup(() => el.removeEventListener("click", onClick, true))

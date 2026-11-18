@@ -1,5 +1,14 @@
 import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
-import { isLiveDictation, showLiveText } from "./live-text"
+import {
+  caretMoved,
+  caretToEnd,
+  closeLiveSegment,
+  growFollowing,
+  liveTouched,
+  settleLiveText,
+  writeLiveText,
+  type LiveRegion,
+} from "./live-text"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -70,7 +79,14 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   /** Live dictation words, while a quick take is being spoken (see the Dictate `live` prop). */
-  let liveSpan: HTMLElement | undefined
+  let liveRegion: LiveRegion | undefined
+  /** The input event firing now is the take's own write, not the person touching the text. */
+  let liveWriting = false
+  const liveInput = (target: HTMLElement) => {
+    liveWriting = true
+    target.dispatchEvent(new InputEvent("input", { bubbles: true }))
+    liveWriting = false
+  }
   let localInput = false
   // Where dictation draws while a take runs. Signals, so its portals mount once the nodes exist.
   const [dictateLayer, setDictateLayer] = createSignal<HTMLElement>()
@@ -186,7 +202,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1)*var(--chat-leading-scale,1))] [font-family:var(--chat-font-family,var(--font-family-sans))] text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
             // With dictation the waveform's lane is reserved all the time — 30px below the text instead
             // of 8 — so a take starting never moves the text or grows the composer.
             classList={{
@@ -196,6 +212,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
               "pb-[30px]": !!props.transcribeUrl,
             }}
             onInput={(event) => {
+              if (liveRegion && !liveWriting) liveRegion = closeLiveSegment(liveRegion)
               const cursor = promptInputV2Cursor(event.currentTarget)
               const prompt = parsePromptInputV2Editor(event.currentTarget)
               const images = props.controller.parts().filter((part) => part.type === "image")
@@ -215,9 +232,10 @@ export function PromptInputV2(props: PromptInputV2Props) {
             onPaste={props.controller.onPaste}
             onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
           />
+          {/* Live words are the prompt's value, so they hide this like typed text does (#189543, #189546). */}
           <Show when={!props.controller.value()}>
             <div
-              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
+              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[length:calc(13px*var(--chat-text-scale,1))] font-[440] leading-[calc(20px*var(--chat-text-scale,1)*var(--chat-leading-scale,1))] [font-family:var(--chat-font-family,var(--font-family-sans))] text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
             >
               {view.placeholder?.() ??
@@ -263,28 +281,35 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   tagLayer={dictateTagLayer}
                   devices={props.dictateDevices}
                   live={(text) => {
-                    // The take, typed into the chat box while it is spoken (live-text.ts). Kept out
-                    // of prompt state — no input event — so the final transcript is what is sent.
-                    if (editor) liveSpan = showLiveText(editor, liveSpan, text)
+                    // The take, typed into the chat box while it is spoken (live-text.ts) — as the
+                    // prompt's real text, through the real input path, so it is what Send sends.
+                    const target = editor
+                    if (!target) return
+                    // A long take keeps its newest words in view (#189977).
+                    const write = growFollowing(target, () => writeLiveText(target, liveRegion, text))
+                    liveRegion = write.region
+                    if (write.changed) liveInput(target)
                   }}
+                  keepLive={() => {
+                    liveRegion = undefined
+                  }}
+                  touched={() => !!editor && liveTouched(editor, liveRegion)}
                   insert={(text) => {
-                    // Append into the editor and let the component's own onInput re-parse it.
-                    // Going through the real input path keeps attachments and mentions intact —
-                    // writing prompt state directly would have to reconstruct them.
-                    liveSpan?.remove() // the final transcript takes the live words' place
-                    liveSpan = undefined
-                    if (!editor) return
-                    const existing = editor.textContent ?? ""
-                    const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
-                    editor.appendChild(document.createTextNode(gap + text))
-                    editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                    // The final transcript settles the take (live-text.ts), and the component's own
+                    // onInput re-parses the editor. Going through the real input path keeps attachments
+                    // and mentions intact — writing prompt state directly would have to reconstruct them.
+                    const region = liveRegion
+                    liveRegion = undefined
+                    if (!editor) return false
+                    // Someone mid-edit keeps their caret. Otherwise the take ends with it at the end.
+                    const midEdit = liveTouched(editor, region) && caretMoved(editor)
+                    if (settleLiveText(editor, region, text)) liveInput(editor)
+                    if (midEdit) return true
                     editor.focus()
-                    const range = document.createRange()
-                    range.selectNodeContents(editor)
-                    range.collapse(false)
-                    const sel = window.getSelection()
-                    sel?.removeAllRanges()
-                    sel?.addRange(range)
+                    caretToEnd(editor)
+                    // The caret is at the end of the transcript; so is the view (#189977).
+                    editor.scrollTop = editor.scrollHeight
+                    return true
                   }}
                 />
               )}
@@ -413,9 +438,6 @@ function parsePromptInputV2Editor(editor: HTMLDivElement) {
       return
     }
     if (!(node instanceof HTMLElement)) return
-    // Live dictation words are on screen, not in the prompt: the final transcript replaces them.
-    // Reading them here would put them in the prompt twice once it lands.
-    if (isLiveDictation(node)) return
     if (node.dataset.mention) {
       mention(node)
       return
@@ -718,7 +740,7 @@ export function PromptInputV2Popover(props: {
               value={search().value}
               aria-label={search().label}
               placeholder={search().placeholder}
-              class="w-full bg-transparent text-[13px] leading-5 text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+              class="w-full bg-transparent text-[length:calc(13px*var(--chat-text-scale,1))] leading-[calc(20px*var(--chat-text-scale,1))] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
               onInput={(event) => search().onValueChange(event.currentTarget.value)}
               onKeyDown={(event) => search().onKeyDown(event)}
               onMouseDown={(event) => event.stopPropagation()}

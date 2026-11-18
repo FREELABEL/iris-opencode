@@ -850,6 +850,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} më shumë)",
   "common.requestFailed": "Kërkesa dështoi",
   "common.moreOptions": "Më shumë opsione",
+  "session.pinned.title": "Mesazhet e fiksuara",
+  "session.pinned.empty": "Nuk ka mesazhe të fiksuara",
   "common.learnMore": "Mësoni më shumë",
   "common.rename": "Riemërto",
   "common.export": "Eksporto",

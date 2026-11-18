@@ -1,5 +1,8 @@
 // @refresh reload
+// Must stay first: fills in APIs the macOS system webview may be too old to have (#191428).
+import "@opencode-ai/app/polyfills"
 import { render } from "solid-js/web"
+import { createSignal } from "solid-js"
 import { AppBaseProviders, AppInterface, PlatformProvider, Platform, ServerConnection } from "@opencode-ai/app"
 import { open, save } from "@tauri-apps/plugin-dialog"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
@@ -9,13 +12,20 @@ import { Store } from "@tauri-apps/plugin-store"
 
 import { UPDATER_ENABLED, createUpdaterPlatform, onUpdateModeChanged, runUpdater } from "./updater"
 import { opencodeGlobal } from "./opencode-global"
+import { basicAuthorization, engineOrigins, withEngineAuth, type EngineCredentials } from "@opencode-ai/app/engine-auth"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
 import { relaunch } from "@tauri-apps/plugin-process"
 import pkg from "../package.json"
+import { installRendererLog } from "./renderer-log"
+
+// First, before anything can throw: this window's errors and every load of it go to engine.log,
+// which survives a reload — the console does not (#191508).
+installRendererLog((line) => invoke("log_renderer", line))
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -26,8 +36,27 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 let update: Update | null = null
 
+// macOS draws the traffic lights over the overlay title bar; the app's Titlebar insets
+// itself around them when it knows it is on macOS and drops the inset in full screen,
+// where macOS hides the lights (#190242, #190245). Windows and Linux are left unset on
+// purpose: their Tauri windows keep native frames, and the Titlebar's windows()/linux()
+// branches assume a frameless window with app-drawn caption controls.
+const mac = ostype() === "macos"
+const [windowFullscreen, setWindowFullscreen] = createSignal(false)
+if (mac) {
+  const win = getCurrentWindow()
+  const sync = () =>
+    void win
+      .isFullscreen()
+      .then(setWindowFullscreen)
+      .catch(() => undefined)
+  sync()
+  void win.onResized(sync).catch(() => undefined)
+}
+
 const platform: Platform = {
   platform: "desktop",
+  ...(mac ? { os: "macos" as const, windowFullscreen } : {}),
   version: pkg.version,
 
   // 1.18's application-global updater (PlatformBase.updater). The older
@@ -36,6 +65,46 @@ const platform: Platform = {
   // Tauri plugin — the flag gates them identically, so they cannot disagree about
   // whether updating is possible.
   updater: createUpdaterPlatform(),
+
+  // #193062: the side panel's native Browser (src-tauri/src/browser.rs).
+  // One page per chat (2026-11-11): every call names the chat whose page it is.
+  nativeBrowser: (chat) => ({
+    // seq (#193405): the native side drops a placement older than the newest it applied.
+    show: (url, bounds, seq) => invoke("browser_show", { chat, url: url ?? null, bounds, seq: seq ?? null }),
+    bounds: (bounds, seq) => invoke("browser_bounds", { chat, bounds, seq: seq ?? null }),
+    hide: () => invoke("browser_hide", { chat }),
+    close: () => invoke("browser_close", { chat }),
+    navigate: (url) => invoke<string>("browser_navigate", { chat, url }),
+    go: (action) => invoke("browser_go", { chat, action }),
+    state: () => invoke("browser_state", { chat }),
+    eval: (script) => invoke<string>("browser_eval", { chat, script }),
+    screenshot: () => invoke<string>("browser_screenshot", { chat }),
+    importSources: () => invoke("browser_import_sources"),
+    importSignIns: (source, sites) => invoke("browser_import", { source, sites }),
+    onState(handler) {
+      let off: (() => void) | undefined
+      let gone = false
+      void listen<{ chat: string; url: string; title?: string | null; loading: boolean }>("iris-browser://state", (e) => {
+        if (e.payload.chat === chat) handler(e.payload)
+      }).then((u) => (gone ? u() : (off = u)))
+      return () => {
+        gone = true
+        off?.()
+      }
+    },
+  }),
+  // A page asked for a new window (target=_blank, window.open): the app opens a tab (#193328).
+  onBrowserNewTab(handler) {
+    let off: (() => void) | undefined
+    let gone = false
+    void listen<{ chat: string; url: string }>("iris-browser://new-tab", (e) => handler(e.payload)).then((u) =>
+      gone ? u() : (off = u),
+    )
+    return () => {
+      gone = true
+      off?.()
+    }
+  },
 
   async openDirectoryPickerDialog(opts) {
     const result = await open({
@@ -176,6 +245,35 @@ const platform: Platform = {
     await relaunch()
   },
 
+  // iris:// links (#190233). The shell queues every link (one can arrive before this window
+  // exists) and emits `iris-deep-link`; draining on subscribe AND on each event is one path
+  // for a cold start and a running app, so each link is handled exactly once.
+  onDeepLink: (handler) => {
+    let stopped = false
+    const drain = () =>
+      invoke<string[]>("take_deep_links")
+        .then((urls) => {
+          if (!stopped) urls.forEach(handler)
+        })
+        .catch(() => undefined)
+    let unlisten: (() => void) | undefined
+    void listen("iris-deep-link", () => void drain())
+      .then((fn) => {
+        if (stopped) fn()
+        else unlisten = fn
+      })
+      .catch(() => undefined)
+    void drain()
+    return () => {
+      stopped = true
+      unlisten?.()
+    }
+  },
+
+  // #192660: the allowlisted maintenance actions (lib.rs iris_action), reachable from Hive screens —
+  // they were only in the macOS menu, so Windows had no way to restart Hive from the app.
+  irisAction: (action) => invoke<string>("iris_action", { action }),
+
   openSignIn: () => {
     void invoke("open_login_window").catch(() => undefined)
   },
@@ -277,24 +375,46 @@ root?.addEventListener("mousewheel", (e) => {
 //                     right and silently matches nothing.
 // Derived with ServerConnection.key() rather than hardcoded so the two cannot drift.
 const serverPort = opencodeGlobal().port
-const sidecarConnection: ServerConnection.Any = {
-  displayName: "Local",
-  type: "sidecar",
-  variant: "base",
-  http: { url: `http://127.0.0.1:${serverPort}` },
-}
-const servers = [sidecarConnection]
-const defaultServer = ServerConnection.key(sidecarConnection)
+// The crash screen reports through the engine (#191430); it sits above the server providers.
+if (serverPort) platform.engineUrl = `http://127.0.0.1:${serverPort}`
 
-render(() => {
-  return (
-    <PlatformProvider value={platform}>
-      {ostype() === "macos" && (
-        <div class="mx-px bg-background-base border-b border-border-weak-base h-8" data-tauri-drag-region />
-      )}
-      <AppBaseProviders>
-        <AppInterface defaultServer={defaultServer} servers={servers} />
-      </AppBaseProviders>
-    </PlatformProvider>
-  )
-}, root!)
+// The engine's per-launch password (#190647), over IPC. None when this app attached to an engine
+// it did not start, or on a build whose engine has no password — then the window connects as it
+// always has. Asked for before the first render so no request goes out without it.
+const engineCredentials = invoke<EngineCredentials | null>("engine_credentials").catch((err) => {
+  console.error("[desktop] could not read the engine credentials", err)
+  return null
+})
+
+void engineCredentials.then((credentials) => {
+  if (credentials && serverPort) {
+    // Every bare fetch to this engine (the IRIS panels) — see engine-auth.ts.
+    globalThis.fetch = withEngineAuth(
+      globalThis.fetch.bind(globalThis),
+      engineOrigins(serverPort),
+      basicAuthorization(credentials),
+    )
+  }
+
+  const sidecarConnection: ServerConnection.Any = {
+    displayName: "Local",
+    type: "sidecar",
+    variant: "base",
+    http: {
+      url: `http://127.0.0.1:${serverPort}`,
+      ...(credentials ? { username: credentials.username, password: credentials.password } : {}),
+    },
+  }
+  const servers = [sidecarConnection]
+  const defaultServer = ServerConnection.key(sidecarConnection)
+
+  render(() => {
+    return (
+      <PlatformProvider value={platform}>
+        <AppBaseProviders>
+          <AppInterface defaultServer={defaultServer} servers={servers} />
+        </AppBaseProviders>
+      </PlatformProvider>
+    )
+  }, root!)
+})

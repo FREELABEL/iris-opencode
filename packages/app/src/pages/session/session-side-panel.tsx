@@ -1,5 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, type JSX } from "solid-js"
-import { IrisPanelBoundary } from "@/components/iris-panel-boundary"
+import { For, Match, Show, Switch, createEffect, createMemo, on, onCleanup, type JSX } from "solid-js"
+import { useIrisPanelScope } from "@/context/iris-panel-scope"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { DragDropProvider as DndKitProvider, PointerSensor } from "@dnd-kit/solid"
@@ -21,7 +21,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
-import { Mark } from "@opencode-ai/ui/logo"
+import { IrisMark } from "@/components/iris-mark"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
@@ -35,16 +35,15 @@ import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import {
-  SessionIrisTab,
-  IRIS_SURFACE_CHOICES,
-  requestIrisSurface,
+  useRequestIrisSurface,
   irisStripTabs,
-  irisActiveSurface,
+  useIrisActiveSurface,
   irisPinned,
-  toggleIrisPin,
   irisFilesPinned,
+  irisOpensOnAtlas,
   toggleIrisFilesPin,
-  irisScopeChip,
+  registerBrowserPane,
+  registerTerminalPane,
 } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
@@ -55,6 +54,9 @@ const webTabPanelID = "session-side-panel-web-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
 import { SessionWebTab } from "@/components/session/session-web-tab"
+import { SessionTerminalPane, rememberPanelSurface } from "@/pages/session/terminal-pane"
+import { nativeBrowserEnabled } from "@/components/session/native-browser-model"
+import { usePlatform } from "@/context/platform"
 import { WEB_TAB, webUrl } from "@/components/session/web-nav"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
@@ -75,7 +77,12 @@ import {
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { IrisProductIcon } from "@/components/session/iris-product-icon"
+import { IrisPanelBody, IrisPinItems, IrisScopeChip } from "@/components/iris-panel"
+import { needsAttention, surfaceCount, surfaceSync, syncLabel } from "@/components/session/iris-surface-store"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
+
+// #193062: the IRIS panel draws the Browser product with this pane (see registerBrowserPane).
+registerBrowserPane(SessionWebTab)
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
 type RenderDiff = FileDiffInfo | (SnapshotFileDiff & { file: string }) | VcsFileDiff
@@ -105,6 +112,11 @@ export function SessionSidePanel(props: {
   size: Sizing
   stacked?: boolean
 }) {
+  // This column's panel (#191484): its product, its project chip, its "show this product".
+  const panelScope = useIrisPanelScope()
+  const requestIrisSurface = useRequestIrisSurface()
+  const irisActiveSurface = useIrisActiveSurface()
+  const irisSurfaceChangedAt = panelScope.surfaceChangedAt
   const layout = useLayout()
   const settings = useSettings()
   const file = useFile()
@@ -113,6 +125,9 @@ export function SessionSidePanel(props: {
   const dialog = useDialog()
   const sdk = useSDK()
   const { sessionKey, tabs, view, params } = useSessionLayout()
+  // #193785: the panel's Terminal tab, while this session (and its TerminalProvider) is on screen.
+  onCleanup(registerTerminalPane(SessionTerminalPane))
+  createEffect(() => rememberPanelSurface(panelScope, irisActiveSurface()))
   const projectDirectory = createMemo(() => sdk().directory)
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
@@ -130,9 +145,8 @@ export function SessionSidePanel(props: {
   const open = createMemo(() => reviewOpen() || fileOpen())
   const fileTreeWidth = createMemo(() => Math.max(FILE_TREE_WIDTH_MIN, layout.fileTree.width()))
   const reviewTab = createMemo(() => isDesktop())
-  /** The file tree is a pin like the products (#187129); unpinned, it is not in the strip. */
-  const isGitProject = () => props.reviewFirst?.() ?? true
-  const filesPinned = createMemo(() => irisFilesPinned(isGitProject()))
+  /** The file tree is an item in the panel's layout like the products (#187129, #191509). */
+  const filesPinned = createMemo(() => irisFilesPinned())
   const panelWidth = createMemo(() => {
     if (!open()) return "0px"
     if (reviewOpen()) return "auto"
@@ -207,6 +221,7 @@ export function SessionSidePanel(props: {
     hasReview: props.canReview,
     reviewFirst: props.reviewFirst,
     filesPinned,
+    preferIris: irisOpensOnAtlas,
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
@@ -240,7 +255,7 @@ export function SessionSidePanel(props: {
       {/* The file tree is pinned here like any product (#187129). Pinning it also opens it. */}
       <MenuV2.Item
         onSelect={() => {
-          if (!toggleIrisFilesPin(isGitProject())) return
+          if (!toggleIrisFilesPin()) return
           openReviewPanel()
           tabs().setActive("review")
         }}
@@ -250,21 +265,7 @@ export function SessionSidePanel(props: {
       </MenuV2.Item>
       {/* PIN a product as a tab (#186509 nav). Pinning also opens it; unpinning only removes the
           tab. The ✓ is the state, so the menu answers "what is in my strip" at a glance. */}
-      <For each={IRIS_SURFACE_CHOICES}>
-        {(surface) => (
-          <MenuV2.Item
-            onSelect={() => {
-              if (toggleIrisPin(surface.id)) openIrisSurface(surface.id)
-            }}
-          >
-            <span class="inline-flex w-4 shrink-0">{irisPinned().includes(surface.id as any) ? "✓" : ""}</span>
-            <span class="inline-flex items-center gap-2">
-              <IrisProductIcon id={surface.id} />
-              {surface.label}
-            </span>
-          </MenuV2.Item>
-        )}
-      </For>
+      <IrisPinItems onOpen={openIrisSurface} />
     </MenuV2.Content>
   )
 
@@ -275,11 +276,19 @@ export function SessionSidePanel(props: {
   // Keyed by PRODUCT ID (strings), not by fresh objects. Rebuilding the triggers on every product
   // switch made the Tabs component lose its selected trigger for a frame, fall back to the first
   // tab and report it as a choice — measured: Agents → Genesis landed on Review.
-  const productIds = createMemo(() => irisStripTabs().map((t) => t.id as string), undefined, {
+  const productIds = createMemo(() => irisStripTabs(irisActiveSurface()).map((t) => t.id as string), undefined, {
     equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]),
   })
   /** The Browser tab (#187864) — only once a link has been opened in it; closable. */
-  const webTabOpen = createMemo(() => tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB)
+  // With the native Browser (#193062) the browser is the Browser PRODUCT in the strip, and chat
+  // links open there; this link-only tab would be a second view of one native webview.
+  const nativeBrowser = (() => {
+    const p = usePlatform()
+    return !!p.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)
+  })()
+  const webTabOpen = createMemo(
+    () => !nativeBrowser && (tabs().all().includes(WEB_TAB) || tabs().active() === WEB_TAB),
+  )
   const webHost = createMemo(() => {
     try {
       return new URL(webUrl() ?? "").hostname.replace(/^www\./, "")
@@ -292,13 +301,15 @@ export function SessionSidePanel(props: {
       <Tabs.Trigger
         value={WEB_TAB}
         closeButton={
-          <IconButton
-            icon="close-small"
-            variant="ghost"
-            class="h-5 w-5"
-            onClick={() => tabs().close(WEB_TAB)}
-            aria-label={language.t("common.closeTab")}
-          />
+          nativeBrowser ? undefined : (
+            <IconButton
+              icon="close-small"
+              variant="ghost"
+              class="h-5 w-5"
+              onClick={() => tabs().close(WEB_TAB)}
+              aria-label={language.t("common.closeTab")}
+            />
+          )
         }
         hideCloseButton
         onMiddleClick={() => tabs().close(WEB_TAB)}
@@ -318,7 +329,19 @@ export function SessionSidePanel(props: {
           {/* The heyiris.io nav's icon for the product, so it reads the same in both places. */}
           <div class="flex items-center gap-1.5">
             <IrisProductIcon id={id} />
-            <div>{irisStripTabs().find((t) => t.id === id)?.label ?? id}</div>
+            <div>{irisStripTabs(irisActiveSurface()).find((t) => t.id === id)?.label ?? id}</div>
+            {/* Showing something that is not current — offline, or the server refused (#190231 phase 2). */}
+            <Show when={needsAttention(surfaceSync(id))}>
+              <span class="iris-tabdot" title={syncLabel(surfaceSync(id), Date.now())?.text} />
+            </Show>
+            {/* A count the product keeps for its tab — Leads' messages in review (#192483, #192544), Inbox's unread (#192688). */}
+            <Show when={surfaceCount(id)}>
+              {(n) => (
+                <span class="iris-tabcount" data-testid={`iris-tabcount-${id}`} title={id === "inbox" ? `${n()} unread on this computer` : `${n()} in review`}>
+                  {n() > 99 ? "99+" : n()}
+                </span>
+              )}
+            </Show>
           </div>
         </Tabs.Trigger>
       )}
@@ -331,33 +354,8 @@ export function SessionSidePanel(props: {
    * pinned, and a chip inside it would scroll away exactly when the panel is busiest.
    */
   const ScopeChip = () => (
-    <Show when={activeTab() === "iris" && irisScopeChip()}>
-      {(chip) => (
-        <div class="iris-scopechip" data-testid="iris-scope-chip" data-scope={chip().scope}>
-          <Show
-            when={chip().pick}
-            fallback={
-              <span class="iris-scopechip__body" title={`Scope: ${chip().label}`}>
-                <span class="iris-scopechip__name">{chip().label}</span>
-              </span>
-            }
-          >
-            {(pick) => (
-              <button
-                type="button"
-                class="iris-scopechip__body"
-                title={`Project: ${chip().label} — change`}
-                onClick={() => pick()()}
-              >
-                <span class="iris-scopechip__name">{chip().label}</span>
-                <span class="iris-scopechip__chev" aria-hidden="true">
-                  ▾
-                </span>
-              </button>
-            )}
-          </Show>
-        </div>
-      )}
+    <Show when={activeTab() === "iris"}>
+      <IrisScopeChip />
     </Show>
   )
 
@@ -375,6 +373,7 @@ export function SessionSidePanel(props: {
 
   let fileFilter: HTMLInputElement | undefined
   let tabList: HTMLDivElement | undefined
+  let strip: HTMLDivElement | undefined
   const temporaryTab = tabs().preview
   const previewTab = (value: string) => {
     const next = normalizeTab(value)
@@ -388,7 +387,33 @@ export function SessionSidePanel(props: {
     previewTab(SESSION_OPEN_FILE_TAB)
     queueMicrotask(() => fileFilter?.focus())
   }
+  /**
+   * KOBALTE'S FALLBACK IS NOT A CHOICE (#190093). When the strip changes under the value we hold
+   * — a product added because it is shown but not pinned, the strip remounting as the panel
+   * reopens, a product switch committing from its transition — Kobalte can momentarily lose the
+   * selected trigger, select the FIRST trigger and report it through onChange. Taken as a click,
+   * it moved the panel: showing Integrations from a closed panel landed on Files & changes
+   * (traced: onSelectionChange → activateTab("review"), with the Integrations trigger present).
+   *
+   * Its signature, all three: the reported value is the FIRST trigger, it is not the value we hold,
+   * and the selection or the product changed moments ago. A person clicking the first tab within
+   * that moment is the only thing this can swallow. The product's timestamp is written with its
+   * signal (irisSurfaceChangedAt), not by an effect here — effects downstream of a transition wait
+   * for the commit, and the fallback arrives before it.
+   */
+  let heldSince = performance.now() // the strip mounting counts: it remounts as the panel reopens
+  createEffect(on(stripValue, () => (heldSince = performance.now()), { defer: true }))
+  const FALLBACK_WINDOW_MS = 400
+  const looksLikeFallback = (value: string) => {
+    if (value === stripValue()) return false
+    const since = Math.max(heldSince, irisSurfaceChangedAt())
+    if (performance.now() - since > FALLBACK_WINDOW_MS) return false
+    // This panel's own strip: in split view the document's first trigger is another column's (#191780).
+    const first = strip?.querySelector('[data-slot="tabs-trigger"]') ?? null
+    return first?.getAttribute("data-value") === value
+  }
   const activateTab = (value: string) => {
+    if (looksLikeFallback(value)) return
     // A product tab: the IRIS panel, on that product. "iris" itself is never shown as a tab.
     if (value.startsWith("iris:")) return openIrisSurface(value.slice(5))
     const next = normalizeTab(value)
@@ -533,11 +558,15 @@ export function SessionSidePanel(props: {
                       >
                         <DragDropSensors />
                         <ConstrainDragYAxis />
+                        {/* TAB STRIP 1 OF 2 (#184891): drawn only WITHOUT `props.fileBrowserState`. The desktop
+                            app draws strip 2 below ("session-review-v2-tabs-bar"). A tab or control added
+                            here alone compiles, passes its tests and never appears — add it to both. */}
                         <Tabs value={stripValue()} onChange={activateTab}>
                           <div class="sticky top-0 shrink-0 flex">
                             <Tabs.List
                               class="min-w-0 flex-1"
                               ref={(el: HTMLDivElement) => {
+                                strip = el
                                 const stop = createFileTabListSync({ el, contextOpen })
                                 onCleanup(stop)
                               }}
@@ -693,7 +722,7 @@ export function SessionSidePanel(props: {
                             <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                                 <div class="h-full px-6 pb-42 -mt-4 flex flex-col items-center justify-center text-center gap-6">
-                                  <Mark class="w-14 opacity-10" />
+                                  <IrisMark class="size-14 rounded-[12px] opacity-10" />
                                   <div class="text-14-regular text-text-weak max-w-56">
                                     {language.t("session.files.selectToOpen")}
                                   </div>
@@ -712,9 +741,7 @@ export function SessionSidePanel(props: {
                               inert={!irisVisible() || undefined}
                             >
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                                <IrisPanelBoundary label="The IRIS panel">
-                                  <SessionIrisTab />
-                                </IrisPanelBoundary>
+                                <IrisPanelBody />
                               </div>
                             </div>
                           </Show>
@@ -787,11 +814,14 @@ export function SessionSidePanel(props: {
                         tabs().move(source.id.toString(), source.index)
                       }}
                     >
+                      {/* TAB STRIP 2 OF 2 (#184891): the one the desktop app draws (with `props.fileBrowserState`).
+                          Strip 1 above is the fallback — add any tab or control to both. */}
                       <Tabs value={stripValue()} onChange={activateTab}>
                         <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center">
                           <Tabs.List
                             ref={(el: HTMLDivElement) => {
                               tabList = el
+                              strip = el
                               const stop = createFileTabListSync({ el, contextOpen })
                               onCleanup(stop)
                             }}
@@ -971,7 +1001,7 @@ export function SessionSidePanel(props: {
                           <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
                               <div class="h-full px-6 pb-42 -mt-4 flex flex-col items-center justify-center text-center gap-6">
-                                <Mark class="w-14 opacity-10" />
+                                <IrisMark class="size-14 rounded-[12px] opacity-10" />
                                 <div class="text-14-regular text-text-weak max-w-56">
                                   {language.t("session.files.selectToOpen")}
                                 </div>
@@ -990,9 +1020,7 @@ export function SessionSidePanel(props: {
                             inert={!irisVisible() || undefined}
                           >
                             <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                              <IrisPanelBoundary label="The IRIS panel">
-                                <SessionIrisTab />
-                              </IrisPanelBoundary>
+                              <IrisPanelBody />
                             </div>
                           </div>
                         </Show>

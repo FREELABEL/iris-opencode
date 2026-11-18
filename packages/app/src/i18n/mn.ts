@@ -854,6 +854,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} илүү)",
   "common.requestFailed": "Хүсэлт амжилтгүй боллоо",
   "common.moreOptions": "Илүү олон сонголт",
+  "session.pinned.title": "Тогтоосон мессежүүд",
+  "session.pinned.empty": "Тогтоосон мессеж алга",
   "common.learnMore": "Илүү ихийг мэдэж аваарай",
   "common.rename": "Нэрээ өөрчлөх",
   "common.export": "Экспорт",

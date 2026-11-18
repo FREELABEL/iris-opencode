@@ -14,7 +14,10 @@ export const GO_UPSELL_URL = "https://opencode.ai/go"
 // throttling us, this is us refusing us. The server marks it `limit_source: iris_billing_gate`,
 // which is the only field in the body that cannot also be produced by a provider.
 export const IRIS_LIMIT_SOURCE = "iris_billing_gate"
-export const IRIS_UPGRADE_URL = "https://web.heyiris.io/pricing?source=desktop-limit"
+// The fallback when the server sends no upgrade_url. heyiris.io, never the Elon host (#190190):
+// the desktop opens its own plans dialog for this limit and ignores the link, and for anything
+// else that does follow it, where /pricing resolves is the server's to change, not a client's.
+export const IRIS_UPGRADE_URL = "https://heyiris.io/pricing?source=desktop-limit"
 
 export type RetryReason = "free_tier_limit" | "account_rate_limit" | "iris_budget_exceeded" | (string & {})
 

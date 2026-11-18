@@ -216,10 +216,10 @@ on this machine.</p>
 
   // Everything after "we have a credential". Shared by BOTH sign-in methods, so the email-code
   // and Google paths cannot drift: save → setup (CLI, daemon) → restart.
-  async function finishSignIn(token, method) {
+  async function finishSignIn(token, method, refused) {
     $("step-code").hidden = true;
     $("sub").textContent = "You're signed in on this machine.";
-    msg("Signed in. Opening IRIS…", "ok");
+    if (refused) msg(refused, "err"); else msg("Signed in. Opening IRIS…", "ok");
     // #189321: who this key is, so the saved-accounts list can name it and give a second account
     // its own history. Best effort with a short timeout — sign-in must not wait on it or fail
     // because of it; an account saved without a name is still an account you can switch to.
@@ -235,6 +235,8 @@ on this machine.</p>
       }
     } catch (_) {}
     await invoke("save_iris_token", { token, identity });
+    // Saved first: closing the window now loses nothing, and the notice never blocks signing in.
+    if (refused) await new Promise((r) => setTimeout(r, 4000));
     // After the save, not before: Rust attaches the token now on disk, which is what lets the
     // server join this install to the person (genesis_events.user_id).
     track("onboarding.signed_in", method);
@@ -289,7 +291,10 @@ on this machine.</p>
       // credential — a file that exists, passes every "is it signed in" check, and 401s.
       const token = data?.data?.sdk_token?.key;
       if (!token) throw new Error("Signed in, but no token was returned. Contact support.");
-      await finishSignIn(token, "code");
+      // A licence or trial refused at verification (#191962). Either field may be absent.
+      const claim = [data?.data?.license_claim, data?.data?.trial_claim].find((c) => c?.granted === false);
+      const refused = claim ? (claim.error || "That code could not be applied.") + " You're still signed in." : "";
+      await finishSignIn(token, "code", refused);
     } catch (e) {
       msg(e.message, "err");
     } finally {

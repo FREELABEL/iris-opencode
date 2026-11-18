@@ -1,5 +1,6 @@
 import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
+import { Panel } from "@/iris/panel"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
@@ -27,9 +28,17 @@ function eventResponse() {
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
       const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+      // Counted for the side panel (#191506): zero open streams is the one way to KNOW no desktop can hear a command.
       return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", handler)),
-        () => Effect.sync(() => GlobalBus.off("event", handler)),
+        Effect.sync(() => {
+          GlobalBus.on("event", handler)
+          Panel.streamOpened()
+        }),
+        () =>
+          Effect.sync(() => {
+            GlobalBus.off("event", handler)
+            Panel.streamClosed()
+          }),
       )
     })
     const heartbeat = Stream.tick("10 seconds").pipe(

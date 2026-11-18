@@ -756,6 +756,8 @@ export const dict = {
   "common.dismiss": "Afvis",
   "common.requestFailed": "Forespørgsel mislykkedes",
   "common.moreOptions": "Flere muligheder",
+  "session.pinned.title": "Fastgjorte beskeder",
+  "session.pinned.empty": "Ingen fastgjorte beskeder",
   "common.learnMore": "Lær mere",
   "common.rename": "Omdøb",
   "common.export": "Eksportér",

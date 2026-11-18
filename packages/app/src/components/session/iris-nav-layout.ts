@@ -1,0 +1,156 @@
+/**
+ * THE SIDE PANEL'S LAYOUT IS DATA (#191509).
+ *
+ * Which items the panel's strip shows, in what order, comes from one record: a versioned DEFAULT
+ * that ships with the app, merged with the layout the person saved. The renderer maps over the
+ * result and never asks "is this Atlas?" — changing what a new user sees is an edit to
+ * DEFAULT_NAV_LAYOUT, not to a component.
+ *
+ * The rule that decides everything: a choice the person made always wins. A new default reaches
+ * only what they have never seen — an item that is not in their saved layout at all — and it
+ * lands where the default puts it. Nothing they showed is hidden again; nothing they hid comes
+ * back; their order is never reshuffled.
+ */
+
+/** A layout: every item, in order, and the ones not shown. Items are product ids, plus `files`. */
+export type NavLayout = { version: number; order: string[]; hidden: string[] }
+
+export const NAV_LAYOUT_KEY = "iris.panel.navLayout"
+/** The file tree's id in the layout. It is an item like any product, not a special case. */
+export const FILES_ITEM = "files"
+/** Where the layout lived before #191509 — read once, to carry an existing person's choices over. */
+export const LEGACY_PINS_KEY = "iris.panel.pinned"
+export const LEGACY_FILES_KEY = "iris.panel.files"
+
+/**
+ * v2 (#191509): a new person meets Atlas (their records), then Genesis (their pages). The file
+ * tree is hidden — reachable from "+", not the first thing on screen. v1 was the pre-#191509
+ * behaviour: Genesis, Atlas, Agents, Pulse pinned, the file tree shown in git projects.
+ */
+export const DEFAULT_NAV_LAYOUT: NavLayout = {
+  version: 2,
+  // Leads (#192544, which took in Outreach #192483) and Marketing (#192481) are shown: approvals and
+  // ads review wait there, and a hidden tab is the problem they fix. After the file tree, so for a
+  // saved layout they land after what the person arranged.
+  // Inbox (#192688) is shown, after Leads: replies wait there, with an unread count on the tab.
+  // Browser (#193062) is shown, after Marketing: a tab nobody can find is the bug it was filed for.
+  // Terminal (#193785) sits after Drives, HIDDEN: a shell is not for everyone, and a non-technical
+  // person meeting the side panel is lost already (#186060). Turned on from "+", like Hive and MCP.
+  // Outreach (#193487) is shown, before Leads: replies and drafts waiting on you, and the campaigns
+  // behind them. New to every saved layout (the old `outreach` id was migrated to Leads by #192544),
+  // so it lands here — after whatever the person put before Leads — and shows.
+  // Drives (#193705) is shown, after Browser: asked for in the bar, beside the other products.
+  order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "inbox", "marketing", "browser", "drives", "terminal", "playbooks", "hive", "integrations", "mcp"],
+  hidden: [FILES_ITEM, "terminal", "playbooks", "hive", "integrations", "mcp"],
+}
+
+/**
+ * Items that became another item. A layout holding `from` keeps the person's choice: the merged
+ * item takes the slot of whichever of the two they had showing (the first one, in their order), and
+ * is shown if either was. Never twice. A layout that never had `from` is returned as it was.
+ *
+ * Empty since #193487. #192544 folded Outreach into Leads (`outreach: "leads"`); Outreach is its own
+ * product again, so the id is no longer renamed. A layout that still holds `outreach` (saved while
+ * Outreach was a tab — #192544 migrated it on read, and only wrote the result back on a change) keeps Outreach where it was,
+ * shown or hidden as the person left it. One that was migrated already has no `outreach`: the new
+ * item lands where the default puts it, shown. Either way Leads keeps its own slot and visibility.
+ */
+export const RENAMED_NAV_ITEMS: Record<string, string> = {}
+
+export function migrateNavLayout(saved: NavLayout): NavLayout {
+  let { order, hidden } = saved
+  for (const [from, to] of Object.entries(RENAMED_NAV_ITEMS)) {
+    if (!order.includes(from) && !hidden.includes(from)) continue
+    const shown = (id: string) => order.includes(id) && !hidden.includes(id)
+    const visible = shown(from) || shown(to)
+    // The slot: the first of the two that was showing; if neither was, where either already sat.
+    const pick = order.find((id) => (id === from || id === to) && shown(id)) ?? order.find((id) => id === from || id === to)
+    const slot = pick === undefined ? -1 : order.indexOf(pick)
+    order = order.map((id, i) => (i === slot ? to : id)).filter((id, i) => i === slot || (id !== from && id !== to))
+    hidden = uniq(hidden.filter((id) => id !== from && id !== to).concat(visible ? [] : [to]))
+  }
+  return { ...saved, order, hidden }
+}
+
+const uniq = (xs: string[]) => [...new Set(xs)]
+
+/**
+ * The layout to draw: the default, with the person's saved choices on top.
+ *
+ * - Nothing saved → the default.
+ * - Saved → their order and their visibility, for every item they have seen (it is in their
+ *   `order` or `hidden`). Ids the app no longer knows are dropped.
+ * - An item they have never seen goes in at the default's position (right after the nearest item
+ *   that precedes it in the default) with the default's visibility.
+ */
+export function mergeNavLayout(def: NavLayout, saved: NavLayout | null | undefined): NavLayout {
+  if (!saved) return { version: def.version, order: [...def.order], hidden: [...def.hidden] }
+  const known = new Set(def.order)
+  const savedHidden = new Set(saved.hidden.filter((id) => known.has(id)))
+  const order = uniq(saved.order.filter((id) => known.has(id)))
+  const seen = new Set([...order, ...savedHidden])
+  const defHidden = new Set(def.hidden)
+  // Items hidden but missing from `order` are seen — they just need a slot, the default's.
+  def.order.forEach((id, i) => {
+    if (order.includes(id)) return
+    const before = def.order.slice(0, i).reverse().find((x) => order.includes(x))
+    order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, id)
+  })
+  const hidden = order.filter((id) => (seen.has(id) ? savedHidden.has(id) : defHidden.has(id)))
+  return { version: def.version, order, hidden }
+}
+
+/** Show or hide one item. Showing an item puts it after the last shown one, as pinning always did. */
+export function setNavItemVisible(layout: NavLayout, id: string, visible: boolean): NavLayout {
+  const hidden = visible ? layout.hidden.filter((x) => x !== id) : uniq([...layout.hidden, id])
+  if (!visible || !layout.hidden.includes(id)) return { ...layout, hidden }
+  const rest = layout.order.filter((x) => x !== id)
+  const lastShown = rest.reduce((at, x, i) => (layout.hidden.includes(x) ? at : i), -1)
+  rest.splice(lastShown + 1, 0, id)
+  return { ...layout, order: rest, hidden }
+}
+
+/** The shown items, in order. */
+export function visibleNavItems(layout: NavLayout): string[] {
+  return layout.order.filter((id) => !layout.hidden.includes(id))
+}
+
+export const isNavItemVisible = (layout: NavLayout, id: string) =>
+  layout.order.includes(id) && !layout.hidden.includes(id)
+
+/** A stored layout, or null when there is none or it is not one. */
+export function parseNavLayout(raw: string | null): NavLayout | null {
+  try {
+    const v = JSON.parse(raw ?? "null")
+    if (!v || typeof v !== "object" || !Array.isArray(v.order)) return null
+    const strings = (xs: unknown) => (Array.isArray(xs) ? xs.filter((x): x is string => typeof x === "string") : [])
+    return { version: typeof v.version === "number" ? v.version : 1, order: strings(v.order), hidden: strings(v.hidden) }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The layout a person saved BEFORE #191509, as a v1 layout — or null if they saved nothing.
+ *
+ * Their pinned products were a choice: pinned is shown in that order, unpinned is hidden. Their
+ * file-tree choice ("1"/"0") is kept. A person with pins who never touched the file tree had it
+ * in their strip (in git projects, the only place it can show), so it stays shown.
+ */
+export function legacyNavLayout(pinsRaw: string | null, filesRaw: string | null, def: NavLayout): NavLayout | null {
+  let pins: string[] | null = null
+  try {
+    const list = JSON.parse(pinsRaw ?? "null")
+    if (Array.isArray(list)) {
+      const ok = uniq(list.filter((x): x is string => typeof x === "string" && x !== FILES_ITEM && def.order.includes(x)))
+      if (ok.length) pins = ok
+    }
+  } catch {}
+  const filesChoice = filesRaw === "1" || filesRaw === "0"
+  if (!pins && !filesChoice) return null
+  const order = [...(pins ?? [])]
+  const hidden = pins ? def.order.filter((id) => id !== FILES_ITEM && !pins.includes(id)) : []
+  if (filesRaw === "0") hidden.push(FILES_ITEM)
+  else if (filesChoice || pins) order.push(FILES_ITEM)
+  return { version: 1, order, hidden }
+}

@@ -194,3 +194,104 @@ describe("allowance — the client holds no policy (#186457)", () => {
     })
   })
 })
+
+describe("createCheckout — Stripe straight from the app, no web sign-in (#190190)", () => {
+  const PLANS = {
+    data: [
+      {
+        slug: "iris-personal-monthly",
+        title: "Solo",
+        price: "29.00",
+        billing_period: "month",
+        brand: "iris",
+        public: true,
+        features: { kind: "os", sellable: true },
+      },
+    ],
+  }
+  // Answers the catalogue read with PLANS and the checkout POST with `checkout`, recording it.
+  const serve = (checkout: { status: number; body: unknown }, seen: { url?: string; init?: RequestInit }) =>
+    (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/api/v1/platform/packages")) return new Response(JSON.stringify(PLANS), { status: 200 })
+      seen.url = String(url)
+      seen.init = init
+      return new Response(JSON.stringify(checkout.body), { status: checkout.status })
+    }) as unknown as typeof fetch
+  const withFetch = async (impl: typeof fetch, fn: () => Promise<void>) => {
+    const real = globalThis.fetch
+    globalThis.fetch = impl
+    try {
+      await fn()
+    } finally {
+      globalThis.fetch = real
+    }
+  }
+
+  test("posts the catalogue's price for the account the key belongs to, and returns Stripe's URL", async () => {
+    const seen: { url?: string; init?: RequestInit } = {}
+    await withFetch(
+      serve({ status: 200, body: { success: true, data: { url: "https://checkout.stripe.com/c/pay/cs_1" } } }, seen),
+      async () => {
+        const r = await Platform.createCheckout("iris-personal-monthly")
+        expect(r).toEqual({ ok: true, url: "https://checkout.stripe.com/c/pay/cs_1" })
+      },
+    )
+    expect(seen.url).toBe(`${FL_API}/api/v1/users/upgrade/checkout`)
+    expect(seen.init?.method).toBe("POST")
+    const body = JSON.parse(String(seen.init?.body))
+    expect(body).toMatchObject({ package_slug: "iris-personal-monthly", price: 29, billing_interval: "month", trial_days: 0, product: "desktop-upgrade" })
+    // The buyer is whoever the key belongs to — fl-api resolves it. A body user_id is what
+    // #187931 had to stop trusting.
+    expect(body).not.toHaveProperty("user_id")
+    expect(body.redirect_url).not.toContain("web.heyiris.io")
+  })
+
+  test("an expired sign-in says so, instead of a bare 401", async () => {
+    await withFetch(serve({ status: 401, body: { message: "Unauthenticated." } }, {}), async () => {
+      const r = await Platform.createCheckout("iris-personal-monthly")
+      expect(r.ok).toBe(false)
+      expect(!r.ok && r.reason).toContain("sign-in has expired")
+    })
+  })
+
+  test("any other refusal carries the status and the server's message", async () => {
+    await withFetch(serve({ status: 500, body: { message: "No price found" } }, {}), async () => {
+      const r = await Platform.createCheckout("iris-personal-monthly")
+      expect(!r.ok && r.reason).toBe("Checkout refused (500): No price found")
+    })
+  })
+
+  test("a plan that is not on sale never reaches Stripe", async () => {
+    const seen: { url?: string } = {}
+    await withFetch(serve({ status: 200, body: {} }, seen), async () => {
+      const r = await Platform.createCheckout("iris-nope")
+      expect(r.ok).toBe(false)
+    })
+    expect(seen.url).toBeUndefined()
+  })
+})
+
+describe("nodeAiOf — GPU and models from the payload the node already sends (#192222)", () => {
+  // Field shapes recorded from /api/v6/nodes on 2026-11-02 (names changed).
+  const NOW = Date.parse("2026-11-02T06:00:00Z")
+  const server = {
+    connection_status: "online",
+    hardware_profile: { gpu: { name: null, type: null, vram_gb: null, available: false } },
+    local_llm: { server: "ollama", available: true, models: ["qwen3:14b", "phi4:latest", "llama3.2:3b"] },
+    inference: { enabled: true, url: "https://x", models: ["qwen3:14b", "llama3.2:3b"], updated_at: "2026-11-02T05:59:00Z" },
+  }
+  test("serving needs inference on, the model listed, online, a URL and a fresh report", () => {
+    const ai = Platform.nodeAiOf(server, NOW)
+    expect(ai.gpu).toEqual({ available: false })
+    expect(ai.modelsInstalled).toEqual(["llama3.2:3b", "phi4:latest", "qwen3:14b"])
+    expect(ai.modelsServing).toEqual(["hive/llama3.2:3b", "hive/qwen3:14b"])
+    expect(Platform.nodeAiOf({ ...server, connection_status: "offline" }, NOW).modelsServing).toBeUndefined()
+    const stale = { ...server, inference: { ...server.inference, updated_at: "2026-11-02T05:00:00Z" } }
+    expect(Platform.nodeAiOf(stale, NOW).modelsServing).toBeUndefined()
+  })
+  test("a real GPU keeps its name and memory; a node that never reported one has no gpu field", () => {
+    const mac = { hardware_profile: { gpu: { name: "Apple M1 Pro", type: "metal", vram_gb: 16, available: true } } }
+    expect(Platform.nodeAiOf(mac, NOW).gpu).toEqual({ available: true, name: "Apple M1 Pro", type: "metal", vramGb: 16 })
+    expect(Platform.nodeAiOf({ hardware_profile: {} }, NOW)).toEqual({})
+  })
+})

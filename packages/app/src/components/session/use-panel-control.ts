@@ -1,0 +1,675 @@
+import { createEffect, onCleanup, untrack } from "solid-js"
+import { chatOnScreen, markOnScreen } from "@/utils/chat-on-screen"
+import { useLayout } from "@/context/layout"
+import { usePlatform } from "@/context/platform"
+import { useServerSDK } from "@/context/server-sdk"
+import { useSessionLayout } from "@/pages/session/session-layout"
+import { focusArtifact, irisOpenArtifact, irisOpenCard, irisOpenDataset, irisPanelView, requestIrisNav } from "./iris-nav"
+import { nativeBrowserEnabled } from "./native-browser-model"
+import {
+  browserGrants,
+  confirmAct,
+  hostOf,
+  noteActivity,
+  noteAsked,
+  browserMode,
+  recentlyDeclined,
+  originOf,
+  pageRefusal,
+  takenOverSites,
+  clearHumanCheck,
+} from "./browser-grants"
+import { HUMAN_CHECK_WAIT, humanCheckShowing } from "./human-check"
+import type { NativeBrowser } from "@/context/platform"
+import { deliverReport } from "./panel-report"
+import { IRIS_PANEL_CATALOG, useIrisActiveSurface } from "./session-iris-tab"
+import { navigateWeb, WEB_TAB, webUrl } from "./web-nav"
+import {
+  activeTab,
+  addTab,
+  closeTab,
+  describeTabs,
+  forgetTabPage,
+  MAX_TABS,
+  pageKey,
+  resolveTab,
+  setActiveTab,
+  setPendingOpen,
+} from "./browser-tabs"
+
+/**
+ * THE AGENT'S SIDE PANEL, DESKTOP HALF (#190093). The engine half is src/iris/panel.ts.
+ *
+ * Two jobs, both in the page rather than the panel — the panel unmounts when it closes, and a
+ * closed panel is exactly the one an agent most needs to open:
+ *
+ * 1. APPLY `iris.panel.command` events addressed to this session, by the same steps the chat
+ *    cards take (genesis-artifact-card.tsx, web-link-intercept.ts). There is no second way to
+ *    open a product; an agent and a click land on the same screen.
+ *
+ * 2. REPORT what the panel shows (POST /iris/panel/state) — on every change, debounced, and once
+ *    after each command with `ack` set, so the agent learns where the panel ENDED UP. The ack
+ *    waits until the panel shows what was asked, or says what it shows instead.
+ */
+export const PANEL_COMMAND_EVENT = "iris.panel.command"
+
+type Command =
+  | { action: "open" }
+  | { action: "close" }
+  | { action: "show"; surface: string; sub?: string; bloq?: number }
+  | { action: "artifact"; id: string }
+  | { action: "tab"; tab: string }
+  | { action: "browse"; url: string }
+  | { action: "card"; bloq: number; item: number; list?: number }
+  | { action: "dataset"; bloq: number; schema: string }
+  | { action: "report" }
+  | PageCommand
+
+/** The Browser pane's page (#193145): run a browser-tool script there, or open an address. */
+/** Every page command may name a tab (#193328): its number, id or label; none = the one showing. */
+export type PageCommand = { tab?: string } & (
+  | {
+      action: "page"
+      op: "eval"
+      script: string
+      mode: "read" | "act"
+      /** Set on an irreversible click (#193186): its label. The person allows it once, or not. */
+      confirm?: string
+      /** What the strip says the agent is doing ("clicking 'Search'"). */
+      doing?: string
+    }
+  /** `newTab`: open the address in a new tab of this chat, called `label`. */
+  | { action: "page"; op: "open"; url: string; newTab?: boolean; label?: string }
+  | { action: "page"; op: "screenshot" }
+  /** This chat's tabs, changing nothing. */
+  | { action: "page"; op: "tabs" }
+  /** Close one of this chat's tabs (never the last). */
+  | { action: "page"; op: "close-tab" }
+)
+
+/** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
+const SETTLE_MS = 5000
+/** How long the panel must hold the asked-for state before it counts. */
+const STABLE_MS = 300
+const REAPPLY_GAP_MS = 250
+const MAX_REAPPLY = 6
+
+/** Commands already applied, by id — one application per command, however many pages listen. */
+const handled = new Set<string>()
+/**
+ * The answer sent for each handled command (#191506). The engine re-sends a command it has not
+ * heard back about; a re-send of one already answered gets that answer again rather than being
+ * applied twice — the first answer may be the thing that was lost.
+ */
+const answered = new Map<string, { error?: string; result?: string }>()
+const REPORT_DEBOUNCE_MS = 250
+
+/**
+ * Labels to ids ("Genesis" → pages, "Schemas" → schemas), case-insensitively, from the catalog
+ * the switcher draws. The engine does this too once it has a report — but a command can arrive
+ * before the first report does (a cold start), and "Atlas › Schemas" must still mean Schemas.
+ */
+export function resolveShow(cmd: { surface: string; sub?: string }): { surface: string; sub?: string } {
+  const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+  const s = IRIS_PANEL_CATALOG.find((x) => eq(x.id, cmd.surface) || eq(x.label, cmd.surface))
+  if (!s) return cmd
+  const sub = cmd.sub ? (s.subs.find((v) => eq(v.id, cmd.sub!) || eq(v.label, cmd.sub!))?.id ?? cmd.sub) : undefined
+  return { surface: s.id, sub }
+}
+
+export function usePanelControl(input: { open: () => boolean }) {
+  const serverSDK = useServerSDK()
+  const platform = usePlatform()
+  const layout = useLayout()
+  const { params, tabs, view } = useSessionLayout()
+  const irisActiveSurface = useIrisActiveSurface()
+
+  const snapshot = () => {
+    const v = irisPanelView()
+    return {
+      session: params.id,
+      open: input.open(),
+      tab: tabs().active() ?? undefined,
+      tabs: tabs().all(),
+      surface: irisActiveSurface(),
+      sub: v.sub,
+      bloq: v.bloq,
+      artifact: irisOpenArtifact(),
+      url: webUrl() ?? undefined,
+      card: irisOpenCard(),
+      dataset: irisOpenDataset(),
+      // The Browser pane can take the agent's page commands (#193145): the engine's browser tool
+      // defaults to it instead of a hidden Chrome when this is true.
+      browser: !!platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true),
+    }
+  }
+
+  // Confirmed delivery, retried, the second try by the engine's other loopback name — see panel-report.ts.
+  const post = (body: Record<string, unknown>) => {
+    if (!body.session) return
+    if (typeof body.ack === "string") {
+      answered.set(body.ack, { error: body.error as string | undefined, result: body.result as string | undefined })
+    }
+    if (answered.size > 500) answered.delete(answered.keys().next().value!)
+    void deliverReport(platform.fetch ?? globalThis.fetch, serverSDK().url, { ...body, catalog: IRIS_PANEL_CATALOG })
+  }
+
+  // This chat is on screen while its page is mounted; the app-wide listener covers the rest (#193492).
+  createEffect(() => {
+    const id = params.id
+    if (id) onCleanup(markOnScreen(id))
+  })
+  listenOffScreen(serverSDK(), platform)
+
+  // 2. Report on change.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  createEffect(() => {
+    const s = snapshot()
+    clearTimeout(timer)
+    timer = setTimeout(() => post(s), REPORT_DEBOUNCE_MS)
+  })
+  onCleanup(() => clearTimeout(timer))
+
+  // 1. Apply.
+  // Open only when absent: open() re-orders the strip, and a re-ordered strip is a rebuilt Kobalte
+  // collection — which falls back to its first tab and reports it (see settle). Selecting alone
+  // changes nothing but the selection.
+  const selectTab = (tab: string) => {
+    if (!untrack(() => tabs().all()).includes(tab)) void tabs().open(tab)
+    tabs().setActive(tab)
+  }
+  /**
+   * OPEN FIRST, SELECT AFTER MOUNT. The panel unmounts when closed; opening it and selecting a
+   * tab in the same tick lets the remounting tab strip report its stale first selection as a
+   * choice and overwrite ours — measured: close from Files & changes, then show Integrations,
+   * landed on Files & changes. So when the panel was closed, the tab is chosen two frames later.
+   */
+  const showTab = (tab: string) => {
+    const wasOpen = untrack(input.open)
+    view().reviewPanel.open("other")
+    if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+    selectTab(tab)
+    if (!wasOpen) requestAnimationFrame(() => requestAnimationFrame(() => selectTab(tab)))
+  }
+
+  const apply = (cmd: Command) => {
+    switch (cmd.action) {
+      case "open":
+        view().reviewPanel.open("other")
+        return
+      case "close":
+        view().reviewPanel.close()
+        return
+      case "show":
+        // The request FIRST: opening the tab is what mounts the component that reads it.
+        requestIrisNav({ surface: cmd.surface, sub: cmd.sub, bloqId: cmd.bloq, session: params.id })
+        showTab("iris")
+        return
+      case "artifact":
+        requestIrisNav({ surface: "pages", sub: "artifacts", artifactId: cmd.id, session: params.id })
+        focusArtifact(cmd.id)
+        showTab("iris")
+        return
+      case "tab":
+        showTab(cmd.tab)
+        return
+      case "browse":
+        navigateWeb(cmd.url)
+        if (platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true)) {
+          requestIrisNav({ surface: "browser", session: params.id })
+          showTab("iris")
+          return
+        }
+        showTab(WEB_TAB)
+        return
+      case "card":
+        // The board, then the card — the same request a notification about a card makes (#189799).
+        requestIrisNav({ surface: "atlas", sub: "lists", bloqId: cmd.bloq, itemId: cmd.item, session: params.id })
+        showTab("iris")
+        return
+      case "dataset":
+        // The board, the Schemas view, then the dataset on its Records tab — its rows, not its fields.
+        requestIrisNav({ surface: "atlas", sub: "schemas", bloqId: cmd.bloq, schema: cmd.schema, session: params.id })
+        showTab("iris")
+        return
+      case "report":
+        return
+    }
+  }
+
+  /** Why the panel is not (yet) where the command asked, or undefined when it is. */
+  const mismatch = (cmd: Command): string | undefined => {
+    const s = untrack(snapshot)
+    switch (cmd.action) {
+      case "open":
+        return s.open ? undefined : "the panel did not open (the window may be too narrow for it)"
+      case "close":
+        return s.open ? "the panel is still open" : undefined
+      case "show":
+        if (!s.open) return "the panel did not open (the window may be too narrow for it)"
+        if (s.tab !== "iris") return `the panel is on ${s.tab}, not the IRIS products`
+        if (s.surface !== cmd.surface) return `the panel shows ${s.surface}, not ${cmd.surface}`
+        if (cmd.sub && s.sub !== cmd.sub) return `${s.surface} shows ${s.sub ?? "its default view"}, not ${cmd.sub}`
+        if (cmd.bloq && s.bloq?.id !== cmd.bloq) return `the board is #${s.bloq?.id ?? "?"}, not #${cmd.bloq}`
+        return undefined
+      case "artifact":
+        if (s.tab !== "iris" || s.surface !== "pages") return "Genesis › Artifacts did not open"
+        return s.artifact === cmd.id ? undefined : `artifact ${cmd.id} is not in this session's list`
+      case "tab":
+        return s.tab === cmd.tab ? undefined : `the panel is on ${s.tab}, not ${cmd.tab}`
+      case "browse":
+        return s.tab === WEB_TAB || (s.tab === "iris" && s.surface === "browser") ? undefined : "the Browser tab did not open"
+      case "card":
+        if (!s.open) return "the panel did not open (the window may be too narrow for it)"
+        if (s.tab !== "iris" || s.surface !== "atlas") return "Atlas did not open"
+        if (s.bloq?.id !== cmd.bloq) return `the board is #${s.bloq?.id ?? "?"}, not #${cmd.bloq}`
+        return s.card?.id === cmd.item ? undefined : `card ${cmd.item} did not open on board #${cmd.bloq}`
+      case "dataset":
+        if (!s.open) return "the panel did not open (the window may be too narrow for it)"
+        if (s.tab !== "iris" || s.surface !== "atlas" || s.sub !== "schemas") return "Atlas › Schemas did not open"
+        if (s.bloq?.id !== cmd.bloq) return `the board is #${s.bloq?.id ?? "?"}, not #${cmd.bloq}`
+        return s.dataset?.slug === cmd.schema
+          ? undefined
+          : `dataset ${cmd.schema} is not open — it may not be on board #${cmd.bloq}'s first page of schemas`
+      case "report":
+        return undefined
+    }
+  }
+
+  /**
+   * Ack only once the panel has STAYED where it was asked for STABLE_MS — a first glance can be
+   * undone a frame later. Until it has matched ONCE, apply again (spaced, bounded): a freshly
+   * mounted IRIS tab takes over a second to read the request, and the strip can bounce while it
+   * rebuilds (see session-side-panel's looksLikeFallback).
+   *
+   * NEVER AGAINST THE USER. Once the panel has matched, nothing is re-applied — a later difference
+   * is the person clicking, and the ack simply reports where they went. A new command cancels a
+   * settle still running. The first version re-applied on any mismatch for five seconds and put
+   * the panel back each time the user clicked a tab.
+   */
+  let cancelSettle: (() => void) | undefined
+  onCleanup(() => cancelSettle?.())
+  const settle = (cmd: Command, ack: string) => {
+    cancelSettle?.()
+    let cancelled = false
+    cancelSettle = () => (cancelled = true)
+    const started = Date.now()
+    let applied = 0
+    let lastApply = started
+    let matchedOnce = false
+    let okSince: number | undefined
+    const tick = () => {
+      if (cancelled) return
+      const now = Date.now()
+      const why = mismatch(cmd)
+      if (!why) {
+        matchedOnce = true
+        okSince ??= now
+      } else okSince = undefined
+      const settled = okSince !== undefined && now - okSince >= STABLE_MS
+      // Matched, then moved: the user took over. Report where they are; do not chase it.
+      if (settled || (matchedOnce && why) || now - started > SETTLE_MS) {
+        cancelSettle = undefined
+        post({ ...untrack(snapshot), ack, error: matchedOnce && why ? undefined : why })
+        return
+      }
+      if (!matchedOnce && untrack(input.open) && applied < MAX_REAPPLY && now - lastApply >= REAPPLY_GAP_MS) {
+        applied++
+        lastApply = now
+        apply(cmd)
+      }
+      setTimeout(tick, 50)
+    }
+    // Two frames: let the tab mount and the nav request be consumed before the first look.
+    requestAnimationFrame(() => requestAnimationFrame(tick))
+  }
+
+  /** A page command for this chat, on screen: see runPageCommand. */
+  const runPage = (cmd: PageCommand, ack: string) => {
+    const chat = params.id
+    return runPageCommand(
+      {
+        chat,
+        platform,
+        onScreen: true,
+        reply: (r) => post({ ...untrack(snapshot), ack, ...(chat ? { browserTabs: describeTabs(chat) } : {}), ...r }),
+        showBrowser: (url) => {
+          if (url) navigateWeb(url)
+          requestIrisNav({ surface: "browser", session: params.id })
+          showTab("iris")
+        },
+      },
+      cmd,
+    )
+  }
+
+  const stop = serverSDK().event.listen((e: any) => {
+    const event = e?.details
+    if (event?.type !== PANEL_COMMAND_EVENT) return
+    const props = event.properties as { id?: string; session?: string; command?: Command } | undefined
+    if (!props?.id || !props.command || !params.id || props.session !== params.id) return
+    if (handled.has(props.id)) {
+      // A re-send: answer again if we already did; a settle still running will answer itself.
+      const prior = answered.get(props.id)
+      if (prior) post({ ...untrack(snapshot), ack: props.id, error: prior.error, result: prior.result })
+      return
+    }
+    handled.add(props.id)
+    if (handled.size > 500) handled.delete(handled.values().next().value!)
+    const command: Command =
+      props.command.action === "show" ? { ...props.command, ...resolveShow(props.command) } : props.command
+    // The Browser pane's page answers with a value, not a panel state to settle on.
+    if (command.action === "page") {
+      void runPage(command, props.id)
+      return
+    }
+    // A live read changes nothing, so there is nothing to wait for.
+    if (command.action === "report") {
+      post({ ...untrack(snapshot), ack: props.id })
+      return
+    }
+    try {
+      apply(command)
+    } catch (err) {
+      post({
+        ...untrack(snapshot),
+        ack: props.id,
+        error: `could not apply: ${err instanceof Error ? err.message : String(err)}`,
+      })
+      return
+    }
+    settle(command, props.id)
+  })
+  onCleanup(stop)
+}
+
+/**
+ * THE AGENT'S CHAT NEED NOT BE ON SCREEN (#193492).
+ *
+ * The listener in usePanelControl lives in the session page, so only the chat on screen answered
+ * page commands. In the flight-booking test the person went to another chat while the agent
+ * worked: 11 of 11 Browser failures were "the desktop did not answer within 16-25 s" for the
+ * agent's chat, while its page sat alive and hidden the whole time (browser.rs keeps a chat's
+ * pages when it leaves). Nothing about the page needed the chat on screen; only the listener did.
+ *
+ * So a second, app-wide listener answers page commands for chats that are NOT on screen, against
+ * that chat's own hidden page. Same grants, same human-check rule, same tabs. What changes off
+ * screen is only what needs the person's eyes: an irreversible click's yes, an Allow, a human
+ * check. Those answer at once, saying the person is in another chat, instead of waiting on a
+ * prompt nobody can see.
+ */
+export { chatOnScreen, markOnScreen } from "@/utils/chat-on-screen"
+
+/** Where a page the person can't see is laid out: off screen, at a normal desktop size. */
+const OFFSCREEN = { x: -30_000, y: 0, width: 1200, height: 860 }
+/** The engine waits 12 s at least for a page command: answer before it gives up. */
+export const OFFSCREEN_DEADLINE_MS = 11_000
+
+/**
+ * Bring a chat's page to life without showing it to the person: SHOWN, but laid out off screen.
+ * Never left hidden while the agent uses it (#193598): WebKit throttles a hidden page's timers and
+ * stops its animation frames, so each read crept to the 10 s eval limit, three of them outlasted
+ * the engine's wait, and the agent heard nothing ("The desktop did not answer", 2026-11-14).
+ * The chat hides it again when the person opens and leaves it; until then it costs what a visible
+ * page costs, and the eight-page limit still closes the oldest.
+ */
+async function wakeHidden(nb: NativeBrowser, url?: string) {
+  const alive = await nb.eval("true").then(
+    () => true,
+    () => false,
+  )
+  if (alive) {
+    await nb.show(undefined, OFFSCREEN)
+    if (url) await nb.navigate(url)
+    return
+  }
+  // No page yet, or closed to make room: create it off screen (on `url`, or where it last was).
+  await nb.show(url, OFFSCREEN)
+  await new Promise((r) => setTimeout(r, 900))
+}
+
+export type PageCtx = {
+  chat: string | undefined
+  platform: ReturnType<typeof usePlatform>
+  /** The chat is on screen: its session page is mounted. */
+  onScreen: boolean
+  reply: (r: { result?: string; error?: string }) => void
+  /** On screen only: show the Browser in this chat's panel (and navigate the showing tab to `url`). */
+  showBrowser: (url?: string) => void
+}
+
+const AWAY = "The person is in another chat right now, so they can't see this prompt"
+
+/**
+ * A page command (#193145). THE GRANT IS CHECKED HERE, on the person's side: the engine asks,
+ * this decides. `open` navigates the pane like a chat link (no grant: the person sees it
+ * happen, and reading the new page needs that site's grant); `eval` needs the site granted and
+ * `read` mode.
+ */
+export async function runPageCommand(ctx: PageCtx, cmd: PageCommand) {
+  const { chat, platform, reply } = ctx
+  // This chat's own pages: an agent in one chat never reads or drives another chat's.
+  if (!chat || !platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) {
+    return reply({ error: "this IRIS has no Browser pane (it is desktop only, or turned off with iris.browser.native=0)" })
+  }
+  const noSuchTab = (t?: string) =>
+    `there is no tab "${t}" in this chat. Its tabs: ${describeTabs(chat)
+      .map((x) => `${x.n} ${x.label ?? x.title ?? "New tab"}${x.active ? " (showing)" : ""}`)
+      .join(", ")}`
+  if (cmd.op === "tabs") return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+  if (cmd.op === "close-tab") {
+    const id = resolveTab(chat, cmd.tab)
+    if (!id || !cmd.tab) return reply({ error: cmd.tab ? noSuchTab(cmd.tab) : "close-tab needs a tab" })
+    const key = pageKey(chat, id)
+    if (closeTab(chat, id) === undefined) return reply({ error: "that is this chat's only tab: it stays open" })
+    forgetTabPage(key)
+    await platform.nativeBrowser(key).close?.().catch(() => undefined)
+    return reply({ result: JSON.stringify({ ok: true, value: describeTabs(chat) }) })
+  }
+  const fresh = cmd.op === "open" && cmd.newTab
+  const tab = fresh ? addTab(chat, cmd.label, { show: false }) : resolveTab(chat, cmd.tab)
+  if (!tab) {
+    return reply({
+      error: fresh
+        ? `this chat already has ${MAX_TABS} tabs open: close one first ({"action":"close","tab":N}) or open in an existing tab`
+        : noSuchTab(cmd.tab),
+    })
+  }
+  const key = pageKey(chat, tab)
+  const nb = platform.nativeBrowser(key)
+  const showing = activeTab(chat) === tab
+  try {
+    if (cmd.op === "open") {
+      const before = fresh ? undefined : (await nb.state())?.url
+      if (!ctx.onScreen) {
+        // Off screen: load it in the chat's hidden page; the person finds it there when they come back.
+        await wakeHidden(nb, cmd.url)
+        setActiveTab(chat, tab)
+      } else if (fresh) {
+        // The new tab opens on this address when it first shows.
+        setPendingOpen(key, cmd.url)
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+      } else if (!showing) {
+        // A tab in the background: navigate its page if it is alive, else open there when shown.
+        await nb.navigate(cmd.url).catch(() => setPendingOpen(key, cmd.url))
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+      } else {
+        ctx.showBrowser(cmd.url)
+      }
+      const landed = await waitForPage(nb, cmd.url, before)
+      // Landed on a "prove you're human" page: ask the person now; the agent's next look waits.
+      const o = originOf(landed.url)
+      if (o && (await humanCheckShowing((x) => nb.eval(x)))) noteAsked(o, "check")
+      return reply({ result: JSON.stringify({ ok: true, value: landed }) })
+    }
+    if (!ctx.onScreen) {
+      // Nobody is looking at this chat: work in its hidden page, waking it if it was closed.
+      await wakeHidden(nb)
+    } else if (!showing) {
+      // The agent never acts out of sight in the chat the person is watching: a click or type in a
+      // background tab, or a picture of it, brings that tab to the front first. Reading one does
+      // not switch, unless its page was closed to make room (then showing it reopens it).
+      const acting = (cmd.op === "eval" && cmd.mode === "act") || cmd.op === "screenshot"
+      const alive = acting ? false : await nb.eval("true").then(() => true, () => false)
+      if (!alive) {
+        setActiveTab(chat, tab)
+        ctx.showBrowser()
+        await new Promise((r) => setTimeout(r, 900))
+      }
+    }
+    const away = ctx.onScreen ? "" : ` ${AWAY}: ask them to open this chat.`
+    const s = await nb.state()
+    const origin = originOf(s?.url)
+    // A "prove you're human" page is for the PERSON (human-check.ts): never read or click it.
+    // The agent waits on this answer the way it waits for Allow.
+    if (await humanCheckShowing((x) => nb.eval(x))) {
+      if (recentlyDeclined(origin)) {
+        return reply({ error: `the person chose not to finish ${hostOf(origin)}'s human check. Don't try again unless they ask` })
+      }
+      if (origin) noteAsked(origin, "check")
+      return reply({ error: HUMAN_CHECK_WAIT + away })
+    }
+    clearHumanCheck(origin)
+    if (cmd.op === "screenshot") {
+      // Looking is reading: the same per-site Allow (or Always allow).
+      const no = pageRefusal({ mode: "read", url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+      if (no && recentlyDeclined(origin)) return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+      if (no) {
+        if (origin && !takenOverSites().includes(origin)) noteAsked(origin, "read")
+        return reply({ error: no + away })
+      }
+      if (!nb.screenshot) return reply({ error: "this IRIS can't take pictures of the Browser yet: use read or find" })
+      noteActivity(origin!, "looking at the page", "read")
+      const shot = await nb.screenshot().catch((err) => {
+        if (ctx.onScreen) throw err
+        throw new Error(`no picture: this chat's Browser is hidden while the person is in another chat. Use read, elements or find instead`)
+      })
+      return reply({ result: JSON.stringify({ ok: true, value: shot }) })
+    }
+    const why = pageRefusal({ mode: cmd.mode, url: s?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+    if (why && recentlyDeclined(origin)) {
+      return reply({ error: `the person chose Not now for ${hostOf(origin)}. Don't try again unless they ask` })
+    }
+    if (why) {
+      // Offer the missing permission right there in the strip (never while the person has the wheel).
+      if (origin && !takenOverSites().includes(origin)) noteAsked(origin, cmd.mode)
+      return reply({ error: why + away })
+    }
+    if (cmd.mode === "act" && cmd.confirm) {
+      // An irreversible click always waits for the person's yes, and they can only give it where they can see it.
+      if (!ctx.onScreen) {
+        return reply({
+          error: `clicking "${cmd.confirm}" needs the person's yes. ${AWAY}. Nothing was clicked: tell them it is ready and ask them to open this chat to allow it`,
+        })
+      }
+      noteActivity(origin!, `waiting for you to allow "${cmd.confirm}"`, "act")
+      const ok = await confirmAct(origin!, cmd.confirm)
+      if (!ok) {
+        return reply({ error: `the person did not allow clicking "${cmd.confirm}" on ${hostOf(origin)}. Do not try it again unless they ask` })
+      }
+      // They may have taken over or stopped while the prompt was up.
+      const again = pageRefusal({ mode: "act", url: (await nb.state())?.url, grants: browserGrants(), takenOver: takenOverSites(), always: browserMode() === "always" })
+      if (again) return reply({ error: again })
+    }
+    noteActivity(origin!, cmd.doing ?? (cmd.mode === "act" ? "working" : "reading"), cmd.mode)
+    reply({ result: await nb.eval(cmd.script) })
+  } catch (err) {
+    reply({ error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/** The app-wide listener for chats not on screen. One per server connection. */
+let background: { sdk: unknown; stop: () => void } | undefined
+function listenOffScreen(sdk: ReturnType<ReturnType<typeof useServerSDK>>, platform: ReturnType<typeof usePlatform>) {
+  if (background?.sdk === sdk) return
+  background?.stop()
+  const post = (body: Record<string, unknown>) => {
+    if (typeof body.ack === "string") answered.set(body.ack, { error: body.error as string | undefined, result: body.result as string | undefined })
+    if (answered.size > 500) answered.delete(answered.keys().next().value!)
+    void deliverReport(platform.fetch ?? globalThis.fetch, sdk.url, { ...body, catalog: IRIS_PANEL_CATALOG })
+  }
+  // What the engine keeps for a chat that is not on screen: its panel is not showing, its Browser still works.
+  const state = (chat: string) => ({ session: chat, open: false, browser: true, browserTabs: describeTabs(chat) })
+  const stop = sdk.event.listen((e: any) => {
+    const event = e?.details
+    if (event?.type !== PANEL_COMMAND_EVENT) return
+    const props = event.properties as { id?: string; session?: string; command?: Command } | undefined
+    const chat = props?.session
+    if (!props?.id || !chat || props.command?.action !== "page") return
+    // A chat on screen answers for itself (usePanelControl).
+    if (chatOnScreen(chat)) return
+    if (!platform.nativeBrowser || !nativeBrowserEnabled(globalThis.localStorage, true)) return
+    if (handled.has(props.id)) {
+      const prior = answered.get(props.id)
+      if (prior) post({ ...state(chat), ack: props.id, error: prior.error, result: prior.result })
+      return
+    }
+    handled.add(props.id)
+    if (handled.size > 500) handled.delete(handled.values().next().value!)
+    const ack = props.id
+    // Always an answer (#193598): a step still running when the engine is about to give up says
+    // so, instead of the engine reporting a desktop that "did not answer". First answer wins.
+    let done = false
+    const reply = (r: { result?: string; error?: string }) => {
+      if (done) return
+      done = true
+      clearTimeout(late)
+      post({ ...state(chat), ack, ...r })
+    }
+    const late = setTimeout(
+      () =>
+        reply({
+          error: `the page in this chat's Browser (not on screen) did not finish within ${OFFSCREEN_DEADLINE_MS / 1000} s. It may still be loading: read it again, or ask the person to open this chat`,
+        }),
+      OFFSCREEN_DEADLINE_MS,
+    )
+    void runPageCommand(
+      { chat, platform, onScreen: false, reply, showBrowser: () => undefined },
+      props.command as PageCommand,
+    ).catch((err) => reply({ error: err instanceof Error ? err.message : String(err) }))
+  })
+  background = { sdk, stop }
+}
+
+/**
+ * Wait until the pane shows the asked-for site and has settled (#193145). A redirect is fine
+ * (youtube.com → www.youtube.com, x.com → x.com/home): matched by host without "www.". 20 s.
+ */
+export function sameSite(a: string | undefined, b: string | undefined): boolean {
+  const host = (u?: string) => {
+    try {
+      return new URL(u ?? "").hostname.replace(/^www\./, "")
+    } catch {
+      return ""
+    }
+  }
+  return !!host(a) && host(a) === host(b)
+}
+
+async function waitForPage(nb: NativeBrowser, url: string, before: string | undefined) {
+  const started = Date.now()
+  const stillOn = (u?: string) => (u && u !== "about:blank" ? ` The pane still shows ${u}.` : "")
+  while (Date.now() - started < 20_000) {
+    await new Promise((r) => setTimeout(r, 300))
+    const s = await nb.state().catch(() => null)
+    if (s && sameSite(s.url, url) && (s.url !== before || Date.now() - started > 1500)) {
+      // The address changes before the page has painted: give it a moment, then read the title.
+      await new Promise((r) => setTimeout(r, 800))
+      const now = (await nb.state().catch(() => null)) ?? s
+      // A page that fails to load puts the pane back on the page it was on: never report THAT
+      // page as where we landed (Vonlane, 2026-11-11: www.vonlane.com "opened" Google Maps).
+      if (!sameSite(now.url, url)) {
+        throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(now.url)} Try the address without www, or the site's main page.`)
+      }
+      return { url: now.url, title: now.title ?? "" }
+    }
+    // Gave up loading and went back: say so now, not after 20 s.
+    if (s && !s.loading && s.url === before && Date.now() - started > 6_000) {
+      throw new Error(`${url} didn't load (the site didn't answer or refused).${stillOn(s.url)} Try the address without www, or the site's main page.`)
+    }
+  }
+  const last = await nb.state().catch(() => null)
+  throw new Error(`${url} didn't load within 20 s.${stillOn(last?.url)}`)
+}

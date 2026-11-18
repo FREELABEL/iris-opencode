@@ -6,6 +6,7 @@ import {
   ARTIFACT_SANDBOX,
   authorLine,
   changedSince,
+  initialPublishBoard,
   markdownDocument,
   parseCsv,
   sandboxedDocument,
@@ -135,7 +136,30 @@ describe("publishing an artifact as a page", () => {
     const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
     expect(src).toContain("dialog.show(")
     expect(src.indexOf('id="pubm-where"')).toBeLessThan(src.indexOf('id="pubm-who"'))
-    expect(src).toContain("setBoard(props.bloqId)")
+    // The destination comes from the project chosen in the panel, falling back to the default (#193407).
+    expect(src).toContain("initialPublishBoard({ selected: props.selectedBloqId, fallback: props.bloqId })")
+  })
+  test("Save to Genesis opens on the project chosen in the IRIS panel (#193407)", () => {
+    // Chosen B, the panel's default A: B. Switch to C: C.
+    expect(initialPublishBoard({ selected: 202, fallback: 101 })).toBe(202)
+    expect(initialPublishBoard({ selected: 303, fallback: 101 })).toBe(303)
+    // Nothing chosen: the existing default.
+    expect(initialPublishBoard({ selected: undefined, fallback: 101 })).toBe(101)
+    expect(initialPublishBoard({ selected: null, fallback: 101 })).toBe(101)
+    // Garbage is "nothing chosen", not a destination.
+    expect(initialPublishBoard({ selected: 0, fallback: 101 })).toBe(101)
+    expect(initialPublishBoard({ selected: Number.NaN, fallback: 101 })).toBe(101)
+    // Neither: undefined, so the modal opens its picker and asks.
+    expect(initialPublishBoard({})).toBeUndefined()
+  })
+  test("a project list that lands late fills an empty destination only — never the chosen one", () => {
+    const src = readFileSync(path.join(import.meta.dir, "iris-artifact-publish.tsx"), "utf8")
+    expect(src).toContain("if (touched || board() !== undefined || next === undefined) return")
+  })
+  test("the IRIS tab keeps its chosen project in the panel scope, shared by every tab in it (#193407)", () => {
+    const src = readFileSync(path.join(import.meta.dir, "session-iris-tab.tsx"), "utf8")
+    expect(src).toContain("const selected = chipScope.bloq")
+    expect(src).toContain("selectedBloqId={selected()}")
   })
   test("the consequence is one sentence: visibility, address and project", () => {
     expect(publishSummary("public", "ncma", "NCMA Fort Worth")).toBe(

@@ -253,6 +253,17 @@ export const StepFinishPart = Schema.Struct({
       write: Schema.Finite,
     }),
   }),
+  // Constellation Gate's verdict on the text this step sent, from the model proxy's x-gate-*
+  // headers (#189589). Absent when Gate did not screen the call — never zeros standing in for it.
+  gate: Schema.optional(
+    Schema.Struct({
+      scanned: Schema.Finite,
+      held: Schema.Finite,
+      flagged: Schema.Finite,
+      errors: Schema.Finite,
+      mode: Schema.String,
+    }),
+  ),
 }).annotate({ identifier: "StepFinishPart" })
 export type StepFinishPart = Types.DeepMutable<Schema.Schema.Type<typeof StepFinishPart>>
 

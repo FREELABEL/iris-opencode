@@ -3,8 +3,8 @@ import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 import { createReplyReader } from "./spoken-replies"
 
 const user = (id: string) => ({ id, role: "user", sessionID: "s", time: { created: 0 } }) as unknown as Message
-const reply = (id: string, completed?: number, error?: { name: string }) =>
-  ({ id, role: "assistant", sessionID: "s", time: { created: 0, completed }, error }) as unknown as Message
+const reply = (id: string, completed?: number, error?: { name: string }, parentID = "u1") =>
+  ({ id, role: "assistant", sessionID: "s", parentID, time: { created: 0, completed }, error }) as unknown as Message
 const text = (messageID: string, value: string, extra = {}) =>
   ({ id: `${messageID}-p`, type: "text", messageID, sessionID: "s", text: value, ...extra }) as unknown as Part
 
@@ -71,7 +71,7 @@ describe("reply reader", () => {
   test("the next reply in the same session is read too", () => {
     const h = harness()
     h.reader.update([user("u1"), reply("a1", 1)], () => [text("a1", "Old.")])
-    h.reader.update([user("u1"), reply("a1", 1), user("u2"), reply("a2")], (id) => [text(id, "New one. ")])
+    h.reader.update([user("u1"), reply("a1", 1), user("u2"), reply("a2", undefined, undefined, "u2")], (id) => [text(id, "New one. ")])
     expect(h.said).toEqual(["New one."])
   })
 
@@ -91,5 +91,20 @@ describe("reply reader", () => {
     h.reader.update([user("u1"), reply("a1", 2)], () => [text("a1", "Hi. Bye.")])
     h.reader.stop()
     expect(h.calls).toEqual(["speak", "speak", "finish", "stop"])
+  })
+
+  test("a stop mutes every later step of the same turn, and the next turn is read again (#189518)", () => {
+    const h = harness()
+    h.reader.update([user("u1"), reply("a1")], () => [text("a1", "Checking. ")])
+    h.reader.stop()
+    // The agent runs a tool; its next step is a NEW assistant message of the same turn.
+    h.reader.update([user("u1"), reply("a1", 1), reply("a2")], (id) => [text(id, "Found it. More. ")])
+    h.reader.update([user("u1"), reply("a1", 1), reply("a2", 2)], (id) => [text(id, "Found it. More. Done")])
+    expect(h.said).toEqual(["Checking."])
+    // The person asks again: a new turn speaks.
+    h.reader.update([user("u1"), reply("a1", 1), reply("a2", 2), user("u2"), reply("a3", undefined, undefined, "u2")], (id) => [
+      text(id, "New answer. "),
+    ])
+    expect(h.said).toEqual(["Checking.", "New answer."])
   })
 })

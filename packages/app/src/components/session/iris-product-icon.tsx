@@ -68,12 +68,80 @@ const ACTIVITY: Shape[] = [
     { d: "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" },
   ],
 ]
+// lucide "megaphone" — Marketing (#192481).
+const MEGAPHONE: Shape[] = [
+  ["path", { d: "m3 11 18-5v12L3 14v-3z" }],
+  ["path", { d: "M11.6 16.8a3 3 0 1 1-5.8-1.6" }],
+]
 const PLUG: Shape[] = [
   ["path", { d: "M12 22v-5" }],
   ["path", { d: "M9 8V2" }],
   ["path", { d: "M15 8V2" }],
   ["path", { d: "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" }],
 ]
+// Lexicon (#192484) — lucide "scale", as the site's Solutions menu draws it.
+const SCALE: Shape[] = [
+  ["path", { d: "m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" }],
+  ["path", { d: "M7 21h10" }],
+  ["path", { d: "M12 3v18" }],
+  ["path", { d: "M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" }],
+]
+
+// lucide "hard-drive" — Drives (#193705).
+const HARD_DRIVE: Shape[] = [
+  ["line", { x1: "22", x2: "2", y1: "12", y2: "12" }],
+  ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
+  ["line", { x1: "6", x2: "6.01", y1: "16", y2: "16" }],
+  ["line", { x1: "10", x2: "10.01", y1: "16", y2: "16" }],
+]
+// lucide "inbox" — Inbox (#192688).
+const INBOX: Shape[] = [
+  ["path", { d: "M22 12h-6l-2 3h-4l-2-3H2" }],
+  ["path", { d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" }],
+]
+// lucide "send" — Outreach (#193487).
+const SEND: Shape[] = [
+  ["path", { d: "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" }],
+  ["path", { d: "m21.854 2.147-10.94 10.939" }],
+]
+// lucide "globe" — Browser (#193062).
+const GLOBE: Shape[] = [
+  ["circle", { cx: "12", cy: "12", r: "10" }],
+  ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
+  ["path", { d: "M2 12h20" }],
+]
+// lucide "square-terminal" — the Terminal tab (#193785).
+const SQUARE_TERMINAL: Shape[] = [
+  ["path", { d: "m7 11 2-2-2-2" }],
+  ["path", { d: "M11 13h4" }],
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
+]
+// lucide "panels-top-left" — a landing page (#193233, Marketing › + ).
+const PANELS_TOP_LEFT: Shape[] = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
+  ["path", { d: "M3 9h18" }],
+  ["path", { d: "M9 21V9" }],
+]
+// lucide "palette" — a brand kit (#193233).
+const PALETTE: Shape[] = [
+  ["path", { d: "M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" }],
+  ["circle", { cx: "13.5", cy: "6.5", r: ".5" }],
+  ["circle", { cx: "17.5", cy: "10.5", r: ".5" }],
+  ["circle", { cx: "6.5", cy: "12.5", r: ".5" }],
+  ["circle", { cx: "8.5", cy: "7.5", r: ".5" }],
+]
+
+/**
+ * What Marketing › + makes (#193233) → glyph and colour, drawn by IrisProductIcon like a surface.
+ * A campaign review is Marketing's own megaphone; a landing page is a Genesis page, in Genesis lime;
+ * a brand kit is a palette in violet, a colour no tab uses.
+ */
+export const MAKE_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
+  campaign: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500, as Marketing
+  landing: { shapes: PANELS_TOP_LEFT, color: "#84cc16" }, // lime-500, as Genesis
+  brand: { shapes: PALETTE, color: "#8b5cf6" }, // violet-500
+}
 
 /** Surface id → glyph and colour. Colours are Tailwind's, as the site uses them. */
 export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> = {
@@ -82,14 +150,21 @@ export const PRODUCT_ICONS: Record<string, { shapes: Shape[]; color?: string }> 
   playbooks: { shapes: SCROLL_TEXT, color: "#c084fc" }, // purple-400
   hive: { shapes: NETWORK, color: "#f59e0b" }, // amber-500
   pulse: { shapes: ACTIVITY, color: "#fb7185" }, // rose-400
+  outreach: { shapes: SEND, color: "#06b6d4" }, // cyan-500 — a colour no other tab uses
   leads: { shapes: USER_PLUS, color: "#10b981" }, // ReachR — emerald-500
+  inbox: { shapes: INBOX, color: "#3b82f6" }, // blue-500
+  marketing: { shapes: MEGAPHONE, color: "#f97316" }, // orange-500
+  browser: { shapes: GLOBE, color: "#14b8a6" }, // teal-500
+  terminal: { shapes: SQUARE_TERMINAL }, // the text colour, as MCP: a tool of the machine, not a product of the site
   agents: { shapes: BOT, color: "#ec4899" }, // pink-500 — the site's Heartbeat, which lives under Agents here
   integrations: { shapes: NETWORK, color: "#0ea5e9" }, // sky-500 — uncoloured on the site; the cyan of the IRIS glow
   mcp: { shapes: PLUG },
+  lexicon: { shapes: SCALE, color: "#6366f1" }, // indigo-500, as on the site
+  drives: { shapes: HARD_DRIVE, color: "#94a3b8" }, // slate-400 — metal; a colour no other tab uses
 }
 
-export function IrisProductIcon(props: { id: string; size?: number }) {
-  const icon = () => PRODUCT_ICONS[props.id]
+export function IrisProductIcon(props: { id: string; size?: number; set?: "product" | "make"; stroke?: number }) {
+  const icon = () => (props.set === "make" ? MAKE_ICONS : PRODUCT_ICONS)[props.id]
   return (
     <Show when={icon()}>
       {(i) => (
@@ -101,7 +176,7 @@ export function IrisProductIcon(props: { id: string; size?: number }) {
           viewBox="0 0 24 24"
           fill="none"
           stroke={i().color ?? "currentColor"}
-          stroke-width="2"
+          stroke-width={String(props.stroke ?? 2)}
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"

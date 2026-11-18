@@ -14,6 +14,8 @@ export type PromptInputControls = {
   agents: {
     available: { name: string; hidden?: boolean; mode: string }[]
     options: string[]
+    /** What the picker shows for an agent id (#192926): an IRIS agent's real name, not its file name. */
+    label: (name: string) => string
     current: string
     loading: boolean
     visible: boolean

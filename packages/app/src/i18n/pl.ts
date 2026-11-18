@@ -820,6 +820,8 @@ export const dict = {
   "common.dismiss": "Odrzuć",
   "common.requestFailed": "Żądanie nie powiodło się",
   "common.moreOptions": "Więcej opcji",
+  "session.pinned.title": "Przypięte wiadomości",
+  "session.pinned.empty": "Brak przypiętych wiadomości",
   "common.learnMore": "Dowiedz się więcej",
   "common.rename": "Zmień nazwę",
   "common.export": "Eksportuj",

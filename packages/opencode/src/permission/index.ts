@@ -13,6 +13,13 @@ export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /**
+   * Reject every pending request of a session, publishing the same `permission.replied`
+   * (reply: "reject") a user reject publishes. Used when the session is aborted (#191779):
+   * tool execution runs on a detached promise, so interrupting the run never reaches the
+   * Deferred the ask is parked on and the request would otherwise stay pending forever.
+   */
+  readonly rejectSession: (sessionID: PermissionV1.Request["sessionID"]) => Effect.Effect<void>
 }
 
 interface PendingEntry {
@@ -66,11 +73,11 @@ const layer = Layer.effect(
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, ignoreApproved, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = evaluate(request.permission, pattern, ruleset, ignoreApproved ? [] : approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -171,7 +178,20 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    const rejectSession = Effect.fn("Permission.rejectSession")(function* (
+      sessionID: PermissionV1.Request["sessionID"],
+    ) {
+      const pending = (yield* InstanceState.get(state)).pending
+      for (const [id, item] of [...pending.entries()]) {
+        if (item.info.sessionID !== sessionID) continue
+        pending.delete(id)
+        yield* Effect.logInfo("rejected on abort", { requestID: id, "session.id": sessionID })
+        yield* events.publish(Event.Replied, { sessionID, requestID: item.info.id, reply: "reject" })
+        yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
+      }
+    })
+
+    return Service.of({ ask, reply, list, rejectSession })
   }),
 )
 

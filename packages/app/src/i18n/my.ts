@@ -856,6 +856,8 @@ export const dict = {
   "common.moreCountSuffix": "(+{{count}} နောက်ထပ်)",
   "common.requestFailed": "တောင်းဆိုမှု မအောင်မြင်ပါ။",
   "common.moreOptions": "နောက်ထပ် ရွေးချယ်စရာများ",
+  "session.pinned.title": "ပင်ထိုးထားသော မက်ဆေ့ချ်များ",
+  "session.pinned.empty": "ပင်ထိုးထားသော မက်ဆေ့ချ် မရှိပါ",
   "common.learnMore": "ပိုမိုလေ့လာရန်",
   "common.rename": "အမည်ပြောင်း",
   "common.export": "တင်ပို့ခြင်း။",

@@ -5,13 +5,14 @@ import { voiceSocketToken } from "./dictation"
  * to the IRIS voice relay (xAI streaming TTS); 24 kHz mono PCM16 comes back as binary frames and is
  * scheduled back to back on one AudioContext so chunks play without gaps.
  *
- * One socket carries many replies and is closed after a minute of silence. stop() is barge-in: it
+ * One socket carries many replies and is closed after 20 s of silence — under the relay's own 30 s
+ * idle limit, so the window, not the relay, is the one that ends a quiet socket (#189517). stop() is barge-in: it
  * silences what is playing and drops the socket, so audio still in flight for the old reply can
  * never play over the next one. The next speak() reconnects.
  */
 
 export const SPEECH_SAMPLE_RATE = 24000
-const IDLE_CLOSE_MS = 60_000
+const IDLE_CLOSE_MS = 20_000
 
 export type SpeechState = "idle" | "speaking" | "unavailable"
 
@@ -23,6 +24,7 @@ export type SpeechOptions = {
 
 export function createSpeechPlayer(opts: SpeechOptions) {
   let ws: WebSocket | undefined
+  let openedVoice: string | undefined
   let ctx: AudioContext | undefined
   let playhead = 0
   let sources = new Set<AudioBufferSourceNode>()
@@ -37,10 +39,14 @@ export function createSpeechPlayer(opts: SpeechOptions) {
   }
 
   function socket() {
-    if (ws && ws.readyState <= WebSocket.OPEN) return ws
+    const voice = opts.voice?.()
+    // The voice is fixed when a socket opens. A changed voice takes effect on the next reply: an
+    // idle socket with the old voice is replaced; one still speaking finishes first (#189534).
+    if (ws && ws.readyState <= WebSocket.OPEN && (voice === openedVoice || state === "speaking")) return ws
+    ws?.close(1000)
+    openedVoice = voice
     const url = new URL(`${opts.base().replace(/\/$/, "")}/voice/speak`)
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-    const voice = opts.voice?.()
     if (voice) url.searchParams.set("voice", voice)
     const token = voiceSocketToken(opts.base())
     if (token) url.searchParams.set("auth_token", token)

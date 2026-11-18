@@ -157,6 +157,12 @@ describe("describeRemoteConfig — the platform now requires a person's credenti
     }
   }
   const base = { api_url: "https://x", default_bloq_id: 7 }
+
+  test("signed in through the desktop app only — a token, no config file — is configured (#189521)", () => {
+    const sdk = "a".repeat(40) + "B9".repeat(12)
+    const r = withKey(sdk, () => describeRemoteConfig(join(dir, "absent.json")))
+    expect(r.config).toEqual({ apiUrl: "https://heyiris.io", token: sdk, bloqId: undefined })
+  })
   const sdk = "a".repeat(40) + "B9".repeat(12)
 
   test("the 64-character SDK token the desktop is launched with is sent", () => {

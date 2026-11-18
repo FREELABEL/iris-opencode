@@ -1,7 +1,7 @@
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { useSDK, type DirectorySDK } from "./sdk"
 import type { Platform } from "./platform"
 import { useServerSDK } from "./server-sdk"
@@ -460,7 +460,7 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
   init: () => {
     const sdk = useSDK()
     const serverSDK = useServerSDK()
-    const params = useParams()
+    const params = useSessionParams()
     const cache = new Map<string, TerminalCacheEntry>()
     const scope = () => serverSDK().scope
     const directory = createMemo(() => base64Encode(sdk().directory))

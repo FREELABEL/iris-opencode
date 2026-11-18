@@ -9,10 +9,13 @@ import { showToast } from "@/utils/toast"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
+import { useSync } from "@/context/sync"
+import { settleReply, withoutRequest } from "./request-reply"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useServerSDK } from "@/context/server-sdk"
 import { ScopedKey } from "@/utils/server-scope"
+import { mayTakeFocus, paneScroller } from "./pane-scope"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
 
@@ -63,6 +66,7 @@ function Option(props: {
 
 export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit: () => void }> = (props) => {
   const sdk = useSDK()
+  const sync = useSync()
   const serverSDK = useServerSDK()
   const language = useLanguage()
   const cacheKey = ScopedKey.from(serverSDK().scope, props.request.id)
@@ -131,8 +135,9 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   const measure = () => {
     if (!root) return
 
-    const scroller = document.querySelector(".scroll-view__viewport")
-    const head = scroller instanceof HTMLElement ? scroller.firstElementChild : undefined
+    // This pane's conversation, not the first column's (#191780).
+    const scroller = paneScroller(root)
+    const head = scroller?.firstElementChild
     const top =
       head instanceof HTMLElement && head.classList.contains("sticky") ? head.getBoundingClientRect().bottom : 0
     if (!top) {
@@ -161,13 +166,16 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     )
   }
 
-  const focus = (i: number) => {
+  // `appearing`: the card has just shown up, nobody asked for it. It takes focus only when the
+  // person is not typing in another column (#191781); keyboard moves inside the card always do.
+  const focus = (i: number, appearing = false) => {
     const next = clamp(i)
     setStore("focus", next)
     if (store.editing) return
     if (focusFrame !== undefined) cancelAnimationFrame(focusFrame)
     focusFrame = requestAnimationFrame(() => {
       focusFrame = undefined
+      if (appearing && !mayTakeFocus(root)) return
       const el = next === options().length ? customRef : optsRef[next]
       el?.focus()
     })
@@ -188,14 +196,14 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     makeEventListener(window, "resize", update)
 
     const dock = root?.closest('[data-component="session-prompt-dock"]')
-    const scroller = document.querySelector(".scroll-view__viewport")
+    const scroller = paneScroller(root)
     createResizeObserver([dock, scroller], update)
 
     onCleanup(() => {
       if (raf !== undefined) cancelAnimationFrame(raf)
     })
 
-    focus(pickFocus())
+    focus(pickFocus(), true)
   })
 
   createEffect(() => {
@@ -222,9 +230,22 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     showToast({ title: language.t("common.requestFailed"), description: message })
   }
 
+  // Answered, or already answered elsewhere (another column, a double submit): the card goes now,
+  // not when the replied event arrives, and "not found" is not a failure (#191772).
+  const drop = () => {
+    const { sessionID, id } = props.request
+    // Removing the request unmounts this card; mark it answered first so cleanup keeps no draft.
+    replied = true
+    cache.delete(cacheKey)
+    sync().set("question", sessionID, (list) => withoutRequest(list, id) ?? [])
+  }
+
   const replyMutation = useMutation(() => ({
     mutationFn: (answers: QuestionAnswer[]) =>
-      sdk().api.question.reply({ sessionID: props.request.sessionID, requestID: props.request.id, answers }),
+      settleReply(
+        () => sdk().api.question.reply({ sessionID: props.request.sessionID, requestID: props.request.id, answers }),
+        drop,
+      ),
     onMutate: () => {
       props.onSubmit()
     },
@@ -236,7 +257,11 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => sdk().api.question.reject({ sessionID: props.request.sessionID, requestID: props.request.id }),
+    mutationFn: () =>
+      settleReply(
+        () => sdk().api.question.reject({ sessionID: props.request.sessionID, requestID: props.request.id }),
+        drop,
+      ),
     onMutate: () => {
       props.onSubmit()
     },

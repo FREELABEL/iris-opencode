@@ -861,6 +861,8 @@ export const dict: Record<string, string> = {
   "common.moreCountSuffix": "(+{{count}} མང་།",
   "common.requestFailed": "ཞུ་བ་འཐུས་ཤོར་འབྱུང་ཡོདཔ།",
   "common.moreOptions": "གདམ་ཁ་མང་བ།",
+  "session.pinned.title": "བཙུགས་ཡོད་པའི་ འཕྲིན་ཡིག",
+  "session.pinned.empty": "བཙུགས་ཡོད་པའི་ འཕྲིན་ཡིག་ མེད།",
   "common.learnMore": "ཁ་གསལ་ཤེས།",
   "common.rename": "མིང་བསྒྱུར།",
   "common.export": "ཕྱིར་བཙོང",

@@ -4,6 +4,8 @@
 - Use this tool for accessing information beyond knowledge cutoff
 - Searches are performed automatically within a single API call
 
+When the person will want to LOOK at what you find — flights, hotels, tickets, shopping, restaurants, listings, anything with prices or a booking at the end — and the browser tool can show the Browser pane (IRIS Desktop), search the site itself in the pane instead, so the results are on their screen. Web search is for facts you fold into an answer, or for finding WHICH site to open in the pane.
+
 Usage notes:
   - Supports live crawling modes when available: 'fallback' (backup if cached unavailable) or 'preferred' (prioritize live crawling)
   - Search types when available: 'auto' (balanced), 'fast' (quick results), 'deep' (comprehensive search)

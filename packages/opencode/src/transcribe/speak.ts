@@ -59,10 +59,18 @@ export function openSpeakSession(
     if (value?.type === "audio.delta" && typeof value.delta === "string") return opts.onAudio(base64Bytes(value.delta))
     if (value?.type === "audio.done") return emit({ type: "done" })
     if (value?.type === "audio.clear") return emit({ type: "cleared" })
+    // The relay ends a session that has been quiet for its idle limit. Between replies that is the
+    // normal state of a spoken-replies socket, not a failure: close quietly and let the window
+    // reconnect on its next sentence (#189517).
+    if (value?.type === "relay.error" && value.code === "idle") return quiet()
     if (value?.type === "relay.error" || value?.type === "error")
       return emit({ type: "unavailable", reason: typeof value.message === "string" ? value.message : "Spoken replies stopped." })
   }
   // A refused upgrade (401/403/429/503) surfaces as an error then a close with no open.
+  const quiet = () => {
+    ended = true
+    ws.close(1000)
+  }
   ws.onerror = () => emit({ type: "unavailable", reason: "The spoken-replies service could not be reached." })
   ws.onclose = (event) => {
     if (event.code !== 1000) emit({ type: "unavailable", reason: event.reason || "Spoken replies stopped." })
@@ -92,7 +100,7 @@ export function openSpeakSession(
 
 function parseJson(text: string) {
   try {
-    return JSON.parse(text) as { type?: unknown; delta?: unknown; message?: unknown }
+    return JSON.parse(text) as { type?: unknown; delta?: unknown; message?: unknown; code?: unknown }
   } catch {
     return undefined
   }

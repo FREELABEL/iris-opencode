@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatKeybind, matchKeybind, parseKeybind } from "./command"
+import { eventKey, formatKeybind, matchKeybind, parseKeybind } from "./command"
 
 describe("command keybind helpers", () => {
   test("parseKeybind handles aliases and multiple combos", () => {
@@ -65,5 +65,25 @@ describe("command keybind helpers", () => {
 
     expect(display.includes("K") || display.includes("k")).toBe(true)
     expect(display.includes("P") || display.includes("p")).toBe(false)
+  })
+})
+
+describe("Option shortcuts on macOS (#191484)", () => {
+  const ev = (key: string, code: string, mods: Partial<KeyboardEvent> = {}) =>
+    ({ key, code, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...mods }) as KeyboardEvent
+
+  test("⌥ remaps the character; the physical key still matches", () => {
+    // "mod" is platform-dependent, so the match is checked with alt alone
+    expect(matchKeybind(parseKeybind("alt+\\"), ev("«", "Backslash", { altKey: true }))).toBe(true)
+    expect(matchKeybind(parseKeybind("alt+w"), ev("∑", "KeyW", { altKey: true }))).toBe(true)
+    expect(eventKey(ev("∑", "KeyW", { altKey: true }))).toBe("w")
+    expect(eventKey(ev("“", "BracketLeft", { altKey: true }))).toBe("[")
+    expect(eventKey(ev("¡", "Digit1", { altKey: true }))).toBe("1")
+  })
+
+  test("without ⌥ the character decides, as before; arrows are untouched", () => {
+    expect(eventKey(ev("«", "Backslash"))).toBe("«")
+    expect(eventKey(ev("ArrowLeft", "ArrowLeft", { altKey: true }))).toBe("arrowleft")
+    expect(eventKey(ev("Enter", "Enter", { altKey: true }))).toBe("enter")
   })
 })

@@ -105,6 +105,46 @@ describe("sessionQuestionRequest", () => {
   })
 })
 
+// #191772: a chat and its subagent side by side both showed the subagent's approval, so it was
+// answered twice and the second answer came back "Permission request not found".
+describe("a request shows in one column only", () => {
+  const sessions = [
+    session({ id: "parent" }),
+    session({ id: "child", parentID: "parent" }),
+    session({ id: "grand", parentID: "child" }),
+  ]
+
+  test("a parent column leaves a subagent's approval to the subagent's own column", () => {
+    const permissions = { child: [permission("perm-child", "child")] }
+    const elsewhere = new Set(["child"])
+    expect(sessionPermissionRequest(sessions, permissions, "parent", undefined, elsewhere)).toBeUndefined()
+    expect(sessionPermissionRequest(sessions, permissions, "child", undefined, new Set(["parent"]))?.id).toBe(
+      "perm-child",
+    )
+  })
+
+  test("the subagent's own subagents stay with the subagent's column", () => {
+    const permissions = { grand: [permission("perm-grand", "grand")] }
+    expect(sessionPermissionRequest(sessions, permissions, "parent", undefined, new Set(["child"]))).toBeUndefined()
+    expect(sessionPermissionRequest(sessions, permissions, "child", undefined, new Set(["parent"]))?.id).toBe(
+      "perm-grand",
+    )
+  })
+
+  test("questions follow the same rule", () => {
+    const questions = { child: [question("q-child", "child")] }
+    expect(sessionQuestionRequest(sessions, questions, "parent", undefined, new Set(["child"]))).toBeUndefined()
+    expect(sessionQuestionRequest(sessions, questions, "child", undefined, new Set(["parent"]))?.id).toBe("q-child")
+  })
+
+  test("with no column of its own, a subagent still asks in its parent's column", () => {
+    const permissions = { child: [permission("perm-child", "child")] }
+    expect(sessionPermissionRequest(sessions, permissions, "parent", undefined, new Set(["unrelated"]))?.id).toBe(
+      "perm-child",
+    )
+  })
+})
+
 describe("todoState", () => {
   test("hides when there are no todos", () => {
     expect(todoState({ count: 0, done: false, live: true })).toBe("hide")

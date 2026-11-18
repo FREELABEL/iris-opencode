@@ -6,6 +6,7 @@ import {
   FILTER_ICON,
   flowSteps,
   HANDS_FILTERS,
+  handsLevel,
   handsTag,
   humanSteps,
   neededPhrase,
@@ -126,22 +127,16 @@ export function PlaybookFilters(props: {
 }) {
   return (
     <div class="pbf-filters shrink-0" data-slot="pbf-filters">
-      <div class="pbf-chips" role="group" aria-label="How hands-off">
+      {/* One segmented control (#191697). No icons and no legend: each row's dots say it. */}
+      <div class="pbf-segctl" role="group" aria-label="How hands-off">
         <For each={HANDS_FILTERS}>
           {(f) => (
-            <button
-              type="button"
-              class="pbf-chip"
-              aria-pressed={props.value === f.id}
-              onClick={() => props.onChange(f.id)}
-            >
-              <Ic name={FILTER_ICON[f.id]} />
+            <button type="button" aria-pressed={props.value === f.id} onClick={() => props.onChange(f.id)}>
               {f.label}
             </button>
           )}
         </For>
       </div>
-      <WhoLegend />
       <Show when={props.value !== "any"}>
         <p class="pbf-count">
           {props.shown} of {props.total} loaded
@@ -197,9 +192,26 @@ export function PlaybookTags(props: { row: any; withState?: boolean }) {
   )
 }
 
-/** One list row: plain title, the outcome, tags, then the strip and "N steps". */
+/**
+ * One list row (#191697): the name and one line of what it does on the left; on the right, how
+ * hands-off it is as three dots and a word, with the step count under it. That is all a row
+ * says. The work strip, the tags and the view count live on the playbook's own page, where there
+ * is room for them; in the list they were seven things to read per row.
+ */
 export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
   const steps = () => flowSteps(props.row)
+  const level = () => handsLevel(props.row)
+  // Who can see it and whether you have it: an icon each, the words on hover (Alex, 2026-10-29).
+  const scope = () => {
+    const words = scopeWords(props.row?.scope)
+    return words ? { words, icon: scopeIcon(props.row.scope) } : undefined
+  }
+  const state = () =>
+    props.row?.hasLocal
+      ? props.row.action === "update"
+        ? { words: `Update available · v${props.row.version}`, icon: "arrow-up" as const }
+        : { words: "Installed", icon: "check" as const }
+      : undefined
   return (
     <button
       type="button"
@@ -211,30 +223,46 @@ export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
       onClick={() => props.onOpen()}
     >
       <span class="pbf-row__main">
-        <span class="pbf-row__title" classList={{ "pbf-slug": !playbookSlugLine(props.row) }}>
-          {playbookTitle(props.row)}
+        <span class="pbf-row__head">
+          <span class="pbf-row__title">{playbookTitle(props.row)}</span>
+          <Show when={scope()}>
+            {(sc) => (
+              <span class="pbf-row__icon" title={`Who can see it: ${sc().words}`} aria-label={`Who can see it: ${sc().words}`}>
+                <Ic name={sc().icon} />
+              </span>
+            )}
+          </Show>
+          <Show when={state()}>
+            {(st) => (
+              <span
+                class="pbf-row__icon"
+                data-state={props.row.action === "update" ? "update" : "installed"}
+                title={props.row.localWhere ? `${st().words} — ${props.row.localWhere}` : st().words}
+                aria-label={st().words}
+              >
+                <Ic name={st().icon} />
+              </span>
+            )}
+          </Show>
         </span>
-        <Show when={playbookSlugLine(props.row)}>{(slug) => <span class="pbf-row__slug pbf-slug">{slug()}</span>}</Show>
         <Show when={outcomeLine(props.row?.description)}>{(o) => <span class="pbf-row__out">{o()}</span>}</Show>
-        <span class="pbf-row__meta">
-          <PlaybookTags row={props.row} withState />
-          {/* A quiet stat — views, never installs (two across the whole catalogue reads as dead). */}
-          <Show when={typeof props.row?.views === "number"}>
-            <span class="pbf-views" title={`Looked at ${props.row.views.toLocaleString()} times`}>
-              <Ic name="eye" />
-              <span class="pbf-num">{props.row.views.toLocaleString()}</span>
-            </span>
-          </Show>
-        </span>
       </span>
-      <span class="pbf-row__flow">
-        <WorkStrip steps={steps()} big />
-        <span class="pbf-row__n">
-          <Show when={steps().length > 0} fallback="—">
-            <Ic name="checklist" />
+      <span class="pbf-row__side">
+        <Show when={level()} fallback={<span class="pbf-ind pbf-ind--none">No steps listed</span>}>
+          {(lv) => (
+            <span class="pbf-ind" data-tone={lv().tone} title={handsTag(props.row)?.label}>
+              <span class="pbf-dots" aria-hidden="true">
+                <For each={[1, 2, 3]}>{(n) => <i classList={{ on: n <= lv().filled }} />}</For>
+              </span>
+              {lv().label}
+            </span>
+          )}
+        </Show>
+        <Show when={steps().length > 0}>
+          <span class="pbf-row__n">
             {steps().length} step{steps().length === 1 ? "" : "s"}
-          </Show>
-        </span>
+          </span>
+        </Show>
       </span>
     </button>
   )

@@ -2,7 +2,10 @@ import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { Deferred, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
@@ -21,6 +24,8 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       SessionNs.node,
+      Permission.node,
+      Question.node,
       EventV2Bridge.node,
       SessionProjector.node,
       CrossSpawnSpawner.node,
@@ -281,5 +286,95 @@ describe("Session", () => {
       expect(created.metadata).toBeUndefined()
       expect(saved.metadata).toBeUndefined()
     }),
+  )
+})
+
+describe("session.remove clears pending requests (#191785)", () => {
+  it.instance(
+    "rejects the deleted session's and its children's pending permission and question requests",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        const permission = yield* Permission.Service
+        const question = yield* Question.Service
+        const events = yield* EventV2Bridge.Service
+        const replied: unknown[] = []
+        const rejected: unknown[] = []
+        const off = yield* events.listen((event) => {
+          if (event.type === Permission.Event.Replied.type) replied.push(event.data)
+          if (event.type === Question.Event.Rejected.type) rejected.push(event.data)
+          return Effect.void
+        })
+        yield* Effect.addFinalizer(() => off)
+
+        const parent = yield* session.create({ title: "parent" })
+        const child = yield* session.create({ title: "child", parentID: parent.id })
+        const other = yield* session.create({ title: "other" })
+
+        const base = { permission: "bash", patterns: ["ls"], metadata: {}, always: [], ruleset: [] }
+        const askPermission = (id: string, sessionID: SessionID) =>
+          permission.ask({ ...base, id: PermissionV1.ID.make(id), sessionID }).pipe(Effect.forkScoped)
+        const questions = [{ question: "Pick?", header: "Pick", options: [{ label: "A", description: "a" }] }]
+        const askQuestion = (sessionID: SessionID) => question.ask({ sessionID, questions }).pipe(Effect.forkScoped)
+
+        const parentPerm = yield* askPermission("per_delete_parent", parent.id)
+        const childPerm = yield* askPermission("per_delete_child", child.id)
+        const otherPerm = yield* askPermission("per_delete_other", other.id)
+        const parentQ = yield* askQuestion(parent.id)
+        const childQ = yield* askQuestion(child.id)
+        const otherQ = yield* askQuestion(other.id)
+
+        for (let i = 0; i < 100; i++) {
+          if ((yield* permission.list()).length === 3 && (yield* question.list()).length === 3) break
+          yield* Effect.sleep("10 millis")
+        }
+        const questionIDs = new Map((yield* question.list()).map((item) => [item.sessionID, item.id]))
+
+        yield* session.remove(parent.id)
+
+        expect((yield* permission.list()).map((item) => item.sessionID)).toEqual([other.id])
+        expect((yield* question.list()).map((item) => item.sessionID)).toEqual([other.id])
+
+        for (const fiber of [parentPerm, childPerm]) {
+          const exit = yield* Fiber.await(fiber)
+          expect(Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof PermissionV1.RejectedError).toBe(true)
+        }
+        for (const fiber of [parentQ, childQ]) {
+          const exit = yield* Fiber.await(fiber)
+          expect(Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof Question.RejectedError).toBe(true)
+        }
+
+        expect(replied).toHaveLength(2)
+        expect(replied).toContainEqual({
+          sessionID: parent.id,
+          requestID: PermissionV1.ID.make("per_delete_parent"),
+          reply: "reject",
+        })
+        expect(replied).toContainEqual({
+          sessionID: child.id,
+          requestID: PermissionV1.ID.make("per_delete_child"),
+          reply: "reject",
+        })
+        expect(rejected).toHaveLength(2)
+        expect(rejected).toContainEqual({ sessionID: parent.id, requestID: questionIDs.get(parent.id) })
+        expect(rejected).toContainEqual({ sessionID: child.id, requestID: questionIDs.get(child.id) })
+
+        // A late reply for a deleted session's request is a clean NotFound, not a throw or a hang.
+        const late = yield* permission
+          .reply({ requestID: PermissionV1.ID.make("per_delete_parent"), reply: "once" })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(late) && Cause.squash(late.cause) instanceof PermissionV1.NotFoundError).toBe(true)
+        const lateQ = yield* question
+          .reply({ requestID: questionIDs.get(parent.id)!, answers: [["A"]] })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(lateQ) && Cause.squash(lateQ.cause) instanceof Question.NotFoundError).toBe(true)
+
+        yield* permission.reply({ requestID: PermissionV1.ID.make("per_delete_other"), reply: "reject" })
+        yield* question.reject(questionIDs.get(other.id)!)
+        yield* Fiber.await(otherPerm)
+        yield* Fiber.await(otherQ)
+        yield* session.remove(other.id)
+      }),
+    { git: true },
   )
 })

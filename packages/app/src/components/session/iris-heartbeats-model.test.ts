@@ -30,6 +30,7 @@ import {
   toolsOfRun,
   ledgerCovers,
   type HeartbeatRow,
+  restOf,
 } from "./iris-heartbeats-model"
 
 // The real heartbeats of account #193 on 2026-10-12 (18 live). Names, boards, report text and
@@ -110,7 +111,7 @@ describe("Agents › Heartbeats — what is true", () => {
     const sorted = sortBeats(rows, NOW).map((r) => stateOf(r, NOW))
     expect(sorted[0]).toBe("silent")
     expect(sorted.indexOf("ok")).toBeGreaterThan(sorted.lastIndexOf("failing"))
-    expect(beatSummary(rows, NOW)).toEqual({ total: 18, beating: 10, attention: 8, paused: 0 })
+    expect(beatSummary(rows, NOW)).toEqual({ total: 18, beating: 10, attention: 8, paused: 0, resting: 0 })
   })
 })
 
@@ -319,5 +320,43 @@ describe("Agents › Heartbeats — inside the wake ledger, a gap is not a skip 
     expect(ledgerCovers(old, at(beat.completedAt))).toBe(false)
     expect(stateOf(old, NOW2)).toBe("silent")
     expect(stateOf({ ...row, wakes: null }, NOW2)).toBe("silent")
+  })
+})
+
+describe("#192251 resting — skipping by choice, under the planner's limit", () => {
+  const NOW = Date.parse("2026-11-03T01:00:00Z")
+  const wake = (at: string, reason = "Repetition detected — same situation as last N heartbeats.") =>
+    ({ at, dueAt: at, outcome: "skipped", kind: "skipped", reason, heldUntil: null }) as any
+  const base = {
+    jobId: 1, agentId: 1, agentName: "Ayala", bloqId: null, bloqName: null, mode: "autonomous", frequency: "hourly",
+    status: "scheduled", agentActive: true, nextRunAt: "2026-11-03T01:30:00Z", lastRunAt: "2026-11-02T23:00:00Z",
+    runCount: 10, consecutiveFailures: 0, lastOk: true, lastError: null, reportTo: 0, tools: 0,
+    lastSkip: { at: "2026-11-03T00:00:00Z", reason: "Repetition detected — same situation as last N heartbeats.", kind: "skipped" },
+    runs: [{ id: 1, status: "completed", startedAt: "2026-11-02T23:00:00Z", completedAt: "2026-11-02T23:01:00Z", durationMs: 1, tokens: 1, model: "m", preview: null, error: null }],
+    runsMeasured: true, ledgerSince: "2026-10-26T00:00:00Z",
+  } as any
+  test("one skip since a real beat is resting, with the beats left before it must run", () => {
+    const r = { ...base, wakes: [wake("2026-11-02T22:00:00Z"), wake("2026-11-03T00:00:00Z")] }
+    expect(stateOf(r, NOW)).toBe("silent")
+    expect(restOf(r, NOW)).toEqual({ skipped: 1, left: 6 })
+    expect(lineOf(r, NOW)).toBe("Resting by choice · skipped 1 in a row · runs again within 6 beats")
+    expect(problemsOf(r, NOW).some((p) => p.kind === "silent")).toBe(false)
+    expect(beatSummary([r], NOW)).toMatchObject({ attention: 0, resting: 1 })
+  })
+  test("at the limit the next beat runs; past it the agent is stuck, not resting", () => {
+    const six = ["00", "01", "02", "03", "04", "05"].map((h) => wake(`2026-11-03T${h}:00:00Z`))
+    expect(restOf({ ...base, nextRunAt: "2026-11-03T08:00:00Z", wakes: six }, Date.parse("2026-11-03T06:30:00Z"))).toEqual({ skipped: 6, left: 1 })
+    const skips = ["00", "01", "02", "03", "04", "05", "06"].map((h) => wake(`2026-11-03T${h}:00:00Z`))
+    const r = { ...base, lastRunAt: "2026-11-02T23:00:00Z", nextRunAt: "2026-11-03T08:00:00Z", wakes: skips }
+    expect(stateOf(r, Date.parse("2026-11-03T07:30:00Z"))).toBe("silent")
+    expect(restOf(r, Date.parse("2026-11-03T07:30:00Z"))).toBeNull()
+  })
+  test("a last beat older than the ledger window makes no claim — the skips before it are unseen", () => {
+    const old = { ...base, lastRunAt: "2026-10-22T19:00:00Z", runs: [{ ...base.runs[0], startedAt: "2026-10-22T19:00:00Z", completedAt: "2026-10-22T19:01:00Z" }], wakes: [wake("2026-10-28T19:00:00Z")] }
+    expect(stateOf(old, NOW)).toBe("silent")
+    expect(restOf(old, NOW)).toBeNull()
+  })
+  test("no wake ledger means no claim either way", () => {
+    expect(restOf({ ...base, wakes: null }, NOW)).toBeNull()
   })
 })

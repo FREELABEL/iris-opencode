@@ -856,6 +856,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} daha)",
   "common.requestFailed": "Sorğu uğursuz oldu",
   "common.moreOptions": "Daha çox seçim",
+  "session.pinned.title": "Sancaqlanmış mesajlar",
+  "session.pinned.empty": "Sancaqlanmış mesaj yoxdur",
   "common.learnMore": "Ətraflı öyrən",
   "common.rename": "Adını dəyiş",
   "common.export": "İxrac et",

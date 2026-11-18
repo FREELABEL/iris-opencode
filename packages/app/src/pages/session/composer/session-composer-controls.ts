@@ -1,12 +1,15 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
-import { createQuery } from "@tanstack/solid-query"
+import { createQuery, useQueryClient } from "@tanstack/solid-query"
 import { useNavigate, useSearchParams } from "@solidjs/router"
-import { type Accessor, createMemo } from "solid-js"
+import { type Accessor, createMemo, onCleanup } from "solid-js"
+import { CHAT_WITH, agentForIrisId, type ChatWithDetail } from "@/components/prompt-input/chat-with"
 import type { PromptInputControls } from "@/components/prompt-input/contracts"
 import type { PromptProjectControls } from "@/components/prompt-project-selector"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { useGlobal } from "@/context/global"
 import { useLayout } from "@/context/layout"
+import { useSessionPane } from "@/context/session-pane"
+import { paneView } from "@/pages/session/session-layout"
 import { useLocal, type ModelSelection } from "@/context/local"
 import type { QueryOptionsApi } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
@@ -16,6 +19,7 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { useProviders } from "@/hooks/use-providers"
 import { pathKey } from "@/utils/path-key"
+import { agentLabels } from "@/components/prompt-input/agent-label"
 
 export function createPromptInputController(input: {
   sessionKey: Accessor<string>
@@ -28,16 +32,39 @@ export function createPromptInputController(input: {
   const sdk = useSDK()
   const sync = useSync()
   const providers = useProviders(() => sdk().directory)
-  const view = layout.view(input.sessionKey)
+  const view = paneView(layout.view(input.sessionKey), useSessionPane())
   const agentsQuery = createQuery(() => input.queryOptions.agents(pathKey(sdk().directory)))
   const globalProvidersQuery = createQuery(() => input.queryOptions.providers(null))
   const providersQuery = createQuery(() => input.queryOptions.providers(pathKey(sdk().directory)))
 
+  // The agents gallery's Chat (#192931): the panel cannot reach this state, so it asks here.
+  const queryClient = useQueryClient()
+  let refreshing: Promise<void> | undefined
+  const refreshAgents = () =>
+    (refreshing ??= queryClient
+      .fetchQuery({ ...input.queryOptions.agents(pathKey(sdk().directory)), staleTime: 0 })
+      .then((fresh) => void sync().set("agent", fresh))
+      .catch(() => undefined)
+      .finally(() => (refreshing = undefined)))
+  if (typeof window !== "undefined") {
+    const onChatWith = (event: Event) => {
+      const detail = (event as CustomEvent<ChatWithDetail>).detail
+      const agent = agentForIrisId(local.agent.list(), detail.id)
+      if (agent) local.agent.set(agent.name)
+      if (!agent && detail.refresh) void refreshAgents()
+      detail.reply(agent?.name ?? null)
+    }
+    window.addEventListener(CHAT_WITH, onChatWith)
+    onCleanup(() => window.removeEventListener(CHAT_WITH, onChatWith))
+  }
+
   return createMemo<PromptInputControls>(() => {
+    const labels = agentLabels(local.agent.list())
     return {
       agents: {
         available: sync().data.agent,
         options: local.agent.list().map((agent) => agent.name),
+        label: (name) => labels[name] ?? name,
         current: local.agent.current()?.name ?? "",
         loading: agentsQuery.isLoading,
         visible: local.agent.visible(),

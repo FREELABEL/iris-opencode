@@ -33,6 +33,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@opencode-ai/core/shell"
@@ -41,8 +42,10 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import * as AttachmentText from "./attachment-text"
+import * as AttachmentPdf from "./attachment-pdf"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { TerminalRun } from "./terminal-run"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -104,6 +107,9 @@ export interface Interface {
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+  /** Terminal mode (#190530): run a command like `shell` does, but record nothing in the session. */
+  readonly terminalStart: (input: TerminalStartInput) => Effect.Effect<{ id: string }, TerminalBusyError>
+  readonly terminalCancel: (sessionID: SessionID, id: string) => Effect.Effect<boolean>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
@@ -123,6 +129,7 @@ const layer = Layer.effect(
     const commands = yield* Command.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
+    const question = yield* Question.Service
     const fsys = yield* FSUtil.Service
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
@@ -152,6 +159,12 @@ const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
       yield* state.cancel(sessionID)
+      // #191779: interrupting the run does not reach a permission/question ask parked inside a
+      // tool (tools execute on a detached promise), so reject them explicitly. Subagent sessions
+      // are cleared too: the cascade in state.cancel interrupts their task, whose onInterrupt
+      // calls this cancel for the child session.
+      yield* permission.rejectSession(sessionID)
+      yield* question.rejectSession(sessionID)
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -595,6 +608,56 @@ const layer = Layer.effect(
       )
     })
 
+    // Terminal mode (#190530). Same shell, arguments, shell.env plugin hook and TERM as
+    // shellImpl above, so a command behaves the same in both; the difference is only where the
+    // output goes — TerminalRun, not a user turn and a tool part.
+    const terminalStart = Effect.fn("SessionPrompt.terminalStart")(function* (input: TerminalStartInput) {
+      if (TerminalRun.running(input.sessionID) >= TerminalRun.RUNNING_LIMIT) {
+        return yield* new TerminalBusyError({ limit: TerminalRun.RUNNING_LIMIT })
+      }
+      const ctx = yield* InstanceState.context
+      const cwd = ctx.directory
+      const cfg = yield* config.get()
+      const sh = Shell.preferred(cfg.shell)
+      const args = Shell.args(sh, input.command, cwd)
+      const run = TerminalRun.create(input.sessionID, input.command)
+      const shellEnv = yield* plugin.trigger("shell.env", { cwd, sessionID: input.sessionID, callID: run.id }, { env: {} })
+
+      const fiber = yield* Effect.gen(function* () {
+        const cmd = ChildProcess.make(sh, args, {
+          cwd,
+          extendEnv: true,
+          env: { ...shellEnv.env, TERM: "dumb" },
+          stdin: "ignore",
+          forceKillAfter: "3 seconds",
+        })
+        const handle = yield* spawner.spawn(cmd)
+        yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) => Effect.sync(() => TerminalRun.append(run, chunk)))
+        const exitCode = Number(yield* handle.exitCode)
+        TerminalRun.finish(run, { status: "exited", exitCode })
+      }).pipe(
+        Effect.scoped,
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) return
+            if (Cause.hasInterruptsOnly(exit.cause)) return TerminalRun.finish(run, { status: "cancelled" })
+            TerminalRun.finish(run, { status: "error", error: String(Cause.squash(exit.cause)) })
+          }),
+        ),
+        Effect.ignore,
+        Effect.forkIn(scope),
+      )
+      if (run.status === "running") run.cancel = () => Effect.runFork(Fiber.interrupt(fiber))
+      return { id: run.id }
+    })
+
+    const terminalCancel = Effect.fn("SessionPrompt.terminalCancel")(function* (sessionID: SessionID, id: string) {
+      const run = TerminalRun.get(sessionID, id)
+      if (!run || run.status !== "running" || !run.cancel) return false
+      run.cancel()
+      return true
+    })
+
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
@@ -704,6 +767,7 @@ const layer = Layer.effect(
         part: Extract<PromptInput["parts"][number], { type: "file" }>,
         bytes: Uint8Array,
         path: string | undefined = part.filename,
+        resolved?: AttachmentText.AttachmentResult,
       ) {
         const text = (value: string): Draft<SessionV1.Part> => ({
           messageID: info.id,
@@ -712,7 +776,7 @@ const layer = Layer.effect(
           synthetic: true,
           text: value,
         })
-        const result = AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
+        const result = resolved ?? AttachmentText.attachmentToText({ bytes, mime: part.mime, filename: path })
         if (result.kind === "unreadable") {
           // The person sees why; the model is told it did not see the file. Nothing is forwarded.
           yield* events.publish(Session.Event.Error, {
@@ -737,6 +801,35 @@ const layer = Layer.effect(
           // Kept for the transcript as text/plain, which toModelMessages never forwards as a file part.
           { ...part, mime: "text/plain", messageID: info.id, sessionID: input.sessionID },
         ]
+      })
+
+      // #192645: a model that cannot take PDF input used to receive "ERROR: Cannot read <file>" for
+      // every attached PDF, and the agent then hunted for a way to extract the text itself. For those
+      // models the engine reads the PDF's text here; a model that reads PDFs still gets the file.
+      const modelReadsPdf = Effect.fn("SessionPrompt.modelReadsPdf")(function* () {
+        return yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
+          Effect.map((mdl) => !!mdl.capabilities?.input?.pdf),
+          Effect.catch(() => Effect.succeed(false)),
+        )
+      })
+      const inlinePdf = Effect.fn("SessionPrompt.inlinePdf")(function* (
+        part: Extract<PromptInput["parts"][number], { type: "file" }>,
+        bytes: Uint8Array,
+        path: string | undefined,
+      ) {
+        const result = yield* Effect.tryPromise({
+          try: () => AttachmentPdf.pdfToText(bytes),
+          catch: () => undefined,
+        }).pipe(
+          Effect.catch(() =>
+            Effect.succeed<AttachmentText.AttachmentResult>({
+              kind: "unreadable",
+              reason: "its text could not be read",
+              fix: "Open it and save or print it to a new PDF, then attach that.",
+            }),
+          ),
+        )
+        return yield* inlineAttachment(part, bytes, path, result)
       })
 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
@@ -835,11 +928,19 @@ const layer = Layer.effect(
               if (AttachmentText.needsTextResolution(part.mime)) {
                 return yield* inlineAttachment(part, AttachmentText.dataUrlBytes(part.url))
               }
+              if (AttachmentPdf.isPdf(part.mime, part.filename) && !(yield* modelReadsPdf())) {
+                return yield* inlinePdf(part, AttachmentText.dataUrlBytes(part.url), part.filename)
+              }
               break
             case "file:": {
               yield* Effect.logInfo("file", { mime: part.mime })
               const filepath = fileURLToPath(part.url)
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
+
+              if (mime !== "application/x-directory" && AttachmentPdf.isPdf(mime, filepath) && !(yield* modelReadsPdf())) {
+                const bytes = yield* fsys.readFile(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (bytes) return yield* inlinePdf(part, bytes, filepath)
+              }
 
               // A workbook or Word file referenced by path (the CLI's -f, an @-mention) used to go to
               // the Read tool as "text/plain" — which refuses binary — or to the SDK raw, which throws.
@@ -1265,6 +1366,10 @@ const layer = Layer.effect(
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
+            const egressProvider = yield* provider
+              .getProvider(model.providerID)
+              .pipe(Effect.orElseSucceed(() => undefined))
+            const egressConfig = yield* config.get()
             const tools = yield* SessionTools.resolve({
               agent,
               session,
@@ -1273,6 +1378,14 @@ const layer = Layer.effect(
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              egress: {
+                modelUrl: egressProvider?.options?.baseURL ?? model.api.url,
+                writtenRules: Permission.merge(
+                  Permission.fromConfig(egressConfig.permission ?? {}),
+                  Permission.fromConfig(egressConfig.agent?.[agent.name]?.permission ?? {}),
+                  session.permission ?? [],
+                ),
+              },
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1527,6 +1640,8 @@ const layer = Layer.effect(
       prompt,
       loop,
       shell,
+      terminalStart,
+      terminalCancel,
       command,
       resolvePromptParts,
     })
@@ -1574,6 +1689,16 @@ export const ShellInput = Schema.Struct({
   command: Schema.String,
 })
 export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+
+export const TerminalStartInput = Schema.Struct({
+  sessionID: SessionID,
+  command: Schema.String.check(Schema.isMinLength(1)),
+})
+export type TerminalStartInput = Schema.Schema.Type<typeof TerminalStartInput>
+
+export class TerminalBusyError extends Schema.TaggedErrorClass<TerminalBusyError>()("SessionPrompt.TerminalBusyError", {
+  limit: Schema.Number,
+}) {}
 
 export const CommandInput = Schema.Struct({
   messageID: Schema.optional(MessageID),
@@ -1651,6 +1776,7 @@ export const node = LayerNode.make({
     Command.node,
     Config.node,
     Permission.node,
+    Question.node,
     FSUtil.node,
     MCP.node,
     LSP.node,

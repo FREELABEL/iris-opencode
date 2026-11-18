@@ -1,0 +1,324 @@
+/**
+ * Hive › Inbox — the writes (#190917 epic: "Make the Hive inbox a place people work").
+ *
+ * The panel could read and mark read. A place people work also needs to mark unread, finish a
+ * thing (done — separate from read: opening is not finishing), and answer it. Three rules carried
+ * over from the reads:
+ *
+ *  - Lines this reader cannot parse are written back byte-for-byte. Changing one row never drops
+ *    another.
+ *  - Reply goes through `iris hive inbox send`, the CLI's own path (own node or a peer's, via the
+ *    relay). argv only, never a shell — the text is something a person typed. The daemon's
+ *    tailnet-exposed bridge still has no send route, on purpose (#184810).
+ *  - "Sent" means the SERVER accepted it and handed back a task id. It never means delivered or
+ *    read; the transport cannot prove either, and the panel must not claim it.
+ */
+import { execFile } from "child_process"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
+import path from "path"
+import { inboxDir, IRIS_API, irisFetch, locateInboxRow, readManifestLines, writeManifestLines, type ManifestRow } from "./platform"
+import { irisCliPath } from "./playbook-install"
+
+export type Exec = (file: string, args: string[], opts: { timeoutMs: number }) => Promise<{ code: number; stdout: string; stderr: string }>
+
+const realExec: Exec = (file, args, opts) =>
+  new Promise((resolve) => {
+    execFile(file, args, { timeout: opts.timeoutMs, maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const code = err ? (typeof (err as any).code === "number" ? (err as any).code : 1) : 0
+      resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") || (err ? String(err.message) : "") })
+    })
+  })
+
+export interface InboxStateResult {
+  measured: boolean
+  reason?: string
+  read: boolean
+  done: boolean
+  /** Set when the caller asked to close the handoff's Atlas card: what happened to it. */
+  card?: { item: string; ok: boolean; reason?: string }
+}
+
+/** `bloq:item:1234` / `atlas:item:1234` / `#1234` / `1234` → 1234. Null for anything else. */
+export function cardIdOf(item: string | null | undefined): number | null {
+  const m = String(item ?? "").trim().match(/^(?:(?:bloq|atlas):item:|#)?(\d+)$/)
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * Set read and/or done on one row. Done implies read — a finished thing is not waiting on you —
+ * but un-done does not make it unread again. `resolveCard` also moves the handoff's Atlas card to
+ * done through the CLI; whether that worked is reported separately, because the local write
+ * succeeding says nothing about the card.
+ */
+export async function setInboxState(
+  index: number,
+  change: { id?: string; read?: boolean; done?: boolean; resolveCard?: boolean },
+  deps: { dir?: string; cli?: string | null; exec?: Exec; now?: () => Date } = {},
+): Promise<InboxStateResult> {
+  const dir = deps.dir ?? inboxDir()
+  const lines = readManifestLines(dir)
+  if (lines === null) return { measured: false, reason: "the inbox manifest could not be read", read: false, done: false }
+  const at = locateInboxRow(lines, index, change.id)
+  const row = at >= 0 ? lines[at].row : null
+  if (!row) return { measured: false, reason: "that message is no longer in the inbox", read: false, done: false }
+
+  const next: ManifestRow = { ...row }
+  if (change.read !== undefined) next.read = change.read
+  if (change.done !== undefined) {
+    next.done = change.done
+    next.done_at = change.done ? (deps.now?.() ?? new Date()).toISOString() : null
+    if (change.done) next.read = true
+  }
+  try {
+    writeManifestLines(
+      dir,
+      lines.map((l, i) => (i === at ? JSON.stringify(next) : l.raw)),
+    )
+  } catch (e) {
+    return {
+      measured: false,
+      reason: `could not update the inbox: ${e instanceof Error ? e.message : String(e)}`,
+      read: Boolean(row.read),
+      done: row.done === true,
+    }
+  }
+
+  const result: InboxStateResult = { measured: true, read: Boolean(next.read), done: next.done === true }
+  if (change.done && change.resolveCard && row.item) {
+    const id = cardIdOf(row.item)
+    const cli = deps.cli === undefined ? irisCliPath() : deps.cli
+    if (id === null) result.card = { item: row.item, ok: false, reason: "not an Atlas card id" }
+    else if (!cli) result.card = { item: row.item, ok: false, reason: "the iris CLI is not installed on this computer" }
+    else {
+      const r = await (deps.exec ?? realExec)(cli, ["bloqs", "update-item", String(id), "--status", "done"], { timeoutMs: 20_000 })
+      result.card = r.code === 0 ? { item: row.item, ok: true } : { item: row.item, ok: false, reason: lastLine(r.stderr || r.stdout) || "the card was not updated" }
+    }
+  }
+  return result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reply / send
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One message this computer sent from the panel. Kept locally so a thread shows both sides. */
+export interface OutboxRow {
+  id: string
+  to: string
+  text: string
+  sentAt: string
+  /** The server's task id. Proof the server accepted it — not that they received it. */
+  taskId?: string
+  /** The inbox row this answered, when it was a reply. */
+  replyTo?: string
+  /** "relay" when it went to a peer's node. */
+  via?: string
+  /**
+   * What became of it, from the task (#190982). Absent = not known yet, and the panel says only
+   * "accepted by IRIS". "delivered" means it is in THEIR inbox — never that they read it.
+   */
+  delivery?: "delivered" | "waiting" | "failed"
+  deliveryReason?: string
+  deliveredAt?: string
+}
+
+export interface SendResult {
+  measured: boolean
+  ok: boolean
+  reason?: string
+  sent?: OutboxRow
+  /** The recipient is offline; it is parked and delivers when they reconnect. */
+  offline?: boolean
+}
+
+export const outboxPath = (dir = inboxDir()) => path.join(path.dirname(dir), "outbox.jsonl")
+
+/** A reply is at most this long — the inbox carries messages, not documents. */
+export const REPLY_CAP = 8000
+
+/** Node names are what the CLI resolves; anything with a control character or a leading dash is refused. */
+export function validTarget(to: string): boolean {
+  return /^[^\s\-\u0000-\u001f][^\u0000-\u001f]{0,119}$/.test(to.trim())
+}
+
+function lastLine(s: string): string {
+  return (
+    s
+      .replace(/\u001b\[[0-9;]*m/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop() ?? ""
+  )
+}
+
+/**
+ * The text as the CLI's positional argument. NOT after `--`: the CLI's parser does not fill
+ * `[message..]` from what follows `--`, so every send failed with "No message given". Found by the
+ * first real round trip, which no mocked test could see (#190940). A text that starts with "-"
+ * would be read as a flag, so it gets a zero-width space in front: invisible, and it stays text.
+ */
+export function argText(text: string): string {
+  return text.startsWith("-") ? `\u200b${text}` : text
+}
+
+/** Parse `iris hive inbox send --json`. The CLI prints its JSON last; anything before it is noise. */
+export function parseSendJson(stdout: string): { ok: boolean; task_id?: string; node?: string; via?: string } | null {
+  const lines = stdout.trim().split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim()
+    if (!l.startsWith("{")) continue
+    try {
+      const j = JSON.parse(lines.slice(i).join("\n"))
+      if (j && typeof j === "object" && "ok" in j) return j
+    } catch {}
+  }
+  return null
+}
+
+export async function sendInboxMessage(
+  input: { to: string; text: string; replyTo?: string },
+  deps: { dir?: string; cli?: string | null; exec?: Exec; now?: () => Date; newId?: () => string } = {},
+): Promise<SendResult> {
+  const to = input.to.trim()
+  const text = input.text.replace(/\r\n/g, "\n").trim()
+  if (!text) return { measured: true, ok: false, reason: "the message is empty" }
+  if (text.length > REPLY_CAP) return { measured: true, ok: false, reason: `the message is longer than ${REPLY_CAP} characters` }
+  if (!validTarget(to)) return { measured: true, ok: false, reason: "that is not a computer name the inbox can send to" }
+  const cli = deps.cli === undefined ? irisCliPath() : deps.cli
+  if (!cli) return { measured: false, ok: false, reason: "the iris CLI is not installed on this computer, so it cannot send" }
+
+  const r = await (deps.exec ?? realExec)(cli, ["hive", "inbox", "send", "--target", to, "--json", argText(text)], { timeoutMs: 30_000 })
+  const j = parseSendJson(r.stdout)
+  if (r.code !== 0 || !j?.ok) {
+    return { measured: true, ok: false, reason: lastLine(r.stderr) || lastLine(r.stdout) || "the send failed" }
+  }
+
+  const sent: OutboxRow = {
+    id: deps.newId?.() ?? `out_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    to: j.node ?? to,
+    text,
+    sentAt: (deps.now?.() ?? new Date()).toISOString(),
+    ...(j.task_id ? { taskId: String(j.task_id) } : {}),
+    ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+    ...(j.via === "peer" ? { via: "relay" } : {}),
+  }
+  // The send already happened. Failing to record it locally must not turn into "send failed" —
+  // that is the message a person resends, and then it arrives twice.
+  try {
+    const file = outboxPath(deps.dir ?? inboxDir())
+    mkdirSync(path.dirname(file), { recursive: true })
+    appendFileSync(file, JSON.stringify(sent) + "\n")
+  } catch {}
+  return { measured: true, ok: true, sent }
+}
+
+/** The outbox, newest last (append order). Unparseable lines are skipped and counted. */
+export function readOutbox(dir = inboxDir()): { rows: OutboxRow[]; unparsed: number } {
+  const file = outboxPath(dir)
+  if (!existsSync(file)) return { rows: [], unparsed: 0 }
+  let unparsed = 0
+  const rows: OutboxRow[] = []
+  try {
+    for (const l of readFileSync(file, "utf-8").split("\n")) {
+      if (!l.trim()) continue
+      try {
+        const r = JSON.parse(l)
+        if (r && typeof r.to === "string" && typeof r.text === "string") rows.push(r)
+        else unparsed++
+      } catch {
+        unparsed++
+      }
+    }
+  } catch {
+    return { rows: [], unparsed: 0 }
+  }
+  return { rows, unparsed }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delivery (#190982)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What the task endpoint says, reduced to what a sender needs. */
+export interface TaskView {
+  status?: string
+  error?: string | null
+  arrived_at?: string | null
+  completed_at?: string | null
+}
+
+/**
+ * A sent row's fate from its task. "accepted" was all the panel could say; a reply the recipient's
+ * node then refused kept saying it forever (#190982: two replies failed 'node busy' and the thread
+ * still read "accepted by IRIS"). Null = cannot tell — leave the row as it was.
+ */
+export function deliveryOf(t: TaskView | null): Pick<OutboxRow, "delivery" | "deliveryReason" | "deliveredAt"> | null {
+  if (!t?.status) return null
+  const st = t.status.toLowerCase()
+  if (st === "completed" || t.arrived_at) return { delivery: "delivered", deliveredAt: t.arrived_at ?? t.completed_at ?? undefined }
+  if (st === "failed" || st === "cancelled" || st === "expired" || st === "timeout")
+    return { delivery: "failed", deliveryReason: shortReason(t.error) ?? st }
+  if (st === "pending" || st === "queued" || st === "dispatched" || st === "running") return { delivery: "waiting" }
+  return null
+}
+
+/** The server's refusal, cut to what a person reads in a thread. */
+export function shortReason(error: string | null | undefined): string | undefined {
+  if (!error) return undefined
+  const busy = error.match(/busy \(([^)]+)\)/)
+  if (busy) return `their computer was busy (${busy[1]})`
+  if (/offline|not online/i.test(error)) return "their computer is offline"
+  const first = error.split(/(?<=\.)\s/)[0].trim()
+  return first.length > 140 ? first.slice(0, 137) + "…" : first
+}
+
+/** The platform's view of one task. A short timeout: a slow API must not hold the panel's list. */
+export async function platformTask(id: string): Promise<TaskView | null> {
+  const res = await irisFetch(`/api/v6/nodes/tasks/${encodeURIComponent(id)}`, IRIS_API, { signal: AbortSignal.timeout(4000) })
+  if (!res.ok) return null
+  const j = (await res.json()) as { task?: TaskView }
+  return j.task ?? null
+}
+
+const TERMINAL = new Set(["delivered", "failed"])
+/** Only the newest rows are looked up, and never one whose fate is already final. */
+export const DELIVERY_LOOKUPS = 20
+
+/**
+ * Resolve the newest unresolved rows' delivery, write FINAL answers back (so a row is looked up
+ * until it is delivered or failed, then never again), and return every row. A lookup that fails —
+ * no network, a peer's task this account cannot see — changes nothing: "accepted" stays true.
+ */
+export async function resolveDelivery(
+  deps: { dir?: string; fetchTask?: ((id: string) => Promise<TaskView | null>) | null } = {},
+): Promise<{ rows: OutboxRow[]; unparsed: number }> {
+  const dir = deps.dir ?? inboxDir()
+  const { rows, unparsed } = readOutbox(dir)
+  const fetchTask = deps.fetchTask === undefined ? platformTask : deps.fetchTask
+  if (!fetchTask) return { rows, unparsed }
+  const todo = rows
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.taskId && !TERMINAL.has(r.delivery ?? ""))
+    .slice(-DELIVERY_LOOKUPS)
+  if (!todo.length) return { rows, unparsed }
+
+  const results = await Promise.all(todo.map(({ r }) => fetchTask(r.taskId!).catch(() => null)))
+  let changedFinal = false
+  todo.forEach(({ i }, k) => {
+    const d = deliveryOf(results[k])
+    if (!d) return
+    rows[i] = { ...rows[i], ...d }
+    if (TERMINAL.has(d.delivery ?? "")) changedFinal = true
+  })
+  // Rewrite only when something became FINAL, and only if no line was unreadable — rewriting
+  // would drop those lines, and a read must never destroy what it could not parse.
+  if (changedFinal && unparsed === 0) {
+    try {
+      const file = outboxPath(dir)
+      writeFileSync(`${file}.tmp`, rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
+      renameSync(`${file}.tmp`, file)
+    } catch {}
+  }
+  return { rows, unparsed }
+}

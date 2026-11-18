@@ -1,14 +1,16 @@
 import { createEffect, createMemo, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { PermissionRequest, QuestionRequest, Todo } from "@opencode-ai/sdk/v2"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { showToast } from "@/utils/toast"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
+import { useSplitActions } from "@/context/split-actions"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import { settleReply, withoutRequest } from "./request-reply"
 
 export const todoState = (input: {
   count: number
@@ -26,21 +28,29 @@ export const todoDockAtBoundary = (state: ReturnType<typeof todoState>) => state
 const idle = { type: "idle" as const }
 
 export function createSessionComposerController(options?: { closeMs?: number | (() => number) }) {
-  const params = useParams()
+  const params = useSessionParams()
   const sdk = useSDK()
   const sync = useSync()
   const serverSync = useServerSync()
   const language = useLanguage()
   const permission = usePermission()
 
+  const split = useSplitActions()
+  // The other columns' sessions: a subagent open beside its parent asks in its own column only.
+  const elsewhere = createMemo(() => new Set((split?.columns?.() ?? []).filter((id) => id !== params.id)))
+
   const questionRequest = createMemo((): QuestionRequest | undefined => {
-    return sessionQuestionRequest(sync().data.session, sync().data.question, params.id)
+    return sessionQuestionRequest(sync().data.session, sync().data.question, params.id, undefined, elsewhere())
   })
 
   const permissionRequest = createMemo((): PermissionRequest | undefined => {
-    return sessionPermissionRequest(sync().data.session, sync().data.permission, params.id, (item) => {
-      return !permission.autoResponds(item, sdk().directory)
-    })
+    return sessionPermissionRequest(
+      sync().data.session,
+      sync().data.permission,
+      params.id,
+      (item) => !permission.autoResponds(item, sdk().directory),
+      elsewhere(),
+    )
   })
 
   const blocked = createMemo(() => {
@@ -81,8 +91,12 @@ export function createSessionComposerController(options?: { closeMs?: number | (
     if (store.responding === perm.id) return
 
     setStore("responding", perm.id)
-    sdk()
-      .api.permission.reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
+    // Answered (or already answered elsewhere): drop the card now rather than when the replied
+    // event arrives, so it cannot be answered a second time into a 404 (#191772).
+    settleReply(
+      () => sdk().api.permission.reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response }),
+      () => sync().set("permission", perm.sessionID, (list) => withoutRequest(list, perm.id) ?? []),
+    )
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })

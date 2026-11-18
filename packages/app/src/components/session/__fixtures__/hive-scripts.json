@@ -1824,5 +1824,101 @@
   "runtime": "bash",
   "content": "#!/bin/bash\n# iris: arg=seconds default=20\n# iris: timeout=120\n# A harmless demo for the Hive console: prints, waits, prints again.\necho \"console demo starting on $(hostname)\"\nsleep \"${SECONDS_ARG:-${SECONDS:-20}}\"\necho \"console demo done\"\n",
   "updatedAt": "2026-09-22T03:47:20.000000Z"
+ },
+ "sharing": {
+  "note": "#191674 script sharing \u2014 hand-written to the live contract (GET /api/v1/scripts, ?shared=1, as the sidecar passes them on), 2026-11-02. Not a capture: the rest of this file is.",
+  "boards": [
+   {
+    "id": 7,
+    "name": "Deals board"
+   },
+   {
+    "id": 12,
+    "name": "Mambo crew"
+   },
+   {
+    "id": 40,
+    "name": "Ops"
+   }
+  ],
+  "mine": {
+   "mambo-status": {
+    "id": "0b6f8a52-6f1e-4f3e-9a0e-2a6c1f3b7d10",
+    "visibility": "project",
+    "version": 4,
+    "bloqIds": [
+     12
+    ],
+    "runsOn": {
+     "kind": "node",
+     "node": "Alexs-MacBook-Pro-11711"
+    }
+   },
+   "nyc-budget": {
+    "id": "5d1c9e33-0b7a-4b8e-8d0c-9f7a2e61c4ab",
+    "visibility": "project",
+    "version": 3,
+    "bloqIds": [
+     7,
+     12,
+     40
+    ],
+    "runsOn": null
+   },
+   "photo-resize": {
+    "id": "a2e4f6b8-1c3d-4e5f-8a7b-9c0d1e2f3a4b",
+    "visibility": "public",
+    "version": 5,
+    "bloqIds": [],
+    "runsOn": {
+     "kind": "capability",
+     "capability": "gpu"
+    }
+   },
+   "hello-fleet": {
+    "id": "c3d5e7f9-2b4d-4f6a-9b8c-0d1e2f3a4b5c",
+    "visibility": "unlisted",
+    "version": 1,
+    "bloqIds": [],
+    "runsOn": {
+     "kind": "any"
+    }
+   }
+  },
+  "shared": [
+   {
+    "id": "7e9a1c3b-5d7f-4a1b-8c3d-5e7f9a1b3c5d",
+    "slug": "lead-dedupe",
+    "name": "Lead Dedupe",
+    "description": "Merges duplicate leads on the board's CRM export.",
+    "runtime": "python",
+    "version": 6,
+    "visibility": "project",
+    "author": "Dana Ruiz",
+    "bloqIds": [
+     7,
+     99
+    ],
+    "runsOn": null,
+    "updatedAt": "2026-10-30T15:02:11.000000Z"
+   },
+   {
+    "id": "1f3e5d7c-9b8a-4c6d-8e0f-1a2b3c4d5e6f",
+    "slug": "studio-render",
+    "name": "Studio Render",
+    "runtime": "bash",
+    "version": 2,
+    "visibility": "project",
+    "author": "Kai Mensah",
+    "bloqIds": [
+     12
+    ],
+    "runsOn": {
+     "kind": "node",
+     "node": "studio-mac"
+    },
+    "updatedAt": "2026-10-28T09:41:00.000000Z"
+   }
+  ]
  }
 }

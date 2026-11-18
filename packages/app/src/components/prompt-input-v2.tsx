@@ -14,7 +14,7 @@ import {
   type DictationControls,
 } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { glowDurations, useSettings } from "@/context/settings"
-import { isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
+import { holdSpokenReplies, isSpeaking, stopSpokenReply } from "@/context/spoken-replies"
 import { DICTATE_COMMAND_ID, dictateCommand } from "@/components/prompt-input/dictate-command"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
@@ -37,6 +37,7 @@ import { dictationAuthFor } from "@/utils/dictation-auth"
 import { useSync } from "@/context/sync"
 import "./prompt-input-glow.css"
 import { BackgroundWorkMenu } from "./background-work-menu"
+import { allowanceDockShown } from "@/pages/session/composer/allowance-events"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -75,20 +76,8 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const [dictate, setDictate] = createSignal<DictationControls>()
-  // Starting to dictate interrupts a reply being read aloud, so the mic does not hear it.
-  createEffect(() => {
-    if (dictate()?.phase() === "recording") stopSpokenReply()
-  })
-  command.register("voice-stop-speaking", () => [
-    {
-      id: "voice.stopSpeaking",
-      title: language.t("command.voice.stopSpeaking"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+m",
-      disabled: !isSpeaking(),
-      onSelect: stopSpokenReply,
-    },
-  ])
+  // Nothing is read aloud while dictating, so the mic does not hear it.
+  createEffect(() => holdSpokenReplies(dictate()?.phase() === "recording"))
   // The working glow (Alex, 2026-10-09): a RING while this chat is working, an UNDERGLOW while
   // anything else runs in the background — other sessions and this one's subagents, which are
   // child sessions and so already in session_status. See prompt-input-glow.css.
@@ -137,7 +126,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         data-still={dictationSettings.glow.reduceMotion() ? "" : undefined}
         data-busy={busy() ? "" : undefined} data-bg={background() > 0 ? "" : undefined}>
       <span class="iris-glow__under" aria-hidden="true" />
-      <Show when={background() > 0}>
+      <Show when={background() > 0 && !allowanceDockShown()}>
         <BackgroundWorkMenu />
       </Show>
       <PromptInputV2
@@ -487,7 +476,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       get agent() {
         return props.controls.agents.visible && props.controls.agents.options.length > 0
           ? {
-              options: () => props.controls.agents.options.map((name) => ({ id: name, label: name })),
+              options: () => props.controls.agents.options.map((name) => ({ id: name, label: props.controls.agents.label(name) })),
               current: () => props.controls.agents.current,
               onSelect: (value: string) => props.controls.agents.select(value),
               keybind: () => command.keybindParts("agent.cycle"),

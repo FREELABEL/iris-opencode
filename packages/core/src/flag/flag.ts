@@ -66,6 +66,11 @@ export const Flag = {
   get OPENCODE_PURE() {
     return truthy("OPENCODE_PURE")
   },
+  // Desktop safe mode (#190980): the app restarts a crash-looping engine with this set, and no
+  // MCP server is started. A getter, like OPENCODE_PURE, so it is read when servers connect.
+  get OPENCODE_SAFE_MODE() {
+    return truthy("OPENCODE_SAFE_MODE")
+  },
   get OPENCODE_PERMISSION() {
     return process.env["OPENCODE_PERMISSION"]
   },

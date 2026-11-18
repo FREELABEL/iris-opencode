@@ -35,6 +35,8 @@ test("an agent's Tasks tab shows what it was actually given", async ({ page }) =
 
   // Open the agent that holds the assignment.
   await page.locator("[data-slot='tabs-content'] button", { hasText: "Josie" }).first().click()
+  // A click opens the agent editor (#191840); the record with its Tasks tab is under Details.
+  await page.getByTestId("iris-agent-editor").getByRole("button", { name: "Details" }).click()
   const detailNav = page.locator(".iris-detailnav")
   await expect(detailNav.getByRole("tab", { name: "Tasks" })).toBeVisible({ timeout: 30_000 })
   await detailNav.getByRole("tab", { name: "Tasks" }).click()

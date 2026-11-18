@@ -1,3 +1,4 @@
+import { tidyBubbleSegments, type BubbleSegment } from "./bubble-text"
 import {
   Component,
   createEffect,
@@ -13,6 +14,11 @@ import {
   type JSX,
   type ComponentProps,
 } from "solid-js"
+import { ToolMark } from "./tool-mark"
+import { panelStep } from "./browser-step"
+import { browserStep } from "./browser-step"
+import { readAloudAvailable, readAloudOptions, readingId, toggleReading } from "./read-aloud"
+import { messagePins, type MessagePinTarget } from "./message-pins"
 import { createStore } from "solid-js/store"
 import stripAnsi from "strip-ansi"
 import { Dynamic } from "solid-js/web"
@@ -67,6 +73,8 @@ import {
   failed as failedCall,
   commandReportOf,
   formatDuration,
+  gateMarkText,
+  gateSummary,
   groupParts,
   irisCallTrigger,
   irisGroupSummary,
@@ -78,6 +86,8 @@ import {
   sameGroups,
 } from "./part-group"
 export {
+  gateMarkText,
+  gateSummary,
   commandsSummary,
   commandTrigger,
   failedCall,
@@ -90,8 +100,8 @@ export {
   isShellTool,
   sameGroups,
 }
-import type { PartGroup } from "./part-group"
-export type { ContextKind, PartGroup, PartRef } from "./part-group"
+import type { GateSummary, PartGroup } from "./part-group"
+export type { ContextKind, GateSummary, PartGroup, PartRef } from "./part-group"
 import { ToolStatusTitle } from "./tool-status-title"
 import { patchFiles } from "./apply-patch-file"
 import { partDefaultOpen } from "./part-default-open"
@@ -240,7 +250,7 @@ export interface MessagePartProps {
 
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset"
+    icon: "check" | "copy" | "reset" | "speaker" | "speaker-stop" | "pushpin" | "pushpin-filled"
     label: JSX.Element
     useV2?: boolean
   },
@@ -274,6 +284,33 @@ function MessageActionButton(
           aria-label={props["aria-label"]}
         />
       </TooltipV2>
+    </Show>
+  )
+}
+
+/** Pin / unpin a message (#193406). Hidden until the app configures pins. */
+function MessagePinButton(props: { target: () => MessagePinTarget; useV2?: boolean }) {
+  const i18n = useI18n()
+  const pinned = () => {
+    const t = props.target()
+    return messagePins()?.isPinned(t.sessionID, t.messageID) ?? false
+  }
+  const label = () => (pinned() ? i18n.t("ui.message.unpin") : i18n.t("ui.message.pin"))
+  return (
+    <Show when={messagePins()}>
+      {(pins) => (
+        <MessageActionButton
+          icon={pinned() ? "pushpin-filled" : "pushpin"}
+          label={label()}
+          useV2={props.useV2}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation()
+            pins().toggle(props.target())
+          }}
+          aria-label={label()}
+        />
+      )}
     </Show>
   )
 }
@@ -1010,6 +1047,8 @@ function IrisWorkingMark() {
 
 export function ContextToolGroup(props: {
   parts: ToolPart[]
+  /** Constellation Gate's verdict on this turn (#189589); absent when Gate did not screen it. */
+  gate?: GateSummary
   busy?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -1018,8 +1057,9 @@ export function ContextToolGroup(props: {
   const i18n = useI18n()
   const data = useData()
   const [localOpen, setLocalOpen] = createSignal<boolean | undefined>(undefined)
-  // Starts folded even with a failure in it (#189509); the header says "· N failed".
-  const open = () => props.open ?? localOpen() ?? false
+  // Starts folded even with a failure in it (#189509); the header says "· N failed". A held tool
+  // result still opens it (#189589): something was withheld from the model, and the person is told.
+  const open = () => props.open ?? localOpen() ?? (props.gate?.held ?? 0) > 0
   const pending = createMemo(
     () =>
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
@@ -1103,12 +1143,18 @@ export function ContextToolGroup(props: {
                 <Show when={cmd().ms !== undefined}>
                   <span data-slot="context-tool-group-time">{" · "}{formatDuration(cmd().ms!)}</span>
                 </Show>
-                <Show when={cmd().failed > 0}>
-                  <span data-slot="context-tool-group-failed">
+                {/* No failed count up here (#190220): agents run probe commands that exit non-zero on
+                    purpose, and a red tally at the top reads as "something broke". The reason
+                    stays on the command itself, inside the fold. */}
+              </Show>
+              <Show when={!pending() && props.gate}>
+                {(g) => (
+                  <span data-slot="context-tool-group-gate" data-tone={gateMarkText(g()).tone}>
                     {" · "}
-                    {i18n.t(cmd().failed === 1 ? "ui.messagePart.iris.failed.one" : "ui.messagePart.iris.failed.other", { count: cmd().failed })}
+                    <Icon name="shield" size="small" />
+                    {gateMarkText(g()).text}
                   </span>
-                </Show>
+                )}
               </Show>
             </span>
           </span>
@@ -1116,6 +1162,19 @@ export function ContextToolGroup(props: {
         </div>
       </Collapsible.Trigger>
       <Collapsible.Content>
+        <Show when={(props.gate?.held ?? 0) > 0}>
+          <div data-component="gate-held-card">
+            <Icon name="shield" size="small" />
+            <div data-slot="gate-held-copy">
+              <span data-slot="gate-held-title">
+                Gate held {props.gate!.held} tool result{props.gate!.held === 1 ? "" : "s"} before the model read {props.gate!.held === 1 ? "it" : "them"}
+              </span>
+              <span data-slot="gate-held-description">
+                It read as an attempt to take over the assistant. The model was told it was withheld. Settings › Security lists it, and you can report a mistake there.
+              </span>
+            </div>
+          </div>
+        </Show>
         <div data-component="context-tool-group-list">
           <Index each={props.parts}>
             {(partAccessor) => {
@@ -1436,13 +1495,25 @@ export function UserMessageDisplay(props: {
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyMessage")}
             />
           </Show>
+          <Show when={text()}>
+            <MessagePinButton
+              useV2={props.useV2Actions}
+              target={() => ({
+                sessionID: props.message.sessionID,
+                messageID: props.message.id,
+                turnID: props.message.id,
+                text: text(),
+                time: props.message.time?.created,
+              })}
+            />
+          </Show>
         </div>
       </Show>
     </div>
   )
 }
 
-type HighlightSegment = { text: string; type?: "file" | "agent" }
+type HighlightSegment = BubbleSegment
 
 function HighlightedText(props: { text: string; references: FilePart[]; agents: AgentPart[] }) {
   const segments = createMemo(() => {
@@ -1475,7 +1546,7 @@ function HighlightedText(props: { text: string; references: FilePart[]; agents: 
       result.push({ text: text.slice(lastIndex) })
     }
 
-    return result
+    return tidyBubbleSegments(result)
   })
 
   return <For each={segments()}>{(segment) => <span data-highlight={segment.type}>{segment.text}</span>}</For>
@@ -1795,6 +1866,28 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
               onClick={handleCopy}
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
             />
+            {/* Read aloud (Settings › Audio): the Mac's own voices, works offline. */}
+            <Show when={props.message.role === "assistant" && readAloudAvailable() && readAloudOptions().enabled}>
+              <MessageActionButton
+                icon={readingId() === part().id ? "speaker-stop" : "speaker"}
+                label={readingId() === part().id ? "Stop reading" : "Read aloud"}
+                useV2={props.useV2Actions}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => toggleReading(part().id, text() ?? "")}
+                aria-label={readingId() === part().id ? "Stop reading" : "Read aloud"}
+              />
+            </Show>
+            <MessagePinButton
+              useV2={props.useV2Actions}
+              target={() => ({
+                sessionID: props.message.sessionID,
+                messageID: props.message.id,
+                turnID:
+                  props.message.role === "assistant" ? (props.message as AssistantMessage).parentID : props.message.id,
+                text: text() ?? "",
+                time: props.message.time?.created,
+              })}
+            />
             <Show when={meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}
@@ -1954,6 +2047,46 @@ ToolRegistry.register({
 })
 
 ToolRegistry.register({
+  name: "side_panel",
+  render(props) {
+    const pending = createMemo(() => props.status === "pending" || props.status === "running")
+    return (
+      <BasicTool
+        {...props}
+        hideDetails
+        icon="window-cursor"
+        trigger={{
+          title: "Panel",
+          subtitle: panelStep(props.input),
+          lead: () => <ToolMark product="panel" working={pending()} />,
+        }}
+      />
+    )
+  },
+})
+
+ToolRegistry.register({
+  name: "browser",
+  render(props) {
+    const pending = createMemo(() => props.status === "pending" || props.status === "running")
+    // The agent's own (separate) Chrome is named as such; otherwise it is the Browser pane.
+    const title = () => (props.input.target === "agent" ? "IRIS's browser" : "Browser")
+    return (
+      <BasicTool
+        {...props}
+        hideDetails
+        icon="window-cursor"
+        trigger={{
+          title: title(),
+          subtitle: browserStep(props.input),
+          lead: () => <ToolMark product="browser" working={pending()} />,
+        }}
+      />
+    )
+  },
+})
+
+ToolRegistry.register({
   name: "webfetch",
   render(props) {
     const i18n = useI18n()
@@ -2018,6 +2151,7 @@ ToolRegistry.register({
           title: title(),
           subtitle: query(),
           subtitleClass: "exa-tool-query",
+          lead: (pending) => <ToolMark product="websearch" working={pending} />,
         }}
       >
         <ExaOutput output={props.output} />

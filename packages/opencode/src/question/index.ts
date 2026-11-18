@@ -57,6 +57,11 @@ export interface Interface {
   }) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: QuestionID) => Effect.Effect<void, NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
+  /**
+   * Reject every pending question of a session, publishing the same `question.rejected` a
+   * user dismiss publishes. Used when the session is aborted (#191779).
+   */
+  readonly rejectSession: (sessionID: SessionID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Question") {}
@@ -152,7 +157,18 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (x) => x.info)
     })
 
-    return Service.of({ ask, reply, reject, list })
+    const rejectSession = Effect.fn("Question.rejectSession")(function* (sessionID: SessionID) {
+      const pending = (yield* InstanceState.get(state)).pending
+      for (const [id, item] of [...pending.entries()]) {
+        if (item.info.sessionID !== sessionID) continue
+        pending.delete(id)
+        yield* Effect.logInfo("rejected on abort", { requestID: id, "session.id": sessionID })
+        yield* events.publish(Event.Rejected, { sessionID, requestID: item.info.id })
+        yield* Deferred.fail(item.deferred, new RejectedError())
+      }
+    })
+
+    return Service.of({ ask, reply, reject, list, rejectSession })
   }),
 )
 

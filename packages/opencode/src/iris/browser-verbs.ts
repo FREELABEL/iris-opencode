@@ -30,6 +30,7 @@ export const VERBS = [
   "click",
   "type",
   "select",
+  "press",
   "scroll",
   "screenshot",
   "close",
@@ -243,24 +244,132 @@ export type PageElement = {
   inViewport: boolean
   /** For a dropdown: what it can actually be set to. A closed set cannot be invented. */
   options?: string[]
+  /** What each option says (same order as options), when it differs from its value. */
+  optionLabels?: string[]
+  /** A radio or checkbox: whether it is chosen. */
+  checked?: boolean
+  /** The web address this element opens (its own link, or the link around it). */
+  href?: string
+  /** The site's ids on it or on its card: data-jk, data-id, data-product-id … */
+  ids?: Record<string, string>
+  /** Listed from an open pop-up; the page behind it is left out. */
+  inDialog?: boolean
+  /** Not a button in the markup but a box the site made clickable (pointer cursor, onclick):
+   * Southwest's fare cells (#193331). Clicked the same way. */
+  area?: boolean
+  /** What sits on top of it where a person would click (a cookie overlay, a sticky bar). */
+  covered?: string
 }
 
-const CLICKABLE = new Set(["link", "button", "checkbox", "radio", "tab", "menuitem", "option", "switch"])
+/** How one `elements` listing was cut. */
+export type ElementListing = {
+  /** Every control on the page (or the open pop-up). */
+  total: number
+  /** Those that matched the query (all of them when there is none). */
+  matched: number
+  /** Matching controls left out because the list was full: above the screen, and below or beside it. */
+  above: number
+  below: number
+  /** A blocking pop-up is open and only its controls were listed: how many are behind it. */
+  behind?: number
+  /** Long strips of look-alike controls that were shortened to a few (a date bar, a seat map). */
+  collapsed?: { role: string; count: number; first: string; last: string }[]
+  query?: string
+  /** What the page looked like, for the bot-check test (humanCheckReason). */
+  signals?: PageSignals
+}
+
+/** The few facts that tell a "prove you're human" or block page from a real one (#193355 item 11). */
+export type PageSignals = {
+  url: string
+  title: string
+  heading: string
+  text: string
+  textLength: number
+  frames: string[]
+  cfChallenge: boolean
+  blockWidget: boolean
+}
+
+
+/**
+ * The line under the list: what was left out and how to reach it. A list cut silently reads as
+ * "this is everything", and the agent gives up on a page whose button is simply further down.
+ */
+export function listingFooter(listed: number, l: ElementListing | null): string {
+  if (!l) return ""
+  const behind = l.behind
+    ? `${l.behind} more control${l.behind === 1 ? " is" : "s are"} BEHIND the pop-up on the page. To reach them, close it first (its close or accept button, or {"action":"press","key":"Escape"}).`
+    : ""
+  const strips = (l.collapsed ?? [])
+    .map((c) => `${c.count} more ${c.role}s in one strip ("${c.first}" … "${c.last}") are left out`)
+    .join("; ")
+  const squeezed = strips ? `${strips}. To reach one, ask for it by its words: {"action":"elements","query":"Dec 10"}.` : ""
+  const rest = cutFooter(listed, l)
+  return [squeezed, rest, behind].filter(Boolean).join(" ")
+}
+
+function cutFooter(listed: number, l: ElementListing): string {
+  if (l.query) {
+    if (!l.matched) return `Nothing among the page's ${l.total} controls matches "${l.query}". Try a shorter word, or scroll and run elements without a query.`
+    const more = l.matched - listed
+    return `${l.matched} of the page's ${l.total} controls match "${l.query}"${more > 0 ? ` (${more} more not shown — narrow the query)` : ""}.`
+  }
+  const left = l.above + l.below
+  if (left <= 0) return ""
+  const where = [l.below ? `${l.below} below or beside the screen` : "", l.above ? `${l.above} above it` : ""].filter(Boolean).join(" and ")
+  return `Showing ${listed} of ${l.total} controls, what is on screen first. Not listed: ${where}. Scroll there and run elements again, or ask for one by its words: {"action":"elements","query":"$155"}.`
+}
+
+/** A link as short as it can be read: a path on this page's site, the full address elsewhere. */
+export function shortHref(href: string, pageUrl?: string): string {
+  try {
+    const u = new URL(href)
+    const here = pageUrl ? new URL(pageUrl) : undefined
+    const s = here && here.origin === u.origin ? u.pathname + u.search + u.hash : href
+    return s.length > 120 ? s.slice(0, 119) + "…" : s
+  } catch {
+    return href.slice(0, 120)
+  }
+}
+
+/** "30 Austin: DoubleTree University Area": the value to pass AND what it means. */
+function optionText(e: PageElement, i: number): string {
+  const v = e.options![i]!
+  const l = e.optionLabels?.[i]
+  return l && l !== v ? `${v} "${l.slice(0, 40)}"` : v
+}
+
+// combobox: a site-built picker (Google Flights' trip type, passengers, class) opens only on a click.
+// A native <select> is still refused below, pointing at select. gridcell/treeitem: calendar days, tree rows.
+const CLICKABLE = new Set([
+  "link", "button", "checkbox", "radio", "tab", "menuitem", "menuitemcheckbox", "menuitemradio",
+  "option", "switch", "combobox", "gridcell", "treeitem",
+])
 const TYPEABLE = new Set(["textbox", "searchbox", "combobox", "textarea"])
 const SELECTABLE = new Set(["combobox", "listbox"])
 const SCROLLS = ["up", "down", "top", "bottom"] as const
 
 /** One line per element: what it is, what it says, and anything that makes it unusable. */
-export function renderElements(els: PageElement[]): string {
+export function renderElements(els: PageElement[], pageUrl?: string): string {
   if (!els.length) return "No interactive elements on this page."
 
-  return els
+  const head = els.some((e) => e.inDialog) ? "A pop-up is open: these are its controls (the page behind it is inert).\n" : ""
+  return head + els
     .map((e) => {
       const flags = [
         e.enabled ? "" : "disabled",
+        e.checked === true ? "checked" : e.checked === false ? "not checked" : "",
         e.inViewport ? "" : "off-screen",
+        e.area ? "click area" : "",
+        e.covered ? `covered by "${e.covered}": a click lands on that, clear it first` : "",
         e.value ? `value: ${JSON.stringify(e.value.slice(0, 40))}` : "",
-        e.options?.length ? `options: ${e.options.slice(0, 12).join(", ")}${e.options.length > 12 ? " …" : ""}` : "",
+        e.options?.length
+          ? `options: ${e.options.slice(0, 12).map((_, i) => optionText(e, i)).join(", ")}${e.options.length > 12 ? ` … (${e.options.length} in all)` : ""}`
+          : "",
+        // What it IS: where it goes and the site's ids for the record (a job, a product).
+        e.href && e.role !== "textbox" ? `→ ${shortHref(e.href, pageUrl)}` : "",
+        e.ids ? Object.entries(e.ids).map(([k, v]) => `${k}=${v.slice(0, 40)}`).join(" ") : "",
       ].filter(Boolean)
 
       return `[${e.ref}] ${e.role.padEnd(10)} ${e.name.slice(0, 60)}${flags.length ? `  · ${flags.join(" · ")}` : ""}`
@@ -273,6 +382,9 @@ export function refuseTargetReason(els: PageElement[], ref: number, op: "click" 
   const el = els.find((e) => e.ref === ref)
   if (!el) return `there is no [${ref}] on this page — it lists ${els.length} elements; run elements again`
   if (!el.enabled) return `[${ref}] ${el.name} is disabled`
+  if (op === "click" && el.role === "combobox" && el.tag === "select") {
+    return `[${ref}] is a dropdown — use select with one of its options, not click`
+  }
   if (op === "click" && !CLICKABLE.has(el.role)) return `[${ref}] is a ${el.role} — not clickable`
   if (op === "type" && !TYPEABLE.has(el.role)) return `[${ref}] is a ${el.role} — not a text field`
   if (op === "select" && !(SELECTABLE.has(el.role) && el.options?.length)) {
@@ -295,8 +407,10 @@ export function refuseOptionReason(els: PageElement[], ref: number, value: strin
   const options = el.options ?? []
   if (!options.length) return `[${ref}] has no options to choose from`
   if (options.includes(value)) return null
+  const want = value.trim().toLowerCase()
+  if (el.optionLabels?.some((l) => l.trim().toLowerCase() === want)) return null
 
-  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).join(", ")}`
+  return `[${ref}] has no option ${JSON.stringify(value)} — it offers: ${options.slice(0, 20).map((_, i) => optionText(el, i)).join(", ")}`
 }
 
 /** Why this scroll cannot be done, or null. Four directions, named in the refusal. */
@@ -307,17 +421,100 @@ export function refuseScrollReason(direction: string): string | null {
 }
 
 const IRREVERSIBLE =
-  /\b(delete|remove|destroy|erase|wipe|pay|buy|purchase|checkout|order|send|submit|transfer|withdraw|confirm|cancel subscription|unsubscribe|deactivate|archive|publish|post|sign out|log out)\b/i
+  /\b(delete|remove|destroy|erase|wipe|pay|buy|purchase|checkout|check out|order|send|submit|transfer|withdraw|confirm|cancel (my |your |the )?(subscription|booking|reservation|order|trip|flight)|unsubscribe|deactivate|archive|publish|post|sign out|log out|book|reserve|complete (my |your |the )?(booking|reservation|purchase|order|payment)|finish (my |your |the )?(booking|reservation)|make (a |the )?(reservation|booking|payment))\b/i
+
+/**
+ * Words that LOOK like a commit but are a list, a field or a setting (#193355): "Sort order",
+ * "Order history", "Confirm dates", "Send code", "Post code". They are taken out before the test
+ * above, so the same label still asks if it ALSO says pay, book, delete…
+ */
+const HARMLESS =
+  /\b(sort (order|by)|order (history|status|details|summary|number|by)|track (my |your |an |the )?order|view (my |your |the )?orders?|my orders|past orders|confirm (the |your )?(dates?|selection|location|address|guests?|passengers?|travell?ers?|time|filters?|search|email|e-mail)|(re)?send (me )?(a |the |my )?(new )?(verification |security |login |sign-in |one[- ]time |confirmation )?(code|otp|pin|link)|post ?code|postal code|book(ing)? (details|summary|reference)|address book)\b/gi
 
 /**
  * Does this control look like it cannot be undone?
  *
  * The cheap half of a risk gate: the agent must say it meant it, and the refusal names the word
  * that triggered it, so a wrong gate is obvious rather than mysterious. The page is untrusted
- * input — one of these clicks spends money or sends something in the user's name.
+ * input — one of these clicks spends money, books a seat or sends something in the user's name.
  */
 export function looksIrreversible(label: string): boolean {
-  return IRREVERSIBLE.test(String(label ?? ""))
+  return IRREVERSIBLE.test(String(label ?? "").replace(HARMLESS, " "))
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
+/**
+ * A date as an <input type=date> takes it: YYYY-MM-DD, or null when the text is not a date.
+ *
+ * A date field ignores "12/10/2026" and stays empty, silently (#193355). US order first (M/D/Y),
+ * day-first only when the first number cannot be a month. Month names in either order.
+ */
+export function normalizeDate(text: string): string | null {
+  const t = String(text ?? "").trim().toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ")
+  const out = (y: number, m: number, d: number) => {
+    const year = y < 100 ? 2000 + y : y
+    const ok = m >= 1 && m <= 12 && d >= 1 && d <= new Date(Date.UTC(year, m, 0)).getUTCDate() && year >= 1000 && year <= 9999
+    return ok ? `${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : null
+  }
+  const iso = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)
+  if (iso) return out(+iso[1]!, +iso[2]!, +iso[3]!)
+  const num = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/)
+  if (num) {
+    const a = +num[1]!
+    const b = +num[2]!
+    return a > 12 ? out(+num[3]!, b, a) : out(+num[3]!, a, b)
+  }
+  const month = (w: string) => MONTHS.indexOf(w.slice(0, 3)) + 1
+  const md = t.match(/^(?:[a-z]+ )?([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)? (\d{4})$/)
+  if (md && month(md[1]!) > 0) return out(+md[3]!, month(md[1]!), +md[2]!)
+  const dm = t.match(/^(?:[a-z]+ )?(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})\.? (\d{4})$/)
+  if (dm && month(dm[2]!) > 0) return out(+dm[3]!, month(dm[2]!), +dm[1]!)
+  return null
+}
+
+const BLOCK_PHRASES =
+  /^(just a moment|attention required|access denied|blocked|you have been blocked|you've been blocked|request blocked|sorry, you have been blocked|access to this page has been denied|pardon our interruption|are you a (human|robot)|verify(ing)? you are (a )?human|please verify you are a human|checking (if the site connection is secure|your browser)|one more step|bot or not|security check|additional verification required)\s*[.!?…]*\s*([|–—-].*)?$/i
+
+/**
+ * Is this page a "prove you're human" check or a block page, and whose? null when it is a page.
+ *
+ * Measured live (#193355): Yelp and Hertz came back blank with 0 controls, Kayak sent the agent to
+ * /help/bots.html, Expedia said "Bot or Not?". The agent read each as an empty or odd page and kept
+ * trying. The check is for a PERSON; the agent's part is to say so and stop.
+ */
+export function humanCheckReason(s: PageSignals | null | undefined): string | null {
+  if (!s) return null
+  const frames = s.frames.join(" ")
+  if (s.cfChallenge || /challenges\.cloudflare\.com/.test(frames) || /^(just a moment|attention required)/i.test(s.title.trim())) {
+    return "a Cloudflare check"
+  }
+  if (/captcha-delivery\.com|datadome/i.test(frames)) return "a DataDome check"
+  if (/px-captcha|perimeterx|human\.com/i.test(frames) || (s.textLength < 2000 && /press (&|and) hold/i.test(s.text))) {
+    return "a PerimeterX check"
+  }
+  let path = ""
+  try {
+    path = new URL(s.url).pathname
+  } catch {}
+  if (/\/help\/bots?\b|\/(bot|captcha|blocked)(\.html?)?$/i.test(path)) return "the site's bot page"
+  if (BLOCK_PHRASES.test(s.title.trim()) || (s.textLength < 3000 && BLOCK_PHRASES.test(s.heading.trim()))) {
+    return "a block page"
+  }
+  if (s.blockWidget) return "a human check"
+  if (s.textLength < 300 && /recaptcha|hcaptcha|turnstile|captcha/i.test(frames)) return "a captcha"
+  if (s.textLength < 1500 && /verify (that )?you are (a )?human|complete the security check|not a robot/i.test(s.text)) {
+    return "a human check"
+  }
+  return null
+}
+
+/** What the agent is told when it meets one: hand it to the person, never get past it. */
+export function humanCheckAdvice(kind: string, target: "agent" | "panel"): string {
+  const never = "It is for a PERSON: do not click, solve, retry or work around it, and do not switch browsers to get past it."
+  return target === "panel"
+    ? `STOP: this page is ${kind}, not the site. ${never} Tell the person in one short line to finish the check in the Browser; your next call waits for them.`
+    : `STOP: this page is ${kind}, not the site: the site turned your browser away. ${never} Tell the person in one short line that the site asked for a human check, and leave that site to them (they can open it themselves).`
 }
 
 export type PageState = {
@@ -326,7 +523,49 @@ export type PageState = {
   textLength: number
   textHash: string
   values: Record<string, string>
+  /** The first few hundred characters of the page's text: enough to know an error page. */
+  head?: string
 }
+
+/**
+ * The page an action LANDED on is an error, not the site (#193442). On 2026-11-13 a booking click
+ * landed on Google's "404. That's an error." twice, and each time the result read like progress.
+ * Only when the action moved the page: an article that mentions "404" is not an error page.
+ */
+export function errorPageReason(after: PageState): string | undefined {
+  const head = (after.head ?? "").slice(0, 400)
+  const short = after.textLength < 1500
+  // An error page LEADS with its code ("404 Not Found", "Error 404 (Not Found)!!1", "503 Service
+  // Unavailable", Google's "404. That’s an error."); an article ABOUT one ("How to fix a 404
+  // error") or a fare of $404 does not.
+  const lead = /^\W*(?:error\W*)?([45]\d\d)\b/i
+  const code = after.title.match(lead) ?? (short ? head.match(lead) : null)
+  if (code) return `an error page (${code[1]})`
+  const said = `${after.title} ${short ? head : ""}`
+  if (/\b(page|file) (was )?not found\b|this page (isn’t|isn't|is not) available|can(’|')?t be reached|access denied|something went wrong/i.test(said))
+    return "an error page"
+  if (after.textLength === 0 && !after.title) return "a blank page"
+  return undefined
+}
+
+/**
+ * The page's state after an action, read again once if it first looks like an error page
+ * (#193492). On 2026-11-16 Google Flights' "Select flight" went on to its return-flight page,
+ * still loading, and the first read called it an error. The agent believed it, left Google and
+ * re-entered the whole trip by hand on the airline's own site — the slowest part of the run.
+ */
+export const LANDING_RECHECK_MS = 2000
+export async function landedState<T extends PageState>(read: () => Promise<T>, before: PageState, waitMs = LANDING_RECHECK_MS): Promise<T> {
+  const first = await read()
+  const moved = before.url !== first.url || before.title !== first.title
+  if (!moved || !errorPageReason(first)) return first
+  await new Promise((r) => setTimeout(r, waitMs))
+  return read().catch(() => first)
+}
+
+/** Said with a failed landing: what to do instead of trying the same thing again. */
+export const RECOVER =
+  "Do not repeat the same step: it will fail the same way. Try another route — go back to the page before ({\"action\":\"open\",\"url\":\"<that address>\"}) and pick a different control, search the page ({\"action\":\"elements\",\"query\":\"…\"}), or open the site's own address directly. If two routes fail, stop and tell the person in one line what you got done and what step they need to take."
 
 /**
  * What actually changed, in the page's own terms.
@@ -335,8 +574,13 @@ export type PageState = {
  * is the sentence this returns plainly rather than an empty summary.
  */
 export function describeChange(before: PageState, after: PageState): string {
+  const moved = before.url !== after.url || before.title !== after.title
+  const failed = moved ? errorPageReason(after) : undefined
+  if (failed) return `FAILED: that landed on ${failed} at ${after.url}${after.title ? ` ("${after.title.slice(0, 80)}")` : ""}, not the site. ${RECOVER}`
   const parts: string[] = []
-  if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
+  const other = otherPageReason(before.url, after.url)
+  if (other) parts.push(other)
+  else if (before.url !== after.url) parts.push(`navigated to ${after.url}`)
   if (before.title !== after.title) parts.push(`title is now "${after.title}"`)
   for (const [ref, v] of Object.entries(after.values)) {
     if ((before.values[ref] ?? "") !== v) parts.push(`[${ref}] now holds ${JSON.stringify(v.slice(0, 60))}`)
@@ -347,4 +591,145 @@ export function describeChange(before: PageState, after: PageState): string {
   }
 
   return parts.length ? parts.join("; ") : "nothing changed — same url, same text, same field values"
+}
+
+/**
+ * The action took the page to a DIFFERENT page of the site, not a new state of the same one
+ * (#193442). On 2026-11-13 "Search" on Google Flights landed on /travel/explore instead of the
+ * results; the answer read "navigated to …" like any other step and the agent carried on. A
+ * changed path (or host) is said as what it is, with the path it left, so the agent checks the
+ * page before the next step. Same path with a new query or #hash is the same page, still moving.
+ */
+export function otherPageReason(beforeUrl: string, afterUrl: string): string | undefined {
+  if (beforeUrl === afterUrl) return undefined
+  let a: URL
+  let b: URL
+  try {
+    a = new URL(beforeUrl)
+    b = new URL(afterUrl)
+  } catch {
+    return undefined
+  }
+  const path = (u: URL) => u.pathname.replace(/\/+$/, "") || "/"
+  if (a.host === b.host && path(a) === path(b)) return undefined
+  // Leaving about:blank or a fresh tab is just arriving.
+  if (!/^https?:$/.test(a.protocol)) return undefined
+  const was = a.host === b.host ? path(a) : `${a.host}${path(a)}`
+  return `navigated to ${afterUrl} — a DIFFERENT PAGE (was ${was}). Read it before the next step: if it is not the page you meant (results, the form, the next step), say so and go back rather than carry on`
+}
+
+/**
+ * What a field shows after typing, said honestly (#193442). On 2026-11-13 `type` on Google
+ * Flights' Departure answered `[18] now holds "12/10/2026"`; the date never counted, and Search
+ * just reopened the calendar. A box holding text is not a site that took it:
+ *  - the page cleared it            → it is EMPTY (the old note, now read after the page settled)
+ *  - the page changed it            → it shows what it shows, not what was typed
+ *  - a picker (combobox, date box)  → the text is there, but the choice is made in its list or
+ *                                     calendar; pick it there and check the field again.
+ * A password is never read back, not even here.
+ */
+export function typeReadbackNote(r: {
+  ref: number
+  typed: string
+  /** What the field holds after the page settled; null when the field is gone (the page moved on). */
+  shown: string | null
+  /** An <input type=date>. */
+  date?: boolean
+  /** A combobox, an autocomplete, or a box that opens a list/calendar. */
+  picker?: boolean
+  /** A text box for a date (Departure, Check-in) given a date. */
+  dateBox?: boolean
+  secret?: boolean
+}): string | undefined {
+  if (r.secret || r.shown === null) return undefined
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim()
+  const typed = norm(r.typed)
+  const shown = norm(r.shown)
+  if (typed && !shown) {
+    return r.date
+      ? "the date field is still EMPTY: it did not take that date. Type it as YYYY-MM-DD (e.g. 2026-12-10), or pick it in the site's calendar."
+      : "the field is still EMPTY after typing: the site did not take the text. Look at it (screenshot) before going on."
+  }
+  const iso = normalizeDate(r.typed)
+  const same = shown === typed || (r.date && iso !== null && shown === iso)
+  if (!same) {
+    return `NOT AS TYPED: [${r.ref}] now shows ${JSON.stringify(shown.slice(0, 60))}, not ${JSON.stringify(typed.slice(0, 60))}: the site changed or rejected it. Check the field before going on.`
+  }
+  if (r.picker || r.dateBox) {
+    const what = r.dateBox ? "a date picker" : "a picker (a box with a list)"
+    return `NOT CHOSEN YET: [${r.ref}] is ${what}. The text is in the box, but sites like this only take a choice made in the list or calendar it opens. Run elements, pick the ${r.dateBox ? "day (check its month and year)" : "option"} there, or press Enter in [${r.ref}] — then check the field shows it before searching.`
+  }
+  return undefined
+}
+
+/**
+ * What inspect found, for the agent: the real addresses, each with where it came from, then the
+ * site's ids. An id is NOT an address: nothing here builds one from a pattern (#193242). If there
+ * is no link, it says so and says how to get one honestly.
+ */
+export function renderInspect(ref: number, i: {
+  tag: string
+  attributes: Record<string, string>
+  ids: Record<string, string>
+  links: { url: string; source: string; where: string }[]
+  ancestors: { tag: string; role?: string; id?: string; ids?: Record<string, string> }[]
+  canonical?: string
+  page: string
+}): string {
+  const lines = [`[${ref}] <${i.tag}> on ${i.page}`]
+  if (i.links.length) {
+    lines.push("links (real, from the page):")
+    for (const l of i.links) lines.push(`  ${l.url}  · ${l.source}: ${l.where}`)
+  } else {
+    lines.push("links: none on it or around it")
+  }
+  const ids = Object.entries(i.ids)
+  if (ids.length) lines.push(`ids: ${ids.map(([k, v]) => `${k}=${v}`).join(" ")}`)
+  if (i.canonical && i.canonical !== i.page) lines.push(`this page's canonical address: ${i.canonical}`)
+  const attrs = Object.entries(i.attributes).filter(([k]) => k !== "data-iris-ref")
+  if (attrs.length) lines.push(`attributes: ${attrs.slice(0, 20).map(([k, v]) => `${k}=${JSON.stringify(v.slice(0, 80))}`).join(" ")}`)
+  if (i.ancestors.length) {
+    lines.push(
+      `inside: ${i.ancestors
+        .slice(0, 6)
+        .map((a) => a.tag + (a.id ? `#${a.id}` : "") + (a.role ? `[${a.role}]` : "") + (a.ids ? ` {${Object.entries(a.ids).map(([k, v]) => `${k}=${v}`).join(" ")}}` : ""))
+        .join(" < ")}`,
+    )
+  }
+  if (!i.links.length) {
+    lines.push(
+      ids.length
+        ? "No address here, only ids. Don't build a link from an id: click it and read the address after, or say you have the id only."
+        : "No address here. Click it and read the address after, if you need one.",
+    )
+  }
+  return lines.join("\n")
+}
+
+/**
+ * The loop breaker (#193492). An agent shown the same thing tries the same thing: on Frontier
+ * (2026-11-14) it ran elements → click [1] → screenshot → reload for minutes, each answer
+ * identical. The model is not the problem; nothing told it the repetition was the problem.
+ *
+ * `history` is this chat's recent call signatures (action, ref, address, answer), newest last.
+ * The third identical one within the window gets a note that names the repetition and the ways
+ * out. Returns the note, or null.
+ */
+export const LOOP_WINDOW = 8
+export function loopNote(history: string[], sig: string): string | null {
+  const recent = history.slice(-LOOP_WINDOW)
+  const same = recent.filter((h) => h === sig).length
+  if (same < 2) return null
+  return (
+    `LOOP: this is the ${same + 1}${same + 1 === 3 ? "rd" : "th"} time this exact step gave this exact answer on this page. ` +
+    `Repeating it will not change the answer. Do something different: read the page (action=read) or find a word on it, ` +
+    `press Escape, scroll to the control, or open the next step's address directly. ` +
+    `If two different tries also fail, stop and tell the person what is in the way so they can do that one step in the Browser pane.`
+  )
+}
+export function loopSignature(action: string, ref: number | undefined, url: string | undefined, output: string): string {
+  const body = output.replace(/\n\npage: [^\n]*$/, "").slice(0, 2000)
+  let h = 0
+  for (let i = 0; i < body.length; i++) h = (h * 31 + body.charCodeAt(i)) | 0
+  return `${action}|${ref ?? ""}|${url ?? ""}|${h}`
 }

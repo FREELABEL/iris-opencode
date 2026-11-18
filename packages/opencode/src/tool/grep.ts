@@ -60,13 +60,23 @@ export const GrepTool = Tool.define(
           const search = FSUtil.resolve(requested)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
+          let cutoff: Ripgrep.Cutoff | undefined
           const result = yield* ripgrep.grep({
             cwd,
             pattern: params.pattern,
+            file: info?.type === "File" ? path.basename(search) : undefined,
             include: params.include,
             limit: 100,
+            signal: ctx.abort,
+            onCutoff: (c) => (cutoff = c),
           })
-          if (result.length === 0) return empty
+          if (result.length === 0) {
+            if (!cutoff) return empty
+            return {
+              ...empty,
+              output: `No matches found before the search stopped at ${Math.round(cutoff.elapsedMs / 1000)}s — the directory is too large to search. Search a narrower path.`,
+            }
+          }
 
           const rows = result.map((item) => ({
             path: path.resolve(
@@ -99,6 +109,12 @@ export const GrepTool = Tool.define(
           if (truncated) {
             output.push("")
             output.push("(Results truncated. Consider using a more specific path or pattern.)")
+          }
+          if (cutoff) {
+            output.push("")
+            output.push(
+              `(Search stopped after ${Math.round(cutoff.elapsedMs / 1000)}s — results are partial. Search a narrower path.)`,
+            )
           }
 
           return {

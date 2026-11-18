@@ -879,6 +879,8 @@ export const dict = {
   "common.dismiss": "Odbaci",
   "common.requestFailed": "Zahtjev nije uspio",
   "common.moreOptions": "Više opcija",
+  "session.pinned.title": "Prikačene poruke",
+  "session.pinned.empty": "Nema prikačenih poruka",
   "common.learnMore": "Saznaj više",
   "common.rename": "Preimenuj",
   "common.export": "Izvezi",

@@ -37,6 +37,18 @@ export function publishState(m: Pick<ArtifactMeta, "revision" | "published">): {
   return { label: behind ? "Update page…" : "Publish settings…", behind }
 }
 
+/**
+ * Which project the publish modal opens on (#193407). The project the person has CHOSEN in the IRIS
+ * panel wins; only with nothing chosen does it fall back to the panel's default board. Either way
+ * the modal can still change it. Undefined means "ask": the picker opens instead.
+ */
+export function initialPublishBoard(input: { selected?: number | null; fallback?: number | null }): number | undefined {
+  const ok = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v) && v > 0
+  if (ok(input.selected)) return input.selected
+  if (ok(input.fallback)) return input.fallback
+  return undefined
+}
+
 /** Mirrors the engine's slugify (artifact-publish.ts) so the suggested address is the one it accepts. */
 export function slugify(title: string): string {
   return (

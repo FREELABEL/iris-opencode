@@ -848,6 +848,8 @@ export const dict: Record<string, string> = {
   "common.moreCountSuffix": "(+{{count}} थप)",
   "common.requestFailed": "अनुरोध असफल भयो",
   "common.moreOptions": "थप विकल्पहरू",
+  "session.pinned.title": "पिन गरिएका सन्देशहरू",
+  "session.pinned.empty": "कुनै पिन गरिएको सन्देश छैन",
   "common.learnMore": "थप जान्नुहोस्",
   "common.rename": "पुन: नामाकरण गर्नुहोस्",
   "common.export": "निर्यात गर्नुहोस्",

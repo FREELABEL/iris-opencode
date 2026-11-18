@@ -21,6 +21,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import {
   ContextToolGroup,
+  gateSummary,
   Message,
   MessageDivider,
   Part as MessagePart,
@@ -69,11 +70,19 @@ import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
+import { useSplitActions } from "@/context/split-actions"
+import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
+import { useSessionPane } from "@/context/session-pane"
+import { useSessionLayout } from "@/pages/session/session-layout"
+import { useCommand } from "@/context/command"
 import { useSessionKey } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
+import { CHAT_TEXT_SIZES, chatTextSize, stepChatTextSize } from "@/utils/chat-text-size"
+import { CHAT_FONTS, CHAT_SPACINGS } from "@/utils/chat-reading"
+import { type MessagePin, useMessagePins } from "@/context/message-pins"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -262,6 +271,8 @@ export function MessageTimeline(props: {
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
   setHistoryAnchor?: (handlers: { capture: () => void; restore: (done: boolean) => void }) => void
+  /** Scroll to a turn by its user message id, loading older history if needed (pinned messages). */
+  onJumpToMessage?: (userMessageID: string) => void
 }) {
   let touchGesture: number | undefined
 
@@ -273,12 +284,36 @@ export function MessageTimeline(props: {
   const dialog = useDialog()
   const sessionArchive = useSessionArchive()
   const language = useLanguage()
+  const command = useCommand()
+  const splitActions = useSplitActions()
+  const pane = useSessionPane()
+  const paneLayout = useSessionLayout()
   const { params, sessionKey } = useSessionKey()
   const ownerSessionKey = sessionKey()
   const cached = timelineCache.get(ownerSessionKey)
   const initialMeasurements = cached?.measurements
   const coldBottomMount = !initialMeasurements?.length && props.shouldAnchorBottom()
   const platform = usePlatform()
+  const messagePins = useMessagePins()
+  // Today's pins show just the time; older ones add the date.
+  const pinFormats = createMemo(() => ({
+    time: new Intl.DateTimeFormat(language.intl(), { timeStyle: "short" }),
+    date: new Intl.DateTimeFormat(language.intl(), {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+  }))
+  const pinTime = (time: number) =>
+    new Date(time).toDateString() === new Date().toDateString()
+      ? pinFormats().time.format(time)
+      : pinFormats().date.format(time)
+  const pinsFor = (id: string) => messagePins.list(id)
+  const jumpToPin = (pin: MessagePin) => {
+    setTitle("menuOpen", false)
+    props.onJumpToMessage?.(pin.turn)
+  }
 
   const [listRoot, setListRoot] = createSignal<HTMLDivElement>()
   const sessionID = createMemo(() => params.id)
@@ -991,13 +1026,27 @@ export function MessageTimeline(props: {
           .filter((part): part is ToolPart => part?.type === "tool")
       })
       const contextOpenKey = () => `context:${row().group.key}`
+      // Gate's verdict on this turn (#189589): the step-finish parts of the messages in this group.
+      const gate = createMemo(() => {
+        const group = row().group
+        if (group.type !== "context") return undefined
+        const ids = [...new Set(group.refs.map((ref) => ref.messageID))]
+        return gateSummary(ids.flatMap((id) => getMsgParts(id)))
+      })
       // Groups start folded, failures included (#189509): a long run with a few failures opened
       // itself and filled the chat. The header's red "· N failed" is the signal; a click opens it.
-      const open = createMemo(() => toolOpen[contextOpenKey()] === true)
+      // A HELD result still opens it (#189589): something was withheld from the model, and the
+      // person is told, never left to notice. Once they open or close it, their choice wins.
+      const open = createMemo(() => {
+        const chosen = toolOpen[contextOpenKey()]
+        if (chosen !== undefined) return chosen === true
+        return (gate()?.held ?? 0) > 0
+      })
 
       return (
         <ContextToolGroup
           parts={parts()}
+          gate={gate()}
           open={open()}
           onOpenChange={(value) => setToolOpen(contextOpenKey(), value)}
           busy={
@@ -1306,7 +1355,7 @@ export function MessageTimeline(props: {
   }
 
   return (
-    <div class="relative w-full h-full min-w-0">
+    <div data-chat-text class="relative w-full h-full min-w-0">
       <div
         class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{
@@ -1486,6 +1535,23 @@ export function MessageTimeline(props: {
                       placement="bottom"
                       buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
                     />
+                    {/* Each column's own side panel (#191484): the titlebar's one button could only
+                        ever mean the focused column, so in a split every chat carries its own. */}
+                    <Show when={pane && settings.general.newLayoutDesigns()}>
+                      <TooltipV2 class="shrink-0" placement="bottom" value={language.t("command.review.toggle")}>
+                        <IconButtonV2
+                          type="button"
+                          variant="ghost-muted"
+                          size="large"
+                          state={paneLayout.view().reviewPanel.opened() ? "pressed" : undefined}
+                          onClick={() => paneLayout.view().reviewPanel.toggle()}
+                          aria-label={language.t("command.review.toggle")}
+                          aria-expanded={paneLayout.view().reviewPanel.opened()}
+                          data-action="pane-panel-toggle"
+                          icon={<IconV2 name="sidebar-right" />}
+                        />
+                      </TooltipV2>
+                    </Show>
                     <Show when={!parentID()}>
                       <Show
                         when={settings.general.newLayoutDesigns()}
@@ -1554,6 +1620,38 @@ export function MessageTimeline(props: {
                                 <DropdownMenu.Item onSelect={() => exportSession(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.export")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
+                                <DropdownMenu.Sub>
+                                  <DropdownMenu.SubTrigger data-action="pinned-messages">
+                                    <DropdownMenu.ItemLabel>
+                                      {language.t("session.pinned.title")}
+                                    </DropdownMenu.ItemLabel>
+                                  </DropdownMenu.SubTrigger>
+                                  <DropdownMenu.Portal>
+                                    <DropdownMenu.SubContent class="max-w-[320px]">
+                                      <For
+                                        each={pinsFor(id)}
+                                        fallback={
+                                          <DropdownMenu.Item disabled>
+                                            <DropdownMenu.ItemLabel>
+                                              {language.t("session.pinned.empty")}
+                                            </DropdownMenu.ItemLabel>
+                                          </DropdownMenu.Item>
+                                        }
+                                      >
+                                        {(pin) => (
+                                          <DropdownMenu.Item data-pin-id={pin.id} onSelect={() => jumpToPin(pin)}>
+                                            <div class="flex flex-col min-w-0">
+                                              <span class="truncate text-12-regular text-text-strong">{pin.text}</span>
+                                              <Show when={pin.time}>
+                                                <span class="text-11-regular text-text-weak">{pinTime(pin.time)}</span>
+                                              </Show>
+                                            </div>
+                                          </DropdownMenu.Item>
+                                        )}
+                                      </For>
+                                    </DropdownMenu.SubContent>
+                                  </DropdownMenu.Portal>
+                                </DropdownMenu.Sub>
                                 <DropdownMenu.Item onSelect={() => void sessionArchive.archive(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
@@ -1591,7 +1689,7 @@ export function MessageTimeline(props: {
                           />
                           <MenuV2.Portal>
                             <MenuV2.Content
-                              style={{ width: "120px", "min-width": "120px" }}
+                              style={{ width: "170px", "min-width": "170px" }}
                               onCloseAutoFocus={(event) => {
                                 if (title.pendingRename) {
                                   event.preventDefault()
@@ -1608,6 +1706,90 @@ export function MessageTimeline(props: {
                                 }
                               }}
                             >
+                              <Show when={splitActions}>
+                                {(actions) => (
+                                  <>
+                                    <MenuV2.Item
+                                      disabled={!actions().canSplit()}
+                                      shortcut={command.keybind("split.right")}
+                                      onSelect={() => actions().splitRight(id)}
+                                    >
+                                      {language.t("split.right")}
+                                    </MenuV2.Item>
+                                    <MenuV2.Separator />
+                                  </>
+                                )}
+                              </Show>
+                              <MenuV2.Sub gutter={0} overlap overflowPadding={8}>
+                                <MenuV2.SubTrigger data-action="chat-text">
+                                  {language.t("session.chatText.title")}
+                                </MenuV2.SubTrigger>
+                                <MenuV2.Portal>
+                                  <MenuV2.SubContent data-chat-text-menu style={{ width: "220px" }}>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-text-size">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.textSize.title")}</span>
+                                      <MenuV2.Item
+                                        closeOnSelect={false}
+                                        aria-label={language.t("session.textSize.smaller")}
+                                        disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES[0]}
+                                        onSelect={() =>
+                                          settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1))
+                                        }
+                                      >
+                                        A−
+                                      </MenuV2.Item>
+                                      <MenuV2.Item
+                                        closeOnSelect={false}
+                                        aria-label={language.t("session.textSize.bigger")}
+                                        disabled={chatTextSize(settings.appearance.fontSize()) === CHAT_TEXT_SIZES.at(-1)}
+                                        onSelect={() =>
+                                          settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1))
+                                        }
+                                      >
+                                        A+
+                                      </MenuV2.Item>
+                                    </div>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-font">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.chatFont.title")}</span>
+                                      <For each={CHAT_FONTS}>
+                                        {(font) => (
+                                          <MenuV2.Item
+                                            closeOnSelect={false}
+                                            data-chat-font-option={font}
+                                            data-selected={settings.appearance.chatFont() === font ? "true" : undefined}
+                                            aria-label={language.t(`session.chatFont.${font}`)}
+                                            title={language.t(`session.chatFont.${font}`)}
+                                            onSelect={() => settings.appearance.setChatFont(font)}
+                                          >
+                                            Aa
+                                          </MenuV2.Item>
+                                        )}
+                                      </For>
+                                    </div>
+                                    <div data-slot="menu-v2-stepper" data-action="chat-spacing">
+                                      <span data-slot="menu-v2-stepper-label">{language.t("session.chatSpacing.title")}</span>
+                                      <For each={CHAT_SPACINGS}>
+                                        {(spacing) => (
+                                          <MenuV2.Item
+                                            closeOnSelect={false}
+                                            data-chat-spacing-option={spacing}
+                                            data-selected={settings.appearance.chatSpacing() === spacing ? "true" : undefined}
+                                            aria-label={language.t(`session.chatSpacing.${spacing}`)}
+                                            title={language.t(`session.chatSpacing.${spacing}`)}
+                                            onSelect={() => settings.appearance.setChatSpacing(spacing)}
+                                          >
+                                            <span data-slot="menu-v2-spacing-glyph" data-spacing={spacing} aria-hidden="true">
+                                              <i />
+                                              <i />
+                                              <i />
+                                            </span>
+                                          </MenuV2.Item>
+                                        )}
+                                      </For>
+                                    </div>
+                                  </MenuV2.SubContent>
+                                </MenuV2.Portal>
+                              </MenuV2.Sub>
                               <MenuV2.Item
                                 onSelect={() => {
                                   setTitle("pendingRename", true)
@@ -1628,6 +1810,31 @@ export function MessageTimeline(props: {
                               <MenuV2.Item onSelect={() => exportSession(id)}>
                                 {language.t("common.export")}...
                               </MenuV2.Item>
+                              <MenuV2.Sub gutter={0} overlap overflowPadding={8}>
+                                <MenuV2.SubTrigger data-action="pinned-messages">
+                                  {language.t("session.pinned.title")}
+                                </MenuV2.SubTrigger>
+                                <MenuV2.Portal>
+                                  <MenuV2.SubContent style={{ width: "280px", "max-width": "320px" }}>
+                                    <For
+                                      each={pinsFor(id)}
+                                      fallback={
+                                        <MenuV2.Item disabled>{language.t("session.pinned.empty")}</MenuV2.Item>
+                                      }
+                                    >
+                                      {(pin) => (
+                                        <MenuV2.Item
+                                          data-pin-id={pin.id}
+                                          shortcut={pin.time ? pinTime(pin.time) : undefined}
+                                          onSelect={() => jumpToPin(pin)}
+                                        >
+                                          <span class="block truncate min-w-0">{pin.text}</span>
+                                        </MenuV2.Item>
+                                      )}
+                                    </For>
+                                  </MenuV2.SubContent>
+                                </MenuV2.Portal>
+                              </MenuV2.Sub>
                               <MenuV2.Item onSelect={() => void sessionArchive.archive(id)}>
                                 {language.t("common.archive")}
                               </MenuV2.Item>

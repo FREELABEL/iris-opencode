@@ -36,9 +36,38 @@ export type ScriptRow = {
   /** NULL on every script today (the field is never written) — never shown as "last run". */
   lastExecutedAt?: string | null
   doctor?: Doctor | null
-  /** `project:<board id>` puts it in that board's Project view. */
+  /** `project:<board id>` puts it in that board's Project view. A sorting TAG — not who can see it. */
   tags?: string[]
+  /** The hub's uuid. Never shown. */
+  id?: string
+  /** Who can open it (#191674). Optional: an older sidecar does not send it, and absent reads as private. */
+  visibility?: string
+  /** The latest saved version. */
+  version?: number | null
+  /** The boards it is shared with — the access scope, unlike the `project:` tag. */
+  bloqIds?: number[]
+  runsOn?: RunsOn | null
 }
+
+/** `# iris: runs-on=` as the hub parsed it. */
+export type RunsOn = { kind: "node"; node: string } | { kind: "any" } | { kind: "capability"; capability: string }
+
+/** A script another account shared with a board I am on. Run by `id`, which is never shown. */
+export type SharedScript = {
+  id: string
+  slug: string
+  name?: string
+  description?: string
+  runtime?: string
+  version: number | null
+  visibility?: string
+  author?: string
+  bloqIds: number[]
+  runsOn: RunsOn | null
+  updatedAt?: string
+}
+
+export type Board = { id: number; name: string }
 
 export type HiveNodeRow = {
   id: string
@@ -59,6 +88,18 @@ export type HiveNodeRow = {
   recentRestarts?: number
   /** When the hardware snapshot (disk, memory) was taken — not the heartbeat. */
   hardwareDetectedAt?: string
+  /** Physical cameras by product name, from the node's device report. */
+  cameras?: readonly string[]
+  /** Absent: never reported. `available: false`: reported, and there is none. */
+  gpu?: { available: boolean; name?: string; type?: string; vramGb?: number }
+  modelsInstalled?: readonly string[]
+  /** Reachable through the IRIS gateway now, as hive/<model>. */
+  modelsServing?: readonly string[]
+  /** The tailnet address the node advertised (#192608) — the server stores only 100.64.0.0/10. */
+  tailscaleIp?: string
+  tailscaleIpAt?: string
+  /** The address IRIS last saw it connect from: its internet connection, never a LAN address. */
+  lastIp?: string
 }
 
 export type TaskView = {
@@ -78,6 +119,9 @@ export type TaskView = {
   error: string | null
   nodeName: string | null
   durationMs: number | null
+  /** Constellation Gate held this run for approval (#189589). Optional: older engines omit it. */
+  held?: boolean
+  gate?: { explanation: string; reasons: string[]; action: string | null; score: number | null; hardware: string[] } | null
 }
 
 // ── test fixtures ────────────────────────────────────────────────────────────────────────────────
@@ -131,7 +175,7 @@ export function isTestScript(slug: string): boolean {
 
 // ── the `# iris:` header ─────────────────────────────────────────────────────────────────────────
 
-export type HeaderArg = { name: string; default?: string; required: boolean; line: number }
+export type HeaderArg = { name: string; default?: string; required: boolean; line: number; choices?: string[] }
 export type ScriptHeader = {
   args: HeaderArg[]
   timeout: number | null
@@ -169,7 +213,8 @@ export function parseHeader(source: string): ScriptHeader {
           return at < 0 ? [w, "true"] : [w.slice(0, at), w.slice(at + 1)]
         }),
       )
-      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1 })
+      const choices = kv["choices"] ? kv["choices"].split("|").filter(Boolean) : undefined
+      out.args.push({ name: value, default: kv["default"], required: kv["required"] === "true", line: i + 1, ...(choices && choices.length > 1 ? { choices } : {}) })
     } else if (key === "timeout") {
       const n = Number(value)
       if (Number.isFinite(n) && n > 0) out.timeout = n
@@ -301,6 +346,16 @@ export const SKILLS: Record<string, { icon: string; word: string }> = {
   bluetooth: { icon: "bluetooth", word: "Bluetooth" },
   disk_encrypted: { icon: "lock", word: "Encrypted disk" },
   instagram: { icon: "at", word: "Instagram" },
+}
+
+/**
+ * The cameras worth naming on a computer's card: plugged-in ones. A laptop's own camera is
+ * always there, so it is named only when it is the only one.
+ */
+export function plugged(c: HiveNodeRow): string[] {
+  const all = [...(c.cameras ?? [])]
+  const external = all.filter((n) => !/facetime|built-?in|macbook|imac/i.test(n))
+  return external.length ? external : []
 }
 
 export function skillsOf(c: HiveNodeRow, limit = 3): { icon: string; word: string }[] {
@@ -462,6 +517,8 @@ export function taskSucceeded(task: TaskView | null | undefined): boolean {
 
 export function taskStatusWord(task: TaskView | null | undefined): string {
   if (!task) return "Ready"
+  // #189589: held by Constellation Gate — not sent, and not "Queued", which would read as on its way.
+  if (task.held) return "Waiting for your approval"
   if (task.terminal) {
     if (taskSucceeded(task)) return task.exitCode != null ? `Done · exit ${task.exitCode}` : "Done"
     if (task.status === "timeout") return "Timed out"
@@ -559,4 +616,255 @@ export function ago(iso: string | null | undefined, now: number): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`
   const d = Math.floor(s / 86400)
   return d === 1 ? "yesterday" : d < 14 ? `${d} days ago` : `${Math.floor(d / 7)} weeks ago`
+}
+
+/**
+ * Syntax colour for the script view — small, dependency-free, line by line (#189589 follow-up:
+ * "flat and ugly and not really scannable"). Not a parser: it colours what makes a script
+ * scannable — comments, strings, keywords, numbers, calls — and the `# iris:` header that decides
+ * where the script may run. A string or comment that spans lines is coloured per line, which is
+ * the right trade for a reading view.
+ */
+export type Tok = { t: string; k?: "com" | "str" | "kw" | "num" | "fn" | "dir" | "var" }
+
+const KEYWORDS: Record<string, string[]> = {
+  python: ["def", "class", "return", "if", "elif", "else", "for", "while", "in", "not", "and", "or", "import", "from", "as", "try", "except", "finally", "raise", "with", "async", "await", "lambda", "pass", "break", "continue", "yield", "global", "is", "None", "True", "False", "self"],
+  bash: ["if", "then", "else", "elif", "fi", "for", "do", "done", "while", "case", "esac", "function", "return", "in", "local", "export", "set", "exit", "echo", "source"],
+  js: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "of", "in", "async", "await", "import", "from", "export", "new", "try", "catch", "finally", "throw", "class", "true", "false", "null", "undefined", "typeof"],
+}
+
+export function langOf(runtime: string | null | undefined): "python" | "bash" | "js" {
+  if (runtime === "python") return "python"
+  if (runtime === "node" || runtime === "playwright") return "js"
+  return "bash"
+}
+
+export function highlightLine(line: string, lang: "python" | "bash" | "js"): Tok[] {
+  if (/^\s*(#|\/\/)\s*iris:/.test(line)) return [{ t: line, k: "dir" }]
+  const kw = new Set(KEYWORDS[lang])
+  const comment = lang === "js" ? "//" : "#"
+  const out: Tok[] = []
+  let i = 0
+  let plain = ""
+  const flush = () => {
+    if (plain) out.push({ t: plain })
+    plain = ""
+  }
+  while (i < line.length) {
+    const rest = line.slice(i)
+    if (rest.startsWith(comment) && !(lang === "bash" && i > 0 && /[\w$]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: rest, k: "com" })
+      break
+    }
+    const q = line[i]
+    if (q === '"' || q === "'" || (q === "`" && lang === "js")) {
+      const triple = lang === "python" && rest.startsWith(q.repeat(3))
+      const close = triple ? q.repeat(3) : q
+      let j = i + close.length
+      while (j < line.length && !line.startsWith(close, j)) j += line[j] === "\\" ? 2 : 1
+      j = Math.min(line.length, j + close.length)
+      flush()
+      out.push({ t: line.slice(i, j), k: "str" })
+      i = j
+      continue
+    }
+    if (lang === "bash" && q === "$") {
+      const m = /^\$(\{[^}]*\}|[A-Za-z_][\w]*|\d|[@#?*!$])/.exec(rest)
+      if (m) {
+        flush()
+        out.push({ t: m[0], k: "var" })
+        i += m[0].length
+        continue
+      }
+    }
+    const word = /^[A-Za-z_][\w]*/.exec(rest)
+    if (word && (i === 0 || !/[\w.]/.test(line[i - 1]) || lang !== "bash")) {
+      const w = word[0]
+      const prev = line[i - 1]
+      if (kw.has(w) && !(prev && /[\w]/.test(prev))) {
+        flush()
+        out.push({ t: w, k: "kw" })
+      } else if (line[i + w.length] === "(") {
+        flush()
+        out.push({ t: w, k: "fn" })
+      } else plain += w
+      i += w.length
+      continue
+    }
+    const num = /^\d+(\.\d+)?/.exec(rest)
+    if (num && !(i > 0 && /[\w]/.test(line[i - 1]))) {
+      flush()
+      out.push({ t: num[0], k: "num" })
+      i += num[0].length
+      continue
+    }
+    plain += q
+    i++
+  }
+  flush()
+  return out
+}
+
+/**
+ * The values a run sends for a script's declared settings (#189589): what the person typed or
+ * picked, else the declared default; empty optional settings are left out so the script's own
+ * fallback applies. Unknown names are passed through so the hub can refuse them with a sentence.
+ */
+export function runArgs(declared: ScriptHeader["args"], values: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const a of declared) {
+    const v = (values[a.name] ?? "").trim()
+    if (v !== "") out[a.name] = v
+    else if (a.default !== undefined && a.default !== "") out[a.name] = a.default
+  }
+  for (const [k, v] of Object.entries(values)) if (!(k in out) && !declared.some((a) => a.name === k) && v.trim() !== "") out[k] = v.trim()
+  return out
+}
+
+/** Required settings with no value — Run says which, instead of sending a run the hub will refuse. */
+export function missingRequired(declared: ScriptHeader["args"], values: Record<string, string>): string[] {
+  return declared.filter((a) => a.required && !(values[a.name] ?? "").trim() && !a.default).map((a) => a.name)
+}
+
+// ── who can open it (#191674) ────────────────────────────────────────────────────────────────────
+//
+// The hub's words are private · project · unlisted · public. None of them is shown: a person picks
+// "Only me", "My team", "Anyone with the link" or "Public gallery". The `project:<id>` TAG above is
+// a different thing — it files a script under a board's Project view and grants nobody anything.
+
+export type Access = "private" | "project" | "unlisted" | "public"
+export const ACCESS_CHOICES: readonly Access[] = ["private", "project", "unlisted", "public"]
+
+/** Anything unrecognised is private — the hub's rule; the failure worth avoiding is a typo reading as public. */
+export function readAccess(v: unknown): Access {
+  return v === "project" || v === "unlisted" || v === "public" ? v : "private"
+}
+
+/** The boards' names, in the order given; a board I cannot see is "a board you're not on". */
+export function boardNames(ids: readonly number[] | undefined, boards: readonly Board[] | undefined): string[] {
+  return (ids ?? []).map((id) => boards?.find((b) => b.id === id)?.name ?? "a board you're not on")
+}
+
+function nameList(names: string[]): string {
+  if (names.length <= 2) return names.join(" and ")
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
+}
+
+/** What the badge says, what its tooltip says, and its icon. */
+export function accessLabel(
+  visibility: unknown,
+  bloqIds: readonly number[] | undefined,
+  boards: readonly Board[] | undefined,
+): { short: string; long: string; icon: "lock" | "share" | "link" | "globe" } {
+  const v = readAccess(visibility)
+  if (v === "public") return { short: "Public gallery", long: "In the public gallery — anyone can read the source and run it.", icon: "globe" }
+  if (v === "unlisted") return { short: "Anyone with the link", long: "Anyone with the link can read and run it. It appears in no listing.", icon: "link" }
+  if (v === "project") {
+    const names = boardNames(bloqIds, boards)
+    if (!names.length) return { short: "My team", long: "Shared with a board, but with none right now.", icon: "share" }
+    return { short: `My team: ${nameList(names)}`, long: `Members of ${nameList(names)} can see and run it.`, icon: "share" }
+  }
+  return { short: "Only me", long: "Only you can see and run it.", icon: "lock" }
+}
+
+/** The words for each choice in the access picker. */
+export const ACCESS_WORDS: Record<Access, { label: string; hint: string }> = {
+  private: { label: "Only me", hint: "Nobody else can see or run it." },
+  project: { label: "My team", hint: "Members of the boards you pick can see and run it." },
+  unlisted: { label: "Anyone with the link", hint: "Not listed anywhere — only people you send the link to." },
+  public: { label: "Public gallery", hint: "Listed in the public gallery. Anyone can read the source and run it." },
+}
+
+/** One hub call. `publish` widens (and passes the checks), `unpublish` makes it private. */
+export type AccessStep =
+  | { action: "publish"; visibility: Exclude<Access, "private">; bloqIds?: number[] }
+  | { action: "unpublish" }
+  | { action: "share" | "unshare"; bloqId: number }
+
+/**
+ * The hub calls that take a script from `cur` to `want`, and whether the person must confirm.
+ *
+ * - Making it PUBLIC asks first: it lists the script in the gallery and shows its source, and a
+ *   copy taken cannot be recalled. Narrowing never asks.
+ * - "My team" needs at least one board (the hub refuses an audience of nobody, so this does too,
+ *   before any call). Boards are shared BEFORE others are unshared: taking the last board out of a
+ *   team script makes it private on the hub, and a swap must not pass through that.
+ * - Leaving a team for another scope keeps the boards; going to "Only me" is one unpublish.
+ */
+export function planAccess(
+  cur: { visibility?: unknown; bloqIds?: readonly number[] },
+  want: { visibility: Access; bloqIds?: readonly number[] },
+): { steps: AccessStep[]; confirm: boolean } | { error: string } {
+  const from = readAccess(cur.visibility)
+  const had = [...new Set(cur.bloqIds ?? [])]
+  const to = want.visibility
+  if (to === "private") return { steps: from === "private" ? [] : [{ action: "unpublish" }], confirm: false }
+  if (to === "project") {
+    const ids = [...new Set(want.bloqIds ?? [])]
+    if (!ids.length) return { error: "Pick at least one board to share it with." }
+    const add = ids.filter((id) => !had.includes(id))
+    const drop = had.filter((id) => !ids.includes(id))
+    const unshare = drop.map((bloqId): AccessStep => ({ action: "unshare", bloqId }))
+    if (from !== "project") return { steps: [{ action: "publish", visibility: "project", bloqIds: ids }, ...unshare], confirm: false }
+    return { steps: [...add.map((bloqId): AccessStep => ({ action: "share", bloqId })), ...unshare], confirm: false }
+  }
+  return { steps: from === to ? [] : [{ action: "publish", visibility: to }], confirm: to === "public" && from !== "public" }
+}
+
+/** Taking this board away leaves a team script with no board — the hub then makes it private. */
+export function unshareMakesPrivate(cur: { visibility?: unknown; bloqIds?: readonly number[] }, bloqId: number): boolean {
+  return readAccess(cur.visibility) === "project" && (cur.bloqIds ?? []).every((id) => id === bloqId)
+}
+
+/** Where a link to it points, for "Anyone with the link" and "Public gallery". A team script has none. */
+export function shareLink(visibility: unknown, slug: string): string | null {
+  const v = readAccess(visibility)
+  return v === "unlisted" || v === "public" ? `https://heyiris.io/api/v1/public/scripts/${encodeURIComponent(slug)}` : null
+}
+
+/** The boards a shared script reached me through: the ones in its audience that I am on. */
+export function sharedVia(s: Pick<SharedScript, "bloqIds">, boards: readonly Board[] | undefined): string {
+  const mine = (boards ?? []).filter((b) => s.bloqIds.includes(b.id)).map((b) => b.name)
+  return mine.length ? nameList(mine) : "a board you're on"
+}
+
+// ── where it runs, which version ─────────────────────────────────────────────────────────────────
+
+/**
+ * Who picks the computer. A script that declares `runs-on=<machine>` is routed by the hub — the
+ * person picks nothing and the run sends no computer (sending one that differs is refused).
+ * `any` / `capability:` still take a pick, as today.
+ */
+export function routing(runsOn: RunsOn | null | undefined): { routed: true; node: string; label: string } | { routed: false } {
+  if (runsOn?.kind === "node") return { routed: true, node: runsOn.node, label: `Runs on ${runsOn.node}` }
+  return { routed: false }
+}
+
+/** The versions a run may pick: latest first, at most `max`. Empty when the version is unknown. */
+export function versionChoices(latest: number | null | undefined, max = 20): number[] {
+  if (!latest || latest < 1 || !Number.isInteger(latest)) return []
+  return Array.from({ length: Math.min(max, latest) }, (_, i) => latest - i)
+}
+
+/**
+ * What the run names. My script at its latest version is its plain slug (so the sidecar can pin
+ * the content hash it read); an older version is `slug@N`. A shared script is always its id —
+ * a slug names a script in ONE account, and mine may share it — `id@N` for an older version.
+ */
+export function runRef(
+  s: { slug: string; id?: string; shared?: boolean },
+  pick: number | null | undefined,
+  latest: number | null | undefined,
+): string {
+  const base = s.shared && s.id ? s.id : s.slug
+  const older = pick != null && pick !== latest
+  return older ? `${base}@${pick}` : base
+}
+
+/** "v3", or "v2 of 3" for an older pick. */
+export function versionWord(pick: number | null | undefined, latest: number | null | undefined): string {
+  if (latest == null) return ""
+  if (pick == null || pick === latest) return `v${latest}`
+  return `v${pick} of ${latest}`
 }

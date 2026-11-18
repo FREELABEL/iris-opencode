@@ -92,8 +92,8 @@ export function frameVerdict(headers: Headers, pageUrl: string, origin: string):
 }
 
 export type FrameProbe =
-  | { state: "embeddable"; url: string }
-  | { state: "refused"; url: string; reason: string }
+  | { state: "embeddable"; url: string; status?: number }
+  | { state: "refused"; url: string; reason: string; status?: number }
   | { state: "unreachable"; url: string; reason: string }
 
 const PROBE_TIMEOUT_MS = 8000
@@ -123,8 +123,10 @@ export async function probeFrame(url: string, origin: string): Promise<FrameProb
     const res = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { Accept: "text/html,*/*" } })
     void res.body?.cancel().catch(() => undefined)
     const verdict = frameVerdict(res.headers, res.url || url, origin)
-    if (verdict.embeddable) return { state: "embeddable", url }
-    return { state: "refused", url, reason: verdict.reason }
+    // The status rides along (#192480): a pinned Genesis page that 404s (a draft, a typo) frames
+    // fine and fires `load`, so without it the panel would show the 404 page as if it worked.
+    if (verdict.embeddable) return { state: "embeddable", url, status: res.status }
+    return { state: "refused", url, reason: verdict.reason, status: res.status }
   } catch (err) {
     return { state: "unreachable", url, reason: err instanceof Error ? err.message : String(err) }
   } finally {

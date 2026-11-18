@@ -1,4 +1,8 @@
+import type { JSX } from "solid-js"
+import { Portal } from "solid-js/web"
+import { irisSplitShare, setIrisSplitShare } from "@/components/iris-split"
 import type { FilePart, Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import { IrisCardNotices } from "@/components/session/iris-card-notices"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
@@ -37,9 +41,11 @@ import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
-import { useSpokenReplies } from "@/context/spoken-replies"
+import { isSpeaking, stopSpokenReply, useSpokenReplies } from "@/context/spoken-replies"
 import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
-import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
+import { usePaneFocused, useSessionPane, useSessionParams } from "@/context/session-pane"
+import { useIrisShell } from "@/components/iris-shell"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
@@ -61,7 +67,8 @@ import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
-import { irisFilesPinned, requestIrisSurface } from "@/components/session/session-iris-tab"
+import { irisFilesPinned, irisOpensOnAtlas, useRequestIrisSurface } from "@/components/session/session-iris-tab"
+import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
@@ -105,6 +112,7 @@ import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { useAllowanceNotice } from "./session/allowance-toast"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
+import { usePanelControl } from "@/components/session/use-panel-control"
 
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
@@ -159,7 +167,7 @@ export function SessionPage() {
 // session ID: session tabs on the same server share this route instance, and
 // workspace-scoped state (terminal, directory providers) lives below.
 export function TargetSessionRouteContent() {
-  const params = useParams<{ serverKey: string; id: string }>()
+  const params = useSessionParams<{ serverKey: string; id: string }>()
   const serverSync = useServerSync()
   const directory = createMemo(() => serverSync().session.lineage.peek(params.id)?.session.directory)
   return (
@@ -211,7 +219,9 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
     const conn = server.list.find((item) => ServerConnection.key(item) === key)
     return conn ? serverName(conn) : key
   })
-  const closeTab = () => {
+  const closeTab = (event?: MouseEvent) => {
+    // Closing, not choosing: in a split the click must not go on to focus this column (#191484).
+    event?.stopPropagation()
     if (!props.sessionID) return
     tabs.removeSessionTab({ server: props.serverKey ?? server.key, sessionId: props.sessionID })
   }
@@ -246,7 +256,7 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
 }
 
 function ResolvedTargetSessionRoute() {
-  const params = useParams<{ serverKey: string; id: string }>()
+  const params = useSessionParams<{ serverKey: string; id: string }>()
   const tabs = useTabs()
   const sync = useServerSync()
   const serverKey = createMemo(() => requireServerKey(params.serverKey))
@@ -339,6 +349,9 @@ function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
 function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean }>) {
   return (
     <div
+      // One chat's own panel (timeline + composer): what its docks search within, so a card in
+      // split view measures and focuses its own column, not the first one (#191780).
+      data-component="session-panel"
       classList={{
         "flex-1 min-h-0 flex flex-col": true,
         "bg-v2-background-bg-base": props.newLayout,
@@ -353,6 +366,7 @@ function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boo
 }
 
 export default function Page() {
+  const requestIrisSurface = useRequestIrisSurface()
   const serverSync = useServerSync()
   const layout = useLayout()
   const local = useLocal()
@@ -376,6 +390,7 @@ export default function Page() {
   const reviewMode = () => view().review.mode() ?? "git"
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
+
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
@@ -448,6 +463,8 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
+  // In a split (#191484) the file tree's open state is window-wide; only the focused column shows it.
+  const paneFocused = usePaneFocused()
   const size = createSizing()
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
@@ -459,6 +476,7 @@ export default function Page() {
   const desktopFileTreeOpen = createMemo(
     () =>
       isDesktop() &&
+      paneFocused() &&
       shouldShowFileTree({
         visible: settings.visibility.fileTree(),
         opened: layout.fileTree.opened(),
@@ -468,6 +486,60 @@ export default function Page() {
     newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
+  // The only column on screen hands its right side to the shell (#192535), which owns the size
+  // and keeps the container across Home / new chat / chat. Split-view columns keep their own.
+  const shell = useIrisShell()
+  const sessionPane = useSessionPane()
+  const inShell = createMemo(() => !!shell && !sessionPane && isDesktop() && newSessionDesign())
+  createEffect(() => {
+    if (!shell) return
+    // Every chat page claims the right side, so Home's panel never shows beside a chat. A split
+    // column (or a phone-width page) claims it closed and keeps its own panel.
+    shell.claim(() => inShell() && desktopV2PanelLayout().visible)
+    if (!inShell()) return
+    // One open state for the shell: a chat follows it on the way in, so a panel open on Home is
+    // open here (and closed stays closed) ...
+    untrack(() => {
+      const panel = view().reviewPanel
+      if (shell.open() && !panel.opened()) panel.open("other")
+      if (!shell.open() && panel.opened()) panel.close()
+    })
+  })
+  // ... and opening or closing it here is what Home shows next.
+  createEffect(
+    on(
+      () => view().reviewPanel.opened(),
+      (opened) => {
+        if (untrack(inShell)) shell!.setOpen(opened)
+      },
+      { defer: true },
+    ),
+  )
+  // The agent sees and steers the side panel through this (#190093) — see use-panel-control.ts.
+  usePanelControl({ open: desktopSidePanelOpen })
+
+  /*
+   * The titlebar's Hive and Inbox pills (#189279) ask for the IRIS panel from outside any session
+   * layout. This page owns the panel, so it opens it — the surface/sub-view itself travels through
+   * requestIrisNav and the tab applies it. Same two rules as use-panel-control's showTab: open the
+   * tab only when it is absent (open() re-orders the strip, which then falls back to its first tab),
+   * and when the panel was closed, select again after the strip has remounted.
+   */
+  createEffect(() => {
+    if (!irisPanelOpenRequest() || !paneFocused()) return
+    untrack(() => {
+      const wasOpen = desktopSidePanelOpen()
+      view().reviewPanel.open("other")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+      const select = () => {
+        if (!tabs().all().includes("iris")) void tabs().open("iris")
+        tabs().setActive("iris")
+      }
+      select()
+      if (!wasOpen) requestAnimationFrame(() => requestAnimationFrame(select))
+    })
+    clearIrisPanelOpen()
+  })
   let panelRow: HTMLDivElement | undefined
   const [panelRowWidth, setPanelRowWidth] = createSignal<number>()
   createResizeObserver(
@@ -491,15 +563,21 @@ export default function Page() {
   })
   // Clamp at render time so window or sidebar resizes squeeze the chat panel
   // instead of the review pane, without overwriting the persisted width.
+  // The chat column's width is the shared split (#192535) times the row, so the split set on Home
+  // is the split here; layout.session.width is only the fallback before the row is measured.
+  const sharedSessionWidth = () => {
+    const available = sessionPanelAvailable()
+    return available === undefined ? layout.session.width() : Math.round(available * irisSplitShare())
+  }
   const sessionPanelResizedWidth = createMemo(() =>
     clampSessionPanelWidth({
-      width: layout.session.width(),
+      width: sharedSessionWidth(),
       available: sessionPanelAvailable(),
       split: splitReview(),
     }),
   )
   const sessionPanelWidth = createMemo(() => {
-    if (!desktopSidePanelOpen()) return "100%"
+    if (inShell() || !desktopSidePanelOpen()) return "100%"
     if (desktopSessionResizeOpen()) return `${sessionPanelResizedWidth()}px`
     return `calc(100% - ${layout.fileTree.width()}px)`
   })
@@ -546,7 +624,8 @@ export default function Page() {
     review: reviewTab,
     hasReview: canReview,
     reviewFirst,
-    filesPinned: () => irisFilesPinned(reviewFirst()),
+    filesPinned: () => irisFilesPinned(),
+    preferIris: irisOpensOnAtlas,
   })
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
@@ -1050,6 +1129,8 @@ export default function Page() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    // Every column listens on the window; only the focused one may pull keys into its composer.
+    if (!paneFocused()) return
     const path = event.composedPath()
     const target = path.find((item): item is HTMLElement => item instanceof HTMLElement)
     const activeElement = deepActiveElement()
@@ -1100,6 +1181,17 @@ export default function Page() {
     view().review.setMode(next)
   })
 
+  // Registered here, not in a composer, so the old and new layouts both get it (#189527).
+  command.register("voice-stop-speaking", () => [
+    {
+      id: "voice.stopSpeaking",
+      title: language.t("command.voice.stopSpeaking"),
+      category: language.t("command.category.session"),
+      keybind: "mod+shift+m",
+      disabled: !isSpeaking(),
+      onSelect: stopSpokenReply,
+    },
+  ])
   useSpokenReplies({
     enabled: () => settings.voice.speakReplies(),
     sessionID: () => params.id,
@@ -1108,7 +1200,11 @@ export default function Page() {
     base: () => sdk().url,
     voice: () => settings.voice.speakVoice() || undefined,
     onUnavailable: (reason) =>
-      showToast({ variant: "error", title: language.t("settings.general.row.speakReplies.unavailable"), description: reason }),
+      showToast({
+        variant: "error",
+        title: language.t("settings.general.row.speakReplies.unavailable"),
+        description: reason,
+      }),
   })
 
   createEffect(
@@ -2006,6 +2102,15 @@ export default function Page() {
     consumePendingMessage: layout.pendingMessage.consume,
   })
 
+  // Pinned messages (#193406): scroll to a turn; if it isn't loaded yet, the hash-scroll effect
+  // pages older history in until it is, then scrolls.
+  const jumpToMessage = (id: string) => {
+    autoScroll.pause()
+    const msg = visibleUserMessages().find((m) => m.id === id)
+    if (msg) return scrollToMessage(msg)
+    setUi("pendingMessage", id)
+  }
+
   createEffect(
     on(
       () => params.id,
@@ -2139,6 +2244,7 @@ export default function Page() {
                   setScrollToEnd={(fn) => {
                     scrollToEnd = fn
                   }}
+                  onJumpToMessage={jumpToMessage}
                 />
               )}
             </Show>
@@ -2296,6 +2402,18 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      {/* Your own Atlas cards — assigned, mentioned, due tomorrow — as OS notifications (#189799). */}
+      <IrisCardNotices
+        url={() => serverSDK().url}
+        fetch={platform.fetch}
+        notify={(title, body, onClick) => platform.notify(title, body, onClick)}
+        open={() => {
+          view().reviewPanel.open("other")
+          if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
+          void tabs().open("iris")
+          tabs().setActive("iris")
+        }}
+      />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
@@ -2329,7 +2447,7 @@ export default function Page() {
             </SessionPanelFrame>
           )}
 
-          <Show when={desktopSessionResizeOpen()}>
+          <Show when={desktopSessionResizeOpen() && !inShell()}>
             <div onPointerDown={() => size.start()}>
               <ResizeHandle
                 classList={{
@@ -2342,6 +2460,8 @@ export default function Page() {
                 onResize={(width) => {
                   size.touch()
                   layout.session.resize(width)
+                  const available = sessionPanelAvailable()
+                  if (available) setIrisSplitShare(width / available)
                 }}
               />
             </div>
@@ -2368,62 +2488,64 @@ export default function Page() {
           </Suspense>
         </Show>
         <Show when={newSessionDesign()}>
-          <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
-            <div class="min-w-0 h-full flex flex-1 flex-col">
-              <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
-                <div class="min-h-0 flex-1">
-                  <Suspense>
-                    <SessionSidePanel
-                      canReview={canReview}
-                      reviewFirst={reviewFirst}
-                      diffs={reviewDiffs}
-                      diffsReady={reviewReady}
-                      empty={reviewEmptyText}
-                      hasReview={hasReview}
-                      reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
-                      reviewCount={reviewCount}
-                      reviewPanel={reviewPanelV2}
-                      fileTreeOpened={reviewV2State.sidebarOpened}
-                      onToggleFileTree={reviewV2State.toggleSidebar}
-                      fileBrowserState={reviewV2State}
-                      activeDiff={activeReviewFile()}
-                      focusReviewDiff={focusReviewDiff}
-                      reviewSnap={ui.reviewSnap}
-                      size={size}
-                      stacked={desktopV2PanelLayout().stacked}
+          <ShellSlot when={inShell()}>
+            <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
+              <div class="min-w-0 h-full flex flex-1 flex-col">
+                <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
+                  <div class="min-h-0 flex-1">
+                    <Suspense>
+                      <SessionSidePanel
+                        canReview={canReview}
+                        reviewFirst={reviewFirst}
+                        diffs={reviewDiffs}
+                        diffsReady={reviewReady}
+                        empty={reviewEmptyText}
+                        hasReview={hasReview}
+                        reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
+                        reviewCount={reviewCount}
+                        reviewPanel={reviewPanelV2}
+                        fileTreeOpened={reviewV2State.sidebarOpened}
+                        onToggleFileTree={reviewV2State.toggleSidebar}
+                        fileBrowserState={reviewV2State}
+                        activeDiff={activeReviewFile()}
+                        focusReviewDiff={focusReviewDiff}
+                        reviewSnap={ui.reviewSnap}
+                        size={size}
+                        stacked={desktopV2PanelLayout().stacked}
+                      />
+                    </Suspense>
+                  </div>
+                </Show>
+                <Show when={desktopV2PanelLayout().stacked}>
+                  <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
+                    <ResizeHandle
+                      class="!relative !inset-auto !h-full !w-full !transform-none"
+                      direction="vertical"
+                      size={layout.terminal.height()}
+                      min={100}
+                      max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
+                      collapseThreshold={50}
+                      onResize={(height) => {
+                        size.touch()
+                        layout.terminal.resize(height)
+                      }}
+                      onCollapse={() => view().terminal.close()}
                     />
-                  </Suspense>
-                </div>
-              </Show>
-              <Show when={desktopV2PanelLayout().stacked}>
-                <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
-                  <ResizeHandle
-                    class="!relative !inset-auto !h-full !w-full !transform-none"
-                    direction="vertical"
-                    size={layout.terminal.height()}
-                    min={100}
-                    max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
-                    collapseThreshold={50}
-                    onResize={(height) => {
-                      size.touch()
-                      layout.terminal.resize(height)
+                  </div>
+                </Show>
+                <Show when={terminalOpen()}>
+                  <div
+                    classList={{
+                      "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
+                      "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
                     }}
-                    onCollapse={() => view().terminal.close()}
-                  />
-                </div>
-              </Show>
-              <Show when={terminalOpen()}>
-                <div
-                  classList={{
-                    "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
-                    "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
-                  }}
-                >
-                  <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
-                </div>
-              </Show>
-            </div>
-          </Show>
+                  >
+                    <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </ShellSlot>
         </Show>
       </div>
 
@@ -2431,5 +2553,20 @@ export default function Page() {
         <TerminalPanel />
       </Show>
     </SessionRouteFrame>
+  )
+}
+
+/** Its children in place, or portaled into the shell's right side while `when` holds. */
+function ShellSlot(props: { when: boolean; children: JSX.Element }) {
+  const shell = useIrisShell()
+  return (
+    <Show when={props.when && shell?.slot()} fallback={props.children}>
+      {(el) => (
+        // Portal wraps its children in a bare div; it must stretch like the slot it sits in.
+        <Portal mount={el()} ref={(wrap: HTMLDivElement) => (wrap.className = "flex min-h-0 min-w-0 flex-1")}>
+          {props.children}
+        </Portal>
+      )}
+    </Show>
   )
 }

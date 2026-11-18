@@ -29,6 +29,22 @@ import { Usage, type LLMEvent } from "@opencode-ai/llm"
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
+/** Gate's verdict for a step (#189589), as ai-sdk.ts put it on the step's provider metadata. */
+export function stepGate(metadata: unknown) {
+  const gate = isRecord(metadata) && isRecord(metadata.iris) ? metadata.iris.gate : undefined
+  if (!isRecord(gate)) return {}
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+  return {
+    gate: {
+      scanned: n(gate.scanned),
+      held: n(gate.held),
+      flagged: n(gate.flagged),
+      errors: n(gate.errors),
+      mode: typeof gate.mode === "string" ? gate.mode : "shadow",
+    },
+  }
+}
+
 export interface Handle {
   readonly message: SessionV1.Assistant
   readonly updateToolCall: (
@@ -452,6 +468,7 @@ const layer = Layer.effect(
               type: "step-finish",
               tokens: usage.tokens,
               cost: usage.cost,
+              ...stepGate(value.providerMetadata),
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {

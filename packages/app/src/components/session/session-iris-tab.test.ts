@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, IRIS_PANEL_CATALOG, highlightJson, integrationHealth, itemCommands, logoFor, mcpServerRows, normalizeSurface, playbookButton, playbookCommand, playbookSources, providerMark, resolvePane, SUBVIEWS, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -54,10 +54,10 @@ describe("normalizeSurface", () => {
 
 describe("resolvePane", () => {
   test("a surface with no sub-views resolves to itself", () => {
-    const r = resolvePane("leads", undefined)
+    const r = resolvePane("mcp", undefined)
     expect(r.sub).toBeUndefined()
-    expect(r.pane).toBe("leads")
-    expect(r.path(674)).toBe("/iris/leads/674")
+    expect(r.pane).toBe("mcp")
+    expect(r.path(674)).toBe("/mcp")
   })
 
   test("the pane and the endpoint come from the SAME sub-view", () => {
@@ -81,19 +81,28 @@ describe("resolvePane", () => {
     expect(resolvePane("atlas", "nonsense").pane).toBe("atlas")
   })
 
-  test("agent modes narrow on the SERVER, in the query string", () => {
-    // Not a client-side filter over rows already fetched: that leaves the footer counting the
-    // unfiltered set, so "12 of 40" sits under nine rows and describes a different set.
-    expect(resolvePane("agents", "scheduled").path(674)).toBe("/iris/agents/674?mode=scheduled")
-    expect(resolvePane("agents", "ondemand").path(674)).toBe("/iris/agents/674?mode=ondemand")
-    // Every agent mode still draws with the agents renderer — same rows, narrower set.
-    expect(resolvePane("agents", "ondemand").pane).toBe("agents")
+  test("Agents is ELON's gallery, and the tabs it replaced land on it (#192619)", () => {
+    // All / Scheduled / On demand / Live became one view. Installs remember those sub-views in
+    // localStorage, so each must open the gallery, never a blank pane.
+    expect(resolvePane("agents", "all").pane).toBe("agent-gallery")
+    for (const old of ["scheduled", "ondemand", "live"]) expect(resolvePane("agents", old).pane).toBe("agent-gallery")
+    expect(resolvePane("agents", "rooms").pane).toBe("rooms")
+    expect(resolvePane("agents", "heartbeats").pane).toBe("heartbeats")
   })
 
   test("the hive inbox is a different endpoint AND a different renderer", () => {
-    const r = resolvePane("hive", "inbox")
+    // Inbox › Computers since #192688 (it was Hive › Inbox).
+    const r = resolvePane("inbox", "computers")
     expect(r.pane).toBe("inbox")
     expect(r.path(674)).toBe("/iris/inbox")
+  })
+
+  test("the people inbox is the Inbox tab's first view, and draws itself (#192688)", () => {
+    const r = resolvePane("inbox", undefined)
+    expect(r.sub?.id).toBe("messages")
+    expect(r.pane).toBe("comms-inbox")
+    expect(r.path(674)).toBe("/iris/comms")
+    expect(resolvePane("hive", "inbox").pane).toBe("hive")
   })
 })
 
@@ -131,11 +140,18 @@ describe("a held payload from another pane", () => {
 })
 
 describe("detailTabsFor", () => {
-  test("info is always present and always first", () => {
+  test("info is always present, and first everywhere but a dataset", () => {
     // A detail that opens on a tab with nothing in it reads as broken.
-    for (const pane of ["schemas", "pages", "agents", "leads", "hive", "nonsense"]) {
+    for (const pane of ["pages", "agents", "leads", "hive", "nonsense"]) {
       expect(detailTabsFor(pane)[0].id).toBe("info")
     }
+    for (const pane of ["schemas", "pages", "agents", "leads", "hive", "nonsense"]) {
+      expect(detailTabsFor(pane).map((t) => t.id)).toContain("info")
+    }
+  })
+
+  test("a dataset opens on its records, not its fields (#193285)", () => {
+    expect(detailTabsFor("schemas")[0].id).toBe("records")
   })
 
   test("a schema offers its records and a page offers its preview", () => {
@@ -373,5 +389,52 @@ describe("Playbooks › All", () => {
     expect(playbookSources({ sources: ["marketplace", "installed", "project"] })).toBe("project · installed · marketplace")
     expect(playbookSources({ sources: ["account"] })).toBe("account")
     expect(playbookSources({})).toBe("")
+  })
+})
+
+describe("Desktop tabs: Outreach and Marketing (#192479)", () => {
+  test("Outreach is its own product again (#193487); Leads keeps Needs approval, which draws Reachr (#192544)", () => {
+    expect(normalizeSurface("outreach")).toBe("outreach")
+    expect(resolvePane("outreach", undefined).pane).toBe("outreach-today")
+    expect(resolvePane("outreach", "campaigns").pane).toBe("outreach-campaigns")
+    expect(resolvePane("outreach", "scripts").pane).toBe("outreach-scripts")
+    // Inbox and Leads are links to those products, never Outreach's own view — even if stored.
+    expect(resolvePane("outreach", "inbox").pane).toBe("outreach-today")
+    expect(SUBVIEWS.outreach!.filter((s) => s.goto).map((s) => [s.id, s.goto!.surface])).toEqual([
+      ["inbox", "inbox"],
+      ["leads", "leads"],
+    ])
+    expect(resolvePane("leads", undefined).pane).toBe("leads-crm")
+    // Leads › Outreach kept its id (`review`), so a stored or deep-linked sub-view still lands on the queue.
+    expect(resolvePane("leads", "review").pane).toBe("reachr")
+    expect(SUBVIEWS.leads!.map((s) => [s.id, s.label])).toEqual([
+      ["all", "Leads"],
+      ["review", "Needs approval"],
+    ])
+  })
+  test("Marketing ships with NO pages for anyone: its sub-tabs are the account's own pins (#192624)", () => {
+    // 1.18.169 hardcoded FREELABEL's and Hive's ads pages here and showed them to every customer.
+    expect(SUBVIEWS.marketing).toBeUndefined()
+    expect(resolvePane("marketing", undefined)).toMatchObject({ pane: "marketing-pins" })
+    expect(resolvePane("marketing", undefined).slug).toBeUndefined()
+    const cat = IRIS_PANEL_CATALOG.find((s) => s.id === "marketing")!
+    expect(cat.subs).toEqual([])
+    expect(JSON.stringify(cat)).not.toMatch(/freelabel|hive|x-ads|ads-review|ads-board/i)
+    // No sub-view anywhere in the shipped config frames one of those pages.
+    const slugs = Object.values(SUBVIEWS).flatMap((l) => (l ?? []).map((v) => v.slug).filter(Boolean))
+    for (const s of ["freelabel-ads-review", "hive-ads-review", "x-ads-board"]) expect(slugs).not.toContain(s)
+  })
+  test("a saved layout or stored sub-view from 1.18.169 cannot bring the old sub-tabs back (#192624)", () => {
+    // What 1.18.169 stored in iris.panel.subviews, and what a deep link or the agent could still send.
+    for (const sub of ["freelabel-ads", "hive-ads", "x-ads"]) {
+      const r = resolvePane("marketing", sub)
+      expect(r.pane).toBe("marketing-pins")
+      expect(r.slug).toBeUndefined()
+      expect(r.sub).toBeUndefined()
+    }
+  })
+  test("Lexicon › Console is the lexicon-console page, opened signed in; Agreements stays the landing view (#192482)", () => {
+    expect(resolvePane("lexicon", "console")).toMatchObject({ pane: "page", slug: "lexicon-console", sub: { signIn: true } })
+    expect(resolvePane("lexicon", undefined).pane).toBe("lexicon-agreements")
   })
 })

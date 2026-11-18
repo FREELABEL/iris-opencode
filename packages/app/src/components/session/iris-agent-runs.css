@@ -1,0 +1,135 @@
+/*
+ * Agents › Running (#192855) — heyiris.io/p/background-agents-run-inspector, narrowed to a side pane.
+ *
+ * Same palette ROLES as the Hive panes (.hsc): jade = working (the only thing that moves),
+ * sage = done, amber = retrying, coral = failed. Lines between boxes say who started whom; they
+ * draw in when a sub-agent appears. Written dark first, then light-dark(light, dark), so the pane
+ * follows the app's theme. Numbers are mono.
+ */
+.iar-wrap { container-type: inline-size; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%; }
+.iar {
+  --iar-surface: #131312; --iar-surface: light-dark(#f6f5f1, #131312);
+  --iar-card: #1b1b19; --iar-card: light-dark(#ffffff, #1b1b19);
+  --iar-elev: #24241f; --iar-elev: light-dark(#efeee8, #24241f);
+  --iar-rule: #34342e; --iar-rule: light-dark(#dcdbd3, #34342e);
+  --iar-ink: #e8e8e0; --iar-ink: light-dark(#1d1c19, #e8e8e0);
+  --iar-ink2: #9c9c92; --iar-ink2: light-dark(#5c5b54, #9c9c92);
+  --iar-faint: #6e6e66; --iar-faint: light-dark(#8a897f, #6e6e66);
+  --iar-jade: #4fd1a5; --iar-jade: light-dark(#0f7a5c, #4fd1a5);
+  --iar-sage: #9cbf8f; --iar-sage: light-dark(#4d7a45, #9cbf8f);
+  --iar-amber: #f59e0b; --iar-amber: light-dark(#b45309, #f59e0b);
+  --iar-coral: #f0806f; --iar-coral: light-dark(#b8402f, #f0806f);
+  --iar-line: #4f7fd6; --iar-line: light-dark(#8fb0ee, #4f7fd6);
+  --iar-track: #2a2a26; --iar-track: light-dark(#ecebe5, #2a2a26);
+  --iar-bar: #4a4a43; --iar-bar: light-dark(#c9cfd8, #4a4a43);
+  --iar-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  --iar-ease: cubic-bezier(.45, 0, .15, 1);
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 14px 20px;
+  color: var(--iar-ink); background: var(--iar-surface); font-size: 12.5px; line-height: 1.4;
+}
+.iar *, .iar *::before, .iar *::after { box-sizing: border-box; }
+.iar button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.iar button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--iar-jade)); outline-offset: 1px; }
+.iar-num { font-family: var(--iar-mono); font-variant-numeric: tabular-nums; }
+.iar-warn { margin: 0 0 8px; color: var(--iar-amber); }
+.iar-empty { margin: 4px 2px 12px; color: var(--iar-ink2); }
+.iar-group {
+  display: flex; align-items: center; gap: 6px; margin: 4px 0 8px;
+  font: 600 10.5px/1 var(--iar-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--iar-faint);
+}
+
+/* one run: its name, four numbers, then the tree */
+.iar-run { margin-bottom: 14px; }
+.iar-rh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.iar-rh b { font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-running { color: var(--iar-jade); white-space: nowrap; }
+.iar-cost { margin-left: auto; }
+.iar-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0 0 10px; padding: 7px 10px; border: 1px solid var(--iar-rule); border-radius: 9px; background: var(--iar-card); }
+.iar-stats dt { font-size: 10.5px; color: var(--iar-faint); }
+.iar-stats dd { margin: 0; font-size: 13px; }
+.iar-stats dd[data-bad] { color: var(--iar-coral); }
+
+/* an agent's box */
+.iar-box { position: relative; border: 1px solid var(--iar-rule); border-radius: 10px; background: var(--iar-card); padding: 9px 10px 7px; animation: iar-in 320ms var(--iar-ease) both; }
+.iar-bh { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 7px; align-items: start; }
+.iar-mark { width: 13px; height: 13px; margin-top: 2px; fill: none; stroke: var(--iar-jade); stroke-width: 1.8; stroke-linecap: round; }
+.iar-nm b { display: block; font-weight: 600; font-size: 13px; line-height: 1.2; }
+.iar-nm span { display: block; font-size: 11px; color: var(--iar-faint); }
+.iar-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 6px; font-size: 11px; white-space: nowrap; }
+.iar-pill svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.iar-pill[data-state="running"] { color: var(--iar-jade); background: color-mix(in srgb, var(--iar-jade) 14%, transparent); }
+.iar-pill[data-state="retry"] { color: var(--iar-amber); background: color-mix(in srgb, var(--iar-amber) 14%, transparent); }
+.iar-pill[data-state="done"] { color: var(--iar-sage); background: color-mix(in srgb, var(--iar-sage) 14%, transparent); }
+.iar-pill[data-state="failed"] { color: var(--iar-coral); background: color-mix(in srgb, var(--iar-coral) 14%, transparent); }
+.iar-spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: iar-spin 900ms linear infinite; }
+.iar-task { margin: 6px 0 6px; color: var(--iar-ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-none { margin: 0 0 4px; color: var(--iar-faint); }
+
+/* calls: icon · what · where it ran on the agent's timeline · how long */
+.iar-calls { list-style: none; margin: 0; padding: 4px 0 0; border-top: 1px solid var(--iar-rule); }
+.iar-callrow { display: grid; grid-template-columns: 14px minmax(0, 1fr) 54px 42px; gap: 7px; align-items: center; width: 100%; padding: 3px 4px; border-radius: 6px; }
+.iar-callrow:hover, .iar-callrow[aria-expanded="true"] { background: var(--iar-elev); }
+.iar-ti { width: 13px; height: 13px; fill: none; stroke: var(--iar-ink2); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.iar-cl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-trk { position: relative; height: 6px; border-radius: 3px; background: var(--iar-track); }
+.iar-trk i { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--iar-bar); }
+.iar-call[data-status="running"] .iar-trk i, .iar-call[data-status="pending"] .iar-trk i {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--iar-jade) 40%, transparent), var(--iar-jade), color-mix(in srgb, var(--iar-jade) 40%, transparent));
+  background-size: 200% 100%; animation: iar-shim 1.4s linear infinite;
+}
+.iar-call[data-status="failed"] .iar-trk i { background: var(--iar-coral); opacity: .7; }
+.iar-dur { text-align: right; font: 11.5px var(--iar-mono); color: var(--iar-faint); font-variant-numeric: tabular-nums; }
+.iar-call[data-status="failed"] .iar-dur, .iar-call[data-status="failed"] .iar-cl { color: var(--iar-coral); }
+.iar-more { padding: 2px 4px 4px 25px; color: var(--iar-faint); font-size: 11.5px; }
+.iar-more:hover { color: var(--iar-ink); }
+.iar-cd { margin: 2px 0 6px; padding: 8px 9px; border-radius: 7px; background: var(--iar-elev); }
+.iar-cdh { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--iar-faint); }
+.iar-cdh code { font: 11.5px var(--iar-mono); color: var(--iar-ink2); }
+.iar-call[data-status="failed"] .iar-cdh span { color: var(--iar-coral); }
+.iar-res { margin: 5px 0 4px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 var(--iar-mono); color: var(--iar-ink); }
+.iar-call[data-status="failed"] .iar-res { color: var(--iar-coral); }
+.iar-args { font-size: 11px; color: var(--iar-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-args code { font: 11px var(--iar-mono); color: var(--iar-ink2); }
+.iar-bf { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 11.5px; color: var(--iar-faint); }
+.iar-bf b { color: var(--iar-ink); font-weight: 600; }
+.iar-sp { flex: 1; }
+.iar-link { color: var(--iar-ink2) !important; font-size: 11.5px; }
+.iar-link:hover { color: var(--iar-ink) !important; text-decoration: underline; }
+.iar-stop { color: var(--iar-coral) !important; }
+
+/* who started whom: an elbow from the parent's line into each child, drawn when the child appears */
+.iar-kids { list-style: none; margin: 0 0 0 12px; padding: 0; position: relative; }
+.iar-kid { position: relative; padding: 10px 0 0 18px; }
+.iar-kid::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 30px;
+  border-left: 1.5px solid var(--iar-line); border-bottom: 1.5px solid var(--iar-line); border-bottom-left-radius: 8px;
+  animation: iar-draw 320ms var(--iar-ease) both;
+}
+.iar-kid:not(:last-child)::after { content: ""; position: absolute; left: 0; top: 28px; bottom: 0; border-left: 1.5px solid var(--iar-line); }
+.iar-kid > .iar-box { animation-delay: 180ms; }
+
+/* a finished sub-agent, folded to one line */
+.iar-fold { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 7px; align-items: center; width: 100%; padding: 6px 9px; border: 1px solid var(--iar-rule); border-radius: 9px; background: transparent; color: var(--iar-ink2); }
+.iar-fold:hover { background: var(--iar-elev); }
+.iar-fold b { color: var(--iar-ink); font-weight: 600; }
+.iar-fold-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-fold .iar-num { font-size: 11px; color: var(--iar-faint); }
+
+/* Inactive: finished runs, one line each, open to see the whole tree */
+.iar-inactive { margin-top: 6px; border-top: 1px solid var(--iar-rule); padding-top: 8px; }
+.iar-inactive > summary, .iar-past > summary { list-style: none; cursor: pointer; }
+.iar-inactive > summary::-webkit-details-marker, .iar-past > summary::-webkit-details-marker { display: none; }
+.iar-car { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; transition: transform 320ms var(--iar-ease); }
+.iar-inactive[open] > summary .iar-car { transform: rotate(90deg); }
+.iar-past > summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 6px; border-radius: 7px; color: var(--iar-ink2); }
+.iar-past > summary:hover { background: var(--iar-elev); }
+.iar-past-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-past > summary .iar-num { font-size: 11px; color: var(--iar-faint); }
+.iar-past[open] > .iar-run { margin: 6px 0 10px; }
+
+@keyframes iar-spin { to { transform: rotate(360deg); } }
+@keyframes iar-shim { to { background-position: -200% 0; } }
+@keyframes iar-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes iar-draw { from { clip-path: inset(0 100% 100% 0); } to { clip-path: inset(0 0 0 0); } }
+@media (prefers-reduced-motion: reduce) { .iar *, .iar *::before { animation: none !important; } }
+@container (max-width: 320px) { .iar-callrow { grid-template-columns: 14px minmax(0, 1fr) 40px; } .iar-trk { display: none; } }

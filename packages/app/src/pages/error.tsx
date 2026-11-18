@@ -1,6 +1,6 @@
 import { TextField } from "@opencode-ai/ui/text-field"
 import * as Sentry from "@sentry/solid"
-import { Logo } from "@opencode-ai/ui/logo"
+import { IrisMark } from "@/components/iris-mark"
 import { Button } from "@opencode-ai/ui/button"
 import { Component, createSignal, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -8,6 +8,7 @@ import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
 import { Icon } from "@opencode-ai/ui/icon"
 import { errorDescriptionKey } from "./error-description"
+import { reportCrashOnce } from "@/utils/crash-report"
 
 export type InitError = {
   name: string
@@ -217,6 +218,8 @@ function formatError(error: unknown, t: Translator): string {
 
 interface ErrorPageProps {
   error: unknown
+  /** The app-wide crash screen (top-level boundary): report it once through the engine (#191430). */
+  reportCrash?: boolean
 }
 
 export const ErrorPage: Component<ErrorPageProps> = (props) => {
@@ -242,6 +245,22 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
 
   onMount(() => {
     void ensureFatalErrorRecorded().catch(() => undefined)
+    if (props.reportCrash) {
+      let storage: Storage | undefined
+      try {
+        storage = localStorage
+      } catch {}
+      // Fire and forget: reportCrashOnce never rejects, and nothing here waits on it.
+      void reportCrashOnce(props.error, {
+        engineUrl: platform.engineUrl,
+        fetch: platform.fetch,
+        storage,
+        version: platform.version,
+        os: platform.os,
+        userAgent: typeof navigator === "undefined" ? undefined : navigator.userAgent,
+        pathname: typeof location === "undefined" ? undefined : location.pathname,
+      })
+    }
   })
 
   async function checkForUpdates() {
@@ -281,7 +300,7 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
       data-tauri-drag-region
     >
       <div class="w-2/3 max-w-3xl flex flex-col items-center justify-center gap-8">
-        <Logo class="w-58.5 opacity-12 shrink-0" />
+        <IrisMark class="size-16 rounded-[14px] opacity-40 shrink-0" />
         <div class="flex flex-col items-center gap-2 text-center">
           <h1 class="text-lg font-medium text-text-strong">{language.t("error.page.title")}</h1>
           <p class="text-sm text-text-weak">{language.t(errorDescriptionKey(props.error))}</p>

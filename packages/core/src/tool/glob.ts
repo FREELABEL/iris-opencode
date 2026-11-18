@@ -90,7 +90,7 @@ const layer = Layer.effectDiscard(
                   ),
                 )
             }).pipe(
-              Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              Effect.mapError((cause) => new ToolFailure({ message: cause instanceof Ripgrep.Error ? cause.message : `Unable to find files matching ${input.pattern}` })),
             ),
         }),
       })

@@ -160,6 +160,34 @@ describe("speech player", () => {
   })
 })
 
+describe("speech player: voice changes (#189534)", () => {
+  test("a changed voice replaces an idle socket on the next reply", () => {
+    let voice = "ara"
+    const player = createSpeechPlayer({ base: () => "http://h", voice: () => voice })
+    player.speak("Hi.")
+    const first = FakeSocket.all[0]!
+    first.open()
+    first.receive(JSON.stringify({ type: "done" }))
+    voice = "eve"
+    player.speak("Again.")
+    expect(FakeSocket.all).toHaveLength(2)
+    expect(first.closed).toBe(1000)
+    expect(FakeSocket.all[1]!.url.searchParams.get("voice")).toBe("eve")
+  })
+
+  test("a socket that is still speaking finishes with its voice", () => {
+    let voice = "ara"
+    const player = createSpeechPlayer({ base: () => "http://h", voice: () => voice })
+    player.speak("One.")
+    const first = FakeSocket.all[0]!
+    first.open()
+    first.receive(pcm(2400))
+    voice = "eve"
+    player.speak("Two.")
+    expect(FakeSocket.all).toHaveLength(1)
+  })
+})
+
 test("fromPcm16 decodes little-endian samples", () => {
   const bytes = new Uint8Array([0x00, 0x40, 0x00, 0xc0, 0xff])
   expect(Array.from(fromPcm16(bytes))).toEqual([0.5, -0.5])

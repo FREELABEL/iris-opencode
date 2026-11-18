@@ -1,16 +1,28 @@
 import { describe, expect, test } from "bun:test"
 import {
+  loopNote,
+  loopSignature,
   VERBS,
   clampPageText,
   describeChange,
+  errorPageReason,
+  landedState,
   findInPage,
+  humanCheckAdvice,
+  humanCheckReason,
+  listingFooter,
   looksIrreversible,
+  normalizeDate,
+  otherPageReason,
   refuseNavigationReason,
   refuseOptionReason,
   refuseScrollReason,
   refuseTargetReason,
   refuseUrlReason,
   renderElements,
+  renderInspect,
+  shortHref,
+  typeReadbackNote,
   windowOfLines,
 } from "./browser-verbs"
 
@@ -18,7 +30,7 @@ describe("VERBS", () => {
   test("S3 adds the acting verbs, in one place", () => {
     // Read-only through S1.1; click and type arrive here with compatibility, a gate on
     // irreversible labels, and a change verified in code.
-    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "select", "scroll", "screenshot", "close"])
+    expect(VERBS).toEqual(["open", "read", "find", "window", "elements", "click", "type", "select", "press", "scroll", "screenshot", "close"])
   })
 })
 
@@ -219,6 +231,17 @@ describe("S3 — a target must be compatible with the operation", () => {
     expect(refuseTargetReason(els, 1, "click")).toBeNull()
   })
 
+  test("a site-built picker (combobox) is clickable; a native <select> points at select", () => {
+    const pickers = [
+      { ref: 3, role: "combobox", name: "Round trip", tag: "div", enabled: true, inViewport: true },
+      { ref: 4, role: "combobox", name: "Size", tag: "select", options: ["S", "M"], enabled: true, inViewport: true },
+      { ref: 5, role: "gridcell", name: "20", tag: "div", enabled: true, inViewport: true },
+    ]
+    expect(refuseTargetReason(pickers as any, 3, "click")).toBeNull()
+    expect(refuseTargetReason(pickers as any, 4, "click")).toContain("use select")
+    expect(refuseTargetReason(pickers as any, 5, "click")).toBeNull()
+  })
+
   test("typing into a link is refused", () => {
     expect(refuseTargetReason(els, 1, "type")).toContain("not a text field")
     expect(refuseTargetReason(els, 2, "type")).toBeNull()
@@ -247,6 +270,91 @@ describe("S3 — irreversible clicks are gated", () => {
     expect(looksIrreversible("Home")).toBe(false)
     expect(looksIrreversible("Next page")).toBe(false)
     expect(looksIrreversible("Search")).toBe(false)
+  })
+
+  // The stress test's list (#193355): booking words went through free, list/field words asked.
+  // Every real pay / submit / send-message gate stays.
+  const ASK = [
+    "Book now", "Book", "Book flight", "Reserve", "Reserve now", "Complete booking", "Confirm booking",
+    "Complete reservation", "Make a reservation", "Cancel booking",
+    "Purchase", "Place order", "Pay now", "Pay $420 now", "Buy now", "Checkout", "Submit", "Submit order",
+    "Send message", "Send", "Send money", "Confirm", "Confirm and pay", "Confirm transfer", "Delete account",
+    "Remove", "Archive", "Publish", "Post", "Unsubscribe", "Sign out", "Order now",
+    // a harmless phrase does not launder a real commit word next to it
+    "Confirm dates and pay", "Send code and book",
+  ]
+  const FREE = [
+    "Sort order", "Order history", "Order status", "Track your order", "View orders", "Confirm dates", "Confirm selection",
+    "Send code", "Send verification code", "Resend code", "Post code", "Postcode", "Postal code",
+    "Continue to payment", "Cancel", "Home", "Search flights", "Booking details", "Bookings", "Reservations",
+    "Address book", "Facebook", "Reserved seating",
+  ]
+  test.each(ASK)("asks before %p", (label) => expect(looksIrreversible(label)).toBe(true))
+  test.each(FREE)("does not ask before %p", (label) => expect(looksIrreversible(label)).toBe(false))
+})
+
+describe("a date as a date field takes it (#193355)", () => {
+  test.each([
+    ["12/10/2026", "2026-12-10"],
+    ["1/5/26", "2026-01-05"],
+    ["2026-12-10", "2026-12-10"],
+    ["2026/12/10", "2026-12-10"],
+    ["25/12/2026", "2026-12-25"],
+    ["12.10.2026", "2026-12-10"],
+    ["December 10, 2026", "2026-12-10"],
+    ["Dec 10 2026", "2026-12-10"],
+    ["10 December 2026", "2026-12-10"],
+    ["Thu, Dec 10th, 2026", "2026-12-10"],
+  ])("%p → %p", (text, iso) => expect(normalizeDate(text)).toBe(iso))
+  test.each(["next friday", "13/13/2026", "2/30/2026", "", "Phoenix"])("%p is not a date", (text) => expect(normalizeDate(text)).toBeNull())
+})
+
+describe("bot checks and block pages are named, and handed to the person (#193355)", () => {
+  const page = { url: "https://site.test/", title: "Flights", heading: "Flights", text: "Find cheap flights", textLength: 5000, frames: [], cfChallenge: false, blockWidget: false }
+  test.each([
+    [{ title: "Just a moment..." }, "a Cloudflare check"],
+    [{ cfChallenge: true }, "a Cloudflare check"],
+    [{ frames: ["https://geo.captcha-delivery.com/captcha/?x=1"] }, "a DataDome check"],
+    [{ text: "Press & Hold to confirm you are a human", textLength: 200 }, "a PerimeterX check"],
+    [{ url: "https://www.kayak.com/help/bots.html" }, "the site's bot page"],
+    [{ title: "Bot or Not?", heading: "Bot or Not?" }, "a block page"],
+    [{ title: "Access Denied" }, "a block page"],
+    [{ heading: "Sorry, you have been blocked", textLength: 400 }, "a block page"],
+    [{ text: "", textLength: 0, frames: ["https://www.google.com/recaptcha/api2/anchor"] }, "a captcha"],
+    [{ blockWidget: true }, "a human check"],
+  ])("%p is %p", (over, kind) => expect(humanCheckReason({ ...page, ...over })).toBe(kind))
+
+  test("a real page is not one, even one that mentions captchas or blocking", () => {
+    expect(humanCheckReason(page)).toBeNull()
+    expect(humanCheckReason({ ...page, heading: "Blocked dates", text: "These dates are blocked" })).toBeNull()
+    expect(humanCheckReason({ ...page, title: "Blocked dates | Calendar", textLength: 100 })).toBeNull()
+    expect(humanCheckReason({ ...page, title: "Attention Required! | Cloudflare" })).toBe("a Cloudflare check")
+    expect(humanCheckReason({ ...page, title: "Access Denied - Hertz" })).toBe("a block page")
+    expect(humanCheckReason({ ...page, frames: ["https://www.google.com/recaptcha/api2/anchor"] })).toBeNull()
+    expect(humanCheckReason(null)).toBeNull()
+  })
+
+  test("the advice hands it to the person and never to a workaround", () => {
+    for (const target of ["agent", "panel"] as const) {
+      const a = humanCheckAdvice("a Cloudflare check", target)
+      expect(a).toContain("for a PERSON")
+      expect(a).toContain("do not click, solve")
+      expect(a).toContain("do not switch browsers")
+    }
+    expect(humanCheckAdvice("x", "panel")).toContain("finish the check in the Browser")
+  })
+})
+
+describe("a pop-up's listing says what is behind it, and a covered control says what covers it (#193355)", () => {
+  test("footer counts what is behind a blocking pop-up", () => {
+    const l = { total: 3, matched: 3, above: 0, below: 0, behind: 220 }
+    expect(listingFooter(3, l)).toContain("220 more controls are BEHIND the pop-up")
+    expect(listingFooter(3, { ...l, behind: undefined })).toBe("")
+  })
+
+  test("a covered row names the cover", () => {
+    const t = renderElements([{ ref: 1, role: "button", name: "Search flights", tag: "button", enabled: true, inViewport: true, covered: "Accept cookies" }])
+    expect(t).toContain('covered by "Accept cookies"')
   })
 })
 
@@ -301,5 +409,163 @@ describe("S3.1 — select and scroll", () => {
     expect(refuseScrollReason("up")).toBeNull()
     expect(refuseScrollReason("bottom")).toBeNull()
     expect(refuseScrollReason("sideways")).toContain("up, down, top, bottom")
+  })
+})
+
+describe("dropdowns show what each option MEANS (Vonlane: '30' is Austin)", () => {
+  const el = {
+    ref: 12, role: "combobox", name: "source", tag: "select", enabled: true, inViewport: true,
+    options: ["", "29", "30", "14"],
+    optionLabels: ["Where are you starting?", "Austin-Arboretum: DoubleTree Northwest", "Austin: DoubleTree University Area", "Fort Worth: Hilton"],
+  }
+  test("elements lists the value with its words", () => {
+    expect(renderElements([el])).toContain('30 "Austin: DoubleTree University Area"')
+  })
+  test("the words a person sees choose the option too", () => {
+    expect(refuseOptionReason([el], 12, "Fort Worth: Hilton")).toBeNull()
+    expect(refuseOptionReason([el], 12, "30")).toBeNull()
+    expect(refuseOptionReason([el], 12, "Dallas")).toContain('14 "Fort Worth: Hilton"')
+  })
+})
+
+describe("what an element IS (#193242)", () => {
+  test("rows say where they lead, their ids and whether a choice is checked", () => {
+    const out = renderElements(
+      [
+        { ref: 1, role: "link", name: "Engineer", tag: "a", enabled: true, inViewport: true, href: "https://www.indeed.com/viewjob?jk=abc", ids: { "data-jk": "abc" } },
+        { ref: 2, role: "radio", name: "Hemp Protein", tag: "input", enabled: true, inViewport: true, checked: false, inDialog: true },
+      ],
+      "https://www.indeed.com/jobs?q=ai",
+    )
+    expect(out).toContain("A pop-up is open")
+    expect(out).toContain("→ /viewjob?jk=abc · data-jk=abc")
+    expect(out).toContain("Hemp Protein  · not checked")
+  })
+
+  test("other sites' links stay whole; long ones are cut", () => {
+    expect(shortHref("https://b.com/x", "https://a.com/")).toBe("https://b.com/x")
+    expect(shortHref("https://a.com/" + "x".repeat(200), "https://a.com/").length).toBe(120)
+  })
+
+  test("inspect gives real links with their source, and never makes one from an id", () => {
+    const base = { tag: "button", attributes: { "aria-label": "full details" }, ancestors: [{ tag: "li", ids: { "data-jk": "abc" } }], page: "https://www.indeed.com/jobs" }
+    const found = renderInspect(3, { ...base, ids: { "data-jk": "abc" }, links: [{ url: "https://www.indeed.com/viewjob?jk=abc", source: "card-anchor", where: "a link in the same card" }] })
+    expect(found).toContain("https://www.indeed.com/viewjob?jk=abc  · card-anchor")
+    const idOnly = renderInspect(3, { ...base, ids: { "data-jk": "abc" }, links: [] })
+    expect(idOnly).toContain("links: none")
+    expect(idOnly).toContain("Don't build a link from an id")
+    expect(idOnly).not.toContain("viewjob")
+  })
+})
+
+describe("#193442 — a step that lands on an error page says FAILED, not progress", () => {
+  const before = { url: "https://www.google.com/travel/flights/booking?tfs=x", title: "Google Flights", textLength: 9000, textHash: "a", values: {} }
+
+  test("Google's 404 after 'Continue to book' (2026-11-13, twice) is a failure with a way forward", () => {
+    const after = {
+      url: "https://www.google.com/travel/clk/f?t=1794549600000",
+      title: "Error 404 (Not Found)!!1",
+      textLength: 160,
+      textHash: "b",
+      values: {},
+      head: "404. That’s an error. The requested URL /travel/clk/f was not found on this server. That’s all we know.",
+    }
+    const s = describeChange(before, after)
+    expect(s.startsWith("FAILED")).toBeTrue()
+    expect(s).toContain("404")
+    expect(s).toContain("Do not repeat the same step")
+  })
+
+  test("real pages are not error pages: an article about 404s, a price of $404, a long page", () => {
+    expect(errorPageReason({ ...before, title: "How to fix a 404 error", textLength: 8000, head: "404 errors happen when" })).toBeUndefined()
+    expect(errorPageReason({ ...before, title: "Select flights", textLength: 900, head: "Basic $404 Choice $439" })).toBeUndefined()
+    expect(errorPageReason({ ...before, title: "Southwest Airlines", textLength: 20000, head: "Something went wrong? Contact us" })).toBeUndefined()
+  })
+
+  test("a page that was already showing stays as it was: only a step that MOVED the page is judged", () => {
+    const bad = { ...before, title: "Error 404 (Not Found)", textLength: 100, head: "404 not found" }
+    expect(describeChange(bad, { ...bad, textHash: "c" })).not.toContain("FAILED")
+  })
+
+  test("other error shapes: a 503, 'page not found', a blank page", () => {
+    expect(errorPageReason({ ...before, title: "503 Service Unavailable", textLength: 50, head: "" })).toContain("503")
+    expect(errorPageReason({ ...before, title: "Oops", textLength: 200, head: "Sorry, this page not found." })).toBeDefined()
+    expect(errorPageReason({ ...before, title: "", textLength: 0, head: "" })).toBe("a blank page")
+  })
+})
+
+describe("#193442 — a landing on another page, and a field that did not take the text, are said plainly", () => {
+  test("a different path is a different page; a new query or hash is the same page moving", () => {
+    const s = otherPageReason("https://www.google.com/travel/flights?q=x", "https://www.google.com/travel/explore?q=x")
+    expect(s).toContain("DIFFERENT PAGE")
+    expect(s).toContain("was /travel/flights")
+    expect(otherPageReason("https://x.test/search?q=a", "https://x.test/search?q=b")).toBeUndefined()
+    expect(otherPageReason("https://x.test/a", "https://x.test/a/#top")).toBeUndefined()
+    expect(otherPageReason("https://a.test/", "https://b.test/x")).toContain("was a.test/")
+    expect(otherPageReason("about:blank", "https://b.test/x")).toBeUndefined()
+  })
+
+  test("describeChange says it, and still says navigated to", () => {
+    const before = { url: "https://g.test/travel/flights", title: "Flights", textLength: 1000, textHash: "a", values: {} }
+    const s = describeChange(before, { ...before, url: "https://g.test/travel/explore", title: "Explore", textHash: "b" })
+    expect(s).toContain("navigated to https://g.test/travel/explore")
+    expect(s).toContain("DIFFERENT PAGE")
+  })
+
+  test("type: empty, changed, a picker, or fine", () => {
+    expect(typeReadbackNote({ ref: 3, typed: "Austin", shown: "" })).toContain("still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "x", shown: "", date: true })).toContain("date field is still EMPTY")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "Thu, Dec 10" })).toContain("NOT AS TYPED")
+    expect(typeReadbackNote({ ref: 3, typed: "12/10/2026", shown: "2026-12-10", date: true })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 18, typed: "12/10/2026", shown: "12/10/2026", dateBox: true })).toContain("NOT CHOSEN YET: [18] is a date picker")
+    expect(typeReadbackNote({ ref: 4, typed: "aus", shown: "aus", picker: true })).toContain("NOT CHOSEN YET")
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: "kimi" })).toBeUndefined()
+    // The field went away (the page moved on), or it is a password: nothing is said or echoed.
+    expect(typeReadbackNote({ ref: 4, typed: "kimi", shown: null })).toBeUndefined()
+    expect(typeReadbackNote({ ref: 4, typed: "hunter2", shown: "x", secret: true })).toBeUndefined()
+  })
+})
+
+describe("#193492 — the loop breaker", () => {
+  test("the third identical step and answer on the same page says LOOP; a different answer does not", () => {
+    const a = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)\n\npage: https://x.test/p")
+    const b = loopSignature("click", 1, "https://x.test/p", "the page text changed (+1 characters)")
+    expect(a).toBe(b) // the trailing page line does not make two answers different
+    expect(loopNote([], a)).toBeNull()
+    expect(loopNote([a], a)).toBeNull()
+    expect(loopNote([a, "elements|x", a], a)).toContain("LOOP")
+    const other = loopSignature("click", 1, "https://x.test/p", "navigated to /next")
+    expect(loopNote([a, a], other)).toBeNull()
+  })
+  test("it forgets steps older than the window", () => {
+    const a = loopSignature("screenshot", undefined, "https://x.test/p", "Here is the Browser pane")
+    const old = [a, a, ...Array.from({ length: 8 }, (_, i) => `x${i}`)]
+    expect(loopNote(old, a)).toBeNull()
+  })
+})
+
+describe("a landing that first looks like an error is read again (#193492)", () => {
+  const before = { url: "https://www.google.com/travel/flights/search?a", title: "Houston to Los Angeles | Google Flights", textLength: 9000, textHash: "1", values: {}, head: "Explore Flights" }
+  const loading = { ...before, url: "https://www.google.com/travel/flights/search?b", title: "Los Angeles to Houston | Google Flights", textLength: 300, textHash: "2", head: "Something went wrong" }
+  const loaded = { ...loading, textLength: 12000, textHash: "3", head: "Explore Flights Hotels Returning flights" }
+
+  test("Google's return-flight page, still loading, is not reported as an error once it loads", async () => {
+    const reads = [loading, loaded]
+    const after = await landedState(async () => reads.shift()!, before, 1)
+    expect(after).toBe(loaded)
+    expect(describeChange(before, after)).not.toContain("FAILED")
+  })
+
+  test("a real error page is still an error after the second look", async () => {
+    const err = { ...loading, title: "Error 404 (Not Found)!!1", head: "404. That’s an error." }
+    const after = await landedState(async () => err, before, 1)
+    expect(describeChange(before, after)).toContain("FAILED")
+  })
+
+  test("a normal landing is read once, with no wait", async () => {
+    let n = 0
+    const after = await landedState(async () => (n++, loaded), before, 10_000)
+    expect(n).toBe(1)
+    expect(after).toBe(loaded)
   })
 })

@@ -1,7 +1,7 @@
 import { batch, createMemo, createRoot, onCleanup } from "solid-js"
 import { createStore, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-pane"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Persist, persisted } from "@/utils/persist"
 import { useServerSDK } from "./server-sdk"
@@ -211,7 +211,7 @@ export const { use: useComments, provider: CommentsProvider } = createSimpleCont
   name: "Comments",
   gate: false,
   init: () => {
-    const params = useParams()
+    const params = useSessionParams()
     const sdk = useSDK()
     const serverSDK = useServerSDK()
     const cache = createScopedCache(

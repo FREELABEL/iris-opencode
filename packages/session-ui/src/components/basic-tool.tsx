@@ -14,6 +14,8 @@ export type TriggerTitle = {
   args?: string[]
   argsClass?: string
   action?: JSX.Element
+  /** A small mark before the title (the web-search globe). Gets `pending` so it can move while the tool runs. */
+  lead?: (pending: boolean) => JSX.Element
 }
 
 const isTriggerTitle = (val: any): val is TriggerTitle => {
@@ -196,6 +198,7 @@ export function BasicTool(props: BasicToolProps) {
               {(title) => (
                 <div data-slot="basic-tool-tool-info-structured">
                   <div data-slot="basic-tool-tool-info-main">
+                    <Show when={title().lead}>{(lead) => lead()(pending())}</Show>
                     <span
                       data-slot="basic-tool-tool-title"
                       classList={{

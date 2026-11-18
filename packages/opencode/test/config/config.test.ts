@@ -902,6 +902,32 @@ it.instance("updates config and writes to file", () =>
   }),
 )
 
+it.instance("update never writes a resolved {env:} value to disk (#192183)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const file = path.join(test.directory, "config.json")
+    const fake = "fake-secret-value-for-test-only"
+    process.env.IRIS_TEST_FAKE_SECRET = fake
+    yield* Effect.promise(() =>
+      Bun.write(
+        file,
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: { x: { options: { apiKey: "{env:IRIS_TEST_FAKE_SECRET}" } } },
+        }),
+      ),
+    )
+    yield* Config.Service.use((svc) =>
+      svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
+    )
+    delete process.env.IRIS_TEST_FAKE_SECRET
+    const onDisk = yield* Effect.promise(() => Bun.file(file).text())
+    expect(onDisk).not.toContain(fake)
+    expect(onDisk).toContain("{env:IRIS_TEST_FAKE_SECRET}")
+    expect(onDisk).toContain("updated/model")
+  }),
+)
+
 it.instance("gets config directories", () =>
   Effect.gen(function* () {
     const dirs = yield* Config.use.directories()

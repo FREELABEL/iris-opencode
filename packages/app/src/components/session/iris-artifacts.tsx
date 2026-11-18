@@ -22,7 +22,7 @@ import {
   sandboxedDocument,
   type ArtifactMeta,
 } from "./iris-artifacts-model"
-import { clearArtifactFocus, irisArtifactFocus } from "./iris-nav"
+import { clearArtifactFocus, irisArtifactFocus, setIrisOpenArtifact } from "./iris-nav"
 import { IrisArtifactPublish } from "./iris-artifact-publish"
 import { IrisFileArtifact, type FileContent } from "./iris-file-artifact"
 import { fileRevision, type PromotedFile } from "./iris-promote"
@@ -56,6 +56,9 @@ export function IrisArtifacts(props: {
   sessionId?: string
   projectParam: string
   project?: string
+  /** The project chosen in the IRIS panel (#193407) — what "Save to Genesis" opens on. */
+  selectedBloqId?: number
+  /** The fallback when nothing is chosen (the panel's default board). */
   bloqId?: number
   bloqName?: string
   /** Projects the publish modal can send an artifact to (#187131). */
@@ -107,6 +110,9 @@ export function IrisArtifacts(props: {
   })
 
   const [openId, setOpenId] = createSignal<string | undefined>()
+  // The selected artifact, for the agent (#190093). Cleared when the pane goes away.
+  createEffect(() => setIrisOpenArtifact(openId()))
+  onCleanup(() => setIrisOpenArtifact(undefined))
   const [listOpen, setListOpen] = createSignal(false)
   // Open the newest one by default; keep the user's choice while it still exists.
   createEffect(() => {
@@ -285,6 +291,7 @@ export function IrisArtifacts(props: {
                     doFetch={props.doFetch}
                     sessionId={props.sessionId!}
                     project={props.project}
+                    selectedBloqId={props.selectedBloqId}
                     bloqId={props.bloqId}
                     bloqName={props.bloqName}
                     boards={props.boards}

@@ -47,6 +47,14 @@ export class ChainError extends TranscribeError {
 /** Longest a Retry-After may hold one dictation inside the chain. The person is waiting. */
 export const MAX_RETRY_AFTER_MS = 5000
 
+/**
+ * Longest the cloud engines may hold ONE dictation, all retries included. Each upload may take up
+ * to 90 s, and timeouts were retried on every engine: a hung platform kept the composer on
+ * "Transcribing…", mic disabled, for ~13 minutes (#189522). Past this the recording is held and
+ * the retry UI takes over — nothing is lost.
+ */
+export const CLOUD_DEADLINE_MS = 120_000
+
 /** Default engine order. Grok primary; OpenRouter second as the multi-model aggregator. */
 const DEFAULT_PROVIDERS = "xai,openrouter,openai"
 
@@ -67,6 +75,8 @@ export async function transcribeWithFallback(
     backoffMs?: number[]
     /** Cap on a server's Retry-After; defaults to MAX_RETRY_AFTER_MS. */
     maxRetryAfterMs?: number
+    /** Budget for every cloud attempt together; defaults to CLOUD_DEADLINE_MS. */
+    deadlineMs?: number
   },
 ) {
   const attempts: Attempt[] = []
@@ -75,18 +85,22 @@ export async function transcribeWithFallback(
   // A 429's Retry-After, owed before the NEXT request — same engine or the next one, since the
   // limit may be the platform's own and every engine sits behind it.
   let owed = 0
+  const until = Date.now() + (opts.deadlineMs ?? CLOUD_DEADLINE_MS)
+  const left = () => until - Date.now()
 
-  for (const provider of remote ? (opts.providers ?? defaultProviders()) : []) {
+  cloud: for (const provider of remote ? (opts.providers ?? defaultProviders()) : []) {
     if (!remote) break
     for (const wait of [0, ...backoff]) {
       const pause = Math.max(wait, owed)
       owed = 0
+      if (pause >= left()) break cloud
       if (pause) await Bun.sleep(pause)
       const started = Date.now()
       const result = await transcribeRemote(audio, remote, {
         filename: opts.filename,
         language: opts.language,
         provider,
+        timeoutMs: left(),
       }).catch((e: unknown) => (e instanceof Error ? e : new TranscribeError(String(e))))
       if (!(result instanceof Error)) {
         attempts.push({ engine: provider, ok: true, status: 200, ms: Date.now() - started })
@@ -100,6 +114,7 @@ export async function transcribeWithFallback(
       if (status === 413) throw new ChainError(tooLargeMessage(result.message), attempts, true, 413)
       if (status === 429 && retryAfterMs !== undefined)
         owed = Math.min(retryAfterMs, opts.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS)
+      if (left() <= 0) break cloud
       if (!retryable(status)) break
     }
   }
@@ -143,7 +158,7 @@ function defaultProviders() {
 /** One line per engine, its LAST error — the thing a person (or a bug report) needs. */
 function failureMessage(remote: RemoteConfig | null, attempts: Attempt[]) {
   if (!remote && attempts.length === 0)
-    return "Dictation needs an IRIS account and a board to file it under. Sign in with `iris auth login`, then set IRIS_TRANSCRIBE_BLOQ_ID or `default_bloq_id` in ~/.iris/config.json."
+    return "Dictation needs you signed in to IRIS. Sign in to the app (or run `iris auth login`), then try again."
   const last = new Map(attempts.map((a) => [a.engine, a.error ?? ""]))
   const detail = [...last].map(([engine, error]) => `${engine}: ${error.slice(0, 160)}`).join(" · ")
   return `Every transcription engine failed (${detail})`

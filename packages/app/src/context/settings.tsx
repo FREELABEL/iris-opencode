@@ -2,7 +2,10 @@ import { createStore, reconcile } from "solid-js/store"
 import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
+import { configureReadAloud } from "@opencode-ai/session-ui/read-aloud"
 import { usePlatform } from "@/context/platform"
+import { chatTextScale, chatTextSize } from "@/utils/chat-text-size"
+import { chatFont, chatFontFamily, chatSpacing, chatSpacingScale, type ChatFont, type ChatSpacing } from "@/utils/chat-reading"
 
 export interface NotificationSettings {
   agent: boolean
@@ -42,6 +45,8 @@ export interface Settings {
   }
   appearance: {
     fontSize: number
+    chatFont?: ChatFont
+    chatSpacing?: ChatSpacing
     mono: string
     sans: string
     terminal: string
@@ -63,6 +68,19 @@ export interface Settings {
     speakReplies: boolean
     /** xAI voice id for spoken replies ("" = the relay's default). */
     speakVoice: string
+  }
+  /**
+   * Settings › Read aloud: the speaker button on IRIS's replies. Uses this computer's own voices,
+   * so it works offline (session-ui read-aloud.ts). Separate from voice.speakReplies, which streams
+   * an online voice.
+   */
+  audio: {
+    /** Show the speaker button on replies. */
+    readAloud: boolean
+    /** A system voice's voiceURI; "" = this computer's default voice for your language. */
+    voice: string
+    /** Speaking speed, 0.5 – 2 (1 = normal). */
+    rate: number
   }
   /** The composer's working glow (prompt-input-glow.css). Both on by default. */
   glow: {
@@ -230,6 +248,8 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
+    chatFont: "sans",
+    chatSpacing: "default",
     mono: "",
     sans: "",
     terminal: "",
@@ -256,6 +276,11 @@ const defaultSettings: Settings = {
     speakReplies: false,
     speakVoice: "",
   },
+  audio: {
+    readAloud: true,
+    voice: "",
+    rate: 1,
+  },
   glow: {
     ring: true,
     halo: true,
@@ -275,6 +300,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
   init: () => {
     const platform = usePlatform()
     const [store, setStore, settingsInit, ready] = persisted("settings.v3", createStore<Settings>(defaultSettings))
+    // The speaker button on replies reads these (reactively) through session-ui's read-aloud.
+    configureReadAloud(() => ({
+      enabled: store.audio?.readAloud ?? defaultSettings.audio.readAloud,
+      voice: store.audio?.voice ?? defaultSettings.audio.voice,
+      rate: store.audio?.rate ?? defaultSettings.audio.rate,
+      volume: 1,
+    }))
     const [launch, setLaunch, , launchReady] = persisted(
       "app-version.v1",
       createStore<{ version?: string }>({ version: undefined }),
@@ -392,6 +424,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       const root = document.documentElement
       root.style.setProperty("--font-family-mono", monoFontFamily(store.appearance?.mono))
       root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
+      // Read only inside [data-chat-text] (the conversation and its message box), #193464.
+      root.style.setProperty("--chat-text-size", String(chatTextScale(store.appearance?.fontSize)))
+      // Chat font and spacing (#193477), read only inside [data-chat-text] like the size.
+      root.style.setProperty("--chat-font", chatFontFamily(store.appearance?.chatFont))
+      const spacing = chatSpacingScale(store.appearance?.chatSpacing)
+      root.style.setProperty("--chat-leading", String(spacing.leading))
+      root.style.setProperty("--chat-gap", String(spacing.gap))
     })
 
     createEffect(() => {
@@ -505,7 +544,15 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       appearance: {
         fontSize: withFallback(() => store.appearance?.fontSize, defaultSettings.appearance.fontSize),
         setFontSize(value: number) {
-          setStore("appearance", "fontSize", value)
+          setStore("appearance", "fontSize", chatTextSize(value))
+        },
+        chatFont: () => chatFont(store.appearance?.chatFont),
+        setChatFont(value: ChatFont) {
+          setStore("appearance", "chatFont", chatFont(value))
+        },
+        chatSpacing: () => chatSpacing(store.appearance?.chatSpacing),
+        setChatSpacing(value: ChatSpacing) {
+          setStore("appearance", "chatSpacing", chatSpacing(value))
         },
         font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
         setFont(value: string) {
@@ -599,6 +646,21 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         speakVoice: withFallback(() => store.voice?.speakVoice, defaultSettings.voice.speakVoice),
         setSpeakVoice(value: string) {
           setStore("voice", (voice) => ({ ...voice, speakVoice: value }))
+        },
+      },
+      audio: {
+        // Settings saved before this group existed have no `audio` object: spread from the defaults.
+        readAloud: withFallback(() => store.audio?.readAloud, defaultSettings.audio.readAloud),
+        setReadAloud(value: boolean) {
+          setStore("audio", (a) => ({ ...defaultSettings.audio, ...a, readAloud: value }))
+        },
+        voice: withFallback(() => store.audio?.voice, defaultSettings.audio.voice),
+        setVoice(value: string) {
+          setStore("audio", (a) => ({ ...defaultSettings.audio, ...a, voice: value }))
+        },
+        rate: withFallback(() => store.audio?.rate, defaultSettings.audio.rate),
+        setRate(value: number) {
+          setStore("audio", (a) => ({ ...defaultSettings.audio, ...a, rate: Math.min(2, Math.max(0.5, value)) }))
         },
       },
       glow: {

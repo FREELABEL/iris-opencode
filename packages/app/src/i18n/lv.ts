@@ -852,6 +852,8 @@ export const dict = {
   "common.moreCountSuffix": " (+{{count}} vēl)",
   "common.requestFailed": "Pieprasījums neizdevās",
   "common.moreOptions": "Vairāk opciju",
+  "session.pinned.title": "Piespraustās ziņas",
+  "session.pinned.empty": "Nav piespraustu ziņu",
   "common.learnMore": "Uzzināt vairāk",
   "common.rename": "Pārdēvēt",
   "common.export": "Eksportēt",

@@ -26,6 +26,8 @@ export function TabNavItem(props: {
   onRename: (title: string) => Promise<void>
   onClose: () => void
   onNavigate: () => void
+  /** Select on click instead of on press, so a press can become a drag without switching. */
+  navigateOnRelease?: boolean
   active?: boolean
   forceTruncate?: boolean
   suppressNavigation?: () => boolean
@@ -210,12 +212,15 @@ export function TabNavItem(props: {
           if (event.button !== 0) return
           if (editing()) return
           if (props.suppressNavigation?.()) return
+          if (props.navigateOnRelease) return
           props.onNavigate()
         }}
         onClick={(event) => {
           event.preventDefault()
           // Mouse navigation already happened on mousedown; detail 0 means keyboard activation.
-          if (event.detail > 0) return
+          // A session tab navigates here instead (#191484): a press may become a drag into the
+          // chat area, and selecting on press would replace the session it is dragged beside.
+          if (event.detail > 0 && !props.navigateOnRelease) return
           if (editing()) return
           if (props.suppressNavigation?.()) return
           props.onNavigate()

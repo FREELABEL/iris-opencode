@@ -11,6 +11,7 @@ import {
   untrack,
   type Accessor,
 } from "solid-js"
+import { chatOnScreen } from "@/utils/chat-on-screen"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
@@ -29,6 +30,7 @@ import { getFilename } from "@opencode-ai/core/util/path"
 import { Session } from "@opencode-ai/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
+import { CHAT_TEXT_DEFAULT, stepChatTextSize } from "@/utils/chat-text-size"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
@@ -59,6 +61,7 @@ import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { UpdateAvailableToast } from "@/components/update-available-toast"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -90,7 +93,6 @@ import { SidebarContent } from "./layout/sidebar-shell"
  * and a px literal would not. See #184875.
  */
 const COLLAPSED_RAIL = "4rem"
-
 
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
@@ -468,6 +470,10 @@ export default function LegacyLayout(props: ParentProps) {
         const currentSession = params.id
         if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
         if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
+        // Split view (#191774): a chat in ANY column already shows its request in its own composer.
+        // The route names only the focused column, so this toast covered the window for a chat the
+        // person could see, and read as "the approval is in every column".
+        if (chatOnScreen(props.sessionID) || (session?.parentID && chatOnScreen(session.parentID))) return
 
         dismissSessionAlert(sessionKey)
 
@@ -919,6 +925,28 @@ export default function LegacyLayout(props: ParentProps) {
         category: language.t("command.category.project"),
         keybind: "mod+o",
         onSelect: () => chooseProject(),
+      },
+      // Chat text size (#193464): only the conversation and its message box. Cmd +/- stays whole-app zoom.
+      {
+        id: "chat.text.bigger",
+        title: language.t("command.chat.text.bigger"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+=",
+        onSelect: () => settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), 1)),
+      },
+      {
+        id: "chat.text.smaller",
+        title: language.t("command.chat.text.smaller"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+-",
+        onSelect: () => settings.appearance.setFontSize(stepChatTextSize(settings.appearance.fontSize(), -1)),
+      },
+      {
+        id: "chat.text.reset",
+        title: language.t("command.chat.text.reset"),
+        category: language.t("command.category.view"),
+        keybind: "mod+alt+0",
+        onSelect: () => settings.appearance.setFontSize(CHAT_TEXT_DEFAULT),
       },
       {
         id: "project.previous",
@@ -2271,7 +2299,12 @@ export default function LegacyLayout(props: ParentProps) {
         }
       />
       <Show when={updateVersion() !== undefined}>
-        <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
+        <UpdateAvailableToast
+          version={updateVersion() ?? ""}
+          install={installUpdate}
+          decline={() => void platform.updater?.decline?.()}
+          language={language}
+        />
       </Show>
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
@@ -2421,38 +2454,4 @@ export default function LegacyLayout(props: ParentProps) {
       <ToastRegion v2={false} />
     </div>
   )
-}
-
-function UpdateAvailableToast(props: {
-  version: string
-  install: () => void
-  language: ReturnType<typeof useLanguage>
-}) {
-  let toastId: number | undefined
-
-  onMount(() => {
-    toastId = showToast({
-      persistent: true,
-      icon: "download",
-      title: props.language.t("toast.update.title"),
-      description: props.language.t("toast.update.description", { version: props.version }),
-      actions: [
-        {
-          label: props.language.t("toast.update.action.installRestart"),
-          onClick: props.install,
-        },
-        {
-          label: props.language.t("toast.update.action.notYet"),
-          onClick: "dismiss",
-        },
-      ],
-    })
-  })
-
-  onCleanup(() => {
-    if (toastId === undefined) return
-    dismissToast(toastId)
-  })
-
-  return null
 }

@@ -10,6 +10,10 @@ import { nextSpeakable } from "@/utils/speakable"
  * and no clock comparison between window and server is needed. Speech stops when the person sends
  * another message, the reply is aborted, they switch session, or they start dictating
  * (stopSpokenReply, called by the composer).
+ *
+ * A stop silences the whole TURN, not one message: every agent step is its own assistant message,
+ * so muting only the current one let the next step after a tool call start talking again
+ * (#189518). The turn is the user message the replies answer (their parentID).
  */
 
 type Speaker = Pick<SpeechPlayer, "speak" | "finish" | "stop">
@@ -17,10 +21,13 @@ type Speaker = Pick<SpeechPlayer, "speak" | "finish" | "stop">
 export function createReplyReader(speaker: Speaker) {
   let current: { id: string; consumed: number; done: boolean } | undefined
   let lastUser: string | undefined
+  let muted: string | undefined
   let primed = false
 
-  // Also silences a reply that finished streaming but is still playing.
+  // Also silences a reply that finished streaming but is still playing, and mutes the rest of
+  // the turn it belongs to.
   const stop = () => {
+    muted = lastUser
     if (!current) return
     speaker.stop()
     current.done = true
@@ -32,6 +39,7 @@ export function createReplyReader(speaker: Speaker) {
       stop()
       current = undefined
       lastUser = undefined
+      muted = undefined
       primed = false
     },
     stop,
@@ -44,7 +52,8 @@ export function createReplyReader(speaker: Speaker) {
 
       const reply = messages.findLast((m) => m.role === "assistant")
       if (!reply || reply.role !== "assistant") return
-      if (current?.id !== reply.id) current = { id: reply.id, consumed: 0, done: !!reply.time.completed }
+      if (current?.id !== reply.id)
+        current = { id: reply.id, consumed: 0, done: !!reply.time.completed || (!!muted && reply.parentID === muted) }
       if (current.done) return
       if (reply.error?.name === "MessageAbortedError") return stop()
 
@@ -65,6 +74,16 @@ export function createReplyReader(speaker: Speaker) {
 
 let active: Pick<SpeechPlayer, "stop"> | undefined
 const [speaking, setSpeaking] = createRoot(() => createSignal(false))
+const [held, setHeld] = createRoot(() => createSignal(false))
+
+/**
+ * While the person is dictating, nothing is spoken: the recorder would hear it, and on macOS the
+ * sidecar recorder has no echo cancellation, so the reply ends up in the transcript (#189518).
+ */
+export function holdSpokenReplies(on: boolean) {
+  setHeld(on)
+  if (on) stopSpokenReply()
+}
 
 /** True while a reply is being read aloud — drives the composer's Stop speaking control. */
 export const isSpeaking = speaking
@@ -92,7 +111,11 @@ export function useSpokenReplies(opts: {
         voice: opts.voice,
         onState: (state, reason) => {
           setSpeaking(state === "speaking")
-          if (state === "unavailable") opts.onUnavailable(reason ?? "")
+          if (state !== "unavailable") return
+          // One notice, then the rest of this turn stays quiet. Retrying every sentence failed the
+          // same way each time and stacked a toast per sentence (#189524). The next turn tries again.
+          reader.stop()
+          opts.onUnavailable(reason ?? "")
         },
       })
       active = handle
@@ -108,7 +131,9 @@ export function useSpokenReplies(opts: {
   createEffect(() => {
     const id = opts.sessionID()
     if (!opts.enabled() || !id) return
-    reader.update(opts.messages(id) ?? [], opts.parts)
+    const messages = opts.messages(id) ?? []
+    if (held()) return reader.stop()
+    reader.update(messages, opts.parts)
   })
   onCleanup(() => {
     reader.reset()

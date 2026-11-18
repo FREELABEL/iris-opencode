@@ -42,6 +42,29 @@ function copilotTotalNanoAiu(value: unknown) {
   return total
 }
 
+/**
+ * Constellation Gate's verdict for this step, from the IRIS model proxy's x-gate-* response
+ * headers (#189589). Undefined when the proxy did not screen the call — a provider that is not
+ * IRIS, or an account Gate is not rolled out to — so "not screened" never renders as "0 clean".
+ */
+export function gateFromHeaders(headers: Record<string, string> | undefined) {
+  if (!headers) return
+  const get = (name: string) => headers[name] ?? headers[name.toLowerCase()]
+  const scanned = get("x-gate-scanned")
+  if (scanned === undefined) return
+  const n = (v: string | undefined) => {
+    const x = Number(v ?? 0)
+    return Number.isFinite(x) && x >= 0 ? x : 0
+  }
+  return {
+    scanned: n(scanned),
+    held: n(get("x-gate-held")),
+    flagged: n(get("x-gate-flagged")),
+    errors: n(get("x-gate-errors")),
+    mode: get("x-gate-mode") ?? "shadow",
+  }
+}
+
 function usage(value: unknown) {
   if (!value || typeof value !== "object") return undefined
   const item = value as {
@@ -90,7 +113,7 @@ export function toLLMEvents(
         return Effect.fail(new ProviderError.ResponseStreamError("Provider finish_reason: network_error"))
       return Effect.sync(() => {
         const original = providerMetadata(event.providerMetadata)
-        const metadata =
+        const withCopilot =
           state.copilotTotalNanoAiu === undefined
             ? original
             : {
@@ -100,6 +123,8 @@ export function toLLMEvents(
                   totalNanoAiu: state.copilotTotalNanoAiu,
                 },
               }
+        const gate = gateFromHeaders((event as { response?: { headers?: Record<string, string> } }).response?.headers)
+        const metadata = gate === undefined ? withCopilot : { ...withCopilot, iris: { ...withCopilot?.iris, gate } }
         state.copilotTotalNanoAiu = undefined
         return [
           LLMEvent.stepFinish({

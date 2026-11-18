@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { diffDraft, draftFrom, statusOptions, type CardDoc } from "./iris-card-editor"
+import { appendTranscript, diffDraft, draftFrom, groupTrail, statusOptions, timeAgo, type CardDoc, type TrailRow } from "./iris-card-editor"
 
 const doc: CardDoc = {
   measured: true,
@@ -87,11 +87,97 @@ describe("card editor — sharing allow-list", () => {
   })
 })
 
+import { SHARE_MODES, shareMode } from "./iris-card-editor"
+
+describe("card editor — who can open a card (#191841)", () => {
+  test("is read from is_public and the allow-list, with nothing new stored", () => {
+    expect(shareMode(false, [])).toBe("private")
+    // Private keeps a stored list (make-private does not clear it): still private.
+    expect(shareMode(false, ["a@b.co"])).toBe("private")
+    expect(shareMode(true, [])).toBe("unlisted")
+    expect(shareMode(true, ["@heyiris.io"])).toBe("restricted")
+  })
+
+  test("unlisted says out loud that anyone with the link is in", () => {
+    // never-empty-a-gate-allowlist: an open link is a choice the words have to name.
+    expect(SHARE_MODES.find((m) => m.id === "unlisted")!.help).toMatch(/Anyone with the link/)
+  })
+
+  test("offers exactly the three modes, private first", () => {
+    expect(SHARE_MODES.map((m) => m.id)).toEqual(["private", "unlisted", "restricted"])
+  })
+})
+
 describe("card editor — attachment sizes", () => {
   test("bytes, KB, MB", () => {
     expect(fileSize(900)).toBe("900 B")
     expect(fileSize(4 * 1024)).toBe("4.0 KB")
     expect(fileSize(42 * 1024 * 1024)).toBe("42.0 MB")
     expect(fileSize(undefined)).toBe("")
+  })
+})
+
+describe("appendTranscript — a meeting lands at the END of the body, never over it (#190041)", () => {
+  test("a new line after what is there", () => {
+    expect(appendTranscript("Agenda\n- budget", "We agreed on the budget.")).toBe("Agenda\n- budget\n\nWe agreed on the budget.")
+  })
+  test("an empty body becomes the transcript", () => {
+    expect(appendTranscript("", "  hello  ")).toBe("hello")
+  })
+  test("trailing whitespace is not stacked into blank lines", () => {
+    expect(appendTranscript("notes\n\n\n", "more")).toBe("notes\n\nmore")
+  })
+  test("an empty transcript leaves the body exactly as it was", () => {
+    expect(appendTranscript("keep  \n", "   ")).toBe("keep  \n")
+  })
+})
+
+describe("card editor — the chat thread (Elon layout)", () => {
+  // fl-api sends the trail newest first.
+  const rows: TrailRow[] = [
+    { id: 9, type: "comment", text: "Moved it.", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:09:00Z" },
+    { id: 8, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:08:00Z" },
+    { id: 7, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:07:00Z" },
+    { id: 6, type: "item_updated", text: "Item updated: x", actor: "FREELABEL", actorId: 193, at: "2026-10-22T10:06:00Z" },
+    { id: 5, type: "comment", text: "Looks good", actor: "Sam", actorId: 7, at: "2026-10-22T10:05:00Z" },
+    { id: 4, type: "item_assigned", text: "Assigned Crate Keeper", actor: "Sam", actorId: 7, at: "2026-10-22T10:04:00Z" },
+  ]
+
+  test("reads oldest first, and folds a run of edits by one person into one line", () => {
+    const t = groupTrail(rows, { id: 193 })
+    expect(t.map((e) => e.kind)).toEqual(["change", "comment", "change", "comment"])
+    const edits = t[2]
+    expect(edits.kind === "change" && edits.rows.length).toBe(3)
+    expect(edits.kind === "change" && edits.summary).toBe("edited the card 3×")
+    expect(edits.kind === "change" && edits.at).toBe("2026-10-22T10:08:00Z")
+  })
+
+  test("a single change keeps its own words; mixed changes are counted", () => {
+    const one = groupTrail([rows[5]])
+    expect(one[0].kind === "change" && one[0].summary).toBe("Assigned Crate Keeper")
+    const mixed = groupTrail([rows[1], { ...rows[5], actor: "FREELABEL", actorId: 193 }])
+    expect(mixed[0].kind === "change" && mixed[0].summary).toBe("made 2 changes")
+  })
+
+  test("your own comments are yours by id, not by a display name that differs", () => {
+    const t = groupTrail(rows, { id: 193, name: "admin", email: "admin@freelabel.net" })
+    const comments = t.filter((e) => e.kind === "comment")
+    expect(comments.map((c) => c.kind === "comment" && c.mine)).toEqual([false, true])
+  })
+
+  test("without an id, the name or email still finds them", () => {
+    const noIds = rows.map(({ actorId, ...r }) => r)
+    const t = groupTrail(noIds, { name: "freelabel" })
+    expect(t.filter((e) => e.kind === "comment").map((c) => c.kind === "comment" && c.mine)).toEqual([false, true])
+  })
+
+  test("relative times", () => {
+    const now = Date.parse("2026-10-22T12:00:00Z")
+    expect(timeAgo("2026-10-22T11:59:40Z", now)).toBe("just now")
+    expect(timeAgo("2026-10-22T11:55:00Z", now)).toBe("5m ago")
+    expect(timeAgo("2026-10-22T10:00:00Z", now)).toBe("2h ago")
+    expect(timeAgo("2026-10-19T12:00:00Z", now)).toBe("3d ago")
+    expect(timeAgo(undefined, now)).toBe("")
+    expect(timeAgo("not a date", now)).toBe("not a date")
   })
 })

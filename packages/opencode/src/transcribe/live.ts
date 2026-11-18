@@ -10,7 +10,8 @@ import { readRemoteConfig, resolveBoard } from "./remote"
  *
  * xAI's partials are cumulative within an utterance: each one restates the utterance so far, and an
  * is_final partial locks it before the next utterance starts. xAI has been seen sending the same
- * final twice in a row, so a repeated final is dropped.
+ * final twice in a row, so a repeated final is dropped — compared ignoring case, punctuation and
+ * spacing. The window also merges finals (session-ui live-text.ts appendFinal).
  */
 
 /** fl-iris-api services/stt-relay, deployed as the iris-stt-relay Railway service (2026-10-05). */
@@ -94,8 +95,11 @@ export function openLiveSession(
     const event = parseRelayEvent(message.data)
     if (!event) return
     if (event.type === "final") {
-      if (event.text === lastFinal) return
-      lastFinal = event.text
+      // Compared loosely: a resend with a different comma or a leading space is still a repeat,
+      // and an exact match let those through to be typed twice (#189546).
+      const key = event.text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim()
+      if (key === lastFinal) return
+      lastFinal = key
     }
     emit(event)
   }

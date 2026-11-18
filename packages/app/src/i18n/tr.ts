@@ -884,6 +884,8 @@ export const dict = {
   "common.dismiss": "Kapat",
   "common.requestFailed": "İstek başarısız",
   "common.moreOptions": "Daha fazla seçenek",
+  "session.pinned.title": "Sabitlenmiş mesajlar",
+  "session.pinned.empty": "Sabitlenmiş mesaj yok",
   "common.learnMore": "Daha fazla bilgi",
   "common.rename": "Yeniden adlandır",
   "common.export": "Dışa aktar",
