@@ -3,6 +3,7 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-artifact-publish.css"
+import "./iris-panel-ui.css"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { renderMarkdown } from "./iris-item"
 import {
@@ -361,37 +362,26 @@ export function IrisArtifactPublish(props: {
         <Show when={props.meta.published}>
           {(p) => (
             <span class="iris-publish__addr" data-testid="artifact-page-link">
-              <span class="iris-publish__url" title={p().url}>
-                {p().visibility === "private" ? "Private in Genesis · " : ""}
-                {p().url.replace(/^https?:\/\//, "")}
-              </span>
-              {/* Icons, not words (#193844): three text links plus the address and the publish
-                  button wrapped onto two or three lines in a narrow window. Each keeps its
-                  name as the tooltip and the accessible label. */}
+              {/* No address text in the bar (#193844): like the Genesis Pages toolbar, the link
+                  lives behind Copy (its tooltip names it) and Open in browser. The text fought
+                  the title for width and pushed the bar onto three lines. */}
+              <Show when={p().visibility === "private"}>
+                <span class="iris-publish__muted">Private in Genesis</span>
+              </Show>
+              {/* The Genesis Pages toolbar's controls (#193844): iris-panel-ui icon buttons and a
+                  Draft | Live segment, not a row of text links that wrapped onto three lines in a
+                  narrow window. Each icon keeps its name as tooltip and accessible label. */}
               <button
                 type="button"
-                class="iris-publish__icon"
-                title={copied() ? "Copied" : "Copy link"}
+                class="iris-ui-icon"
+                title={copied() ? "Copied" : `Copy link · ${p().url.replace(/^https?:\/\//, "")}`}
                 aria-label={copied() ? "Copied" : "Copy link"}
                 onClick={() => void copy(p().url)}
               >
                 <Icon name={copied() ? "check" : "copy"} size="small" />
               </button>
-              <Show when={props.onToggleLive}>
-                <button
-                  type="button"
-                  class="iris-publish__icon"
-                  classList={{ "iris-publish__icon--on": !!props.live }}
-                  aria-pressed={!!props.live}
-                  title={props.live ? "Showing the live page — click for the draft" : "View live page"}
-                  aria-label={props.live ? "Show draft" : "View live"}
-                  onClick={() => props.onToggleLive?.()}
-                >
-                  <Icon name="eye" size="small" />
-                </button>
-              </Show>
               <a
-                class="iris-publish__icon"
+                class="iris-ui-icon"
                 href={p().url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -400,6 +390,16 @@ export function IrisArtifactPublish(props: {
               >
                 <Icon name="square-arrow-top-right" size="small" />
               </a>
+              <Show when={props.onToggleLive}>
+                <span class="iris-ui-seg" role="group" aria-label="Show">
+                  <button type="button" aria-pressed={!props.live} onClick={() => props.live && props.onToggleLive?.()}>
+                    Draft
+                  </button>
+                  <button type="button" aria-pressed={!!props.live} onClick={() => !props.live && props.onToggleLive?.()}>
+                    Live
+                  </button>
+                </span>
+              </Show>
             </span>
           )}
         </Show>
@@ -414,11 +414,11 @@ export function IrisArtifactPublish(props: {
           fallback={<span class="iris-publish__muted">{props.meta.kind} can't be published yet</span>}
         >
           <Show when={!props.meta.published}>
-            <button type="button" class="iris-card__linkbtn" onClick={() => openModal("private")}>
+            <button type="button" class="iris-ui-btn" onClick={() => openModal("private")}>
               Save to Genesis
             </button>
           </Show>
-          <button type="button" class="iris-card__linkbtn iris-card__linkbtn--primary" onClick={() => openModal()}>
+          <button type="button" class="iris-ui-btn" data-primary onClick={() => openModal()}>
             {state().label}
           </button>
         </Show>
