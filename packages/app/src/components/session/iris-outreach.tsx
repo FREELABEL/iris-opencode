@@ -6,6 +6,7 @@ import type { Fetch } from "./iris-leads"
 import { ConversationDetail } from "./iris-inbox"
 import { channelLabel, markUnread, parseSeen, readableBody, SEEN_KEY, type ConversationsAnswer } from "./iris-inbox-model"
 import { IrisReachrReview } from "./iris-reachr-review"
+import { IrisAudiences, type AudienceIntent } from "./iris-audiences"
 import type { ReviewBatch } from "./iris-reachr-review-model"
 import { setSurfaceCount } from "./iris-surface-store"
 import {
@@ -22,6 +23,7 @@ import {
   segmentQuery,
   strategyOrder,
   todayCount,
+  todayIsClear,
   todayQueue,
   type AudienceAnswer,
   type CampaignRow,
@@ -37,19 +39,55 @@ import {
  * Flat by rule: hairlines, type and spacing — no cards, no filled pills, no decoration. Inbox and
  * Leads are not drawn here; their sub-tabs open those products (session-iris-tab.tsx).
  */
-export type OutreachView = "today" | "campaigns" | "scripts"
+export type OutreachView = "today" | "campaigns" | "scripts" | "audiences"
 
 const get = <T,>(doFetch: Fetch, path: string): Promise<Payload<T>> =>
   doFetch(path)
     .then((r) => r.json())
     .catch((e: unknown) => ({ measured: false, reason: e instanceof Error ? e.message : String(e), data: undefined as T }))
 
-export function IrisOutreach(props: { doFetch: Fetch; view: OutreachView; onOpenLead: (leadId: number) => void }) {
+export function IrisOutreach(props: {
+  doFetch: Fetch
+  view: OutreachView
+  onOpenLead: (leadId: number) => void
+  /** Switch Outreach's sub-view (Today's "Build the next audience" opens Audiences). */
+  onShow?: (view: OutreachView) => void
+  /** Audiences: the panel's board, the boards to pick from, and the engine's event stream. */
+  bloqId?: number
+  boards?: () => { id: number; name: string }[]
+  listen?: (fn: (e: { details?: { type?: string; properties?: any } }) => void) => () => void
+}) {
+  // What a Today button asked Audiences for; held here because the view below remounts.
+  const [intent, setIntent] = createSignal<AudienceIntent>()
+  const build = async (i: AudienceIntent) => {
+    const bloq = props.bloqId ?? props.boards?.()[0]?.id
+    // A fresh draft for "Find people"; "From a post" also starts it on that post.
+    if (bloq)
+      await props
+        .doFetch("/iris/outreach/segments/draft", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ bloq, reset: true, filters: i.post ? [{ key: "source_post", value: i.post }] : [] }),
+        })
+        .catch(() => undefined)
+    setIntent(i)
+    props.onShow?.("audiences")
+  }
   return (
     <div class="iris-ui iris-or" data-slot="iris-outreach" data-view={props.view}>
       <Switch>
         <Match when={props.view === "today"}>
-          <OutreachToday doFetch={props.doFetch} onOpenLead={props.onOpenLead} />
+          <OutreachToday doFetch={props.doFetch} onOpenLead={props.onOpenLead} onBuild={(i) => void build(i)} />
+        </Match>
+        <Match when={props.view === "audiences"}>
+          <IrisAudiences
+            doFetch={props.doFetch}
+            bloqId={props.bloqId}
+            boards={props.boards}
+            listen={props.listen}
+            intent={intent()}
+            onIntentUsed={() => setIntent(undefined)}
+          />
         </Match>
         <Match when={props.view === "campaigns"}>
           <OutreachCampaigns doFetch={props.doFetch} onOpenLead={props.onOpenLead} />
@@ -77,7 +115,7 @@ function Empty(props: { children: any; onRetry?: () => void }) {
 
 // ─── Today ────────────────────────────────────────────────────────────────────
 
-function OutreachToday(props: { doFetch: Fetch; onOpenLead: (id: number) => void }) {
+function OutreachToday(props: { doFetch: Fetch; onOpenLead: (id: number) => void; onBuild: (i: AudienceIntent) => void }) {
   const [comms, { refetch: refetchComms }] = createResource(
     () => props.doFetch("/iris/comms?days=14").then((r) => r.json() as Promise<ConversationsAnswer>).catch((e) => ({ measured: false, reason: String(e) }) as ConversationsAnswer),
   )
@@ -107,7 +145,14 @@ function OutreachToday(props: { doFetch: Fetch; onOpenLead: (id: number) => void
           <div class="iris-or-note" data-tone="warn">{reasons().join(" · ")}</div>
         </Show>
         <Show when={!comms.loading || !batches.loading} fallback={<Empty><Spinner class="iris-ui-spin" /></Empty>}>
-          <Show when={queue().length} fallback={<Empty onRetry={refresh}>Nothing waiting. Replies that need an answer and drafts in review land here.</Empty>}>
+          <Show
+            when={queue().length}
+            fallback={
+              <Show when={todayIsClear(convs(), bs())} fallback={<Empty onRetry={refresh}>Nothing waiting. Replies that need an answer and drafts in review land here.</Empty>}>
+                <BuildAudience onBuild={props.onBuild} />
+              </Show>
+            }
+          >
             <div class="iris-or-sect">
               <span>Replies</span>
               <span class="n">{replies().length}</span>
@@ -160,6 +205,41 @@ function OutreachToday(props: { doFetch: Fetch; onOpenLead: (id: number) => void
           )}
         </Show>
       </div>
+    </div>
+  )
+}
+
+/** Today with nothing waiting (#193533): one line, then the three ways to start the next audience. */
+function BuildAudience(props: { onBuild: (i: AudienceIntent) => void }) {
+  const [post, setPost] = createSignal<string>()
+  return (
+    <div class="iris-or-clear" data-slot="or-today-clear">
+      <p>You're clear. Build the next audience:</p>
+      <div class="iris-or-clear-actions">
+        <button type="button" class="iris-ui-btn" data-slot="or-find-people" onClick={() => props.onBuild({ mode: "find" })}>
+          Find people
+        </button>
+        <button type="button" class="iris-ui-btn" data-slot="or-from-post" aria-expanded={post() !== undefined} onClick={() => setPost(post() === undefined ? "" : undefined)}>
+          From a post
+        </button>
+        <button type="button" class="iris-ui-btn" data-slot="or-from-site" onClick={() => props.onBuild({ mode: "site" })}>
+          From a list/site
+        </button>
+      </div>
+      <Show when={post() !== undefined}>
+        <form
+          class="iris-or-clear-post"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (post()?.trim()) props.onBuild({ mode: "post", post: post()!.trim() })
+          }}
+        >
+          <input class="iris-or-input" aria-label="Post URL" placeholder="Paste a post URL" value={post() ?? ""} onInput={(e) => setPost(e.currentTarget.value)} />
+          <button type="submit" class="iris-ui-btn" disabled={!post()?.trim()}>
+            Open
+          </button>
+        </form>
+      </Show>
     </div>
   )
 }

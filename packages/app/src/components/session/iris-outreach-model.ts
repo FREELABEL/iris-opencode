@@ -293,3 +293,11 @@ export function todayCount(conversations: Conversation[] | undefined, batches: R
 /** Said when the account has no campaigns. Generic: any account, any board. */
 export const NO_CAMPAIGNS =
   "No SOM campaigns on this account yet. Create one with `iris som campaign create` (a name, a board, a strategy and the Instagram account it sends from), then it shows here."
+
+/**
+ * Today's "You're clear" state (#193533): only when BOTH reads answered and there are no replies
+ * waiting and nothing in review. A failed read is not a clear day — it shows its reason instead.
+ */
+export function todayIsClear(conversations: Conversation[] | undefined, batches: ReviewBatch[] | undefined): boolean {
+  return !!conversations && !!batches && todayCount(conversations, batches) === 0
+}
