@@ -7,6 +7,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight, writeJson } from "./iris-api"
 import { SomCampaignCommand } from "./platform-som-campaign"
 import { pullSessions, pushSessions } from "./platform-som-sessions"
+import { formatServerLedger, serverLedgerPath, type ServerLedgerSummary } from "./som-send-ledger"
 import * as fs from "fs"
 import * as os from "os"
 import * as pathNode from "path"
@@ -409,6 +410,7 @@ const SomHelpCommand = cmd({
     console.log("  iris som ledger courses             One campaign")
     console.log("  iris som ledger --retryable          Only retryable failures")
     console.log("  iris som ledger --date 2026-05-16    Specific date")
+    console.log("  iris som ledger --server [campaign]  Server ledger: every machine, sent today vs cap, replies")
     console.log("  iris som retry courses               Show retryable leads + retry command")
     console.log("  iris som debug courses 21995         Print debug command for one lead")
     console.log("")
@@ -667,17 +669,25 @@ const LEDGER_DIR = pathNode.join(os.homedir(), ".iris", "som-ledger")
 
 const SomLedgerCommand = cmd({
   command: "ledger [campaign]",
-  describe: "view per-lead outreach results from today's ledger",
+  describe: "view per-lead outreach results from today's ledger (local file, or --server)",
   builder: (yargs) =>
     yargs
       .positional("campaign", { describe: "campaign name (omit for all)", type: "string" })
+      .option("server", { describe: "read the server ledger: every machine's sends, today per account vs the cap, replies (#193485)", type: "boolean" })
+      .option("bloq", { describe: "with --server: board id (default: the campaign's board, else your own reported sends)", type: "number" })
+      .option("since", { describe: "with --server: totals since this date/time (ISO)", type: "string" })
       .option("date", { describe: "date (YYYY-MM-DD, default today)", type: "string" })
       .option("retryable", { describe: "show only retryable failures", type: "boolean" })
       .option("failures", { describe: "show only failures", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
+    if (args.server) {
+      await showServerLedger(args)
+      return
+    }
     const date = (args.date as string) || new Date().toISOString().slice(0, 10)
     const campaign = args.campaign as string | undefined
+    if (!args.json) console.log(dim(`Showing: LOCAL ledger on this machine (${LEDGER_DIR}). Add --server for every machine's sends.`))
 
     // Find matching ledger files
     let files: string[] = []
@@ -749,6 +759,39 @@ const SomLedgerCommand = cmd({
     console.log("")
   },
 })
+
+// #193485: the server's view. A registry campaign name resolves to its board and strategy (the
+// strategy name is what the sender reports as `campaign`); anything else is taken as that name.
+async function showServerLedger(args: any) {
+  if (!(await requireAuth())) return
+  const name = args.campaign as string | undefined
+  let bloq: number | undefined = args.bloq as number | undefined
+  let campaign = name
+  if (name) {
+    const entry = (await loadCampaigns())[name]
+    if (entry) {
+      bloq = bloq ?? entry.board
+      campaign = entry.strategy || name
+    }
+  }
+  const resp = await irisFetch(serverLedgerPath({ bloq, campaign, since: args.since as string | undefined }), {}, RAICHU)
+  if (!resp.ok) {
+    if (resp.status === 404 && !bloq) {
+      console.log(dim("The server ledger is not available yet (fl-api without /som/send-events). Showing nothing; run without --server for the local ledger."))
+      return
+    }
+    await handleApiError(resp, "Read server ledger")
+    return
+  }
+  const body = (await resp.json()) as { data: ServerLedgerSummary }
+  if (args.json) {
+    await writeJson(body.data)
+    return
+  }
+  console.log("")
+  for (const line of formatServerLedger(body.data)) console.log(line)
+  console.log("")
+}
 
 const RETRYABLE_SET = new Set([
   "no_dm_input", "no_ig_button", "no_send_message", "panel_failed",
