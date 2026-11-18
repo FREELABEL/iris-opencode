@@ -91,10 +91,15 @@ export function IrisScopeChip() {
  * type-ahead instead of the search. Put focus in the search instead.
  */
 export function focusPinSearch(e: Event) {
-  const el = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>(".iris-pinsearch__input")
+  // The event's target is not always the menu element, so look in the open menu itself.
+  const el =
+    (e.currentTarget as HTMLElement | null)?.querySelector?.<HTMLInputElement>(".iris-pinsearch__input") ??
+    document.querySelector<HTMLInputElement>("[data-menu-content] .iris-pinsearch__input, .iris-pinsearch__input")
   if (!el) return
   e.preventDefault()
   el.focus()
+  // Some opens restore focus to the trigger after this runs; take it back once.
+  requestAnimationFrame(() => document.activeElement !== el && el.isConnected && el.focus())
 }
 
 export function IrisPinItems(props: { onOpen: (id: string) => void }) {
