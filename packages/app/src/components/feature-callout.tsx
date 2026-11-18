@@ -62,7 +62,9 @@ export function FeatureCallouts(props: { callouts?: Callout[] }) {
     const next = pickCallout({
       callouts: props.callouts ?? CALLOUTS,
       seen: store.seen,
-      version: platform.version,
+      // A dev build reports the branch label (1.18.23), not a release number, so the
+      // version gate would hide everything; releases stamp the real number (release-desktop.yml).
+      version: import.meta.env.DEV ? undefined : platform.version,
       now: new Date(),
       onScreen: (t) => onScreen(find(t)),
     })

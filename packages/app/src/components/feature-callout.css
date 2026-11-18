@@ -2,7 +2,9 @@
    Colours come from theme tokens, so light and dark follow the app. */
 .iris-callout {
   --iris-callout-bg: var(--border-interactive-focus, #034cff);
-  --iris-callout-fg: var(--text-on-interactive-base, #fcfcfc);
+  /* Fixed, not a token: the card is a strong blue in both themes, and the light theme's
+     "on interactive" text came out dark on it (seen in the light-mode screenshot). */
+  --iris-callout-fg: #ffffff;
   position: fixed;
   z-index: 60;
   width: min(340px, calc(100vw - 24px));
