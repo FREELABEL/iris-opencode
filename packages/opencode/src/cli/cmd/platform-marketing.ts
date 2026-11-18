@@ -3,7 +3,6 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { FL_API, IRIS_API, irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson, emitJsonError } from "./iris-api"
 import { resolveBloqId } from "./platform-bloqs"
-import { pageOrigin } from "./page-ref"
 import {
   applyPinOp,
   boardMeta,
@@ -16,6 +15,7 @@ import {
   KINDS,
   landingContent,
   needsSignIn,
+  pageUrl,
   parsePins,
   PIN_SLUG,
   refusalWords,
@@ -47,7 +47,6 @@ import {
 
 const JSON_OPTION = { describe: "machine-readable output", type: "boolean", default: false } as const
 const PINS_PATH = "/api/v1/me/settings/marketing.pins"
-const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? pageOrigin()
 
 /** The seams a test replaces. */
 export const marketingDeps = {
@@ -337,7 +336,7 @@ async function makeNamed(kind: "landing" | "brand", board: number, name: string)
   const d = j?.data ?? j
   if (kind === "landing") {
     if (typeof d?.slug !== "string") return { ok: false, reason: "IRIS answered, but not with a page. Check `iris pages list` before trying again." }
-    return { ok: true, slug: d.slug, id: Number(d.id) || undefined, name: String(d.title ?? name), url: `${PAGE_ORIGIN}/p/${d.slug}` }
+    return { ok: true, slug: d.slug, id: Number(d.id) || undefined, name: String(d.title ?? name), url: pageUrl(d.slug) }
   }
   if (!Number.isFinite(Number(d?.id))) return { ok: false, reason: "IRIS answered, but not with a brand. Check `iris brand list` before trying again." }
   return { ok: true, id: Number(d.id), slug: String(d.slug ?? base), name: String(d.name ?? name) }
@@ -429,7 +428,7 @@ const OpenCommand = cmd({
       return fail(json, why), end(json)
     }
     // Built from the slug asked for, never from the server's answer — the link only ever opens that page.
-    const url = `${PAGE_ORIGIN}/p/${encodeURIComponent(s)}#atlas_code=${code}`
+    const url = `${pageUrl(s)}#atlas_code=${code}`
     if (json) return writeJson({ success: true, url, expires_in: typeof body.expires_in === "number" ? body.expires_in : null })
     console.log(`  ${url}`)
     console.log("")

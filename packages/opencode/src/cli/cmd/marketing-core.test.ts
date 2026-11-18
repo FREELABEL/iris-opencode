@@ -163,3 +163,25 @@ describe("boards from the platform", () => {
     expect(await readBoards()).toEqual({ ok: true, boards: [{ id: 905, name: "IRIS Drives", role: "owner", lists: 0 }] })
   })
 })
+
+import { pageUrl } from "./marketing-core"
+
+describe("page addresses (#188508)", () => {
+  test("IRIS never sends people to freelabel.net: pages are on heyiris.io", () => {
+    const keep = { origin: process.env.IRIS_PAGE_ORIGIN, env: process.env.IRIS_ENV }
+    delete process.env.IRIS_PAGE_ORIGIN
+    delete process.env.IRIS_ENV
+    try {
+      expect(pageUrl("spring-launch")).toBe("https://heyiris.io/p/spring-launch")
+      expect(pageUrl(" Spring Launch ")).toBe("https://heyiris.io/p/Spring%20Launch")
+      expect(pageUrl("spring-launch")).not.toContain("freelabel.net")
+      process.env.IRIS_PAGE_ORIGIN = "https://pages.example.com"
+      expect(pageUrl("x")).toBe("https://pages.example.com/p/x")
+    } finally {
+      if (keep.origin === undefined) delete process.env.IRIS_PAGE_ORIGIN
+      else process.env.IRIS_PAGE_ORIGIN = keep.origin
+      if (keep.env === undefined) delete process.env.IRIS_ENV
+      else process.env.IRIS_ENV = keep.env
+    }
+  })
+})
