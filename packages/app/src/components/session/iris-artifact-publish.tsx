@@ -71,6 +71,23 @@ export function IrisArtifactPublish(props: {
   const [slug, setSlug] = createSignal("")
   const [scope, setScope] = createSignal<Visibility | undefined>()
   const [auth, setAuth] = createSignal(false)
+  // Who may get a sign-in code (#193846). Loaded from the page itself, because a list set by the
+  // CLI or by hand is the one in force; `dirty` = the person changed it here, and only then is it
+  // sent — untouched, the engine keeps whatever the page has.
+  const [allow, setAllow] = createSignal<string[]>([])
+  const [allowText, setAllowText] = createSignal("")
+  const [allowState, setAllowState] = createSignal<"none" | "loading" | "known" | "unknown">("none")
+  const [allowDirty, setAllowDirty] = createSignal(false)
+  const [allowBad, setAllowBad] = createSignal<string[]>([])
+  const addAllowed = () => {
+    const parts = allowText().split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)
+    const ok = parts.filter(isSignInEntry).map((x) => (x.includes("@") && !x.startsWith("@") ? x : `@${x.replace(/^@/, "")}`))
+    setAllowBad(parts.filter((x) => !isSignInEntry(x)))
+    if (!ok.length) return
+    setAllow((cur) => [...new Set([...cur, ...ok])])
+    setAllowText("")
+    setAllowDirty(true)
+  }
   const [board, setBoard] = createSignal<number | undefined>()
   const [picking, setPicking] = createSignal(false)
   const [filter, setFilter] = createSignal("")
@@ -129,6 +146,12 @@ export function IrisArtifactPublish(props: {
           requiresAuth: auth(),
           bloq: dest,
           html: props.meta.kind === "markdown" ? markdownDocument(renderMarkdown(props.content)) : undefined,
+          gate: allowDirty()
+            ? {
+                allowedEmails: allow().filter((x) => !x.startsWith("@")),
+                allowedDomains: allow().filter((x) => x.startsWith("@")).map((x) => x.slice(1)),
+              }
+            : undefined,
         }),
       })
       const out = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string; published?: { url: string } }
@@ -156,6 +179,23 @@ export function IrisArtifactPublish(props: {
     // the user pressed "Save to Genesis", which is the Private choice by name.
     setScope(preset ?? p?.visibility)
     setAuth(p?.requiresAuth ?? false)
+    setAllow([])
+    setAllowText("")
+    setAllowBad([])
+    setAllowDirty(false)
+    setAllowState(p ? "loading" : "none")
+    if (p)
+      void props
+        .doFetch(
+          `/iris/artifacts/${encodeURIComponent(props.meta.id)}/gate?session=${encodeURIComponent(props.sessionId)}${props.project ? `&project=${encodeURIComponent(props.project)}` : ""}`,
+        )
+        .then((r) => r.json())
+        .then((g: { known?: boolean; allowedEmails?: string[]; allowedDomains?: string[] }) => {
+          if (allowDirty()) return
+          setAllow([...(g.allowedEmails ?? []), ...(g.allowedDomains ?? []).map((d) => `@${d}`)])
+          setAllowState(g.known ? "known" : "unknown")
+        })
+        .catch(() => setAllowState("unknown"))
     // Pre-filled with the project chosen in the IRIS panel (#193407) — read NOW, at the press, not
     // when this component mounted — so the common case is one glance and a confirm. Only with
     // nothing chosen does it fall back to the panel's default board; with neither, the picker
@@ -315,6 +355,71 @@ export function IrisArtifactPublish(props: {
                     <span class="iris-pubm__scopehint"> — visitors get an email code</span>
                   </span>
                 </label>
+                {/* Who can sign in (#193846). Without this, "Require sign-in" turned on a door
+                    whose list nobody could see, and people were refused with "not authorized
+                    for this workspace". The words below are fl-api's actual rule
+                    (GateDomainPolicy), not a guess. */}
+                <Show when={auth()}>
+                  <div class="iris-pubm__who" data-testid="artifact-signin-list">
+                    <span class="iris-pubm__wholbl">
+                      <span class="iris-pubm__tone" data-tone="info">
+                        <Icon name="shield" size="small" />
+                      </span>
+                      Who can sign in
+                    </span>
+                    <Show when={allow().length > 0}>
+                      <div class="iris-pubm__chips">
+                        <For each={allow()}>
+                          {(entry) => (
+                            <span class="iris-ui-chip" data-tone="info">
+                              <Icon name={entry.startsWith("@") ? "globe" : "at"} size="small" />
+                              {entry}
+                              <button
+                                type="button"
+                                class="iris-pubm__chipx"
+                                aria-label={`Remove ${entry}`}
+                                onClick={() => {
+                                  setAllow((cur) => cur.filter((x) => x !== entry))
+                                  setAllowDirty(true)
+                                }}
+                              >
+                                <Icon name="close-small" size="small" />
+                              </button>
+                            </span>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    <div class="iris-pubm__whoadd">
+                      <input
+                        type="text"
+                        placeholder="name@firm.com or @firm.com"
+                        aria-label="Add an email or @domain"
+                        value={allowText()}
+                        onInput={(e) => setAllowText(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return
+                          e.preventDefault()
+                          addAllowed()
+                        }}
+                      />
+                      <button type="button" class="iris-ui-btn" disabled={!allowText().trim()} onClick={addAllowed}>
+                        Add
+                      </button>
+                    </div>
+                    <Show when={allowBad().length > 0}>
+                      <p class="iris-pubm__error" role="alert">
+                        Not an email or a domain: {allowBad().join(", ")}
+                      </p>
+                    </Show>
+                    <p class="iris-pubm__whosum" data-tone={signInTone(allow(), allowState())}>
+                      <span class="iris-pubm__tone">
+                        <Icon name={signInTone(allow(), allowState()) === "good" ? "circle-check" : signInTone(allow(), allowState()) === "warn" ? "warning" : "clock"} size="small" />
+                      </span>
+                      <span>{signInSummary(allow(), allowState(), boardName() ?? "")}</span>
+                    </p>
+                  </div>
+                </Show>
               </section>
             </div>
 
@@ -433,4 +538,31 @@ export function IrisArtifactPublish(props: {
       </Show>
     </div>
   )
+}
+
+/** Green when a list limits who gets in; amber when it's empty (anyone with the code) or unread. */
+export function signInTone(list: string[], state: "none" | "loading" | "known" | "unknown") {
+  if (state === "loading") return "idle"
+  return list.length > 0 ? "good" : "warn"
+}
+
+/** An address, or a domain with or without its leading @. */
+function isSignInEntry(x: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) || /^@?[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(x)
+}
+
+/**
+ * What the list MEANS at the door, in words (fl-api GateDomainPolicy). Board members always get a
+ * code. A list admits its addresses and domains. An empty list admits anyone who can receive a
+ * code, except on a board marked sensitive or PHI, where only members (and people given a role)
+ * get in — the empty case is said out loud because a quiet blank is how gates leaked before.
+ */
+export function signInSummary(list: string[], state: "none" | "loading" | "known" | "unknown", board: string) {
+  if (state === "loading") return "Reading this page's current list…"
+  if (state === "unknown" && list.length === 0)
+    return "Couldn't read this page's current list. It stays as it is unless you add someone here."
+  const members = board ? `Members of ${board}` : "Board members"
+  if (list.length === 0)
+    return `${members}, and anyone who can receive the code — unless the board is marked sensitive. Add an email or @domain to limit it.`
+  return `${members}, plus ${list.length === 1 ? "this entry" : `these ${list.length}`}. Anyone else is told they aren't authorized.`
 }

@@ -33,7 +33,15 @@ export type PublishInput = {
   bloqId?: number
   /** For markdown artifacts: the rendered page, from the panel (the engine has no markdown lib). */
   html?: string
+  /**
+   * Who may get a sign-in code (#193846): exact addresses and whole domains, stored as the page's
+   * json_content.gate the way fl-api reads it (GateShape / SiteGate). Omitted = keep the page's
+   * current list, whatever set it — the CLI, an agent, or a person by hand.
+   */
+  gate?: SignInList
 }
+
+export type SignInList = { allowedEmails: string[]; allowedDomains: string[] }
 
 export type PublishResult = {
   ok: boolean
@@ -110,11 +118,60 @@ function apiReason(j: any, status: number): string {
   return [`Genesis ${status}`, j?.message, errors].filter(Boolean).join(": ")
 }
 
+/**
+ * Entries a person typed, split into the two lists the gate stores. An address is an email;
+ * "@x.com", "x.com" and "https://x.com" are the domain x.com. Anything else is returned in `bad`
+ * so the caller can refuse it out loud — fl-api refuses the whole gate (422) for one bad entry.
+ */
+export function splitSignInEntries(entries: string[]) {
+  const clean = entries.map((e) => e.trim().toLowerCase()).filter(Boolean)
+  const email = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
+  const domain = (e: string) => e.replace(/^https?:\/\//, "").replace(/^@/, "").replace(/\/.*$/, "")
+  const isDomain = (e: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(domain(e))
+  return {
+    allowedEmails: [...new Set(clean.filter(email))],
+    allowedDomains: [...new Set(clean.filter((e) => !email(e) && isDomain(e)).map(domain))],
+    bad: clean.filter((e) => !email(e) && !isDomain(e)),
+  }
+}
+
+/**
+ * The page's current sign-in list, as stored. `known: false` when the page can't be read or its
+ * gate is stored in a shape this can't trust (fl-api #270 repairs those on the next save).
+ */
+export async function readPageGate(pageId: number) {
+  const res = await irisFetch(`/api/v1/pages/${pageId}`, FL_API).catch(() => null)
+  if (!res?.ok) return { known: false, allowedEmails: [], allowedDomains: [], requireOtp: false }
+  const j = (await res.json().catch(() => ({}))) as any
+  const content = typeof (j?.data ?? j)?.json_content === "string" ? safeJson((j?.data ?? j).json_content) : (j?.data ?? j)?.json_content
+  const gate = content?.gate
+  if (gate !== undefined && (typeof gate !== "object" || gate === null))
+    return { known: false, allowedEmails: [], allowedDomains: [], requireOtp: !!content?.requireOtp }
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [])
+  return {
+    known: true,
+    allowedEmails: list(gate?.allowedEmails),
+    allowedDomains: list(gate?.allowedDomains),
+    requireOtp: !!content?.requireOtp,
+    gate: (gate ?? undefined) as Record<string, unknown> | undefined,
+  }
+}
+
+function safeJson(s: string) {
+  try {
+    return JSON.parse(s)
+  } catch {
+    return undefined
+  }
+}
+
 export async function publishArtifact(input: PublishInput): Promise<PublishResult> {
   if (!["public", "unlisted", "private"].includes(input.visibility)) return { ok: false, reason: "choose a scope" }
   if (!validSlug(input.slug)) return { ok: false, reason: "the address can use lowercase letters, numbers and hyphens" }
   const art = Artifacts.read(input.rootDir, input.session, input.id)
   if (!art) return { ok: false, reason: `no artifact ${input.id} in this session` }
+  const typed = input.gate ? splitSignInEntries([...input.gate.allowedEmails, ...input.gate.allowedDomains]) : undefined
+  if (typed?.bad.length) return { ok: false, reason: `not an email or a domain: ${typed.bad.join(", ")}` }
   if (art.truncated) return { ok: false, reason: "this artifact is over 2 MB — too large to publish as a page" }
 
   let source: string
@@ -133,6 +190,16 @@ export async function publishArtifact(input: PublishInput): Promise<PublishResul
   if (!owner) return { ok: false, reason: "not signed in to IRIS — run `iris auth login`" }
 
   const prior = art.meta.published
+  // Republishing used to PUT a fresh json_content, which silently dropped the page's sign-in
+  // list — so a list set by the CLI or by hand (Pathways, #192655) vanished on the next publish
+  // from Desktop. Read what is there and keep every gate key; replace only the lists given.
+  const existing = prior?.pageId ? await readPageGate(prior.pageId) : undefined
+  if (existing && !existing.known && !typed)
+    return { ok: false, reason: "couldn't read this page's sign-in list, so it wasn't overwritten — try again" }
+  const gate = typed
+    ? { ...(existing?.gate ?? {}), allowedEmails: typed.allowedEmails, allowedDomains: typed.allowedDomains }
+    : existing?.gate
+  if (gate) Object.assign(content.json_content, { gate })
   const common = {
     title,
     seo_title: title,

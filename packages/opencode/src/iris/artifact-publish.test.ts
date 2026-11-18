@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
 import { Artifacts } from "./artifacts"
-import { htmlToPageContent, pageUrl, publishArtifact, slugify, validSlug } from "./artifact-publish"
+import { htmlToPageContent, pageUrl, publishArtifact, slugify, splitSignInEntries, validSlug } from "./artifact-publish"
 
 // Artifact → page (→ site). One page per artifact, the scope asked every time.
 
@@ -103,6 +103,7 @@ describe("publishArtifact", () => {
     expect(Artifacts.read(r, S, a.id)!.meta.published!.revision).toBe(1) // the page is behind
     calls = []
     replies.push(
+      () => json(200, { data: { id: 901, json_content: { requireOtp: false } } }),
       () => json(200, { data: { id: 901, slug: "all-hallows" } }),
       () => json(200, {}),
     )
@@ -116,7 +117,8 @@ describe("publishArtifact", () => {
     })
     expect(again.ok).toBe(true)
     const methods = calls.filter((c) => !c.url.includes("purge")).map((c) => `${c.method} ${new URL(c.url).pathname}`)
-    expect(methods).toEqual(["PUT /api/v1/pages/901", "POST /api/v1/pages/901/publish"])
+    // Read first, so the page's own sign-in list survives the PUT (#193846).
+    expect(methods).toEqual(["GET /api/v1/pages/901", "PUT /api/v1/pages/901", "POST /api/v1/pages/901/publish"])
     expect(Artifacts.read(r, S, a.id)!.meta.published!.revision).toBe(2)
   })
 
@@ -167,6 +169,76 @@ describe("publishArtifact", () => {
       ).reason,
     ).toContain("csv")
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe("who can sign in (#193846)", () => {
+  async function publishedOnce() {
+    const r = root()
+    const a = Artifacts.write(r, { session: S, title: "Queue", kind: "html", content: PAGE })
+    replies.push(() => json(201, { data: { id: 902, slug: "queue" } }))
+    await publishArtifact({ rootDir: r, session: S, id: a.id, slug: "queue", visibility: "unlisted", requiresAuth: true })
+    calls = []
+    return { r, id: a.id }
+  }
+  const put = () => calls.find((c) => c.method === "PUT")!.body
+
+  test("republishing keeps a list someone set outside Desktop — the Pathways lockout", async () => {
+    const { r, id } = await publishedOnce()
+    const handSet = { allowedDomains: ["pathwaysinjuryconsultants.com"], allowedEmails: ["kmontero@x.com"], type: "restricted" }
+    replies.push(
+      () => json(200, { data: { id: 902, json_content: { requireOtp: true, gate: handSet } } }),
+      () => json(200, { data: { id: 902, slug: "queue" } }),
+      () => json(200, {}),
+    )
+    const out = await publishArtifact({ rootDir: r, session: S, id, slug: "queue", visibility: "unlisted", requiresAuth: true })
+    expect(out.ok).toBe(true)
+    expect(put().json_content.gate).toEqual(handSet)
+  })
+
+  test("a list from the dialog replaces only the two lists; other gate settings stay", async () => {
+    const { r, id } = await publishedOnce()
+    replies.push(
+      () => json(200, { data: { id: 902, json_content: { gate: { allowedDomains: ["old.com"], type: "open_workspace" } } } }),
+      () => json(200, { data: { id: 902, slug: "queue" } }),
+      () => json(200, {}),
+    )
+    await publishArtifact({
+      rootDir: r, session: S, id, slug: "queue", visibility: "unlisted", requiresAuth: true,
+      gate: { allowedEmails: ["Robyn@Vanguardhcs.com"], allowedDomains: ["@pathwaysinjuryconsultants.com"] },
+    })
+    expect(put().json_content.gate).toEqual({
+      type: "open_workspace",
+      allowedEmails: ["robyn@vanguardhcs.com"],
+      allowedDomains: ["pathwaysinjuryconsultants.com"],
+    })
+  })
+
+  test("a page whose list can't be read is not overwritten blind", async () => {
+    const { r, id } = await publishedOnce()
+    replies.push(() => json(500, {}))
+    const out = await publishArtifact({ rootDir: r, session: S, id, slug: "queue", visibility: "unlisted", requiresAuth: true })
+    expect(out.ok).toBe(false)
+    expect(out.reason).toContain("sign-in list")
+    expect(calls.some((c) => c.method === "PUT")).toBe(false)
+  })
+
+  test("one bad entry refuses the publish before any network call", async () => {
+    const { r, id } = await publishedOnce()
+    const out = await publishArtifact({
+      rootDir: r, session: S, id, slug: "queue", visibility: "unlisted", requiresAuth: true,
+      gate: { allowedEmails: ["kristen"], allowedDomains: [] },
+    })
+    expect(out).toMatchObject({ ok: false, reason: "not an email or a domain: kristen" })
+    expect(calls).toEqual([])
+  })
+
+  test("entries sort into addresses and domains", () => {
+    expect(splitSignInEntries([" A@B.com ", "@x.org", "https://y.io/path", "z.co", "nope", "a@b.com"])).toEqual({
+      allowedEmails: ["a@b.com"],
+      allowedDomains: ["x.org", "y.io", "z.co"],
+      bad: ["nope"],
+    })
   })
 })
 

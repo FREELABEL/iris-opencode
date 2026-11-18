@@ -2115,6 +2115,7 @@ export const IrisPaths = {
   artifacts: `${root}/artifacts`,
   artifactDoc: `${root}/artifacts/:artifactID`,
   artifactPublish: `${root}/artifacts/:artifactID/publish`,
+  artifactGate: `${root}/artifacts/:artifactID/gate`,
   playbookInstall: `${root}/playbooks/install`,
   bugReport: `${root}/bug-report`,
   catalog: `${root}/catalog`,
@@ -4161,6 +4162,25 @@ export const IrisApi = HttpApi.make("iris").add(
           description: "Posts one of the app-side onboarding steps (or the crash screen, app.crash_screen) to the desktop funnel with this machine's install id. Unknown names are ignored.",
         }),
       ),
+      HttpApiEndpoint.get("artifactGate", IrisPaths.artifactGate, {
+        params: { artifactID: Schema.String },
+        query: ArtifactQuery,
+        success: described(
+          Schema.Struct({
+            published: described(Schema.Boolean, "False when this artifact has no page yet: there is no list to read."),
+            known: described(Schema.Boolean, "False when the page or its gate could not be read; the dialog must not show an empty list as fact."),
+            allowedEmails: Schema.Array(Schema.String),
+            allowedDomains: Schema.Array(Schema.String),
+          }).annotate({ identifier: "IrisArtifactGate" }),
+          "Who may get a sign-in code for this artifact's page",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.artifactGate",
+          summary: "Read the sign-in list of an artifact's page",
+          description: "The page's json_content.gate lists as stored (#193846), so Publish shows the list that is really in force before anyone changes it.",
+        }),
+      ),
       HttpApiEndpoint.post("artifactPublish", IrisPaths.artifactPublish, {
         params: { artifactID: Schema.String },
         payload: Schema.Struct({
@@ -4176,6 +4196,12 @@ export const IrisApi = HttpApi.make("iris").add(
           html: described(
             Schema.optional(Schema.String),
             "Markdown artifacts only: the page as the panel rendered it.",
+          ),
+          gate: described(
+            Schema.optional(
+              Schema.Struct({ allowedEmails: Schema.Array(Schema.String), allowedDomains: Schema.Array(Schema.String) }),
+            ),
+            "Who may get a sign-in code (#193846). Omitted: the page keeps the list it has.",
           ),
         }),
         success: described(
