@@ -95,6 +95,7 @@ import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
 import { IrisCampaignOnboarding } from "./iris-campaign-onboarding"
 import { IrisLexiconAgreements } from "./iris-lexicon-agreements"
+import { IrisDrives } from "./iris-drives"
 import { IrisReachrReview } from "./iris-reachr-review"
 import { IrisOutreach } from "./iris-outreach"
 import { IrisLeadsTab, requestLeadOpen } from "./iris-leads-tab"
@@ -711,6 +712,9 @@ const SURFACES = [
   // Lexicon (#192484, epic #192479) — legal cases' agreements, native. Account-wide: an agreement is
   // filed against a case, not a board.
   { id: "lexicon", label: "Lexicon", path: (_b: number) => `/iris/agreements` },
+  // Drives (#193705) — catalogued drives, folders and sensitive-file findings, from Atlas. Account-wide:
+  // a drive is the person's, not a board's. Built for the panel's 360px — see iris-drives.tsx.
+  { id: "drives", label: "Drives", pane: "drives", path: (_b: number) => `/iris/drives` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
   { id: "integrations", label: "Integrations", path: (b: number) => `/iris/integrations/${b}` },
 ] as const
@@ -742,6 +746,8 @@ const SELF_PANES = new Set([
 // Lexicon › Agreements (#192484) draws and fetches for itself. Kept off the line above so parallel
 // edits to that list do not collide.
 SELF_PANES.add("lexicon-agreements")
+// Drives (#193705) draws and fetches for itself; findings load per drive.
+SELF_PANES.add("drives")
 SELF_PANES.add("genesis-pages")
 // Marketing (#192624): the account's pinned review pages, drawn and stored by the pane itself.
 SELF_PANES.add("marketing-pins")
@@ -1256,6 +1262,7 @@ const PANEL_HINTS: Record<string, string> = {
   "integrations/add": "Connect a new account (Gmail, Slack, …)",
   lexicon: "Lexicon — legal cases: engagement letters, fee agreements and releases out for signature",
   "lexicon/agreements": "Agreements on a case: what is awaiting signature, executed or revoked — raise, issue, revoke",
+  drives: "Drives — catalogued drives, their project folders and sensitive files found by a scan; read from Atlas",
 }
 
 export const IRIS_PANEL_CATALOG: readonly {
@@ -4562,6 +4569,9 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "lexicon-agreements"}>
               <IrisLexiconAgreements doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "drives"}>
+              <IrisDrives doFetch={doFetch} openExternal={(url) => platform.openExternal(url)} />
             </Match>
             <Match when={pane() === "pulse-topic"}>
               <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
