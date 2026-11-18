@@ -1226,12 +1226,13 @@ describe("tool.shell truncation", () => {
             const started = Date.now()
             const result = yield* run({ command: `sleep 1 && echo bg_done_188641`, background: true }, backgroundCtx(said))
             expect(Date.now() - started).toBeLessThan(900)
-            expect(result.metadata.background).toBe(true)
-            const log = String(result.metadata.outputPath)
+            const meta = result.metadata as Record<string, unknown>
+            expect(meta.background).toBe(true)
+            const log = String(meta.outputPath)
             expect(result.output).toContain(log)
 
             const jobs = yield* BackgroundJob.Service
-            const done = yield* jobs.wait({ id: String(result.metadata.jobId), timeout: 10_000 })
+            const done = yield* jobs.wait({ id: String(meta.jobId), timeout: 10_000 })
             expect(done.info?.status).toBe("completed")
             expect(done.info?.output).toContain("bg_done_188641")
             expect(yield* Effect.promise(() => Bun.file(log).text())).toContain("bg_done_188641")
@@ -1252,7 +1253,7 @@ describe("tool.shell truncation", () => {
           Effect.gen(function* () {
             const result = yield* run({ command: `sleep 1 && echo still_here`, background: true }, backgroundCtx([]))
             const jobs = yield* BackgroundJob.Service
-            const done = yield* jobs.wait({ id: String(result.metadata.jobId), timeout: 10_000 })
+            const done = yield* jobs.wait({ id: String((result.metadata as Record<string, unknown>).jobId), timeout: 10_000 })
             expect(done.info?.output).toContain("still_here")
             expect(done.info?.output).not.toContain("exceeding timeout")
           }),
