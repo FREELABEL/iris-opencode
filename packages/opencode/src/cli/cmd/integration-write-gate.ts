@@ -171,3 +171,48 @@ export async function gatedExec(
   const ignored = !!plan && typeof plan === "object" && !plan.dry_run && (plan.success === true || "data" in plan)
   return { kind: "rehearsed", plan: null, ...(ignored ? { server_ignored_dry_run: true } : {}) }
 }
+
+/**
+ * Tools whose SERVER has its own preview (#193000). Each reads an `apply` parameter and writes
+ * nothing unless it is true — checked on fl-iris-api main 2026-11-18: `$apply =
+ * filter_var($p['apply'] ?? false, FILTER_VALIDATE_BOOLEAN)` in all five. For these, the local
+ * rehearsal above showed only the parameters you typed; the server's preview shows what would
+ * actually change (ready / held, old → new). That is the preview Robyn's go flow needs, and
+ * before this fix the only way to get it was `apply=false --apply`, which reads as a write to a
+ * person and to safety tooling.
+ *
+ * Deliberately a short, named list, not a verb rule: a tool goes here only once its server-side
+ * default has been read. Undo/delete tools are not here; they keep the local rehearsal.
+ */
+export const SERVER_PREVIEW_FUNCTIONS: Record<string, readonly string[]> = {
+  "servis-ai": [
+    "move_case_stage",
+    "bulk_update_case_providers",
+    "add_received_payments",
+    "update_payment_notes",
+    "record_reduction",
+  ],
+}
+
+/**
+ * Without --apply, the parameters to send for a server-side preview, or null when the tool has
+ * none. `apply` is FORCED to false: an `"apply": true` left in a params file must not write
+ * without --apply.
+ */
+export function serverPreviewParams(
+  target: string,
+  fn: string,
+  params: Record<string, unknown>,
+  opts: { apply: boolean; forceDryRun?: boolean },
+): Record<string, unknown> | null {
+  if (opts.apply || opts.forceDryRun) return null
+  const list = SERVER_PREVIEW_FUNCTIONS[String(target).toLowerCase()]
+  if (!list || !list.includes(String(fn).toLowerCase())) return null
+  return { ...params, apply: false }
+}
+
+/** A server preview that came back saying it wrote something is an incident, not a result. */
+export function previewWroteSomething(result: any): boolean {
+  const mode = String(result?.mode ?? result?.result?.mode ?? "").toLowerCase()
+  return mode === "applied"
+}

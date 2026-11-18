@@ -12,6 +12,7 @@ import { createCipheriv, createHash, randomBytes, randomUUID } from "crypto"
 import { ENVELOPE_VERSION, generateDek, sealContent, wrapDek } from "../lib/envelope"
 import { tmpdir } from "os"
 import { NoNodeKeyError, decideSeal, e2eMode, nodeKeyFetch, sealedConfigFields, type TargetsOutcome } from "./hive-e2e"
+import { applyNegation } from "./negated-flag"
 
 // ============================================================================
 // iris hive send — send files, text, or links to another Hive node
@@ -321,6 +322,9 @@ export const HiveSendCommand = cmd({
           "end-to-end encryption (on by default when the recipient has a key). --envelope: refuse to send without it. --no-envelope: turn it off",
         type: "boolean",
       })
+      // literal --no-envelope: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-envelope", { type: "boolean", default: false, describe: "same as --envelope=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "envelope"), true)
       .option("tenant", { describe: "tenant slug, for escrow policy resolution", type: "string" })
       .option("class", { describe: "transfer class for escrow policy: phi, financial, general", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),

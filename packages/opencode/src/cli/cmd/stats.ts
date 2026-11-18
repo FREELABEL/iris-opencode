@@ -376,7 +376,8 @@ function buildStatsJson(
     totalSessions: stats.totalSessions,
     totalMessages: stats.totalMessages,
     days: stats.days,
-    cost: { total: cost, perDay: costPerDay },
+    // #185834: total is 0 both when it was free and when nothing was priced; `priced` says which.
+    cost: { total: cost, perDay: costPerDay, priced: !(cost === 0 && tokenCount(stats.totalTokens) > 0) },
     tokens: {
       input: stats.totalTokens.input,
       output: stats.totalTokens.output,
@@ -440,8 +441,9 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
   const cost = isNaN(stats.totalCost) ? 0 : stats.totalCost
   const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
   const tokensPerSession = isNaN(stats.tokensPerSession) ? 0 : stats.tokensPerSession
-  console.log(renderRow("Total Cost", `$${cost.toFixed(2)}`))
-  console.log(renderRow("Avg Cost/Day", `$${costPerDay.toFixed(2)}`))
+  const used = tokenCount(stats.totalTokens)
+  console.log(renderRow("Total Cost", money(cost, used, 2)))
+  console.log(renderRow("Avg Cost/Day", money(costPerDay, used, 2)))
   console.log(renderRow("Avg Tokens/Session", formatNumber(Math.round(tokensPerSession))))
   const medianTokensPerSession = isNaN(stats.medianTokensPerSession) ? 0 : stats.medianTokensPerSession
   console.log(renderRow("Median Tokens/Session", formatNumber(Math.round(medianTokensPerSession))))
@@ -466,7 +468,7 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
       console.log(renderRow("  Messages", usage.messages.toLocaleString()))
       console.log(renderRow("  Input Tokens", formatNumber(usage.tokens.input)))
       console.log(renderRow("  Output Tokens", formatNumber(usage.tokens.output)))
-      console.log(renderRow("  Cost", `$${usage.cost.toFixed(4)}`))
+      console.log(renderRow("  Cost", money(usage.cost, tokenCount(usage.tokens), 4)))
       console.log("├────────────────────────────────────────────────────────┤")
     }
     // Remove last separator and add bottom border
@@ -541,11 +543,12 @@ export function displayAdminStats(stats: SessionStats, period: string = "all", t
   const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
   const costPerSession = stats.totalSessions > 0 ? cost / stats.totalSessions : 0
   
-  console.log(renderRow("Total Cost", `$${cost.toFixed(2)}`))
-  console.log(renderRow("Avg Cost/Day", `$${costPerDay.toFixed(2)}`))
-  console.log(renderRow("Avg Cost/Session", `$${costPerSession.toFixed(4)}`))
-  console.log(renderRow("Est Monthly Cost", `$${(costPerDay * 30).toFixed(2)}`))
-  console.log(renderRow("Est Annual Cost", `$${(costPerDay * 365).toFixed(2)}`))
+  const used = tokenCount(stats.totalTokens)
+  console.log(renderRow("Total Cost", money(cost, used, 2)))
+  console.log(renderRow("Avg Cost/Day", money(costPerDay, used, 2)))
+  console.log(renderRow("Avg Cost/Session", money(costPerSession, used, 4)))
+  console.log(renderRow("Est Monthly Cost", money(costPerDay * 30, used, 2)))
+  console.log(renderRow("Est Annual Cost", money(costPerDay * 365, used, 2)))
   console.log("└────────────────────────────────────────────────────────┘")
   console.log()
 
@@ -582,9 +585,9 @@ export function displayAdminStats(stats: SessionStats, period: string = "all", t
     console.log(renderRow("Daily Average Sessions", Math.round(dailyAvg).toString()))
     console.log(renderRow("Weekly Projected Sessions", Math.round(weeklyTotal).toString()))
     console.log(renderRow("Monthly Projected Sessions", Math.round(monthlyTotal).toString()))
-    console.log(renderRow("Daily Avg Cost", `$${costPerDay.toFixed(2)}`))
-    console.log(renderRow("Weekly Projected Cost", `$${(costPerDay * 7).toFixed(2)}`))
-    console.log(renderRow("Monthly Projected Cost", `$${(costPerDay * 30).toFixed(2)}`))
+    console.log(renderRow("Daily Avg Cost", money(costPerDay, used, 2)))
+    console.log(renderRow("Weekly Projected Cost", money(costPerDay * 7, used, 2)))
+    console.log(renderRow("Monthly Projected Cost", money(costPerDay * 30, used, 2)))
     console.log("└────────────────────────────────────────────────────────┘")
     console.log()
   }
@@ -604,10 +607,11 @@ export function displayAdminStats(stats: SessionStats, period: string = "all", t
         : 0
       
       console.log(`│ ${model.padEnd(54)} │`)
-      console.log(renderRow("  Total Cost", `$${usage.cost.toFixed(4)}`))
+      const modelUsed = tokenCount(usage.tokens)
+      console.log(renderRow("  Total Cost", money(usage.cost, modelUsed, 4)))
       console.log(renderRow("  Messages", usage.messages.toLocaleString()))
       console.log(renderRow("  Avg Tokens/Msg", formatNumber(Math.round(avgTokensPerMessage))))
-      console.log(renderRow("  Cost per Message", `$${(usage.cost / usage.messages).toFixed(6)}`))
+      console.log(renderRow("  Cost per Message", money(usage.messages > 0 ? usage.cost / usage.messages : 0, modelUsed, 6)))
       console.log("├────────────────────────────────────────────────────────┤")
     }
     process.stdout.write("\x1B[1A")
@@ -856,6 +860,29 @@ export async function computeSessionSnapshot(sessionID: string): Promise<Session
     session_created_at: session.time.created ? new Date(session.time.created).toISOString() : null,
     session_updated_at: session.time.updated ? new Date(session.time.updated).toISOString() : null,
   }
+}
+
+/**
+ * #185834 — A COST THAT WAS NEVER PRICED IS NOT $0.00.
+ *
+ * Session cost is tokens times the model's price table. When that table is all zeros (every
+ * model in `iris models iris --verbose`, 2026-09-17) the arithmetic is right and the answer is a
+ * confident "$0.00" under 8.8M input tokens. A missing number gets questioned; "$0.00" gets
+ * believed. Tokens used and nothing priced → "unpriced".
+ */
+export function tokenCount(t: {
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: { read?: number; write?: number }
+}): number {
+  return (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.read || 0) + (t.cache?.write || 0)
+}
+
+export function money(value: number, tokens: number, digits = 2): string {
+  const v = Number.isFinite(value) ? value : 0
+  if (v === 0 && tokens > 0) return "unpriced"
+  return `$${v.toFixed(digits)}`
 }
 
 function formatNumber(num: number): string {

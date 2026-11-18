@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { noteUuid, publicUrl, notFoundHint } from "./page-ref"
+import { noteUuid, publicUrl, notFoundHint, pageOrigin, brandUrl } from "./page-ref"
 
 /**
  * A PUBLISHED NOTE IS NOT A DRAFT PAGE.
@@ -90,5 +90,51 @@ describe("notFoundHint", () => {
   test("an ordinary page keeps the draft diagnosis, which is correct for it", () => {
     const hint = notFoundHint("some-page")
     expect(hint).toContain("iris pages publish some-page")
+  })
+})
+
+/**
+ * NO LINK HANDED TO A PERSON SITS ON THE API HOST (#193704).
+ *
+ * 2026-11-16: `iris pages share` printed https://freelabel.net/s/<token> for a private page — it
+ * has no public_url, so the share code fell back to its own hardcoded freelabel.net. The link
+ * worked, so nothing caught it, and it went to a Pathways client. These pin the fallback and the
+ * rewrite of API-host urls, and keep a client's own domain intact.
+ */
+describe("pageOrigin / brandUrl", () => {
+  test("a private or draft page (no public_url) gets the brand host, not freelabel.net", () => {
+    expect(pageOrigin()).toBe("https://heyiris.io")
+    expect(pageOrigin({ public_url: null })).toBe("https://heyiris.io")
+    expect(pageOrigin({})).toBe("https://heyiris.io")
+  })
+
+  test("a public_url on the API host is moved to the brand host", () => {
+    expect(pageOrigin({ public_url: "https://freelabel.net/p/x" })).toBe("https://heyiris.io")
+    expect(pageOrigin({ public_url: "https://www.freelabel.net/p/x" })).toBe("https://heyiris.io")
+  })
+
+  test("a client's own domain is kept", () => {
+    expect(pageOrigin({ public_url: "https://pathways.example.com/p/x" })).toBe("https://pathways.example.com")
+  })
+
+  test("brandUrl rewrites only the host, keeping the path", () => {
+    expect(brandUrl("https://freelabel.net/s/ABC123")).toBe("https://heyiris.io/s/ABC123")
+    expect(brandUrl("https://heyiris.io/s/ABC123")).toBe("https://heyiris.io/s/ABC123")
+    expect(brandUrl("https://client.example/p/a?b=1#c")).toBe("https://client.example/p/a?b=1#c")
+  })
+
+  test("publicUrl never returns an API-host url, even when the API says so", () => {
+    expect(publicUrl({ public_url: "https://freelabel.net/p/abc", slug: "abc" })).toBe("https://heyiris.io/p/abc")
+  })
+
+  test("IRIS_PUBLIC_URL still overrides the brand host", () => {
+    const prev = process.env.IRIS_PUBLIC_URL
+    process.env.IRIS_PUBLIC_URL = "https://white.label/"
+    try {
+      expect(pageOrigin()).toBe("https://white.label")
+    } finally {
+      if (prev === undefined) delete process.env.IRIS_PUBLIC_URL
+      else process.env.IRIS_PUBLIC_URL = prev
+    }
   })
 })

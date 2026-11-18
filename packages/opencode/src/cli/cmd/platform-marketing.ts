@@ -15,7 +15,6 @@ import {
   KINDS,
   landingContent,
   needsSignIn,
-  PAGE_ORIGIN,
   pageUrl,
   parsePins,
   PIN_SLUG,
@@ -429,7 +428,7 @@ const OpenCommand = cmd({
       return fail(json, why), end(json)
     }
     // Built from the slug asked for, never from the server's answer — the link only ever opens that page.
-    const url = `${PAGE_ORIGIN}/p/${encodeURIComponent(s)}#atlas_code=${code}`
+    const url = `${pageUrl(s)}#atlas_code=${code}`
     if (json) return writeJson({ success: true, url, expires_in: typeof body.expires_in === "number" ? body.expires_in : null })
     console.log(`  ${url}`)
     console.log("")

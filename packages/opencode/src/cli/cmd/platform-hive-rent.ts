@@ -165,6 +165,20 @@ const RentalsCommand = cmd({
   },
 })
 
+/** True when the lease came back already released before this call was made (#193809). */
+export function releasedBefore(l: Pick<Lease, "released_at">, askedAtMs: number): boolean {
+  if (!l.released_at) return false
+  const t = Date.parse(l.released_at)
+  // 5 s of slack for clock skew between this machine and the server.
+  return Number.isFinite(t) && t < askedAtMs - 5000
+}
+
+function releasedAgo(l: Pick<Lease, "released_at" | "created_at">): string {
+  const at = Date.parse(l.released_at!)
+  const held = l.created_at ? Math.max(0, Math.round((at - Date.parse(l.created_at)) / 60000)) : null
+  return `at ${new Date(at).toISOString().replace("T", " ").slice(0, 16)} UTC${held === null ? "" : ` (${held} min after it was rented)`}`
+}
+
 const ReleaseCommand = cmd({
   command: "release <id>",
   describe: "release a rented machine and stop paying for it",
@@ -179,10 +193,16 @@ const ReleaseCommand = cmd({
     if (!userId) process.exit(1)
 
     try {
+      const asked = Date.now()
       const { lease } = await api(`/${argv.id}?user_id=${userId}`, { method: "DELETE" })
-      if (argv.json) return void (await writeJson(lease))
+      const earlier = releasedBefore(lease, asked)
+      if (argv.json) return void (await writeJson({ ...lease, already_released: earlier }))
       console.log()
-      console.log(success(`✓ released ${bold(lease.name)} — it is no longer billing.`))
+      // #193809: the server answers an already-released lease with the lease, not an error. Saying
+      // "it is no longer billing" then reads as "it WAS billing until now" — and sent an operator
+      // hunting for an hour-long leak that was a 3-minute rental released long before.
+      if (earlier) console.log(dim(`· ${bold(lease.name)} was already released ${releasedAgo(lease)} — nothing was billing.`))
+      else console.log(success(`✓ released ${bold(lease.name)} — it is no longer billing.`))
       console.log()
     } catch (e: any) {
       // The server distinguishes "released" from "release failed" precisely so this can too.

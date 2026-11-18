@@ -40,7 +40,7 @@ import { readIntegrationStores, findStatusDisagreements, describeDisagreement, t
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
 import { listEnvelope, listFooter } from "./pagination-args"
-import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount } from "./integration-write-gate"
+import { knownFunction, dryRunResult, gatedExec, previewParams, recipientCount, serverPreviewParams, previewWroteSomething } from "./integration-write-gate"
 import { openBrowser } from "../../util/browser"
 
 // ============================================================================
@@ -2258,7 +2258,13 @@ const ExecCommand = cmd({
             ? ` ${dim(`(${accountOpts.account})`)}`
             : ""
         const fnName = fn
-        const outcome = await gatedExec(fnName, { apply: Boolean(args.apply), forceDryRun: Boolean(args["dry-run"]) }, (dryRun) => {
+        // A tool with its own server preview is previewed THERE, with apply forced false (#193000).
+        const preview = serverPreviewParams(target, fnName, params, { apply: Boolean(args.apply), forceDryRun: Boolean(args["dry-run"]) })
+        if (preview) {
+          params = preview
+          if (!args.json) prompts.log.info(`PREVIEW — run on the server with apply=false. Nothing is written. To write: add ${highlight("apply=true --apply")}`)
+        }
+        const outcome = await gatedExec(fnName, { apply: Boolean(args.apply) || Boolean(preview), forceDryRun: Boolean(args["dry-run"]) }, (dryRun) => {
           if (!dryRun) spinner?.start(`Executing ${target}.${fnName}${accountLabel}…`)
           return executeIntegrationCall(target, fnName, params, { ...accountOpts, dryRun })
         })
@@ -2339,9 +2345,16 @@ const ExecCommand = cmd({
               }
             : cleaned
         }
+        if (preview && previewWroteSomething(outcome.result)) {
+          // Cannot happen with the five listed tools (apply=false is forced), so if it does, say so loudly.
+          process.exitCode = 1
+          const msg = `The server reported mode=applied for a PREVIEW of ${target}.${fn}. Check ${target} before doing anything else.`
+          if (args.json) { await writeJson({ ...(outcome.result ?? {}), preview: true, error: msg }); return }
+          prompts.log.error(msg)
+        }
         if (args.json) {
           const result = withHint(outcome.result)
-          await writeJson(result && typeof result === "object" ? { ...result, client_node: os.hostname() } : result)
+          await writeJson(result && typeof result === "object" ? { ...result, ...(preview ? { preview: true } : {}), client_node: os.hostname() } : result)
           if (isFailedResult(result)) process.exitCode = 1
           return
         }

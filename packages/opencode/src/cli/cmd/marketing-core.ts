@@ -1,3 +1,4 @@
+import { pageOrigin } from "./page-ref"
 // ============================================================================
 // iris marketing — the rules, as pure functions (#193357, follows #193233)
 //
@@ -178,6 +179,11 @@ export function needsSignIn(p: { visibility?: unknown; requires_auth?: unknown; 
   return req === true || (typeof p.visibility === "string" && p.visibility !== "" && p.visibility !== "public")
 }
 
-/** heyiris.io, never freelabel.net (#188508). The same fl-iris-api serves both hosts. */
-export const PAGE_ORIGIN = process.env.IRIS_PAGE_ORIGIN ?? "https://heyiris.io"
-export const pageUrl = (slug: string) => `${PAGE_ORIGIN}/p/${encodeURIComponent(String(slug).trim().toLowerCase())}`
+/**
+ * A page's public address — heyiris.io, never freelabel.net (#188508). The host comes from page-ref's
+ * pageOrigin(), the one place every CLI link takes it from (#193704), so local dev still gets the local
+ * host. IRIS_PAGE_ORIGIN overrides. Read per call, not at import, so the environment is honoured.
+ * The slug is linked as given: `marketing open` must only ever open the page it was asked for.
+ */
+export const pageUrl = (slug: string) =>
+  `${process.env.IRIS_PAGE_ORIGIN ?? pageOrigin()}/p/${encodeURIComponent(String(slug).trim())}`

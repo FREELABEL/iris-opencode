@@ -38,7 +38,7 @@ import { pageBrandLine, parseLinkArg } from "./brand-links"
 // there) lives in its own dependency-free module so it can be unit tested without loading
 // this file's yargs/UI/API graph. Re-exported so call sites elsewhere are unchanged.
 export { noteUuid, publicUrl, notFoundHint } from "./page-ref"
-import { publicUrl, notFoundHint } from "./page-ref"
+import { publicUrl, notFoundHint, pageOrigin, brandUrl } from "./page-ref"
 
 // Pages CRUD routes through iris-api (which proxies to fl-api with service token).
 // The SDK key authenticates against iris-api; fl-api doesn't recognize it directly.
@@ -3932,12 +3932,9 @@ function shareFetch(path: string, options?: RequestInit): Promise<Response> {
   return irisFetch(path, options ?? {}, FL_API)
 }
 
-/** Scheme + host that serves /p/ and /s/ urls. Prefers the host the API itself used. */
+/** Scheme + host for /p/ and /s/ links. One implementation, in page-ref.ts (#193704). */
 function pagesOrigin(page?: { public_url?: string }): string {
-  const m = /^(https?:\/\/[^/]+)/.exec(page?.public_url ?? "")
-  if (m) return m[1]
-  const env = process.env.IRIS_ENV ?? "production"
-  return env === "local" ? "http://local.iris.freelabel.net:9300" : "https://freelabel.net"
+  return pageOrigin(page)
 }
 
 /** The permanent unguessable /p/{uuid} alias (page.public_id), if the API exposes one. */
@@ -3947,7 +3944,7 @@ function uuidUrl(page: any): string | null {
 }
 
 function shareUrlFor(link: ShareLink, page?: any): string {
-  return link.share_url ?? `${pagesOrigin(page)}/s/${link.token}`
+  return link.share_url ? brandUrl(link.share_url) : `${pagesOrigin(page)}/s/${link.token}`
 }
 
 /**
@@ -4523,7 +4520,7 @@ const ShareCmd = cmd({
         prompts.outro("Done")
         return
       }
-      const url = body.share_url ?? shareUrlFor(link, page)
+      const url = body.share_url ? brandUrl(body.share_url) : shareUrlFor(link, page)
       sp.stop(success("Share link created"))
 
       if (args.json) {
