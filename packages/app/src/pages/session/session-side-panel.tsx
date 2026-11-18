@@ -558,6 +558,9 @@ export function SessionSidePanel(props: {
                       >
                         <DragDropSensors />
                         <ConstrainDragYAxis />
+                        {/* TAB STRIP 1 OF 2 (#184891): drawn only WITHOUT `props.fileBrowserState`. The desktop
+                            app draws strip 2 below ("session-review-v2-tabs-bar"). A tab or control added
+                            here alone compiles, passes its tests and never appears — add it to both. */}
                         <Tabs value={stripValue()} onChange={activateTab}>
                           <div class="sticky top-0 shrink-0 flex">
                             <Tabs.List
@@ -811,6 +814,8 @@ export function SessionSidePanel(props: {
                         tabs().move(source.id.toString(), source.index)
                       }}
                     >
+                      {/* TAB STRIP 2 OF 2 (#184891): the one the desktop app draws (with `props.fileBrowserState`).
+                          Strip 1 above is the fallback — add any tab or control to both. */}
                       <Tabs value={stripValue()} onChange={activateTab}>
                         <div class="session-review-v2-tabs-bar sticky top-0 shrink-0 flex items-center">
                           <Tabs.List

@@ -34,12 +34,13 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = {
   // saved layout they land after what the person arranged.
   // Inbox (#192688) is shown, after Leads: replies wait there, with an unread count on the tab.
   // Browser (#193062) is shown, after Marketing: a tab nobody can find is the bug it was filed for.
-  // Terminal (#193785) is shown, after Browser: the chat's terminals, beside it.
+  // Terminal (#193785) sits after Browser, HIDDEN: a shell is not for everyone, and a non-technical
+  // person meeting the side panel is lost already (#186060). Turned on from "+", like Hive and MCP.
   // Outreach (#193487) is shown, before Leads: replies and drafts waiting on you, and the campaigns
   // behind them. New to every saved layout (the old `outreach` id was migrated to Leads by #192544),
   // so it lands here — after whatever the person put before Leads — and shows.
   order: ["atlas", "pages", "agents", "pulse", FILES_ITEM, "outreach", "leads", "inbox", "marketing", "browser", "terminal", "playbooks", "hive", "integrations", "mcp"],
-  hidden: [FILES_ITEM, "playbooks", "hive", "integrations", "mcp"],
+  hidden: [FILES_ITEM, "terminal", "playbooks", "hive", "integrations", "mcp"],
 }
 
 /**

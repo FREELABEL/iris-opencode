@@ -141,7 +141,7 @@ describe("Outreach is a product again (#193487; it was folded into Leads by #192
   test("a saved layout with the old `outreach` id keeps Outreach where it was, shown; Leads stays as the person left it", () => {
     const l = merged(migrateNavLayout(withOutreach))
     // Inbox, Browser and Terminal were never in this layout, so they land after their default neighbours.
-    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "marketing", "browser", "terminal", "inbox"])
+    expect(visibleNavItems(l)).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "marketing", "browser", "inbox"])
     expect(isNavItemVisible(l, "leads")).toBe(false)
     expect(l.order.filter((x) => x === "outreach")).toHaveLength(1)
   })
@@ -158,7 +158,7 @@ describe("Outreach is a product again (#193487; it was folded into Leads by #192
   })
   test("a fresh layout shows Outreach, right before Leads", () => {
     const shown = visibleNavItems(merged(null))
-    expect(shown).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "leads", "inbox", "marketing", "browser", "terminal"])
+    expect(shown).toEqual(["atlas", "pages", "agents", "pulse", "outreach", "leads", "inbox", "marketing", "browser"])
     expect(DEF.hidden).not.toContain("outreach")
   })
   test("a layout migrated by #192544 (no `outreach`, Leads hidden): Outreach lands where the default puts it, shown; Leads stays hidden", () => {
@@ -189,11 +189,13 @@ test("the Browser is shown by default after Marketing, also in a layout saved be
   expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "browser"], hidden: ["browser"] }).hidden).toContain("browser")
 })
 
-test("the Terminal is shown by default after the Browser, also in a layout saved before it existed (#193785)", () => {
-  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).toContain("terminal")
-  const saved: NavLayout = { version: 2, order: ["atlas", "browser", "pages"], hidden: [] }
-  const shown = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, saved))
+test("the Terminal is hidden by default, after the Browser; turned on, it shows there (#193785, #186060)", () => {
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, null))).not.toContain("terminal")
+  // In a layout saved before it existed it stays out of sight too: a new default reaches what was never seen.
+  const old: NavLayout = { version: 2, order: ["atlas", "browser", "pages"], hidden: [] }
+  expect(visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, old))).not.toContain("terminal")
+  // Someone who turned it on keeps it, after the Browser.
+  const on: NavLayout = { version: 2, order: ["atlas", "browser", "terminal", "pages"], hidden: [] }
+  const shown = visibleNavItems(mergeNavLayout(DEFAULT_NAV_LAYOUT, on))
   expect(shown.indexOf("terminal")).toBe(shown.indexOf("browser") + 1)
-  // A person who hid it keeps it hidden.
-  expect(mergeNavLayout(DEFAULT_NAV_LAYOUT, { version: 2, order: ["atlas", "terminal"], hidden: ["terminal"] }).hidden).toContain("terminal")
 })
