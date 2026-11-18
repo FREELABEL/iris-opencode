@@ -7,6 +7,18 @@ import { useTerminal } from "@/context/terminal"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { useIrisPanelScope } from "@/context/iris-panel-scope"
+import { useRequestIrisSurface } from "@/components/session/session-iris-tab"
+
+/**
+ * The tab each side panel showed before Terminal, so moving the terminals under the chat can hand
+ * the panel back to it — not leave half the column saying where the terminals went. Keyed by the
+ * column's panel scope (split view has one per column).
+ */
+const before = new WeakMap<object, string>()
+export function rememberPanelSurface(scope: object, surface: string) {
+  if (surface !== "terminal") before.set(scope, surface)
+}
 
 /**
  * THE SIDE PANEL'S TERMINAL TAB (#193785).
@@ -25,6 +37,12 @@ export function SessionTerminalPane() {
   const language = useLanguage()
   const { view } = useSessionLayout()
   const docked = () => view().terminal.opened()
+  const panelScope = useIrisPanelScope()
+  const requestSurface = useRequestIrisSurface()
+  const moveToDock = () => {
+    view().terminal.open()
+    requestSurface(before.get(panelScope) ?? "atlas")
+  }
   const t = language.t as (key: string, vars?: Record<string, string | number | boolean>) => string
   const [store, setStore] = createStore({ autoCreated: false, recovered: {} as Record<string, boolean> })
 
@@ -115,7 +133,7 @@ export function SessionTerminalPane() {
           <IconButton
             icon="layout-bottom"
             variant="ghost"
-            onClick={() => view().terminal.open()}
+            onClick={moveToDock}
             aria-label="Move under the chat"
             title="Move under the chat"
           />
