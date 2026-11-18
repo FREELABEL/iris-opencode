@@ -101,6 +101,7 @@ import {
   pulseSortKeyAsc,
   measuredAverage,
 } from "./platform-leads-honesty"
+import { applyNegation } from "./negated-flag"
 
 // ============================================================================
 // Sync helpers
@@ -1250,6 +1251,9 @@ const LeadsCreateCommand = cmd({
       .option("product", { describe: "which product they are a prospect for", type: "string", choices: LEAD_PRODUCTS })
       .option("segment", { describe: "segment (e.g. contractors-tx, robotics-founders)", type: "string" })
       .option("name-verified", { describe: "the name is real and complete (--no-name-verified for a partly hidden name)", type: "boolean" })
+      // literal --no-name-verified: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-name-verified", { type: "boolean", default: false, describe: "same as --name-verified=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "name-verified"), true)
       .option("bloq-id", { describe: "board (bloq) this lead belongs to — required; prompted for when interactive", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
@@ -1817,6 +1821,9 @@ const LeadsUpdateCommand = cmd({
       .option("product", { describe: "which product they are a prospect for", type: "string", choices: LEAD_PRODUCTS })
       .option("segment", { describe: "segment (e.g. contractors-tx, robotics-founders)", type: "string" })
       .option("name-verified", { describe: "the name is real and complete (--no-name-verified for a partly hidden name)", type: "boolean" })
+      // literal --no-name-verified: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-name-verified", { type: "boolean", default: false, describe: "same as --name-verified=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "name-verified"), true)
       .option("revenue-type", {
         describe: "revenue type",
         type: "string",

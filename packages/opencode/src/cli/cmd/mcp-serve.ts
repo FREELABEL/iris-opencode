@@ -26,6 +26,7 @@ import { spill } from "./mcp-overflow"
 import { buildAgentListArgs, renderAgentList } from "./mcp-agent-list"
 import { bridgeErrorText, fleetArgs, parseFleet } from "./mcp-hive"
 import { listResources, readResource, RECIPE_URI_PREFIX, type ResourceDeps } from "./mcp-resources"
+import { applyNegation } from "./negated-flag"
 
 // A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
 // reader brace-MATCHES `cmd({ ... })` without skipping string literals, so one unmatched
@@ -652,6 +653,9 @@ export const McpServeCommand = cmd({
         default: true,
         describe: "expose playbooks as typed tools + readable resources",
       })
+      // literal --no-playbooks: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-playbooks", { type: "boolean", default: false, describe: "same as --playbooks=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "playbooks"), true)
       .option("http", {
         type: "boolean",
         default: false,

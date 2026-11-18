@@ -46,6 +46,7 @@ import {
 import { coreAudioDevices, coreMidiDevices, mixxxRuntime } from "./app-config-mixxx-runtime"
 import { obsAdapter } from "./app-config-obs"
 import { listBloqFiles, uploadFileVerified } from "./platform-atlas-files"
+import { applyNegation } from "./negated-flag"
 
 const ADAPTERS: Record<string, AppConfigAdapter> = { obs: obsAdapter, mixxx: { ...mixxxAdapter, runtime: mixxxRuntime } }
 const BUNDLE_SUFFIX = ".iris-config.json"
@@ -290,6 +291,9 @@ const ApplyCmd = cmd({
       .option("bloq", { type: "number", describe: "restore the newest bundle attached to this bloq (same as --from <id>)" })
       .option("quit-app", { type: "boolean", default: false, describe: "quit the app if it is running, without asking (it rewrites its config on quit)" })
       .option("launch", { type: "boolean", default: true, describe: "start the app afterwards and check its log (--no-launch to skip)" })
+      // literal --no-launch: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-launch", { type: "boolean", default: false, describe: "same as --launch=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "launch"), true)
       .option("check-timeout", { type: "number", default: 360, describe: "seconds to wait for the app's log to confirm the setup" })
       .option("rig", { type: "string", describe: "mixxx: which rig on the board (default: the only one, or this machine's name)" })
       .option("prefer", { type: "string", choices: ["page", "dataset"], describe: "mixxx: when the rig's page and dataset were both edited, which one wins" })

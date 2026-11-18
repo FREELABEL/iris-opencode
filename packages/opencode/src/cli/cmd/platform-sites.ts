@@ -17,6 +17,7 @@ import {
   type PageInput,
   type SiteReport,
 } from "./platform-sites-access-model"
+import { applyNegation } from "./negated-flag"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
@@ -860,6 +861,9 @@ const AccessCmd = cmd({
       .option("remove-domain", { type: "string", array: true, describe: "take a domain off the list (repeatable)" })
       .option("remove-email", { type: "string", array: true, describe: "take an address off the list (repeatable)" })
       .option("require-otp", { type: "boolean", describe: "require an emailed sign-in code (--no-require-otp to turn off)" })
+      // literal --no-require-otp: boolean-negation is off globally (src/index.ts) — #193782
+      .option("no-require-otp", { type: "boolean", default: false, describe: "same as --require-otp=false" })
+      .middleware((a) => applyNegation(a as Record<string, unknown>, "require-otp"), true)
       .option("dry-run", { type: "boolean", default: false, describe: "show the change without saving it" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
