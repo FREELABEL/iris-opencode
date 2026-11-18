@@ -236,7 +236,7 @@ const platform: Platform = {
 
   update: async () => {
     if (!UPDATER_ENABLED || !update) return
-    if (ostype() === "windows") await invoke("kill_sidecar").catch(() => undefined)
+    if (ostype() === "windows") await invoke("prepare_for_update").catch(() => undefined) // #193840: every iris-cli.exe, waited out
     await update.install().catch(() => undefined)
   },
 

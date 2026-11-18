@@ -211,7 +211,7 @@ export async function runUpdater({
   }
 
   try {
-    if (ostype() === "windows") await invoke("kill_sidecar")
+    if (ostype() === "windows") await invoke("prepare_for_update").catch(() => undefined) // #193840: every iris-cli.exe, waited out
     await update.install()
   } catch {
     await message("Failed to install update", { title: "Update Failed" })
@@ -294,7 +294,7 @@ export function createUpdaterPlatform(): UpdaterPlatform {
     setState({ status: "installing", version: pending.version })
     try {
       // Windows holds a lock on the running sidecar; the installer fails if it is alive.
-      if (ostype() === "windows") await invoke("kill_sidecar")
+      if (ostype() === "windows") await invoke("prepare_for_update").catch(() => undefined) // #193840: every iris-cli.exe, waited out
       await pending.install()
       await invoke("kill_sidecar")
       await relaunch()

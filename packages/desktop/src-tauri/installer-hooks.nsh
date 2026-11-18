@@ -39,13 +39,27 @@
   ; installer can be a CHILD of IRIS.exe. /T kills the whole tree, so adding it here would
   ; let the installer terminate itself midway through an update and leave a half-written
   ; install directory.
-  nsExec::Exec 'taskkill /F /IM "IRIS.exe"'
+  ;
+  ; Two ways to kill, every time (#193840). On 2026-11-18 a client's update failed with this
+  ; file in the installer and IRIS.exe + iris-cli.exe still alive behind the error, so the
+  ; taskkill calls did not do their job — and their exit codes were Popped and thrown away, so
+  ; nobody could say why. Now: Tauri's own plugin (TerminateProcess through the Win32 API, the
+  ; same call Tauri's template uses to close the main binary), then taskkill, and every result
+  ; goes into the details log the user can screenshot.
+  nsis_tauri_utils::KillProcessCurrentUser "IRIS.exe"
   Pop $0
-  nsExec::Exec 'taskkill /F /IM "IRIS Dev.exe"'
+  nsExec::ExecToLog 'taskkill /F /IM "IRIS.exe"'
+  Pop $0
+  DetailPrint "taskkill IRIS.exe -> $0"
+  nsExec::ExecToLog 'taskkill /F /IM "IRIS Dev.exe"'
   Pop $0
   ; Then the sidecar, which is a leaf and owns the locked file. /T takes its children too.
-  nsExec::Exec 'taskkill /F /T /IM "iris-cli.exe"'
+  nsis_tauri_utils::KillProcessCurrentUser "iris-cli.exe"
   Pop $0
+  DetailPrint "KillProcess iris-cli.exe -> $0"
+  nsExec::ExecToLog 'taskkill /F /T /IM "iris-cli.exe"'
+  Pop $0
+  DetailPrint "taskkill iris-cli.exe -> $0"
 !macroend
 
 ; Leaves FILE writable, or moved aside so a new copy can be written in its place.
@@ -74,6 +88,19 @@
     Rename "${FILE}" "${FILE}.$0.old"
     IfErrors 0 iris_free_done_${ID}
     DetailPrint "Could not free ${FILE}"
+    ; The rename can fail too: iris-cli.exe is a Bun single-file binary that keeps an open
+    ; read handle on ITSELF (to read its embedded bundle), without delete sharing, so a live
+    ; copy can be neither written nor renamed (#193840).
+    ;
+    ; Never fall through to NSIS's own "Error opening file for writing … Abort/Retry/Ignore":
+    ; it names no cause, Retry cannot work while the holder lives, and Ignore leaves a new
+    ; IRIS.exe beside an old iris-cli.exe. Say what to do instead, and only go on once it is
+    ; free. Silent installs (/S) cancel rather than hang on a box nobody can see.
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "IRIS is still running in the background, so it can't be updated yet.$\r$\n$\r$\nOpen Task Manager (Ctrl+Shift+Esc), go to Details, and choose End task on every iris-cli.exe and IRIS.exe. Then click Retry." /SD IDCANCEL IDRETRY iris_free_retry_${ID}
+    Abort "IRIS was still running, so the update was cancelled. Nothing was changed."
+  iris_free_retry_${ID}:
+    StrCpy $1 0
+    Goto iris_free_check_${ID}
   iris_free_done_${ID}:
 !macroend
 
@@ -92,10 +119,7 @@
 !macro NSIS_HOOK_PREUNINSTALL
   ; Same reasoning on the way out: an uninstall that cannot delete a running sidecar leaves
   ; the directory behind and the next install inherits the problem.
-  nsExec::Exec 'taskkill /F /T /IM "iris-cli.exe"'
-  Pop $0
-  nsExec::Exec 'taskkill /F /IM "IRIS.exe"'
-  Pop $0
+  !insertmacro IRIS_KILL_ALL
   Sleep 800
   Delete "$INSTDIR\*.old"
 !macroend
