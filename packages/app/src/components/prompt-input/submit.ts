@@ -16,7 +16,7 @@ import { useSDK, type DirectorySDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
 import { usePlatform } from "@/context/platform"
-import { TerminalMode, type TerminalRequest } from "./terminal-mode"
+import { followTerminal, TerminalMode, type TerminalRequest } from "./terminal-mode"
 import { useSync, type DirectorySync } from "@/context/sync"
 import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
@@ -276,39 +276,13 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       showToast({ title: language.t("prompt.toast.shellSendFailed.title"), description: errorMessage(err) }),
     )
 
-  // Leaving shell mode by ANY route (Esc, the mode toggle, the close button) closes the terminal
-  // and leaves its transcript in the session. A command still running is never killed silently:
-  // shell mode is put back and the terminal asks Wait / Stop and close.
-  let terminalFor: string | undefined
-  createEffect(
-    on(
-      () =>
-        [
-          input.mode(),
-          input.info()?.id,
-          TerminalMode.closing(terminalFor),
-          TerminalMode.running(terminalFor),
-        ] as const,
-      ([mode, id, closing, running]) => {
-        if (mode === "shell") {
-          if (id && terminalFor && terminalFor !== id) void sendTranscript(terminalFor)
-          if (id) terminalFor = id
-          if (terminalFor && closing && !running) input.setMode("normal")
-          return
-        }
-        const sessionID = terminalFor
-        if (!sessionID) return
-        if (TerminalMode.running(sessionID)) {
-          TerminalMode.requestClose(sessionID)
-          input.setMode("shell")
-          return
-        }
-        terminalFor = undefined
-        void sendTranscript(sessionID)
-      },
-      { defer: true },
-    ),
-  )
+  // Leaving shell mode by any route closes the terminal (see followTerminal).
+  followTerminal({
+    mode: input.mode,
+    sessionID: () => input.info()?.id,
+    setMode: input.setMode,
+    send: (sessionID) => void sendTranscript(sessionID),
+  })
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message

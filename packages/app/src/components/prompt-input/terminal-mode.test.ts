@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { TerminalMode, transcript, TRANSCRIPT_OUTPUT_LIMIT, type TerminalEntry } from "./terminal-mode"
+import { createRoot, createSignal } from "solid-js"
+import { followTerminal, TerminalMode, transcript, TRANSCRIPT_OUTPUT_LIMIT, type TerminalEntry } from "./terminal-mode"
 
 const entry = (over: Partial<TerminalEntry>): TerminalEntry => ({
   key: "k",
@@ -129,5 +130,39 @@ describe("TerminalMode", () => {
     expect(cancels).toEqual(["/session/ses/terminal/r1/cancel"])
     expect(TerminalMode.closing("ses")).toBe(true)
     expect(TerminalMode.entries("ses")[0]?.status).toBe("cancelled")
+  })
+})
+
+describe("leaving shell mode", () => {
+  const setup = () =>
+    createRoot((dispose) => {
+      const [mode, setMode] = createSignal<"normal" | "shell">("normal")
+      const sent: string[] = []
+      followTerminal({ mode, sessionID: () => "s1", setMode, send: (id) => sent.push(id) })
+      return { mode, setMode, sent, dispose }
+    })
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  // The bug: the close button only sets the session's close flag, and the effect that should
+  // leave shell mode had never subscribed to it on the first entry into shell mode.
+  test("the close button leaves shell mode the first time", async () => {
+    const t = setup()
+    t.setMode("shell")
+    await tick()
+    expect(TerminalMode.requestClose("s1")).toBe(true)
+    await tick()
+    expect(t.mode()).toBe("normal")
+    expect(t.sent).toEqual(["s1"])
+    t.dispose()
+  })
+
+  test("Esc / the mode toggle still close it", async () => {
+    const t = setup()
+    t.setMode("shell")
+    await tick()
+    t.setMode("normal")
+    await tick()
+    expect(t.sent).toEqual(["s1"])
+    t.dispose()
   })
 })
