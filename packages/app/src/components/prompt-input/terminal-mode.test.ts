@@ -135,11 +135,12 @@ describe("TerminalMode", () => {
 
 // These drive a real Solid effect. Under `--conditions=solid` bun loads Solid's SERVER build,
 // where effects never run, so they skip there; run them with `--conditions=browser`.
-const effectsRun = createRoot((dispose) => {
-  let ran = false
-  createEffect(() => (ran = true))
-  dispose()
-  return ran
+let effectsRun = false
+createRoot((dispose) => {
+  createEffect(() => {
+    effectsRun = true
+    dispose()
+  })
 })
 
 describe.skipIf(!effectsRun)("leaving shell mode", () => {
