@@ -532,7 +532,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       submission.clear()
       input.setPopover(null)
       TerminalMode.attach(session.id, sessionDirectory, terminalRequest(sessionDirectory))
-      terminalFor = session.id
       void TerminalMode.run(session.id, text)
       requestAnimationFrame(() => input.editor()?.focus())
       return
