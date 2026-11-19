@@ -1,3 +1,4 @@
+import { createEffect, createSignal, on, type Accessor } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 
 // Terminal mode (#190530). Shell mode used to send each command into the chat as its own turn
@@ -287,4 +288,56 @@ export const TerminalMode = {
     for (const key of Object.keys(state)) setState(key, undefined!)
     requests.clear()
   },
+}
+
+/**
+ * Leaving shell mode by ANY route (Esc, the mode toggle, the close button) closes the terminal
+ * and leaves its transcript in the session. A command still running is never killed silently:
+ * shell mode is put back and the terminal asks Wait / Stop and close.
+ *
+ * The session being followed is a SIGNAL, not a plain variable. It used to be a `let`, and the
+ * effect read `closing(terminalFor)` before it had set terminalFor, so on the first entry into
+ * shell mode it never subscribed to that session's close flag: the close button set the flag
+ * and nothing reacted. Esc and the toggle still worked because they change the mode itself.
+ */
+export function followTerminal(input: {
+  mode: Accessor<string>
+  sessionID: Accessor<string | undefined>
+  setMode: (mode: "shell" | "normal") => void
+  send: (sessionID: string) => void
+}) {
+  const [following, setFollowing] = createSignal<string | undefined>()
+  createEffect(
+    on(
+      () =>
+        [
+          input.mode(),
+          input.sessionID(),
+          following(),
+          TerminalMode.closing(following()),
+          TerminalMode.running(following()),
+        ] as const,
+      ([mode, id, current, closing, running]) => {
+        if (mode === "shell") {
+          if (id && current && current !== id) input.send(current)
+          if (id && current !== id) {
+            setFollowing(id)
+            return
+          }
+          if (current && closing && !running) input.setMode("normal")
+          return
+        }
+        if (!current) return
+        if (running) {
+          TerminalMode.requestClose(current)
+          input.setMode("shell")
+          return
+        }
+        setFollowing(undefined)
+        input.send(current)
+      },
+      { defer: true },
+    ),
+  )
+  return following
 }
