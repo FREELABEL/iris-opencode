@@ -132,6 +132,21 @@ it.instance("explore agent asks for external directories and allows whitelisted 
   }),
 )
 
+it.instance("installed playbooks are readable without asking; the rest of ~/.iris still asks", () =>
+  Effect.gen(function* () {
+    const build = yield* load((svc) => svc.get("build"))
+    const iris = path.join(Global.Path.home, ".iris")
+    for (const agent of [build!, (yield* load((svc) => svc.get("explore")))!]) {
+      expect(
+        Permission.evaluate("external_directory", path.join(iris, "playbooks", "iris-browser", "PLAYBOOK.md"), agent.permission)
+          .action,
+      ).toBe("allow")
+      expect(Permission.evaluate("external_directory", path.join(iris, "config.json"), agent.permission).action).toBe("ask")
+      expect(Permission.evaluate("external_directory", path.join(iris, "sdk", ".env"), agent.permission).action).toBe("ask")
+    }
+  }),
+)
+
 it.instance(
   "reference config does not create subagents",
   () =>

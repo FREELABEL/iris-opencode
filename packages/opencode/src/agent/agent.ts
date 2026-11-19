@@ -108,6 +108,10 @@ const layer = Layer.effect(
         const whitelistedDirs = [
           Truncate.GLOB,
           path.join(Global.Path.tmp, "*"),
+          // The user's installed playbooks. A skill tells the agent to read its PLAYBOOK.md here,
+          // and every run asked "Access files outside the project directory" for the user's own
+          // playbook. Only this folder: the rest of ~/.iris holds the login token and .env files.
+          path.join(Global.Path.home, ".iris", "playbooks", "*"),
           ...skillDirs.map((dir) => path.join(dir, "*")),
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]
