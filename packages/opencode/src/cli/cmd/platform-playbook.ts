@@ -3305,21 +3305,21 @@ export const PlaybookInstallCommand = cmd({
     if (pb.scope) printKV("Scope", String(pb.scope))
     if (registryVersion) printKV("Version", registryVersion)
     printKV("Playbook", file)
-    if (skillFile) printKV("Skill", skillFile)
+    if (skillFile) printKV("For AI tools", skillFile)
     for (const extra of extraPaths) printKV("Also", extra)
     printKV("Location", root.scope === "global" ? "global — your home folder" : `project — ${root.root}`)
     printDivider()
     if (root.scope === "global") {
-      console.log(`  ${success("✓")} Works from any folder: ${bold("iris playbook run")} ${name}, the ${bold("IRIS app")} and ${bold("Claude Code")}.`)
+      console.log(`  ${success("✓")} Ready in any folder: the ${bold("IRIS app")}, ${bold("iris playbook run")} ${name}, and other AI tools on this computer.`)
     } else {
-      console.log(`  ${success("✓")} Works in this project: ${bold("iris playbook run")} ${name}, and the IRIS app / Claude Code opened on ${root.root}.`)
+      console.log(`  ${success("✓")} Ready in this project: the IRIS app, ${bold("iris playbook run")} ${name}, and other AI tools opened on ${root.root}.`)
       console.log(dim(`  (${root.reason}. For every folder instead: --global)`))
     }
     if (skillVia) console.log(dim(`  Skill refreshed through a symlink: ${pathJoin(skillVia, "SKILL.md")}`))
     if (skillNote) {
       // Not dim: the playbook updated but the copy Claude Code reads did not (#186155).
-      console.log(`  ${bold("!")} Claude Code skill NOT refreshed: ${skillNote}`)
-      console.log(dim(`    Claude Code and the IRIS app will keep using the old copy until it is replaced.`))
+      console.log(`  ${bold("!")} The copy AI tools read was NOT refreshed: ${skillNote}`)
+      console.log(dim(`    The IRIS app and other AI tools will keep using the old copy until it is replaced.`))
     }
     for (const s of shadows) {
       console.log(`  ${bold("!")} An older copy takes priority when you run from here: ${s}`)
@@ -3327,7 +3327,7 @@ export const PlaybookInstallCommand = cmd({
     }
     console.log(dim(`  Update later: iris playbook install ${name} --force`))
 
-    prompts.outro(`${success("✓")} Installed ${highlight(name)}${skillFile ? " and synced for Claude Code + IRIS" : ""}`)
+    prompts.outro(`${success("✓")} Installed ${highlight(name)}`)
   },
 })
 
