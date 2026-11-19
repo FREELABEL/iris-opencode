@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { createRoot, createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal } from "solid-js"
 import { followTerminal, TerminalMode, transcript, TRANSCRIPT_OUTPUT_LIMIT, type TerminalEntry } from "./terminal-mode"
 
 const entry = (over: Partial<TerminalEntry>): TerminalEntry => ({
@@ -133,7 +133,16 @@ describe("TerminalMode", () => {
   })
 })
 
-describe("leaving shell mode", () => {
+// These drive a real Solid effect. Under `--conditions=solid` bun loads Solid's SERVER build,
+// where effects never run, so they skip there; run them with `--conditions=browser`.
+const effectsRun = createRoot((dispose) => {
+  let ran = false
+  createEffect(() => (ran = true))
+  dispose()
+  return ran
+})
+
+describe.skipIf(!effectsRun)("leaving shell mode", () => {
   const setup = () =>
     createRoot((dispose) => {
       const [mode, setMode] = createSignal<"normal" | "shell">("normal")
