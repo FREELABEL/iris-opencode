@@ -127,3 +127,47 @@ export function pageSessionState(
   if (!d || d.type !== "iris:page-session" || d.slug !== slug.trim().toLowerCase()) return null
   return d.state === "exchanging" || d.state === "signed_in" || d.state === "refused" ? d.state : null
 }
+
+/**
+ * THE MEMBER'S ADDRESS (Marketing, 2026-11-20). /p/<slug> is what a stranger opens; an unlisted page's
+ * slug 404s by design and a draft has no public address at all, so the tab showed "This page isn't
+ * published" for a member's own page. The sidecar's /iris/page-address, holding the member's token,
+ * answers with the address that opens for them. Inside the app a member sees their page whatever its
+ * status; the browser keeps the page's visibility, because nothing here changes what /p/<slug> serves.
+ */
+export type PageAddressAnswer = { measured?: boolean; reason?: string; url?: string; kind?: string } | undefined
+
+const MEMBER_PATH = /^\/p\/[A-Za-z0-9-]{1,191}$/
+
+/**
+ * The address to frame for this pinned page: the sidecar's answer when it is an address on
+ * PAGE_ORIGIN under /p/ (with at most ?preview=true&token=…), otherwise the plain /p/<slug>.
+ * Anything else — another host, a fragment, an unmeasured answer — falls back to the plain address,
+ * which is exactly what the tab framed before this existed.
+ */
+export function memberFrameUrl(slug: string, a: PageAddressAnswer): string {
+  const plain = pinnedPageUrl(slug)
+  if (!a?.measured || typeof a.url !== "string") return plain
+  let u: URL
+  try {
+    u = new URL(a.url)
+  } catch {
+    return plain
+  }
+  if (u.origin !== PAGE_ORIGIN || u.hash || u.username || u.password || !MEMBER_PATH.test(u.pathname)) return plain
+  const keys = [...u.searchParams.keys()]
+  const previewOnly = keys.length === 0 || (keys.length === 2 && u.searchParams.get("preview") === "true" && !!u.searchParams.get("token"))
+  return previewOnly ? u.toString() : plain
+}
+
+/**
+ * Put a signed sign-in onto the member's address. The sidecar mints /p/<slug>#atlas_code=<code>; when
+ * the member's address is a different one (unlisted /p/<public_id>, or a preview link) the one-time
+ * code moves to its fragment. The fragment never reaches a server, so the address the page serves
+ * stays the member's address.
+ */
+export function signedMemberUrl(member: string, signed: { url: string; signed: boolean }): string {
+  if (!signed.signed) return member
+  const i = signed.url.indexOf("#atlas_code=")
+  return i < 0 ? member : member.split("#")[0] + signed.url.slice(i)
+}

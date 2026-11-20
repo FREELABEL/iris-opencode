@@ -88,3 +88,38 @@ describe("a pinned page opened signed in (#192482)", () => {
     expect(pageSessionState(msg({}), undefined, "lexicon-console")).toBeNull()
   })
 })
+
+import { memberFrameUrl, signedMemberUrl } from "./iris-pinned-page-model"
+
+describe("the member's address (Marketing shows a member's own page whatever its status)", () => {
+  const UUID = "ef0faee2-d239-451a-a74d-80fdd129b014"
+  test("an unlisted page is framed at /p/<public_id>, not the slug that 404s for it", () => {
+    expect(memberFrameUrl("freelabel-grid-plan", { measured: true, url: `https://heyiris.io/p/${UUID}`, kind: "unlisted" })).toBe(`https://heyiris.io/p/${UUID}`)
+  })
+  test("a draft is framed at the owner's preview link", () => {
+    const u = "https://heyiris.io/p/freelabel-cover-preview?preview=true&token=MTE2NTpwYWdl"
+    expect(memberFrameUrl("freelabel-cover-preview", { measured: true, url: u, kind: "preview" })).toBe(u)
+  })
+  test("no answer, an unmeasured one, or an address anywhere else falls back to the plain /p/<slug>", () => {
+    const plain = "https://heyiris.io/p/x"
+    expect(memberFrameUrl("x", undefined)).toBe(plain)
+    expect(memberFrameUrl("x", { measured: false, url: `https://heyiris.io/p/${UUID}` })).toBe(plain)
+    expect(memberFrameUrl("x", { measured: true, url: "https://evil.example/p/x" })).toBe(plain)
+    expect(memberFrameUrl("x", { measured: true, url: "https://heyiris.io/admin" })).toBe(plain)
+    expect(memberFrameUrl("x", { measured: true, url: "https://heyiris.io/p/x#atlas_code=abc" })).toBe(plain)
+    expect(memberFrameUrl("x", { measured: true, url: "https://heyiris.io/p/x?redirect=https://evil.example" })).toBe(plain)
+    expect(memberFrameUrl("x", { measured: true, url: "not a url" })).toBe(plain)
+  })
+  test("a sign-in moves its one-time code onto the member's address, in the fragment", () => {
+    const code = "a".repeat(43)
+    expect(signedMemberUrl(`https://heyiris.io/p/${UUID}`, { url: `https://heyiris.io/p/freelabel-grid-plan#atlas_code=${code}`, signed: true })).toBe(
+      `https://heyiris.io/p/${UUID}#atlas_code=${code}`,
+    )
+    expect(signedMemberUrl("https://heyiris.io/p/x?preview=true&token=T0KEN123", { url: `https://heyiris.io/p/x#atlas_code=${code}`, signed: true })).toBe(
+      `https://heyiris.io/p/x?preview=true&token=T0KEN123#atlas_code=${code}`,
+    )
+  })
+  test("no sign-in leaves the member's address as it is", () => {
+    expect(signedMemberUrl(`https://heyiris.io/p/${UUID}`, { url: "https://heyiris.io/p/x", signed: false })).toBe(`https://heyiris.io/p/${UUID}`)
+  })
+})
