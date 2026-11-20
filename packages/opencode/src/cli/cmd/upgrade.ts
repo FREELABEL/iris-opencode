@@ -2,6 +2,7 @@ import type { Argv } from "yargs"
 import { UI } from "../ui"
 import * as prompts from "./clack"
 import { Installation } from "../../installation"
+import { ensureApiFallback } from "./node-api-fallback"
 
 /**
  * Refresh the on-demand how-to recipes — #180295.
@@ -100,6 +101,7 @@ export const UpgradeCommand = {
       // Still refresh the docs. Recipes live on `main` and move independently of releases,
       // so an up-to-date binary is not evidence of up-to-date documentation.
       await refreshHowTos(process.env.HOME || process.env.USERPROFILE || "")
+      { const m = ensureApiFallback(process.env.HOME || process.env.USERPROFILE || ""); if (m) prompts.log.info(m) }
       prompts.outro("Done")
       return
     }
@@ -250,6 +252,8 @@ export const UpgradeCommand = {
       if (fixResult.includes("config-fixed")) {
         prompts.log.info("Fixed stale API URL → freelabel.net")
       }
+      // After the stale-URL fix, so the pair is computed from the corrected host (#189649).
+      { const m = ensureApiFallback(home); if (m) prompts.log.info(m) }
     }
 
     prompts.outro("Done")
