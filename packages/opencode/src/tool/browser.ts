@@ -70,6 +70,7 @@ export const Parameters = Schema.Struct({
     "screenshot",
     "close",
     "tabs",
+    "resize",
   ]).annotate({ description: "What to do" }),
   target: Schema.optional(Schema.Literals(["agent", "panel"])).annotate({
     description:
@@ -113,6 +114,10 @@ export const Parameters = Schema.Struct({
   label: Schema.optional(Schema.String).annotate({
     description: "open with new_tab: a short name for the tab the person sees (\"Car rental\", \"Map\", \"Itinerary\")",
   }),
+  width: Schema.optional(Schema.Number).annotate({
+    description:
+      "Browser pane only, with open or resize: the page's width in px for a phone or tablet check (375 phone, 768 tablet). 0 fills the pane again. Capped at the pane's own width",
+  }),
 })
 
 type Metadata = {
@@ -147,6 +152,17 @@ const attempt = <T>(fn: () => Promise<T>) =>
       return { ok: false, message: e instanceof Error ? e.message : String(e) }
     }
   })
+
+/** What a width change did, in one line (#193938). `got.width` is 0 when the page fills the pane,
+ * or before the pane has been placed on screen (it takes the width when it shows). */
+export function widthNote(asked: number, got: { width: number; pane: number }): string {
+  if (asked <= 0) return "The page fills the Browser pane again."
+  if (!got.pane) return `The page will be ${Math.round(got.width || asked)} px wide when the Browser shows.`
+  if (got.width < asked) {
+    return `The pane is only ${Math.round(got.pane)} px wide, so the page is ${Math.round(got.width)} px, not ${Math.round(asked)}. Ask the person to widen the side panel for a wider check.`
+  }
+  return `The page is now ${Math.round(got.width)} px wide (the pane is ${Math.round(got.pane)} px). Take a screenshot to see the layout; {"action":"resize","width":0} fills the pane again.`
+}
 
 /** This chat's tabs, one line: which is showing, what each is (#193328). */
 export function renderTabs(tabs: { n: number; label?: string; title?: string; url?: string; active: boolean }[]): string {
@@ -214,7 +230,8 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
                 (command, timeoutMs) => Panel.send({ directory, session, command, timeoutMs }),
                 (o) => Panel.explainSilence(o, session),
               )
-              if (params.action !== "open") {
+              // resize changes only the pane's size: it never needs to read the page first.
+              if (params.action !== "open" && params.action !== "resize") {
                 const attached = yield* attempt(() => panel.attach())
                 if (!attached.ok) return yield* Effect.fail(new Error(attached.message))
               }
@@ -229,9 +246,22 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
               new Error("tabs are in the person's Browser pane (target panel). Your own browser (target agent) has one page"),
             )
           }
+          if (target !== "panel" && (params.action === "resize" || params.width !== undefined)) {
+            return yield* Effect.fail(new Error("width and resize are for the person's Browser pane (target panel)"))
+          }
           if (page instanceof PanelPage) {
             page.tab = tabRef
             pane = page
+          }
+
+          // A phone or tablet check (#193938): the pane's real webview is resized, so media queries
+          // and layout answer to the width; a screenshot after it shows that layout.
+          if (params.action === "resize") {
+            if (!(page instanceof PanelPage)) return yield* Effect.fail(new Error("no Browser pane is open"))
+            if (params.width === undefined) return yield* Effect.fail(new Error('resize needs a width, e.g. {"action":"resize","width":375} (0 fills the pane)'))
+            const got = yield* attempt(() => (page as PanelPage).resize(params.width!))
+            if (!got.ok) return yield* Effect.fail(new Error(got.message))
+            return { title: `resized to ${got.value.width || "the pane"}`, output: widthNote(params.width, got.value), metadata: {} }
           }
 
           if (params.action === "tabs") {
@@ -283,9 +313,19 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const p: ScriptedPage =
               page ??
               new PageSession({ headless: !want.visible, profileDir: want.saved ? savedProfileDir() : undefined })
+            // A width is set BEFORE the page loads where it can be (a site that picks its layout once,
+            // on load, gets the phone layout); a new tab does not exist until it opens, so after.
+            let sized: string | undefined
+            const resize = (pp: PanelPage) =>
+              Effect.gen(function* () {
+                const got = yield* attempt(() => pp.resize(params.width!))
+                sized = got.ok ? `\n${widthNote(params.width!, got.value)}` : `\n(width not applied: ${got.message})`
+              })
+            if (p instanceof PanelPage && params.width !== undefined && !params.new_tab) yield* resize(p)
             const opened = yield* attempt(() =>
               p instanceof PanelPage ? p.open(params.url!, { newTab: params.new_tab, label: params.label }) : p.open(params.url!),
             )
+            if (opened.ok && p instanceof PanelPage && params.width !== undefined && params.new_tab) yield* resize(p)
             if (!opened.ok) {
               if (target !== "panel") yield* attempt(() => p.close())
               return yield* Effect.fail(new Error(opened.message))
@@ -297,7 +337,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, Session.Serv
             const how =
               p instanceof PageSession
                 ? `\n(${p.kind.visible ? "a window on the person's screen" : "invisible"}, ${p.kind.saved ? "saved profile: their earlier sign-ins in it apply" : "fresh profile: logged out"})`
-                : "\n(in the person's Browser pane)"
+                : `\n(in the person's Browser pane)${sized ?? ""}`
             // A bot check is not the page: say so before the agent reads it as one (#193355).
             // The pane recognises its own checks and waits for the person (app human-check.ts).
             const sig = target === "panel" ? undefined : yield* attempt(() => p.signals())

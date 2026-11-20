@@ -139,7 +139,8 @@ mod tests {
 }
 
 /// A picture of what the Browser shows (the agent's eyes on a map, a chart, a canvas). macOS:
-/// WKWebView's own snapshot, 1024 px wide, as JPEG, base64. Other platforms: not yet.
+/// WKWebView's own snapshot, 1024 px wide, as JPEG, base64. Windows: WebView2's own DevTools
+/// `Page.captureScreenshot` (#193938), JPEG, base64. Linux: not yet.
 #[cfg(target_os = "macos")]
 pub fn snapshot(pw: tauri::webview::PlatformWebview, tx: Reply) {
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
@@ -171,7 +172,75 @@ pub fn snapshot(pw: tauri::webview::PlatformWebview, tx: Reply) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows (#193938). WebView2 has no WKWebView-style snapshot call, but the host can call the
+/// page's DevTools protocol directly (`CallDevToolsProtocolMethod`, on the base ICoreWebView2, so
+/// every WebView2 runtime has it). This goes from Rust to the engine, never through the page, so a
+/// hostile page cannot answer for it. `Page.captureScreenshot` answers `{"data":"<base64>"}`: the
+/// visible viewport, already JPEG, already base64, which is exactly what macOS hands back.
+/// `CapturePreview` would also do, but needs an IStream round trip; this needs nothing new.
+#[cfg(windows)]
+pub fn snapshot(pw: tauri::webview::PlatformWebview, tx: Reply) {
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
+
+    let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+    let cb = tx.clone();
+    let run = move || -> windows::core::Result<()> {
+        let webview = unsafe { pw.controller().CoreWebView2()? };
+        let method = HSTRING::from("Page.captureScreenshot");
+        let params = HSTRING::from(CAPTURE_PARAMS);
+        unsafe {
+            webview.CallDevToolsProtocolMethod(
+                &method,
+                &params,
+                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |hr, json| {
+                    let out = hr
+                        .map_err(|e| format!("the Browser could not take a picture of the page: {e}"))
+                        .and_then(|_| capture_data(&json));
+                    if let Some(tx) = cb.lock().ok().and_then(|mut t| t.take()) {
+                        let _ = tx.send(out);
+                    }
+                    Ok(())
+                })),
+            )
+        }
+    };
+    if let Err(e) = run() {
+        if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+            let _ = tx.send(Err(format!("the Browser could not take a picture of the page: {e}")));
+        }
+    }
+}
+
+/// What Windows asks DevTools for: a JPEG of the visible viewport.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CAPTURE_PARAMS: &str = r#"{"format":"jpeg","quality":80}"#;
+
+/// `Page.captureScreenshot`'s answer → the base64 JPEG in it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn capture_data(json: &str) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|_| "the picture could not be read".to_string())?;
+    match v.get("data").and_then(|d| d.as_str()) {
+        Some(b64) if !b64.is_empty() => Ok(b64.to_string()),
+        _ => Err("the Browser sent no picture".into()),
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub fn snapshot(_pw: tauri::webview::PlatformWebview, tx: Reply) {
-    let _ = tx.send(Err("pictures of the Browser pane work on macOS for now: use read or find".into()));
+    let _ = tx.send(Err("pictures of the Browser pane work on macOS and Windows for now: use read or find".into()));
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn devtools_screenshot_answer_becomes_the_base64() {
+        assert_eq!(capture_data(r#"{"data":"/9j/4AAQ"}"#).unwrap(), "/9j/4AAQ");
+        assert!(capture_data(r#"{"data":""}"#).is_err());
+        assert!(capture_data("{}").is_err());
+        assert!(capture_data("not json").is_err());
+        assert!(CAPTURE_PARAMS.contains("jpeg"));
+    }
 }

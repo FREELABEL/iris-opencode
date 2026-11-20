@@ -108,6 +108,8 @@ export namespace Panel {
         | { action: "page"; op: "open"; url: string; newTab?: boolean; label?: string }
         /** A picture of the page (a JPEG, base64, in `result`): reading by eye, same Allow as read. */
         | { action: "page"; op: "screenshot" }
+        /** The page's width inside the panel for a phone/tablet check (#193938); 0 = fill it. */
+        | { action: "page"; op: "viewport"; width: number }
         /** The chat's tabs, changing nothing. */
         | { action: "page"; op: "tabs" }
         /** Close one of the chat's tabs (never its last). */

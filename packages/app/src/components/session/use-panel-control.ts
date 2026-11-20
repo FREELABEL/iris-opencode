@@ -81,6 +81,8 @@ export type PageCommand = { tab?: string } & (
   /** `newTab`: open the address in a new tab of this chat, called `label`. */
   | { action: "page"; op: "open"; url: string; newTab?: boolean; label?: string }
   | { action: "page"; op: "screenshot" }
+  /** The page's width inside the panel for a phone/tablet check (#193938); 0 or none = fill it. */
+  | { action: "page"; op: "viewport"; width?: number }
   /** This chat's tabs, changing nothing. */
   | { action: "page"; op: "tabs" }
   /** Close one of this chat's tabs (never the last). */
@@ -479,6 +481,12 @@ export async function runPageCommand(ctx: PageCtx, cmd: PageCommand) {
   const nb = platform.nativeBrowser(key)
   const showing = activeTab(chat) === tab
   try {
+    if (cmd.op === "viewport") {
+      // Only the page's size changes, on the person's screen: no site is read, so no Allow.
+      if (!nb.viewport) return reply({ error: "this IRIS Desktop can't resize the Browser yet: update it" })
+      const v = await nb.viewport(cmd.width && cmd.width > 0 ? cmd.width : null)
+      return reply({ result: JSON.stringify({ ok: true, value: v }) })
+    }
     if (cmd.op === "open") {
       const before = fresh ? undefined : (await nb.state())?.url
       if (!ctx.onScreen) {

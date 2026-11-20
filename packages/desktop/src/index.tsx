@@ -79,6 +79,7 @@ const platform: Platform = {
     state: () => invoke("browser_state", { chat }),
     eval: (script) => invoke<string>("browser_eval", { chat, script }),
     screenshot: () => invoke<string>("browser_screenshot", { chat }),
+    viewport: (width) => invoke<{ width: number; pane: number }>("browser_viewport", { chat, width }),
     importSources: () => invoke("browser_import_sources"),
     importSignIns: (source, sites) => invoke("browser_import", { source, sites }),
     onState(handler) {

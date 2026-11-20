@@ -56,6 +56,7 @@ Actions:
 - select: ref, value. Sets a dropdown to one of ITS options — `elements` lists them. A value it does not offer is refused, with the real options.
 - scroll: direction (up, down, top, bottom). Moves the viewport; use it when a page loads more as you go, then run elements again.
 - screenshot: a picture of the page, attached for you to SEE. Use it when the text doesn't carry the answer: maps, charts, images, canvas apps, layout. target panel: you see what the person sees (nothing is saved). target agent: also saved to the Genesis Artifacts pane. Optional title.
+- resize (Browser pane): width. Makes the page that many px wide inside the pane for a phone or tablet check (375 phone, 390 large phone, 768 tablet); the real page is resized, so its media queries and layout change. 0 fills the pane again. It cannot be wider than the pane: the answer says the width you got. open also takes width, to load the page at that width from the start. Then screenshot to see the layout. The width stays on that tab until you change it, so put it back (width 0) when you are done.
 - close: ends the browser. Do this when you are finished with the page.
 
 If a page is a "prove you're human" check or a block page (Cloudflare, "Bot or Not?", "Access Denied", a captcha on an empty page), open and elements say so. It is for the PERSON: never click, solve, retry or work around it, and never switch browsers to get past it. Tell them in one line and leave that site to them.

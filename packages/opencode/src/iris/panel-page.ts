@@ -178,7 +178,20 @@ export class PanelPage extends ScriptedPage {
     return this.acting(ref, this.confirmNext ? `pressing ${key} on "${this.confirmNext}"` : `pressing ${key}${where}`, () => super.pressKey(ref, key))
   }
 
-  /** A JPEG of what the person sees in the pane (macOS for now). Same Allow as reading. */
+  /** Make the page `width` px wide inside the pane for a phone/tablet check, or fill the pane
+   * again (0) (#193938). The desktop resizes the real webview, so media queries answer to it. A
+   * width wider than the pane is capped at the pane: `pane` says how wide that is. */
+  async resize(width: number): Promise<{ width: number; pane: number }> {
+    const o = await this.send(
+      { action: "page", op: "viewport", width: Math.max(0, Math.round(width)), ...(this.tab ? { tab: this.tab } : {}) },
+      PAGE_TIMEOUT_MS,
+    )
+    if (o.state?.browserTabs) this.tabs = o.state.browserTabs
+    const v = (unpackPageAnswer(o, this.explainSilence) ?? {}) as { width?: number; pane?: number }
+    return { width: Number(v.width) || 0, pane: Number(v.pane) || 0 }
+  }
+
+  /** A JPEG of what the person sees in the pane (macOS and Windows). Same Allow as reading. */
   async screenshot(): Promise<Uint8Array> {
     const b64 = await this.sendWaiting({ action: "page", op: "screenshot", ...(this.tab ? { tab: this.tab } : {}) }, 20_000)
     if (typeof b64 !== "string" || !b64) throw new Error("the Browser sent no picture")
