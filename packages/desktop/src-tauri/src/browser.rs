@@ -175,7 +175,7 @@ pub struct BrowserState {
 
 /// The panel's body rectangle, in CSS pixels of the app webview, already multiplied by the app's
 /// zoom by the caller, so it equals logical window pixels.
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
     pub x: f64,
     pub y: f64,
@@ -211,6 +211,36 @@ fn admit(newest: &mut std::collections::HashMap<String, u64>, label: &str, seq: 
 }
 fn admit_placement(label: &str, seq: Option<u64>, show: bool) -> bool {
     PLACED.lock().map(|mut m| admit(&mut m, label, seq, show)).unwrap_or(true)
+}
+
+/// Per page: the width the agent asked its page to be for a phone or tablet check (#193938), and
+/// the panel rectangle the app last placed it in (so a new width applies at once, not on the next
+/// resize). A page with no width fills the panel, as before.
+static VIEWPORT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
+    std::sync::LazyLock::new(Default::default);
+static LAST_BOUNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Bounds>>> =
+    std::sync::LazyLock::new(Default::default);
+/// Narrower than any phone a page is designed for.
+pub const MIN_VIEWPORT: f64 = 240.0;
+
+/// Where a page goes inside the panel: the whole panel, or, given a width narrower than the
+/// panel, that width centred in it (as a browser's device toolbar shows it). Never WIDER than the
+/// panel: the page is drawn over the app window, and past the panel it would cover the chat.
+/// Resizing the real webview (not CSS emulation) is what makes media queries, `innerWidth` and
+/// layout answer to the new width, the same way on WKWebView, WebView2 and WebKitGTK.
+pub fn fit(bounds: Bounds, want: Option<f64>) -> Bounds {
+    match want {
+        Some(w) if w < bounds.width => Bounds { x: bounds.x + ((bounds.width - w) / 2.0).floor(), width: w, ..bounds },
+        _ => bounds,
+    }
+}
+
+/// Remember where the app put this page, and return where it really goes (its width, if set).
+fn place(label: &str, bounds: Bounds) -> Bounds {
+    if let Ok(mut m) = LAST_BOUNDS.lock() {
+        m.insert(label.to_string(), bounds);
+    }
+    fit(bounds, VIEWPORT.lock().ok().and_then(|m| m.get(label).copied()))
 }
 
 fn with_tabs<T>(f: impl FnOnce(&mut Tabs) -> T) -> Option<T> {
@@ -436,6 +466,7 @@ pub async fn browser_show(app: AppHandle, chat: String, url: Option<String>, bou
     }
     touch(&label);
     admit_placement(&label, seq, true);
+    let bounds = place(&label, bounds);
     let pos = LogicalPosition::new(bounds.x, bounds.y);
     let size = LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0));
     if let Some(w) = app.get_webview(&label) {
@@ -490,6 +521,7 @@ pub async fn browser_bounds(app: AppHandle, chat: String, bounds: Bounds, seq: O
     if !admit_placement(w.label(), seq, false) {
         return Ok(());
     }
+    let bounds = place(w.label(), bounds);
     w.set_position(LogicalPosition::new(bounds.x, bounds.y)).map_err(|e| e.to_string())?;
     w.set_size(LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0))).map_err(|e| e.to_string())
 }
@@ -527,6 +559,12 @@ pub async fn browser_close(app: AppHandle, chat: String) -> Result<(), String> {
         t.recent.retain(|l| l != &label);
     });
     if let Ok(mut m) = PLACED.lock() {
+        m.remove(&label);
+    }
+    if let Ok(mut m) = VIEWPORT.lock() {
+        m.remove(&label);
+    }
+    if let Ok(mut m) = LAST_BOUNDS.lock() {
         m.remove(&label);
     }
     match app.get_webview(&label) {
@@ -578,6 +616,39 @@ pub async fn browser_eval(app: AppHandle, chat: String, script: String) -> Resul
     }
 }
 
+/// The page's width after `browser_viewport`, and the panel's: a width wider than the panel is
+/// capped at the panel, and the caller says so.
+#[derive(Serialize)]
+pub struct Viewport {
+    pub width: f64,
+    pub pane: f64,
+}
+
+/// Make this page `width` px wide inside its panel for a phone or tablet check (#193938), or
+/// fill the panel again (`None` / 0). Applies at once when the page has been placed, and stays
+/// through every later resize of the panel until changed or the tab is closed.
+#[tauri::command]
+pub async fn browser_viewport(app: AppHandle, chat: String, width: Option<f64>) -> Result<Viewport, String> {
+    let label = label_for(&chat)?;
+    let want = width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.round().max(MIN_VIEWPORT));
+    if let Ok(mut m) = VIEWPORT.lock() {
+        match want {
+            Some(w) => m.insert(label.clone(), w),
+            None => m.remove(&label),
+        };
+    }
+    let Some(last) = LAST_BOUNDS.lock().ok().and_then(|m| m.get(&label).copied()) else {
+        // Not placed yet: it takes this width when it first shows.
+        return Ok(Viewport { width: want.unwrap_or(0.0), pane: 0.0 });
+    };
+    let b = fit(last, want);
+    if let Some(w) = app.get_webview(&label) {
+        w.set_position(LogicalPosition::new(b.x, b.y)).map_err(|e| e.to_string())?;
+        w.set_size(LogicalSize::new(b.width.max(1.0), b.height.max(1.0))).map_err(|e| e.to_string())?;
+    }
+    Ok(Viewport { width: b.width, pane: last.width })
+}
+
 /// A JPEG (base64) of the page in the Browser. Whether the agent may look is the app's check
 /// (the same per-site Allow as reading), made before this is called.
 #[tauri::command]
@@ -613,6 +684,17 @@ pub async fn browser_cookie_domains(app: AppHandle) -> Result<Vec<String>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_viewport_width_narrows_the_page_inside_the_panel_never_past_it() {
+        let panel = Bounds { x: 800.0, y: 40.0, width: 600.0, height: 700.0 };
+        assert_eq!(fit(panel, None), panel);
+        let phone = fit(panel, Some(375.0));
+        assert_eq!(phone, Bounds { x: 912.0, y: 40.0, width: 375.0, height: 700.0 });
+        // Wider than the panel: the panel (it would otherwise draw over the chat).
+        assert_eq!(fit(panel, Some(1024.0)), panel);
+        assert_eq!(fit(panel, Some(600.0)), panel);
+    }
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()

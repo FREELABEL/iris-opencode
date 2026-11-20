@@ -49,8 +49,11 @@ export type NativeBrowser = {
   state(): Promise<NativeBrowserState | null>
   /** Run a page script in the pane and return its JSON envelope {ok,value|error} (#193145). */
   eval(script: string): Promise<string>
-  /** A JPEG (base64) of what the Browser shows: the agent's eyes on maps and charts. macOS for now. */
+  /** A JPEG (base64) of what the Browser shows: the agent's eyes on maps and charts. macOS and Windows. */
   screenshot?(): Promise<string>
+  /** Make the page `width` px wide inside the panel for a phone/tablet check, or fill it again
+   * (null) (#193938). Answers the width it got and the panel's. Absent on an older desktop. */
+  viewport?(width: number | null): Promise<{ width: number; pane: number }>
   /** Address/title/loading as the page changes. Returns the unsubscribe. */
   onState(handler: (state: NativeBrowserState) => void): () => void
   /** Chrome-family profiles and the sites each is signed into: names and counts only (S3b). */
