@@ -7,11 +7,14 @@ import {
   PAGE_LOAD_TIMEOUT_MS,
   PAGE_SANDBOX,
   pageSessionState,
+  memberFrameUrl,
   pageVerdict,
   pinnedPageUrl,
+  signedMemberUrl,
   signedFrameUrl,
   SIGNIN_RETRIES,
   type FrameCheckAnswer,
+  type PageAddressAnswer,
   type PageSignInAnswer,
   type PageVerdict,
   PAGE_HOST,
@@ -40,8 +43,18 @@ export function IrisPinnedPage(props: {
    */
   signIn?: boolean
 }) {
-  // The plain address — what the bar shows and "Open in browser" opens. Never the signed one.
+  // The plain address — what the bar shows. Never the signed one.
   const url = () => pinnedPageUrl(props.slug)
+  // The address that opens for THIS member (2026-11-20): /p/<public_id> for an unlisted page, the
+  // owner's preview link for a draft. /p/<slug> is the stranger's address and 404s for both.
+  // "Open in browser" opens it too, so the browser shows the member what the tab shows.
+  const [member, setMember] = createSignal(url())
+  const address = (slug: string) =>
+    props
+      .doFetch(`/iris/page-address?slug=${encodeURIComponent(slug)}`, { headers: { Accept: "application/json" } })
+      .then((r) => (r.ok ? (r.json() as Promise<PageAddressAnswer>) : undefined))
+      .catch(() => undefined)
+      .then((a) => memberFrameUrl(slug, a))
   const [phase, setPhase] = createSignal<Phase>({ at: "checking" })
   const [reloadKey, setReloadKey] = createSignal(0)
   // What the frame loads, and a key that changes whenever a fresh code is minted.
@@ -78,7 +91,7 @@ export function IrisPinnedPage(props: {
     mint(slug).then((m) => {
       if (slug !== props.slug) return
       setSignIn(m.signed ? { state: "pending" } : { state: "failed", reason: m.reason })
-      setFrameSrc(m.url)
+      setFrameSrc(signedMemberUrl(member(), m))
       setMintKey((k) => k + 1)
     })
   }
@@ -89,12 +102,17 @@ export function IrisPinnedPage(props: {
     on([() => props.slug, reloadKey], ([slug, key]) => {
       clearTimeout(timer)
       setPhase({ at: "checking" })
-      const q = `url=${encodeURIComponent(pinnedPageUrl(slug))}&origin=${encodeURIComponent(location.origin)}`
-      props
-        .doFetch(`/iris/frame-check?${q}`, { headers: { Accept: "application/json" } })
-        .then((r) => (r.ok ? (r.json() as Promise<FrameCheckAnswer>) : undefined))
-        .catch(() => undefined)
-        .then(async (answer) => {
+      address(slug)
+        .then((at) => {
+          setMember(at)
+          const q = `url=${encodeURIComponent(at)}&origin=${encodeURIComponent(location.origin)}`
+          return props
+            .doFetch(`/iris/frame-check?${q}`, { headers: { Accept: "application/json" } })
+            .then((r) => (r.ok ? (r.json() as Promise<FrameCheckAnswer>) : undefined))
+            .catch(() => undefined)
+            .then((answer) => ({ at, answer }))
+        })
+        .then(async ({ at, answer }) => {
           if (slug !== props.slug || key !== reloadKey()) return // a later reload won the race
           const v = pageVerdict(slug, answer, location.origin)
           if (!v.show) return setPhase({ at: "error", ...v })
@@ -104,10 +122,10 @@ export function IrisPinnedPage(props: {
             const m = await mint(slug)
             if (slug !== props.slug || key !== reloadKey()) return
             setSignIn(m.signed ? { state: "pending" } : { state: "failed", reason: m.reason })
-            setFrameSrc(m.url)
+            setFrameSrc(signedMemberUrl(at, m))
           } else {
             setSignIn({ state: "off" })
-            setFrameSrc(pinnedPageUrl(slug))
+            setFrameSrc(at)
           }
           setMintKey((k) => k + 1)
           setPhase({ at: "loading" })
@@ -158,7 +176,7 @@ export function IrisPinnedPage(props: {
           icon="square-arrow-top-right"
           variant="ghost"
           class="h-6 w-6"
-          onClick={() => props.openExternal(url())}
+          onClick={() => props.openExternal(member())}
           aria-label="Open in browser"
           title="Open in browser"
         />
@@ -177,7 +195,7 @@ export function IrisPinnedPage(props: {
                     icon="square-arrow-top-right"
                     variant="secondary"
                     class="h-7 w-7"
-                    onClick={() => props.openExternal(url())}
+                    onClick={() => props.openExternal(member())}
                     aria-label="Open in browser"
                     title="Open in browser"
                   />

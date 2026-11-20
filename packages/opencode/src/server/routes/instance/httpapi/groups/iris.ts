@@ -2200,6 +2200,7 @@ export const IrisPaths = {
   githubPr: `${root}/github/pr`,
   pageSignIn: `${root}/page-signin`,
   pagePin: `${root}/page-pin`,
+  pageAddress: `${root}/page-address`,
   campaignBoards: `${root}/campaigns/boards`,
   campaignSetup: `${root}/campaigns/setup`,
   marketingPins: `${root}/marketing/pins`,
@@ -3744,6 +3745,27 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Open a pinned Genesis page signed in",
           description:
             "A framed page cannot keep its sign-in cookie (WKWebView refuses third-party cookies; WebView2 refuses SameSite=Lax), so the sidecar asks fl-iris-api for a one-time code with the person's own token and the page's SDK trades it for a session held in memory (#192482). Mints on every call.",
+        }),
+      ),
+      HttpApiEndpoint.get("pageAddress", IrisPaths.pageAddress, {
+        query: Schema.Struct({ slug: described(Schema.String, "The pinned Genesis page, e.g. freelabel-grid-plan.") }),
+        success: described(
+          Schema.Struct({
+            measured: described(Schema.Boolean, "False when no member address could be worked out; `url` is then the plain /p/<slug> and `reason` says why."),
+            reason: Schema.optional(Schema.String),
+            url: described(Schema.String, "The address to frame on heyiris.io: /p/<slug> (public), /p/<public_id> (unlisted), or the owner's preview link (draft or private)."),
+            kind: described(Schema.Literals(["public", "unlisted", "preview"]), "Which of the three addresses `url` is."),
+            status: Schema.optional(Schema.String),
+            visibility: Schema.optional(Schema.String),
+          }).annotate({ identifier: "IrisPageAddress" }),
+          "The address a member can open for one of their own pages",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pageAddress",
+          summary: "Where a member opens their own page",
+          description:
+            "Marketing framed /p/<slug>, the address a stranger uses, so an unlisted page (its slug 404s by design) and a draft both showed 'This page isn't published' inside the app. The sidecar, with the member's own token, returns the address that opens for them: the slug for a public page, /p/<public_id> for an unlisted one, the owner's preview link for a draft or private one. The account's own pages only. Browser behaviour is unchanged.",
         }),
       ),
       HttpApiEndpoint.post("pagePin", IrisPaths.pagePin, {
