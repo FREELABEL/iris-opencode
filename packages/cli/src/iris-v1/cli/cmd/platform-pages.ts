@@ -866,16 +866,18 @@ const PullCmd = cmd({
 
 const PushCmd = cmd({
   command: "push <slug>",
-  // A push on an already-live page DEMOTES it to draft unless --publish is passed,
-  // and a drafted page 404s at its public url. Say that here — it is the single
-  // most surprising thing this command does.
-  describe: "upload local page JSON (a SLUG, not a path). Live pages drop to draft — pass --publish to keep them up",
+  // A LIVE PAGE STAYS LIVE (#193820). Push used to call /unpublish after every push to a
+  // published page "so the live page is untouched" — but unpublished means 404, so it was the
+  // opposite: live pages went offline for days at a time after a routine content push.
+  // Taking a page offline is now something you ask for, with --draft.
+  describe: "upload local page JSON (a SLUG, not a path). A live page stays live — pass --draft to take it offline",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("dir", { describe: "input directory", type: "string", default: "./pages" })
-      .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false })
-      .option("publish", { describe: "publish right after push — use this on any page that is already live, or it 404s until you publish", type: "boolean", default: false })
+      .option("live", { describe: "kept for scripts — a live page now stays live by default", type: "boolean", default: false })
+      .option("draft", { describe: "take a live page OFFLINE after the push (it 404s until you publish)", type: "boolean", default: false })
+      .option("publish", { describe: "publish right after push (a draft page goes live)", type: "boolean", default: false })
       .option("force", { describe: "push even if the local file looks like a stale shadow copy (#181601)", type: "boolean", default: false })
       // Deliberately NOT folded into --force. --force answers "yes, this directory is the one
       // I meant"; this answers "yes, discard the newer versions on the server". Overloading
@@ -1125,8 +1127,8 @@ const PushCmd = cmd({
         sp.stop(success(`Pushed (${cnt} components) + published`))
         console.log(`  ${highlight(publicUrl(slug))}`)
         printDesignStandardHint(slug)
-      // Safe-by-default: unpublish after push so live page is untouched
-      } else if (!args.live && page.status === "published") {
+      // Only on request (#193820): unpublishing a live page makes its public URL 404.
+      } else if (args.draft && page.status === "published") {
         await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
         sp.stop(success(`Pushed (${cnt} components) → draft`))
 
@@ -1141,7 +1143,7 @@ const PushCmd = cmd({
           console.log(`  ${dim("Share with client, then: iris pages publish " + slug)}`)
         }
       } else {
-        sp.stop(success(`Pushed (${cnt} components, new version)`))
+        sp.stop(success(`Pushed (${cnt} components, new version)${page.status === "published" ? " — still live" : ""}`))
       }
 
       prompts.outro("Done")
