@@ -226,9 +226,11 @@ export function IrisHiveSims(props: {
                   {(x) =>
                     x.kind === "missing" && (
                       <span class="hsm-basis-row hsm-basis-missing">
-                        {x.waiting
+                        {x.why === "waiting"
                           ? "MEASURED vs DRAWN: waiting for the engine's header…"
-                          : "MEASURED vs DRAWN: this engine did not say which figures are guesses — the contract requires it. Treat every number as unlabelled."}
+                          : x.why === "not-reached"
+                            ? "MEASURED vs DRAWN: not reached — the run stopped before the engine printed its header."
+                            : "MEASURED vs DRAWN: this engine did not say which figures are guesses — the contract requires it. Treat every number as unlabelled."}
                       </span>
                     )
                   }
@@ -254,7 +256,8 @@ export function IrisHiveSims(props: {
                   worlds {v().knobs.worlds} · cohort {v().knobs.cohort} · {v().knobs.days}d · {v().knobs.refresh ? "fresh pull" : "data on disk"} ·{" "}
                   {duration((v().ended ?? tick()) - v().started)}
                 </div>
-                <Show when={v().reason && v().status !== "passed"}>
+                {/* Why it stopped is on the step that stopped it — not repeated here. */}
+                <Show when={v().reason && v().status !== "passed" && !v().steps.some((s) => s.status === "failed" && s.reason)}>
                   <p class="hsm-reason">{v().reason}</p>
                 </Show>
               </div>

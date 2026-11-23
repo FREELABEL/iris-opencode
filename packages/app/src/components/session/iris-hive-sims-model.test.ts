@@ -65,8 +65,11 @@ describe("hive sims model", () => {
       drawn: ["b"],
     })
     expect(basis(read({ header: ["MEASURED: x | DRAWN: y"] }))).toEqual({ kind: "header", lines: ["MEASURED: x | DRAWN: y"] })
-    expect(basis(read())).toEqual({ kind: "missing", waiting: true })
-    expect(basis(read({ status: "passed" }))).toEqual({ kind: "missing", waiting: false })
+    expect(basis(read())).toEqual({ kind: "missing", why: "waiting" })
+    // A failed tie-out never reached the engine's header: not the engine's fault, and not "unsaid".
+    expect(basis(read({ status: "failed" }))).toEqual({ kind: "missing", why: "not-reached" })
+    const ran = [step("engine"), step("pull"), step("tie-out"), step("simulate", { status: "passed" as const }), step("flip")]
+    expect(basis(read({ status: "passed", steps: ran }))).toEqual({ kind: "missing", why: "unsaid" })
   })
 
   test("which run shows: picked, unless a newer one started since; else the running one; else the newest", () => {

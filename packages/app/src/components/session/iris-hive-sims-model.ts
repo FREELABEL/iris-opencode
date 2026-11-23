@@ -89,14 +89,20 @@ export function percent(p: Progress | undefined): number | undefined {
 export type Basis =
   | { kind: "feed"; measured: string[]; drawn: string[] }
   | { kind: "header"; lines: string[] }
-  | { kind: "missing"; waiting: boolean }
+  /**
+   * waiting: the engine has not printed its header yet. not-reached: the run ended before the
+   * simulate step ran (a failed tie-out) — the engine never had the chance. unsaid: it ran and
+   * did not say, which breaks the contract.
+   */
+  | { kind: "missing"; why: "waiting" | "not-reached" | "unsaid" }
 
 export function basis(run: Pick<RunRead, "feed" | "header" | "status" | "steps">): Basis {
   const io = run.feed.inputs
   if (io) return { kind: "feed", measured: io.measured, drawn: io.drawn }
   if (run.header.length) return { kind: "header", lines: run.header }
   const sim = run.steps.find((s) => s.id === "simulate")
-  return { kind: "missing", waiting: run.status === "running" && sim?.status !== "passed" && sim?.status !== "failed" }
+  if (!sim || sim.status === "waiting") return { kind: "missing", why: run.status === "running" ? "waiting" : "not-reached" }
+  return { kind: "missing", why: sim.status === "running" ? "waiting" : "unsaid" }
 }
 
 /**
