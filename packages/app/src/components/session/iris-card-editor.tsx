@@ -395,6 +395,12 @@ export interface IrisCardEditorProps {
   position?: { index: number; total: number }
   /** Panel: what the back button returns to, e.g. the board's name. */
   backLabel?: string
+  /**
+   * When the card is an epic (#192839): what the board read about it — progress in words (from
+   * recorded child links, or "8 child tickets" from the title) and the "Next:" line. Shown at the
+   * top of Details; owners are the Assigned row below it.
+   */
+  epic?: { progress?: string; next?: string }
 }
 
 /**
@@ -1824,6 +1830,21 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                   <Switch>
                     {/* ───────────── DETAILS ───────────── */}
                     <Match when={side() === "details"}>
+                      <Show when={props.epic}>
+                        {(ep) => (
+                          <div class="iris-sec iris-card__epic" aria-label="Epic">
+                            <div class="iris-card__epic-type font-mono">EPIC</div>
+                            <dl class="iris-card__epic-dl">
+                              <dt>Progress</dt>
+                              <dd>{ep().progress ?? "No child tickets recorded yet"}</dd>
+                              <Show when={ep().next}>
+                                <dt>Next</dt>
+                                <dd>{ep().next}</dd>
+                              </Show>
+                            </dl>
+                          </div>
+                        )}
+                      </Show>
                       <div class="iris-sec">
                         <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="#3b82f6">
                           Assigned
