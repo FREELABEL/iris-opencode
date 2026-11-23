@@ -350,15 +350,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       const all: CommandOption[] = []
 
       for (const reg of activeCommandRegistrations(store.registrations)) {
-        // A screen whose options callback returned nothing used to take the whole app down
-        // ("reg.options is not a function or its return value is not iterable"): seen in the
-        // browser preview, where desktop-only screens have nothing to offer. Skip it instead.
-        const opts = reg.options()
-        if (!Array.isArray(opts)) {
-          if (import.meta.env.DEV) console.warn(`[command] registration ${reg.key ?? "(no key)"} returned no list; skipped`)
-          continue
-        }
-        for (const opt of opts) {
+        for (const opt of reg.options()) {
           if (seen.has(opt.id)) {
             if (import.meta.env.DEV && !warnedDuplicates.has(opt.id)) {
               warnedDuplicates.add(opt.id)
