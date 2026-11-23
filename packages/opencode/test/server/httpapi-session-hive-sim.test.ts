@@ -240,6 +240,11 @@ describe("session hive simulations (#194084)", () => {
         const done = yield* readUntil(session.id, started.id, headers, (r) => r.status !== "running")
         expect(done.status).toBe("cancelled")
         expect(done.steps.map((s) => s.status)).toEqual(["passed", "passed", "passed", "failed", "waiting"])
+        // The engine process is gone, not orphaned: it printed every 1.5 s, and nothing more arrives.
+        const at = done.outputs.simulate.length
+        yield* Effect.sleep("2500 millis")
+        const later = yield* requestJson<Read>(pathFor(SessionPaths.hiveSimRead, { sessionID: session.id, runID: started.id }), { headers })
+        expect(later.steps[3].output.length).toBe(at)
         const other = yield* createSession({ title: "other" })
         const missing = yield* request(pathFor(SessionPaths.hiveSimRead, { sessionID: other.id, runID: started.id }), { headers })
         expect(missing.status).toBe(404)
