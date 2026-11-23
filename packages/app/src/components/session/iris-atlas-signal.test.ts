@@ -48,6 +48,19 @@ describe("readSignal — structured field first, then title, then list name", ()
     expect(p2.priority).toBe("P2")
   })
 
+  test("prose is never read as a status or a priority — only the prefix or a leading label", () => {
+    // Real titles from #652 that a looser reading got wrong.
+    const phase = readSignal(card(20, "Code Mode P1: playbooks behind search in both MCP servers"))
+    expect(phase.loud).toBeNull()
+    expect(phase.priority).toBeUndefined()
+    expect(readSignal(card(21, "Fixed node lookup, and the name is not an identity")).state).toBeNull()
+    expect(readSignal(card(22, "Shipped notes: what landed this week")).state).toBeNull()
+    // …while a leading label still counts.
+    expect(readSignal(card(23, "BLOCKED: IRIS partner ad needs a public partner offer")).state).toBe("blocked")
+    expect(readSignal(card(24, "WIP — onboarding film")).state).toBe("in_progress")
+    expect(tidyPlan([{ name: "Todo", items: [card(25, "Code Mode P2: sandbox image ships the CLI")] }])).toEqual([])
+  })
+
   test("a structured priority wins", () => {
     expect(readSignal(card(8, "[P0] something", { priority: "low" })).loud).toBeNull()
   })

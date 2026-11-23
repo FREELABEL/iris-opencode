@@ -76,6 +76,17 @@ const TITLE_PRIORITY = /\b(P[0-3])\b|\b(CRITICAL|URGENT|HIGH|MEDIUM|LOW)\b/
 
 const EPIC_TITLE = /^\s*(\[\s*EPIC\b|EPIC\b\s*[-—–:·#|]|EPIC\s+\d|EPIC$)/i
 
+/**
+ * Where a title is allowed to SAY state or priority: its bracket prefix ("[ACCT-1 ✅ DONE]",
+ * "[SOC2 · P0]") or a short leading label ("BLOCKED: …", "WIP — …"). Never the prose: "Code Mode
+ * P1: …" is phase 1, not priority 1, and "Fixed node lookup" is a title, not a status.
+ */
+function signalHead(title: string): string | undefined {
+  const [prefix] = splitPrefix(title)
+  if (prefix) return prefix
+  return title.match(/^\s*((?:[✅✔☑🚧⛔🛑]\s*)?[A-Z][A-Z0-9 -]{1,18})\s*[:—–]\s+\S/)?.[1]
+}
+
 /** Strip one leading [ … ] (or a run of them) and return [prefix, rest]. */
 export function splitPrefix(title: string): [string | undefined, string] {
   const m = title.match(/^\s*((?:\[[^\]]{1,80}\]\s*)+)(.*)$/s)
@@ -109,11 +120,10 @@ export function stateOf(item: SignalInput, listName = ""): { state: CardState; f
   if (DONE_STATUS.has(s)) return { state: "done", from: "field" }
   if (PROGRESS_STATUS.has(s)) return { state: "in_progress", from: "field" }
   if (BLOCKED_STATUS.has(s)) return { state: "blocked", from: "field" }
-  const [prefix] = splitPrefix(item.title)
-  const head = prefix ?? item.title.slice(0, 40)
-  if (TITLE_BLOCKED.test(head)) return { state: "blocked", from: "title" }
-  if (TITLE_DONE.test(head)) return { state: "done", from: "title" }
-  if (TITLE_PROGRESS.test(head)) return { state: "in_progress", from: "title" }
+  const head = signalHead(item.title)
+  if (head && TITLE_BLOCKED.test(head)) return { state: "blocked", from: "title" }
+  if (head && TITLE_DONE.test(head)) return { state: "done", from: "title" }
+  if (head && TITLE_PROGRESS.test(head)) return { state: "in_progress", from: "title" }
   if (LIST_DONE.test(listName)) return { state: "done", from: "list" }
   if (LIST_BLOCKED.test(listName)) return { state: "blocked", from: "list" }
   if (LIST_PROGRESS.test(listName)) return { state: "in_progress", from: "list" }
@@ -123,8 +133,7 @@ export function stateOf(item: SignalInput, listName = ""): { state: CardState; f
 export function priorityOf(item: SignalInput): { loud: Loud; label?: string; from?: "field" | "title" } {
   const p = (item.priority ?? "").toString().trim()
   if (p) return { loud: PRIORITY_WORD[p.toLowerCase()] ?? null, label: p.toUpperCase().length <= 3 ? p.toUpperCase() : p.toLowerCase(), from: "field" }
-  const [prefix] = splitPrefix(item.title)
-  const m = (prefix ?? item.title.slice(0, 60)).match(TITLE_PRIORITY)
+  const m = signalHead(item.title)?.match(TITLE_PRIORITY)
   if (!m) return { loud: null }
   const word = (m[1] ?? m[2]).toLowerCase()
   return { loud: PRIORITY_WORD[word] ?? null, label: m[1] ? m[1].toUpperCase() : word, from: "title" }
