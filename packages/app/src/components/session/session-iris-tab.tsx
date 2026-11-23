@@ -88,6 +88,7 @@ import { IrisHiveScripts } from "./iris-hive-scripts"
 import { IrisHiveMachines } from "./iris-hive-machines"
 import { IrisHiveInbox } from "./iris-hive-inbox"
 import { IrisHiveSessions } from "./iris-hive-sessions"
+import { IrisHiveSims } from "./iris-hive-sims"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import type { StepId } from "./iris-agent-editor-model"
@@ -757,6 +758,8 @@ SELF_PANES.add("marketing-pins")
 SELF_PANES.add("browser")
 // Terminal (#193785) draws itself: SessionTerminalPane, registered by the session's side panel.
 SELF_PANES.add("terminal")
+// Hive › Simulations (#194084) draws and polls for itself.
+SELF_PANES.add("hive-sims")
 
 /**
  * The Browser pane, handed in by the screens that host this panel (session side panel, home panel)
@@ -959,6 +962,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "sessions", label: "Sessions", pane: "hive-sessions", path: () => `/iris/hive/sessions` },
     // #188817: write a script, send it to one of your computers, watch it run. Owns its pane.
     { id: "scripts", label: "Scripts", pane: "hive-scripts", path: () => `/iris/hive/scripts` },
+    // #194084: a hive-simulations run, live, then its results — this chat's runs. Owns its pane.
+    { id: "simulations", label: "Simulations", pane: "hive-sims", path: () => `/iris/hive/simulations` },
     // Hive › Inbox moved to Inbox › Computers (#192688): one place for everything waiting on you.
     // `hive/inbox` still lands there (MOVED_SUBVIEWS in iris-panel-nav.ts).
     // THE OTHER HALF OF HIVE. The tab showed your own machines only; a peer connection — the
@@ -1252,6 +1257,7 @@ const PANEL_HINTS: Record<string, string> = {
   hive: "The user's computers (Hive) and tasks that run on them",
   "hive/machines": "Computers connected to the account; send one a task",
   "hive/scripts": "Saved scripts to run on a machine",
+  "hive/simulations": "Hive simulations this chat ran: steps live, MEASURED vs DRAWN, tables, the flip, raw output, Stop. side_panel simulate opens it",
   "hive/peers": "Other machines on the mesh",
   pulse: "What people are saying about a topic or a contact",
   "pulse/topic": "Recent conversation about a topic",
@@ -4707,6 +4713,9 @@ export function SessionIrisTab() {
             </Match>
             <Match when={pane() === "pulse-contact"}>
               <IrisPulseContact doFetch={doFetch} />
+            </Match>
+            <Match when={pane() === "hive-sims"}>
+              <IrisHiveSims doFetch={doFetch} sessionId={navParams.id} directory={projectDir()} />
             </Match>
             <Match when={pane() === "hive-scripts"}>
               <IrisHiveScripts

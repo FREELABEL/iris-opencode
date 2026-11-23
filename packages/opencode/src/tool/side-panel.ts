@@ -4,6 +4,8 @@ import DESCRIPTION from "./side-panel.txt"
 import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { Panel } from "@/iris/panel"
+import { HiveSim } from "@/iris/hive-sim"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SessionID } from "../session/schema"
 
 /**
@@ -18,7 +20,7 @@ import type { SessionID } from "../session/schema"
  * says "it's showing Atlas › Schemas" because the panel said so — never because it asked.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "dataset", "tab", "browse"]).annotate({
+  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "dataset", "tab", "browse", "simulate"]).annotate({
     description: "What to do",
   }),
   surface: Schema.optional(Schema.String).annotate({ description: "show: product id or label (atlas, Genesis, agents, …)" }),
@@ -32,6 +34,15 @@ export const Parameters = Schema.Struct({
   id: Schema.optional(Schema.String).annotate({ description: "artifact: the genesis_artifact id" }),
   tab: Schema.optional(Schema.String).annotate({ description: "tab: review or context" }),
   url: Schema.optional(Schema.String).annotate({ description: "browse: http(s) address" }),
+  engine: Schema.optional(Schema.String).annotate({
+    description: "simulate: path to the hive-simulations engine (.py), absolute or relative to the project directory",
+  }),
+  worlds: Schema.optional(Schema.Number).annotate({ description: "simulate: worlds per arm (default 4000)" }),
+  cohort: Schema.optional(Schema.Number).annotate({ description: "simulate: population per world (default 1000)" }),
+  days: Schema.optional(Schema.Number).annotate({ description: "simulate: window to pull, in days (default 30)" }),
+  refresh: Schema.optional(Schema.Boolean).annotate({
+    description: "simulate: re-pull the real data first (default true); false runs on the dataset already on disk",
+  }),
 })
 
 type Metadata = {
@@ -45,13 +56,17 @@ type Metadata = {
   elapsedMs?: number
   attempts?: number
   streams?: number
+  /** simulate: the run's id and how it ended (running = the wait ended first). */
+  simulation?: string
+  simulationStatus?: HiveSim.RunStatus
 }
 
 
-export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
+export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Service | ChildProcessSpawner>(
   "side_panel",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
+    const spawner = yield* ChildProcessSpawner
 
     const rootOf = (id: SessionID) =>
       Effect.gen(function* () {
@@ -84,6 +99,8 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
         case "browse":
           if (!p.url) return "browse needs a url"
           return { action: "browse", url: p.url }
+        case "simulate":
+          return "simulate is not a panel command"
       }
       return `unknown action ${p.action}`
     }
@@ -126,6 +143,51 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
                 ageSeconds: now ? age(now) : undefined,
                 streams: Panel.openStreams(),
               },
+            }
+          }
+
+          if (params.action === "simulate") {
+            // HIVE SIMULATIONS, LIVE (#194084): the playbook's shell steps as one run the person
+            // watches in Hive › Simulations, while this call waits for it to end and returns the
+            // results. The run is not this call's: if the chat moves on, it keeps going.
+            const started = HiveSim.start(
+              {
+                sessionID: session,
+                directory: instance.directory,
+                engine: params.engine ?? "",
+                worlds: params.worlds,
+                cohort: params.cohort,
+                days: params.days,
+                refresh: params.refresh,
+              },
+              HiveSim.spawnExec(spawner),
+            )
+            if (typeof started === "string") return yield* Effect.fail(new Error(started))
+            const run = started
+            yield* ctx.metadata({ title: `simulating ${run.engine}`, metadata: { simulation: run.id, simulationStatus: run.status } })
+            const show: Panel.Command = { action: "show", surface: "hive", sub: "simulations" }
+            const refusedShow = Panel.refuse(show, known?.catalog)
+            const shown =
+              !refusedShow && Panel.openStreams() > 0
+                ? Panel.send({ directory: instance.directory, session, command: Panel.canonical(show, known?.catalog) })
+                : undefined
+            yield* Effect.promise(() => HiveSim.wait(run, HiveSim.TIMEOUT_MS + 10_000, ctx.abort))
+            const panel = shown ? yield* Effect.promise(() => shown) : undefined
+            const where = refusedShow
+              ? `panel: this desktop has no Hive › Simulations view (${refusedShow}) — describe the results in words.`
+              : !shown
+                ? "panel: no desktop is connected — describe the results in words."
+                : panel?.state && !panel.state.error
+                  ? "panel: showing Hive › Simulations on this run."
+                  : `panel: ${panel?.state?.error ?? "the desktop did not confirm Hive › Simulations"}.`
+            const still =
+              run.status === "running"
+                ? `\nThe run is STILL RUNNING (this call stopped waiting${ctx.abort.aborted ? " because the turn was stopped" : ""}); it continues in Hive › Simulations.`
+                : ""
+            return {
+              title: `simulation ${run.status}`,
+              output: `${HiveSim.report(run)}\n\n${where}${still}`,
+              metadata: { simulation: run.id, simulationStatus: run.status, answered: !!panel?.state },
             }
           }
 

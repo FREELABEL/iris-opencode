@@ -12,6 +12,8 @@ import { Truncate } from "@/tool/truncate"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { Panel } from "@/iris/panel"
+import { HiveSim } from "@/iris/hive-sim"
+import path from "path"
 import { SidePanelTool } from "../../src/tool/side-panel"
 import { MessageID } from "../../src/session/schema"
 import type { Tool } from "@/tool/tool"
@@ -277,6 +279,71 @@ describe("side_panel tool — live state, honest timeouts, cards", () => {
       const s = yield* sessions.create({ title: "desk" })
       const exit = yield* run({ action: "card", bloq: 628 }, ctxFor(s.id)).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
+    }),
+  )
+})
+
+// #194084 — side_panel simulate: runs the hive-simulations steps, shows Hive › Simulations, waits, returns results.
+describe("side_panel tool — simulate", () => {
+  const saved = { ...Panel.timing }
+  const env = process.env.HIVE_SIM_DEMO_SECONDS
+  afterEach(() => {
+    Object.assign(Panel.timing, saved)
+    HiveSim.reset()
+    if (env === undefined) delete process.env.HIVE_SIM_DEMO_SECONDS
+    else process.env.HIVE_SIM_DEMO_SECONDS = env
+  })
+  const engine = (name: string) => path.join(import.meta.dir, "..", "iris", "fixtures", "hive-sim", name)
+  const withSims: Panel.State["catalog"] = [
+    ...catalog!,
+    { id: "hive", label: "Hive", subs: [{ id: "machines", label: "Machines" }, { id: "simulations", label: "Simulations" }] },
+  ]
+
+  it.instance("starts the run, shows Hive › Simulations, and returns the steps and the simulate output", () =>
+    Effect.gen(function* () {
+      process.env.HIVE_SIM_DEMO_SECONDS = "0.3"
+      Object.assign(Panel.timing, { sendMs: 2000, resendMs: 500 })
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "sim" })
+      Panel.report({ session: String(s.id), open: true, catalog: withSims })
+      Panel.streamOpened()
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "simulate", engine: engine("demo-engine.py"), worlds: 100, cohort: 20, days: 7 }, ctxFor(s.id))
+        expect(desk.seen.map((e) => e.payload.properties.command)).toEqual([{ action: "show", surface: "hive", sub: "simulations" }])
+        expect(r.metadata.simulationStatus).toBe("passed")
+        expect(r.output).toContain("PASSED")
+        expect(r.output).toContain("✓ tie-out — passed")
+        expect(r.output).toContain("MEASURED: daily spend per account, active days per account")
+        expect(r.output).toContain("FLIP: Free-tier active days per month flips the ranking")
+        expect(r.output).toContain("--- simulate output ---")
+        expect(r.output).toContain("simulated 100 / 100 worlds")
+        expect(r.output).toContain("panel: showing Hive › Simulations on this run.")
+        expect(r.output).toContain("step:flip")
+        expect(HiveSim.list(String(s.id)).map((x) => x.id)).toEqual([r.metadata.simulation!])
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("an older desktop without the view still gets the run, and is told to describe it in words", () =>
+    Effect.gen(function* () {
+      process.env.HIVE_SIM_DEMO_SECONDS = "0.1"
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "sim old" })
+      Panel.report({ session: String(s.id), open: true, catalog })
+      Panel.streamOpened()
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "simulate", engine: engine("plain-engine.py"), refresh: false }, ctxFor(s.id))
+        expect(desk.seen).toHaveLength(0)
+        expect(r.metadata.simulationStatus).toBe("passed")
+        expect(r.output).toContain("MEASURED: weekly orders per store | DRAWN: price elasticity")
+        expect(r.output).toContain("this desktop has no Hive › Simulations view")
+      } finally {
+        desk.stop()
+      }
     }),
   )
 })

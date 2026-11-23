@@ -1,0 +1,112 @@
+/*
+ * Hive › Simulations (#194084). Tokens from the Hive kit (.hsm is in iris-hive-scripts.css's token
+ * block): jade = running / IRIS, sage = passed, coral = failed, amber = a guess (DRAWN, the flip).
+ * Status is carried by a glyph and text colour, and a card by a tint — never a coloured edge.
+ */
+.hsm {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  color: var(--hsc-ink);
+  background: var(--hsc-surface);
+  font-size: 12.5px;
+}
+.hsm-empty { margin: 0; padding: 14px 12px; color: var(--hsc-ink2); line-height: 1.5; }
+.hsm-note { margin: 0; color: var(--hsc-faint); font-size: 11.5px; }
+
+.hsm-runs { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; flex: none; border-bottom: 1px solid var(--hsc-rule); }
+.hsm-run {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 220px;
+  padding: 4px 9px; border: 1px solid var(--hsc-rule); border-radius: 999px;
+  background: transparent; color: var(--hsc-ink2); font: inherit; cursor: pointer;
+}
+.hsm-run:hover { color: var(--hsc-ink); }
+.hsm-run[aria-selected="true"] { color: var(--hsc-ink); background: var(--hsc-card); border-color: var(--hsc-elev); }
+.hsm-run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hsm-run-meta { color: var(--hsc-faint); font-size: 11px; }
+
+.hsm-body { display: flex; flex-direction: column; gap: 10px; padding: 0 10px 12px; }
+
+/* Pinned: the first thing a reader needs, and the last thing that may scroll away. */
+.hsm-basis {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; flex-direction: column; gap: 3px;
+  margin: 0 -10px; padding: 8px 10px;
+  background: var(--hsc-surface);
+  border-bottom: 1px solid var(--hsc-rule);
+  font-size: 11.5px; line-height: 1.45;
+}
+.hsm-basis-row { display: flex; gap: 8px; align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
+.hsm-basis-row b { flex: none; font-weight: 650; letter-spacing: 0.04em; font-size: 10.5px; }
+.hsm-measured { color: var(--hsc-sage); }
+.hsm-drawn { color: var(--hsc-amber); }
+.hsm-basis-missing { color: var(--hsc-amber); }
+
+.hsm-head { display: flex; flex-direction: column; gap: 3px; padding-top: 2px; }
+.hsm-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hsm-engine { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hsm-status { font-size: 11px; color: var(--hsc-ink2); }
+.hsm-status[data-status="running"] { color: var(--hsc-jade); }
+.hsm-status[data-status="passed"] { color: var(--hsc-sage); }
+.hsm-status[data-status="failed"] { color: var(--hsc-coral); }
+.hsm-knobs { color: var(--hsc-faint); font-size: 11px; }
+.hsm-reason { margin: 2px 0 0; color: var(--hsc-coral); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
+.hsm-stop {
+  padding: 3px 10px; border-radius: 6px; font: inherit; font-size: 11.5px; cursor: pointer;
+  color: var(--hsc-coral); background: color-mix(in srgb, var(--hsc-coral) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hsc-coral) 35%, transparent);
+}
+.hsm-stop:disabled { opacity: 0.55; cursor: default; }
+
+.hsm-progress { position: relative; height: 18px; border-radius: 5px; background: var(--hsc-card); overflow: hidden; }
+.hsm-progress-fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--hsc-jade) 32%, transparent); transition: width 0.3s ease; }
+.hsm-progress-label { position: relative; display: block; padding: 0 8px; line-height: 18px; font-size: 11px; color: var(--hsc-ink); }
+
+.hsm-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.hsm-step { display: flex; gap: 8px; align-items: flex-start; padding: 5px 6px; border-radius: 6px; }
+.hsm-step[data-status="running"] { background: color-mix(in srgb, var(--hsc-jade) 8%, transparent); }
+.hsm-step[data-status="failed"] { background: color-mix(in srgb, var(--hsc-coral) 9%, transparent); }
+.hsm-step[data-status="waiting"] { color: var(--hsc-faint); }
+.hsm-step-main { flex: 1; min-width: 0; }
+.hsm-step-line { display: flex; gap: 8px; align-items: baseline; }
+.hsm-step-title { flex: 1; min-width: 0; }
+.hsm-step-time { color: var(--hsc-faint); font-size: 11px; }
+.hsm-step-reason { margin-top: 2px; font-size: 11.5px; color: var(--hsc-ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hsm-step-reason[data-status="failed"] { color: var(--hsc-coral); font-family: var(--hsc-mono-font); font-size: 11px; }
+
+.hsm-glyph { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; font-size: 12px; font-weight: 700; line-height: 1; }
+.hsm-glyph[data-status="passed"] { color: var(--hsc-sage); }
+.hsm-glyph[data-status="failed"] { color: var(--hsc-coral); }
+.hsm-glyph[data-status="waiting"] { color: var(--hsc-faint); }
+.hsm-spinner {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--hsc-jade) 25%, transparent);
+  border-top-color: var(--hsc-jade);
+  animation: hsc-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .hsm-spinner { animation: none; } }
+
+.hsm-flip { padding: 9px 10px; border-radius: 8px; background: color-mix(in srgb, var(--hsc-amber) 11%, transparent); }
+.hsm-flip-head { font-weight: 600; font-size: 11.5px; color: var(--hsc-amber); margin-bottom: 4px; }
+.hsm-flip-text { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.hsm-flip-meta { margin: 4px 0 0; color: var(--hsc-ink2); font-size: 11px; }
+
+.hsm-table { border-radius: 8px; background: var(--hsc-card); padding: 8px 0 4px; }
+.hsm-table-title { padding: 0 10px 6px; font-weight: 600; font-size: 12px; }
+.hsm-table-scroll { overflow-x: auto; }
+.hsm-table table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+.hsm-table th { text-align: left; font-weight: 600; color: var(--hsc-ink2); padding: 3px 10px; border-bottom: 1px solid var(--hsc-rule); white-space: nowrap; }
+.hsm-table td { padding: 3px 10px; border-bottom: 1px solid color-mix(in srgb, var(--hsc-rule) 50%, transparent); white-space: nowrap; }
+.hsm-table tr:last-child td { border-bottom: 0; }
+
+.hsm-raw { display: flex; flex-direction: column; gap: 4px; }
+.hsm-raw-toggle { align-self: flex-start; padding: 2px 0; background: none; border: 0; font: inherit; font-size: 11.5px; color: var(--hsc-ink2); cursor: pointer; }
+.hsm-raw-toggle:hover { color: var(--hsc-ink); }
+.hsm-raw-text {
+  margin: 0; max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px;
+  background: var(--hsc-term); color: var(--hsc-ink2); font-size: 11px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
