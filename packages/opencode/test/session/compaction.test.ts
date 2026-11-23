@@ -430,13 +430,16 @@ describe("session.compaction.isOverflow", () => {
 
   it.live(
     "returns false when input/output are within input caps",
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const compact = yield* SessionCompaction.Service
-        const model = createModel({ context: 400_000, input: 272_000, output: 128_000 })
-        const tokens = { input: 200_000, output: 20_000, reasoning: 0, cache: { read: 10_000, write: 0 } }
-        expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
-      }),
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 400_000, input: 272_000, output: 128_000 })
+          const tokens = { input: 200_000, output: 20_000, reasoning: 0, cache: { read: 10_000, write: 0 } }
+          expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
+        }),
+      // window math only — the fixed cap (#194083) would trigger at 230k
+      { config: { compaction: { trigger_tokens: 0 } } },
     ),
   )
 
@@ -448,6 +451,57 @@ describe("session.compaction.isOverflow", () => {
         const model = createModel({ context: 200_000, input: 120_000, output: 10_000 })
         const tokens = { input: 50_000, output: 9_999, reasoning: 0, cache: { read: 0, write: 0 } }
         expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
+      }),
+    ),
+  )
+
+  // #194083: a 1M-token window used to mean "compact at ~970k"; a fixed cap now applies.
+  const million = () => createModel({ context: 1_000_000, output: 384_000 })
+  const at = (input: number) => ({ input, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } })
+
+  it.live(
+    "compacts a 1M-window session at the default 200k cap",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        expect(yield* compact.isOverflow({ tokens: at(150_000), model: million() })).toBe(false)
+        expect(yield* compact.isOverflow({ tokens: at(200_000), model: million() })).toBe(true)
+      }),
+    ),
+  )
+
+  it.live(
+    "trigger_tokens sets the cap",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          expect(yield* compact.isOverflow({ tokens: at(40_000), model: million() })).toBe(false)
+          expect(yield* compact.isOverflow({ tokens: at(60_000), model: million() })).toBe(true)
+        }),
+      { config: { compaction: { trigger_tokens: 50_000 } } },
+    ),
+  )
+
+  it.live(
+    "trigger_tokens 0 falls back to the full window",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          expect(yield* compact.isOverflow({ tokens: at(500_000), model: million() })).toBe(false)
+        }),
+      { config: { compaction: { trigger_tokens: 0 } } },
+    ),
+  )
+
+  it.live(
+    "a window smaller than the cap still wins",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 128_000, output: 16_000 })
+        expect(yield* compact.isOverflow({ tokens: at(115_000), model })).toBe(true)
       }),
     ),
   )
@@ -807,6 +861,102 @@ describe("session.compaction.prune", () => {
           expect(part.state.time.compacted).toBeUndefined()
         }
       }),
+    ),
+  )
+})
+
+// #194083: pruning old tool output is on unless switched off.
+function seedOldToolOutput(dir: string) {
+  return Effect.gen(function* () {
+    const ssn = yield* SessionNs.Service
+    const info = yield* ssn.create({})
+    const a = yield* ssn.updateMessage({
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID: info.id,
+      agent: "build",
+      model: ref,
+      time: { created: Date.now() },
+    })
+    yield* ssn.updatePart({ id: PartID.ascending(), messageID: a.id, sessionID: info.id, type: "text", text: "first" })
+    const b: SessionV1.Assistant = {
+      id: MessageID.ascending(),
+      role: "assistant",
+      sessionID: info.id,
+      mode: "build",
+      agent: "build",
+      path: { cwd: dir, root: dir },
+      cost: 0,
+      tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      parentID: a.id,
+      time: { created: Date.now() },
+      finish: "end_turn",
+    }
+    yield* ssn.updateMessage(b)
+    yield* ssn.updatePart({
+      id: PartID.ascending(),
+      messageID: b.id,
+      sessionID: info.id,
+      type: "tool",
+      callID: crypto.randomUUID(),
+      tool: "bash",
+      state: {
+        status: "completed",
+        input: {},
+        output: "x".repeat(200_000),
+        title: "done",
+        metadata: {},
+        time: { start: Date.now(), end: Date.now() },
+      },
+    })
+    for (const text of ["second", "third"]) {
+      const msg = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: info.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({ id: PartID.ascending(), messageID: msg.id, sessionID: info.id, type: "text", text })
+    }
+    return info.id
+  })
+}
+
+function prunedAt(sessionID: SessionID) {
+  return Effect.gen(function* () {
+    const ssn = yield* SessionNs.Service
+    const msgs = yield* ssn.messages({ sessionID })
+    const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
+    return part?.type === "tool" && part.state.status === "completed" ? part.state.time.compacted : "missing"
+  })
+}
+
+describe("session.compaction.prune default (#194083)", () => {
+  it.live(
+    "prunes old tool output when the config says nothing",
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const sessionID = yield* seedOldToolOutput(dir)
+        yield* (yield* SessionCompaction.Service).prune({ sessionID })
+        expect(yield* prunedAt(sessionID)).toBeNumber()
+      }),
+    ),
+  )
+
+  it.live(
+    "leaves tool output alone when prune is false",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const sessionID = yield* seedOldToolOutput(dir)
+          yield* (yield* SessionCompaction.Service).prune({ sessionID })
+          expect(yield* prunedAt(sessionID)).toBeUndefined()
+        }),
+      { config: { compaction: { prune: false } } },
     ),
   )
 })
