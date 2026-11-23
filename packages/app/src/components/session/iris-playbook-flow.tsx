@@ -171,8 +171,10 @@ export function PlaybookTags(props: { row: any; withState?: boolean }) {
       <Show when={props.withState && props.row?.hasLocal}>
         <span
           class="pbf-tag pbf-tag--state"
+          data-state={props.row.action === "update" ? "update" : "installed"}
           title={props.row.localWhere ? `Installed — ${props.row.localWhere}` : "Installed"}
         >
+          <Ic name={props.row.action === "update" ? "arrow-up" : "check"} size={13} />
           {props.row.action === "update" ? `Update · v${props.row.version}` : "Installed"}
         </span>
       </Show>
@@ -419,15 +421,21 @@ export function PlaybookFlowInfo(props: {
       </Show>
       <Show when={props.installResult}>
         {(r) => (
-          <p class="pbf-note" data-tone={r().ok ? undefined : "bad"}>
-            {r().message}
+          <p class="pbf-note pbf-note--result" data-tone={r().ok ? "good" : "bad"} role="status">
+            <Ic name={r().ok ? "check" : "circle-x"} size={14} />
+            <span>{r().message}</span>
           </p>
         )}
       </Show>
       <Show when={runNote()}>
-        <p class="pbf-note" data-slot="pbf-run-note">
-          {runNote() === "copied" ? "Copied — paste it into a terminal to run it: " : "Run this in a terminal: "}
-          <code>{runCommand()}</code>
+        <p class="pbf-note pbf-note--result" data-slot="pbf-run-note" data-tone={runNote() === "copied" ? "good" : undefined}>
+          <Show when={runNote() === "copied"}>
+            <Ic name="check" size={14} />
+          </Show>
+          <span>
+            {runNote() === "copied" ? "Copied — paste it into a terminal to run it: " : "Run this in a terminal: "}
+            <code>{runCommand()}</code>
+          </span>
         </p>
       </Show>
 
