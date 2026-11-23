@@ -2237,6 +2237,19 @@ export const PanelStatePayload = Schema.Struct({
   url: Schema.optional(Schema.String),
   card: Schema.optional(Schema.Struct({ id: Schema.Finite, bloq: Schema.optional(Schema.Finite) })),
   dataset: Schema.optional(Schema.Struct({ slug: Schema.String, bloq: Schema.optional(Schema.Finite) })),
+  script: Schema.optional(
+    described(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        slug: Schema.String,
+        shared: Schema.optional(Schema.Boolean),
+        computer: Schema.optional(Schema.String),
+        taskId: Schema.optional(Schema.String),
+        error: Schema.optional(Schema.String),
+      }),
+      "Hive › Scripts (#194084): the script a side_panel script command selected, and the task its Run started, or why not.",
+    ),
+  ),
   catalog: Schema.optional(PanelCatalog),
   ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
   error: Schema.optional(Schema.String),

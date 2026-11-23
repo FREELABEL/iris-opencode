@@ -12,7 +12,8 @@ import { Truncate } from "@/tool/truncate"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { Panel } from "@/iris/panel"
-import { SidePanelTool } from "../../src/tool/side-panel"
+import { SidePanelTool, ScriptWait } from "../../src/tool/side-panel"
+import type { TaskView } from "@/iris/hive-scripts"
 import { MessageID } from "../../src/session/schema"
 import type { Tool } from "@/tool/tool"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -84,6 +85,16 @@ function fakeDesktop(session: string) {
     if (command.action === "dataset")
       Object.assign(s, { surface: "atlas", sub: "schemas", bloq: { id: command.bloq }, dataset: { slug: command.schema, bloq: command.bloq } })
     if (command.action === "report") Object.assign(s, { tab: "context" })
+    // Hive › Scripts: selects the script; a Run is dispatched to the studio Mac, except `nope`.
+    if (command.action === "script")
+      Object.assign(s, {
+        surface: "hive",
+        sub: "scripts",
+        script:
+          command.slug === "nope"
+            ? { id, slug: command.slug, error: "No script named nope — not yours, not shared with you" }
+            : { id, slug: command.slug, ...(command.run ? { computer: "studio-mac", taskId: "task-77" } : {}) },
+      })
     queueMicrotask(() => Panel.report(s))
   }
   GlobalBus.on("event", on)
@@ -277,6 +288,149 @@ describe("side_panel tool — live state, honest timeouts, cards", () => {
       const s = yield* sessions.create({ title: "desk" })
       const exit = yield* run({ action: "card", bloq: 628 }, ctxFor(s.id)).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
+    }),
+  )
+})
+
+// #194084 — the agent drives Hive › Scripts: select a script, set its settings, press Run, read the task.
+describe("side_panel tool — script", () => {
+  const saved = { ...ScriptWait }
+  afterEach(() => Object.assign(ScriptWait, saved))
+  const task = (over: Partial<TaskView>): TaskView => ({
+    id: "task-77",
+    status: "running",
+    terminal: false,
+    createdAt: null,
+    dispatchedAt: null,
+    arrivedAt: null,
+    startedAt: null,
+    completedAt: null,
+    stdout: "",
+    stderr: "",
+    exitCode: null,
+    exitCodeSource: null,
+    error: null,
+    nodeName: "studio-mac",
+    durationMs: null,
+    held: false,
+    gate: null,
+    ...over,
+  })
+  const withHive: Panel.State["catalog"] = [...catalog!, { id: "hive", label: "Hive", subs: [{ id: "scripts", label: "Scripts" }] }]
+
+  it.instance("selects a script without running it", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog: withHive })
+      const desk = fakeDesktop(String(s.id))
+      let reads = 0
+      ScriptWait.fetchTask = async () => (reads++, { measured: true, data: { task: null } })
+      try {
+        const r = yield* run({ action: "script", slug: "monetization-sim", args: { worlds: "4000" } }, ctxFor(s.id))
+        expect(desk.seen[0].payload.properties.command).toEqual({ action: "script", slug: "monetization-sim", args: { worlds: "4000" } })
+        expect(r.output).toContain("script selected: monetization-sim")
+        expect(r.output).not.toContain("task")
+        expect(reads).toBe(0)
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("run presses Run, waits on the task the tab started, and returns where it ran and what it printed", () =>
+    Effect.gen(function* () {
+      Object.assign(ScriptWait, { pollMs: 5 })
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog: withHive })
+      const desk = fakeDesktop(String(s.id))
+      const asked: string[] = []
+      ScriptWait.fetchTask = async (id) => {
+        asked.push(id)
+        return {
+          measured: true,
+          data: {
+            task:
+              asked.length < 3
+                ? task({})
+                : task({ status: "completed", terminal: true, exitCode: 0, durationMs: 41_000, stdout: "TIE-OUT passed\nFLIP: free-tier active days flips the ranking\n" }),
+          },
+        }
+      }
+      try {
+        const r = yield* run({ action: "script", slug: "monetization-sim", run: true }, ctxFor(s.id))
+        expect(desk.seen[0].payload.properties.command).toEqual({ action: "script", slug: "monetization-sim", run: true })
+        expect(asked).toEqual(["task-77", "task-77", "task-77"])
+        expect(r.metadata.taskId).toBe("task-77")
+        expect(r.metadata.taskStatus).toBe("completed")
+        expect(r.output).toContain("run: task task-77 on studio-mac")
+        expect(r.output).toContain("task task-77: completed · exit 0 · studio-mac · 41 s")
+        expect(r.output).toContain("FLIP: free-tier active days flips the ranking")
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("a held run is reported HELD for the person, not waited out or approved", () =>
+    Effect.gen(function* () {
+      Object.assign(ScriptWait, { pollMs: 5 })
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog: withHive })
+      const desk = fakeDesktop(String(s.id))
+      let reads = 0
+      ScriptWait.fetchTask = async () => (reads++, { measured: true, data: { task: task({ status: "held", held: true, gate: { explanation: "egress to a new host", reasons: [], action: null, score: null, hardware: [] } }) } })
+      try {
+        const r = yield* run({ action: "script", slug: "monetization-sim", run: true }, ctxFor(s.id))
+        expect(reads).toBe(1)
+        expect(r.output).toContain("HELD for approval")
+        expect(r.output).toContain("do not approve it for them")
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("a run still going when the wait ends says STILL RUNNING and how to read it later", () =>
+    Effect.gen(function* () {
+      Object.assign(ScriptWait, { pollMs: 5, waitMs: 20 })
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog: withHive })
+      const desk = fakeDesktop(String(s.id))
+      ScriptWait.fetchTask = async () => ({ measured: true, data: { task: task({ stdout: "simulated 1200 / 4000 worlds" }) } })
+      try {
+        const r = yield* run({ action: "script", slug: "monetization-sim", run: true }, ctxFor(s.id))
+        expect(r.output).toContain("STILL RUNNING")
+        expect(r.output).toContain("side_panel script task=task-77")
+        const again = yield* run({ action: "script", task: "task-77" }, ctxFor(s.id))
+        expect(again.output).toContain("simulated 1200 / 4000 worlds")
+        expect(desk.seen).toHaveLength(1)
+      } finally {
+        desk.stop()
+      }
+    }),
+  )
+
+  it.instance("a script the tab cannot find comes back as the tab's reason; bad input is refused before sending", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const s = yield* sessions.create({ title: "desk" })
+      Panel.report({ session: String(s.id), open: true, catalog: withHive })
+      const desk = fakeDesktop(String(s.id))
+      try {
+        const r = yield* run({ action: "script", slug: "nope", run: true }, ctxFor(s.id))
+        expect(r.title).toBe("not run")
+        expect(r.output).toContain("No script named nope")
+        expect((yield* run({ action: "script" }, ctxFor(s.id)).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(Panel.refuse({ action: "script", slug: "a b" }, withHive)).toContain("slug")
+        expect(Panel.refuse({ action: "script", slug: "x", args: { "bad name": "1" } }, withHive)).toContain("bad name")
+        expect(Panel.refuse({ action: "script", slug: "x" }, catalog)).toContain("no Hive › Scripts")
+      } finally {
+        desk.stop()
+      }
     }),
   )
 })

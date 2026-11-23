@@ -70,7 +70,7 @@ import {
   visibleNavItems,
   type NavLayout,
 } from "./iris-nav-layout"
-import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard, setIrisOpenDataset } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard, setIrisOpenDataset, focusHiveScript } from "./iris-nav"
 import {
   heldPayload,
   holdPayload,
@@ -3443,6 +3443,8 @@ export function SessionIrisTab() {
         queueMicrotask(() => openCard(id))
       }
       if (req.schema) setWantDataset(req.schema)
+      // The agent's side_panel script (#194084): Hive › Scripts reads it once it is mounted.
+      if (req.script) focusHiveScript(req.script)
     })
     clearIrisNav()
   })

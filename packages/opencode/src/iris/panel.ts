@@ -51,6 +51,11 @@ export namespace Panel {
     card?: { id: number; bloq?: number }
     /** Atlas › Schemas: the dataset open on its Records tab, by schema slug, and its board. */
     dataset?: { slug: string; bloq?: number }
+    /**
+     * Hive › Scripts (#194084): the script a `script` command (`id`) selected, and — when it pressed
+     * Run — where it went and its task, or why it did not go. Written by the Scripts tab itself.
+     */
+    script?: { id?: string; slug: string; shared?: boolean; computer?: string; taskId?: string; error?: string }
     /** What the desktop can show: product id → its sub-view ids. Lets callers validate. */
     catalog?: { id: string; label: string; hint?: string; subs: { id: string; label: string; hint?: string }[] }[]
     /** The command this report answers, if any. */
@@ -83,6 +88,11 @@ export namespace Panel {
     | { action: "card"; bloq: number; item: number; list?: number }
     /** Atlas › Schemas on this board with this dataset's Records open — its rows, not its fields. */
     | { action: "dataset"; bloq: number; schema: string }
+    /**
+     * Hive › Scripts with this script (mine or shared) selected, its settings filled in and,
+     * with `run`, its Run pressed — the same press as the Run button and ⌘K `run` (#194084).
+     */
+    | { action: "script"; slug: string; args?: Record<string, string>; run?: boolean; node?: string }
     /** Change nothing; answer with what is on screen now. A live `state` (#191506). */
     | { action: "report" }
     /**
@@ -215,6 +225,13 @@ export namespace Panel {
     if (cmd.action === "dataset") {
       if (!(typeof cmd.bloq === "number" && Number.isInteger(cmd.bloq) && cmd.bloq > 0)) return `dataset needs bloq: the board id`
       if (!/^[A-Za-z0-9_-]{1,120}$/.test(cmd.schema ?? "")) return `dataset needs schema: the dataset's slug (e.g. rental-candidates)`
+    }
+    if (cmd.action === "script") {
+      if (!/^[A-Za-z0-9_.:-]{1,120}$/.test(cmd.slug ?? "")) return `script needs slug: the script's slug as Hive › Scripts lists it`
+      const bad = Object.keys(cmd.args ?? {}).find((k) => !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(k))
+      if (bad) return `script args: "${bad}" is not a setting name`
+      const hive = catalog?.find((x) => x.id === "hive")
+      if (catalog?.length && !hive?.subs.some((v) => v.id === "scripts")) return `this desktop has no Hive › Scripts`
     }
     if (cmd.action === "show" && catalog?.length) {
       const s = catalog.find((x) => x.id === cmd.surface || x.label.toLowerCase() === cmd.surface.toLowerCase())
@@ -358,6 +375,12 @@ export namespace Panel {
     if (s.url) lines.push(`browser: ${s.url}`)
     if (s.card) lines.push(`card open: #${s.card.id}${s.card.bloq ? ` on board #${s.card.bloq}` : ""}`)
     if (s.dataset) lines.push(`dataset open: ${s.dataset.slug} (records)${s.dataset.bloq ? ` on board #${s.dataset.bloq}` : ""}`)
+    if (s.script) {
+      const x = s.script
+      lines.push(`script selected: ${x.slug}${x.shared ? " (shared with you)" : ""}`)
+      if (x.taskId) lines.push(`run: task ${x.taskId}${x.computer ? ` on ${x.computer}` : ""}`)
+      if (x.error) lines.push(`script: ${x.error}`)
+    }
     if (s.error) lines.push(`desktop said: ${s.error}`)
     return lines.join("\n")
   }
