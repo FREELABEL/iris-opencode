@@ -285,6 +285,19 @@
   font-size: 12px;
 }
 
+/* Out-of-date engine: a tinted row, not an edge bar. */
+.session-web__engine-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--surface-warning-weak, rgba(245, 165, 36, 0.14));
+}
+.session-web__engine-note > span {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Browser tabs (#193328): a chat's pages, one row. The active tab is a tint, not an edge bar. */
 .session-web--tabs > .session-web {
   flex: 1;

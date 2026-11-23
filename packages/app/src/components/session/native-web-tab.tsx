@@ -1,7 +1,15 @@
 import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import type { NativeBrowser, NativeBrowserState } from "@/context/platform"
-import { boundsFollower, boundsOf, nextPlacement, OVERLAY_SELECTOR, QUICK_SITES } from "./native-browser-model"
+import {
+  boundsFollower,
+  boundsOf,
+  nextPlacement,
+  outdatedMacEngine,
+  OUTDATED_ENGINE_NOTE,
+  OVERLAY_SELECTOR,
+  QUICK_SITES,
+} from "./native-browser-model"
 import {
   answerConfirm,
   askedSite,
@@ -43,6 +51,9 @@ let chromeFound: Promise<boolean> | undefined
  * One page per chat: `browser` is this chat's (session-web-tab remounts this per chat). Back/forward are always enabled (the page owns
  * its history); the app's zoom is read from platform.webviewZoom, which desktop doesn't set yet.
  */
+// Dismissed until IRIS restarts: the next launch asks again until Safari is updated.
+const ENGINE_NOTE_KEY = "iris.browser.engine-note-closed"
+
 export function NativeWebTab(props: {
   browser: NativeBrowser
   zoom: () => number
@@ -51,6 +62,18 @@ export function NativeWebTab(props: {
    * for this tab (a new tab the agent or a link opened) opens when it first shows. */
   pageKey?: string
 }) {
+  // An out-of-date Mac web engine draws today's sites broken (see outdatedMacEngine).
+  const engineOld = () =>
+    outdatedMacEngine({ userAgent: navigator.userAgent, hasPopover: "popover" in HTMLElement.prototype })
+  const [engineNoteClosed, setEngineNoteClosed] = createSignal(
+    (() => {
+      try {
+        return sessionStorage.getItem(ENGINE_NOTE_KEY) === "1"
+      } catch {
+        return false
+      }
+    })(),
+  )
   const [address, setAddress] = createSignal("")
   const [page, setPage] = createSignal<NativeBrowserState | null>(null)
   const [opened, setOpened] = createSignal(false)
@@ -417,6 +440,23 @@ export function NativeWebTab(props: {
             </div>
           )
         }}
+      </Show>
+      <Show when={engineOld() && !engineNoteClosed()}>
+        <div class="session-web__import-notice session-web__engine-note" data-slot="browser-engine-outdated" role="status">
+          <span>{OUTDATED_ENGINE_NOTE}</span>
+          <button
+            type="button"
+            class="session-web__agent-link"
+            onClick={() => {
+              setEngineNoteClosed(true)
+              try {
+                sessionStorage.setItem(ENGINE_NOTE_KEY, "1")
+              } catch {}
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
       </Show>
       <Show when={notice()}>
         {(n) => (
