@@ -10,7 +10,6 @@ import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { TerminalRun } from "@/session/terminal-run"
-import { HiveSim } from "@/iris/hive-sim"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -37,7 +36,6 @@ import {
   ShellPayload,
   SummarizePayload,
   TerminalStartPayload,
-  HiveSimStartPayload,
   UpdatePayload,
 } from "../groups/session"
 import { PermissionNotFoundError, SessionBusyError, notFound } from "../errors"
@@ -384,39 +382,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return { cancelled: yield* promptSvc.terminalCancel(ctx.params.sessionID, ctx.params.runID) }
     })
 
-    // Hive simulations, live (#194084) — see src/iris/hive-sim.ts.
-    const hiveSimStart = Effect.fn("SessionHttpApi.hiveSimStart")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof HiveSimStartPayload.Type
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const started = yield* promptSvc.hiveSimStart({ ...ctx.payload, sessionID: ctx.params.sessionID })
-      if (typeof started === "string")
-        return yield* started.includes("already running")
-          ? Effect.fail(new SessionBusyError({ sessionID: ctx.params.sessionID, message: started }))
-          : Effect.fail(new HttpApiError.BadRequest({}))
-      return { id: started.id }
-    })
-
-    const hiveSimList = Effect.fn("SessionHttpApi.hiveSimList")(function* (ctx: { params: { sessionID: SessionID } }) {
-      return { runs: HiveSim.list(ctx.params.sessionID).map((r) => HiveSim.json(HiveSim.summary(r))) }
-    })
-
-    const hiveSimRead = Effect.fn("SessionHttpApi.hiveSimRead")(function* (ctx: {
-      params: { sessionID: SessionID; runID: string }
-      query: { from?: string }
-    }) {
-      const run = HiveSim.get(ctx.params.sessionID, ctx.params.runID)
-      if (!run) return yield* notFound(`Simulation not found: ${ctx.params.runID}`)
-      return HiveSim.json(HiveSim.read(run, HiveSim.parseFrom(ctx.query.from)))
-    })
-
-    const hiveSimCancel = Effect.fn("SessionHttpApi.hiveSimCancel")(function* (ctx: {
-      params: { sessionID: SessionID; runID: string }
-    }) {
-      return { cancelled: HiveSim.cancel(ctx.params.sessionID, ctx.params.runID) }
-    })
-
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
@@ -506,10 +471,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("terminalStart", terminalStart)
       .handle("terminalRead", terminalRead)
       .handle("terminalCancel", terminalCancel)
-      .handle("hiveSimStart", hiveSimStart)
-      .handle("hiveSimList", hiveSimList)
-      .handle("hiveSimRead", hiveSimRead)
-      .handle("hiveSimCancel", hiveSimCancel)
       .handle("revert", revert)
       .handle("unrevert", unrevert)
       .handle("permissionRespond", permissionRespond)

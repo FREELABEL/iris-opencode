@@ -4,7 +4,15 @@ import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { focusArtifact, irisOpenArtifact, irisOpenCard, irisOpenDataset, irisPanelView, requestIrisNav } from "./iris-nav"
+import {
+  focusArtifact,
+  irisHiveScript,
+  irisOpenArtifact,
+  irisOpenCard,
+  irisOpenDataset,
+  irisPanelView,
+  requestIrisNav,
+} from "./iris-nav"
 import { nativeBrowserEnabled } from "./native-browser-model"
 import {
   browserGrants,
@@ -62,6 +70,8 @@ type Command =
   | { action: "browse"; url: string }
   | { action: "card"; bloq: number; item: number; list?: number }
   | { action: "dataset"; bloq: number; schema: string }
+  /** Hive › Scripts on this script; `run` presses Run (#194084). `id` is the command's, added on arrival. */
+  | { action: "script"; id?: string; slug: string; args?: Record<string, string>; run?: boolean; node?: string }
   | { action: "report" }
   | PageCommand
 
@@ -91,6 +101,8 @@ export type PageCommand = { tab?: string } & (
 
 /** How long a command may take to show up before the ack says it did not. Under the engine's 6 s: the IRIS tab mounts lazily, measured 1.6 s after a reopen. */
 const SETTLE_MS = 5000
+/** A Run also waits for Scripts to read the script and the Hive to take the task (#194084). Under the engine's 20 s. */
+const SCRIPT_RUN_SETTLE_MS = 15_000
 /** How long the panel must hold the asked-for state before it counts. */
 const STABLE_MS = 300
 const REAPPLY_GAP_MS = 250
@@ -140,6 +152,7 @@ export function usePanelControl(input: { open: () => boolean }) {
       url: webUrl() ?? undefined,
       card: irisOpenCard(),
       dataset: irisOpenDataset(),
+      script: irisHiveScript(),
       // The Browser pane can take the agent's page commands (#193145): the engine's browser tool
       // defaults to it instead of a hidden Chrome when this is true.
       browser: !!platform.nativeBrowser && nativeBrowserEnabled(globalThis.localStorage, true),
@@ -234,6 +247,16 @@ export function usePanelControl(input: { open: () => boolean }) {
         requestIrisNav({ surface: "atlas", sub: "schemas", bloqId: cmd.bloq, schema: cmd.schema, session: params.id })
         showTab("iris")
         return
+      case "script":
+        // The same request Scripts' own ⌘K `run` makes, handed to the tab once it is mounted.
+        requestIrisNav({
+          surface: "hive",
+          sub: "scripts",
+          script: { id: cmd.id ?? "", slug: cmd.slug, args: cmd.args, run: cmd.run, node: cmd.node },
+          session: params.id,
+        })
+        showTab("iris")
+        return
       case "report":
         return
     }
@@ -273,6 +296,14 @@ export function usePanelControl(input: { open: () => boolean }) {
         return s.dataset?.slug === cmd.schema
           ? undefined
           : `dataset ${cmd.schema} is not open — it may not be on board #${cmd.bloq}'s first page of schemas`
+      case "script": {
+        if (!s.open) return "the panel did not open (the window may be too narrow for it)"
+        if (s.tab !== "iris" || s.surface !== "hive" || s.sub !== "scripts") return "Hive › Scripts did not open"
+        // Done when Scripts says so for THIS command: selected, or — with run — sent or refused.
+        const r = s.script
+        if (r?.id !== cmd.id) return `Scripts did not pick up ${cmd.slug}`
+        return !cmd.run || r.taskId || r.error ? undefined : `Scripts did not send ${cmd.slug} to a computer`
+      }
       case "report":
         return undefined
     }
@@ -310,7 +341,8 @@ export function usePanelControl(input: { open: () => boolean }) {
       } else okSince = undefined
       const settled = okSince !== undefined && now - okSince >= STABLE_MS
       // Matched, then moved: the user took over. Report where they are; do not chase it.
-      if (settled || (matchedOnce && why) || now - started > SETTLE_MS) {
+      const limit = cmd.action === "script" && cmd.run ? SCRIPT_RUN_SETTLE_MS : SETTLE_MS
+      if (settled || (matchedOnce && why) || now - started > limit) {
         cancelSettle = undefined
         post({ ...untrack(snapshot), ack, error: matchedOnce && why ? undefined : why })
         return
@@ -359,7 +391,11 @@ export function usePanelControl(input: { open: () => boolean }) {
     handled.add(props.id)
     if (handled.size > 500) handled.delete(handled.values().next().value!)
     const command: Command =
-      props.command.action === "show" ? { ...props.command, ...resolveShow(props.command) } : props.command
+      props.command.action === "show"
+        ? { ...props.command, ...resolveShow(props.command) }
+        : props.command.action === "script"
+          ? { ...props.command, id: props.id }
+          : props.command
     // The Browser pane's page answers with a value, not a panel state to settle on.
     if (command.action === "page") {
       void runPage(command, props.id)

@@ -78,22 +78,6 @@ export const TerminalReadQuery = Schema.Struct({
 })
 export const TerminalStarted = Schema.Struct({ id: Schema.String })
 export const TerminalCancelled = Schema.Struct({ cancelled: Schema.Boolean })
-// Hive simulations, live (#194084) — see src/iris/hive-sim.ts. The run record is described
-// loosely: it is read by the desktop's Hive › Simulations view, not generated into the SDK.
-export const HiveSimStartPayload = Schema.Struct({
-  engine: described(Schema.String, "Path to the engine's .py file, absolute or relative to the session's directory."),
-  worlds: Schema.optional(Schema.Finite),
-  cohort: Schema.optional(Schema.Finite),
-  days: Schema.optional(Schema.Finite),
-  refresh: Schema.optional(described(Schema.Boolean, "Re-pull the real data first (the playbook's refresh=yes). Default true.")),
-})
-export const HiveSimReadQuery = Schema.Struct({
-  ...WorkspaceRoutingQueryFields,
-  from: Schema.optional(described(Schema.String, "Output offsets, one per step, comma separated (the `next` of each step).")),
-})
-export const HiveSimRun = Schema.Unknown.annotate({ identifier: "HiveSimRun" })
-export const HiveSimList = Schema.Struct({ runs: Schema.Array(Schema.Unknown) }).annotate({ identifier: "HiveSimList" })
-export const HiveSimStarted = Schema.Struct({ id: Schema.String })
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
@@ -123,10 +107,6 @@ export const SessionPaths = {
   terminalStart: `${root}/:sessionID/terminal`,
   terminalRead: `${root}/:sessionID/terminal/:runID`,
   terminalCancel: `${root}/:sessionID/terminal/:runID/cancel`,
-  hiveSimStart: `${root}/:sessionID/hive-sim`,
-  hiveSimList: `${root}/:sessionID/hive-sim`,
-  hiveSimRead: `${root}/:sessionID/hive-sim/:runID`,
-  hiveSimCancel: `${root}/:sessionID/hive-sim/:runID/cancel`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
   permissions: `${root}/:sessionID/permissions/:permissionID`,
@@ -432,54 +412,6 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.terminalCancel",
             summary: "Stop a terminal-mode run",
             description: "Interrupt a running terminal-mode command.",
-          }),
-        ),
-        HttpApiEndpoint.post("hiveSimStart", SessionPaths.hiveSimStart, {
-          params: { sessionID: SessionID },
-          query: WorkspaceRoutingQuery,
-          payload: HiveSimStartPayload,
-          success: described(HiveSimStarted, "Started simulation"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "session.hiveSimStart",
-            summary: "Run a Hive simulation",
-            description:
-              "Run the hive-simulations playbook's shell steps (engine, pull, tie-out, simulate) for one engine in the session's directory (#194084). Watch it with session.hiveSimRead.",
-          }),
-        ),
-        HttpApiEndpoint.get("hiveSimList", SessionPaths.hiveSimList, {
-          params: { sessionID: SessionID },
-          query: WorkspaceRoutingQuery,
-          success: described(HiveSimList, "This session's simulations, newest first"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "session.hiveSimList",
-            summary: "List Hive simulations",
-            description: "Runs this engine has made for the session since it started (kept in memory).",
-          }),
-        ),
-        HttpApiEndpoint.get("hiveSimRead", SessionPaths.hiveSimRead, {
-          params: { sessionID: SessionID, runID: Schema.String },
-          query: HiveSimReadQuery,
-          success: described(HiveSimRun, "The run: steps, feed and each step's output since its offset"),
-          error: [ApiNotFoundError],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "session.hiveSimRead",
-            summary: "Read a Hive simulation",
-            description: "Steps with status and output since each step's offset, the structured feed, and the run's state.",
-          }),
-        ),
-        HttpApiEndpoint.post("hiveSimCancel", SessionPaths.hiveSimCancel, {
-          params: { sessionID: SessionID, runID: Schema.String },
-          query: WorkspaceRoutingQuery,
-          success: described(TerminalCancelled, "Whether a running simulation was stopped"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "session.hiveSimCancel",
-            summary: "Stop a Hive simulation",
-            description: "Stop the running step; the steps after it do not run.",
           }),
         ),
         HttpApiEndpoint.post("revert", SessionPaths.revert, {

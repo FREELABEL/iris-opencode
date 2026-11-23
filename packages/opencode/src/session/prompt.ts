@@ -46,7 +46,6 @@ import * as AttachmentPdf from "./attachment-pdf"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Fiber, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { TerminalRun } from "./terminal-run"
-import { HiveSim } from "@/iris/hive-sim"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -111,8 +110,6 @@ export interface Interface {
   /** Terminal mode (#190530): run a command like `shell` does, but record nothing in the session. */
   readonly terminalStart: (input: TerminalStartInput) => Effect.Effect<{ id: string }, TerminalBusyError>
   readonly terminalCancel: (sessionID: SessionID, id: string) => Effect.Effect<boolean>
-  /** Hive simulations (#194084): start the playbook's steps for an engine in this directory. The run, or why not. */
-  readonly hiveSimStart: (input: Omit<HiveSim.Input, "directory">) => Effect.Effect<HiveSim.Run | string>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
@@ -659,12 +656,6 @@ const layer = Layer.effect(
       if (!run || run.status !== "running" || !run.cancel) return false
       run.cancel()
       return true
-    })
-
-    // Hive simulations (#194084): the same spawner terminal mode uses, in the instance's directory.
-    const hiveSimStart = Effect.fn("SessionPrompt.hiveSimStart")(function* (input: Omit<HiveSim.Input, "directory">) {
-      const ctx = yield* InstanceState.context
-      return HiveSim.start({ ...input, directory: ctx.directory }, HiveSim.spawnExec(spawner))
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
@@ -1651,7 +1642,6 @@ const layer = Layer.effect(
       shell,
       terminalStart,
       terminalCancel,
-      hiveSimStart,
       command,
       resolvePromptParts,
     })

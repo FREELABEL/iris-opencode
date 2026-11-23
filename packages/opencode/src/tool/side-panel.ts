@@ -4,8 +4,7 @@ import DESCRIPTION from "./side-panel.txt"
 import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
 import { Panel } from "@/iris/panel"
-import { HiveSim } from "@/iris/hive-sim"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import * as HiveScripts from "@/iris/hive-scripts"
 import type { SessionID } from "../session/schema"
 
 /**
@@ -20,7 +19,7 @@ import type { SessionID } from "../session/schema"
  * says "it's showing Atlas › Schemas" because the panel said so — never because it asked.
  */
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "dataset", "tab", "browse", "simulate"]).annotate({
+  action: Schema.Literals(["state", "open", "close", "show", "artifact", "card", "dataset", "tab", "browse", "script"]).annotate({
     description: "What to do",
   }),
   surface: Schema.optional(Schema.String).annotate({ description: "show: product id or label (atlas, Genesis, agents, …)" }),
@@ -34,16 +33,38 @@ export const Parameters = Schema.Struct({
   id: Schema.optional(Schema.String).annotate({ description: "artifact: the genesis_artifact id" }),
   tab: Schema.optional(Schema.String).annotate({ description: "tab: review or context" }),
   url: Schema.optional(Schema.String).annotate({ description: "browse: http(s) address" }),
-  engine: Schema.optional(Schema.String).annotate({
-    description: "simulate: path to the hive-simulations engine (.py), absolute or relative to the project directory",
+  slug: Schema.optional(Schema.String).annotate({ description: "script: the script's slug in Hive › Scripts (yours or shared with you)" }),
+  args: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
+    description: "script: the script's settings for this run (its `# iris: arg=` names), e.g. {\"worlds\":\"4000\"}",
   }),
-  worlds: Schema.optional(Schema.Number).annotate({ description: "simulate: worlds per arm (default 4000)" }),
-  cohort: Schema.optional(Schema.Number).annotate({ description: "simulate: population per world (default 1000)" }),
-  days: Schema.optional(Schema.Number).annotate({ description: "simulate: window to pull, in days (default 30)" }),
-  refresh: Schema.optional(Schema.Boolean).annotate({
-    description: "simulate: re-pull the real data first (default true); false runs on the dataset already on disk",
+  run: Schema.optional(Schema.Boolean).annotate({ description: "script: true presses Run and waits for the task to end" }),
+  node: Schema.optional(Schema.String).annotate({ description: "script: the computer to run on, by name; default: the one Scripts picks" }),
+  task: Schema.optional(Schema.String).annotate({
+    description: "script: read this Hive task's status and output instead (changes nothing on screen)",
   }),
 })
+
+/**
+ * How long `script` with run waits for the task, and how often it asks. The playbook's own limit
+ * is 900 s; a run still going then is reported as running, with its task id to read again.
+ * Mutable, and the reader swappable, for tests only.
+ */
+export const ScriptWait = { waitMs: 900_000, pollMs: 2_000, sendMs: 20_000, fetchTask: HiveScripts.fetchTask }
+
+/** A Hive task as the agent reads it: where, how it ended, then everything it printed. */
+export function describeTask(t: HiveScripts.TaskView): string {
+  const lines = [
+    `task ${t.id}: ${t.held ? "HELD for approval" : t.status}${t.exitCode !== null ? ` · exit ${t.exitCode}` : ""}${t.nodeName ? ` · ${t.nodeName}` : ""}${t.durationMs !== null ? ` · ${Math.round(t.durationMs / 1000)} s` : ""}`,
+  ]
+  if (t.held)
+    lines.push(
+      `Constellation Gate held this run: ${t.gate?.explanation ?? "it needs its owner's approval"}. The person approves or rejects it in Hive › Scripts — do not approve it for them.`,
+    )
+  if (t.error) lines.push(`error: ${t.error}`)
+  if (t.stdout.trim()) lines.push("--- stdout ---", t.stdout.trimEnd())
+  if (t.stderr.trim()) lines.push("--- stderr ---", t.stderr.trimEnd())
+  return lines.join("\n")
+}
 
 type Metadata = {
   answered?: boolean
@@ -56,17 +77,16 @@ type Metadata = {
   elapsedMs?: number
   attempts?: number
   streams?: number
-  /** simulate: the run's id and how it ended (running = the wait ended first). */
-  simulation?: string
-  simulationStatus?: HiveSim.RunStatus
+  /** script: the Hive task a Run started (or the one read), and its status when the call ended. */
+  taskId?: string
+  taskStatus?: string
 }
 
 
-export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Service | ChildProcessSpawner>(
+export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Service>(
   "side_panel",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
-    const spawner = yield* ChildProcessSpawner
 
     const rootOf = (id: SessionID) =>
       Effect.gen(function* () {
@@ -99,8 +119,15 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
         case "browse":
           if (!p.url) return "browse needs a url"
           return { action: "browse", url: p.url }
-        case "simulate":
-          return "simulate is not a panel command"
+        case "script":
+          if (!p.slug) return "script needs a slug — the script's name in Hive › Scripts"
+          return {
+            action: "script",
+            slug: p.slug,
+            ...(p.args && Object.keys(p.args).length ? { args: p.args } : {}),
+            ...(p.run ? { run: true } : {}),
+            ...(p.node ? { node: p.node } : {}),
+          }
       }
       return `unknown action ${p.action}`
     }
@@ -146,49 +173,11 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
             }
           }
 
-          if (params.action === "simulate") {
-            // HIVE SIMULATIONS, LIVE (#194084): the playbook's shell steps as one run the person
-            // watches in Hive › Simulations, while this call waits for it to end and returns the
-            // results. The run is not this call's: if the chat moves on, it keeps going.
-            const started = HiveSim.start(
-              {
-                sessionID: session,
-                directory: instance.directory,
-                engine: params.engine ?? "",
-                worlds: params.worlds,
-                cohort: params.cohort,
-                days: params.days,
-                refresh: params.refresh,
-              },
-              HiveSim.spawnExec(spawner),
-            )
-            if (typeof started === "string") return yield* Effect.fail(new Error(started))
-            const run = started
-            yield* ctx.metadata({ title: `simulating ${run.engine}`, metadata: { simulation: run.id, simulationStatus: run.status } })
-            const show: Panel.Command = { action: "show", surface: "hive", sub: "simulations" }
-            const refusedShow = Panel.refuse(show, known?.catalog)
-            const shown =
-              !refusedShow && Panel.openStreams() > 0
-                ? Panel.send({ directory: instance.directory, session, command: Panel.canonical(show, known?.catalog) })
-                : undefined
-            yield* Effect.promise(() => HiveSim.wait(run, HiveSim.TIMEOUT_MS + 10_000, ctx.abort))
-            const panel = shown ? yield* Effect.promise(() => shown) : undefined
-            const where = refusedShow
-              ? `panel: this desktop has no Hive › Simulations view (${refusedShow}) — describe the results in words.`
-              : !shown
-                ? "panel: no desktop is connected — describe the results in words."
-                : panel?.state && !panel.state.error
-                  ? "panel: showing Hive › Simulations on this run."
-                  : `panel: ${panel?.state?.error ?? "the desktop did not confirm Hive › Simulations"}.`
-            const still =
-              run.status === "running"
-                ? `\nThe run is STILL RUNNING (this call stopped waiting${ctx.abort.aborted ? " because the turn was stopped" : ""}); it continues in Hive › Simulations.`
-                : ""
-            return {
-              title: `simulation ${run.status}`,
-              output: `${HiveSim.report(run)}\n\n${where}${still}`,
-              metadata: { simulation: run.id, simulationStatus: run.status, answered: !!panel?.state },
-            }
+          // Reading a task changes nothing on screen: straight to the Hive, as the Scripts tab reads it.
+          if (params.action === "script" && params.task) {
+            const r = yield* Effect.promise(() => ScriptWait.fetchTask(params.task!))
+            if (!r.data.task) return yield* Effect.fail(new Error(`could not read task ${params.task}: ${r.reason ?? "not found"}`))
+            return { title: `task ${r.data.task.status}`, output: describeTask(r.data.task), metadata: { taskId: r.data.task.id, taskStatus: r.data.task.status } }
           }
 
           const built = toCommand(params)
@@ -197,7 +186,10 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
           if (refused) return { title: "refused", output: refused, metadata: { refused } }
           const command = Panel.canonical(built, known?.catalog)
 
-          const sent = yield* Effect.promise(() => Panel.send({ directory: instance.directory, session, command }))
+          // A Run waits for the tab to mount, read the script and dispatch: longer than a switch.
+          const sent = yield* Effect.promise(() =>
+            Panel.send({ directory: instance.directory, session, command, ...(command.action === "script" && command.run ? { timeoutMs: ScriptWait.sendMs } : {}) }),
+          )
           const facts = { elapsedMs: sent.elapsedMs, attempts: sent.attempts, streams: sent.streams }
           const after = sent.state
           if (!after) {
@@ -205,6 +197,40 @@ export const SidePanelTool = Tool.define<typeof Parameters, Metadata, Session.Se
               title: "desktop did not answer",
               output: Panel.explainSilence(sent, session),
               metadata: { answered: false, ...facts, state: sent.heard },
+            }
+          }
+          if (command.action === "script") {
+            const meta = { answered: true, live: true, ageSeconds: age(after), state: after, ...facts }
+            const x = after.script
+            if (!x || x.slug !== command.slug)
+              return {
+                title: "script not selected",
+                output: `${Panel.describe(after)}\nThe desktop did not report selecting ${command.slug}${x ? "" : " — it may be an older desktop without this command"}.`,
+                metadata: meta,
+              }
+            if (!command.run || !x.taskId) return { title: x.error ? "not run" : "selected", output: Panel.describe(after), metadata: meta }
+            // PRESSED: the person watches the run in Scripts; this waits on the same task the tab polls.
+            yield* ctx.metadata({ title: `running ${x.slug}${x.computer ? ` on ${x.computer}` : ""}`, metadata: { taskId: x.taskId } })
+            const until = Date.now() + ScriptWait.waitMs
+            let task: HiveScripts.TaskView | null = null
+            let reason: string | undefined
+            while (!ctx.abort.aborted) {
+              const r = yield* Effect.promise(() => ScriptWait.fetchTask(x.taskId!))
+              if (r.data.task) task = r.data.task
+              reason = r.reason
+              if (task?.terminal || task?.held || Date.now() >= until) break
+              yield* Effect.sleep(ScriptWait.pollMs)
+            }
+            const still = task && !task.terminal && !task.held
+            const tail = !task
+              ? `\nCould not read task ${x.taskId}${reason ? `: ${reason}` : ""}. Read it later with side_panel script task=${x.taskId}.`
+              : still
+                ? `\nSTILL RUNNING — this call stopped waiting${ctx.abort.aborted ? " because the turn was stopped" : ""}. It continues in Hive › Scripts; read it again with side_panel script task=${x.taskId}. Do not run it again.`
+                : ""
+            return {
+              title: task ? `${x.slug} ${task.held ? "held" : task.status}` : `${x.slug} sent`,
+              output: `${Panel.describe(after)}\n\n${task ? describeTask(task) : ""}${tail}`,
+              metadata: { ...meta, taskId: x.taskId, taskStatus: task?.status },
             }
           }
           const link = command.action === "card" ? `\nweb link: ${Panel.cardLink(command)}` : ""
