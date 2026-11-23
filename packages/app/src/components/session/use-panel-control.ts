@@ -301,7 +301,7 @@ export function usePanelControl(input: { open: () => boolean }) {
         if (s.tab !== "iris" || s.surface !== "hive" || s.sub !== "scripts") return "Hive › Scripts did not open"
         // Done when Scripts says so for THIS command: selected, or — with run — sent or refused.
         const r = s.script
-        if (r?.id !== cmd.id) return `Scripts did not pick up ${cmd.slug}`
+        if (!r || r.id !== cmd.id) return `Scripts did not pick up ${cmd.slug}`
         return !cmd.run || r.taskId || r.error ? undefined : `Scripts did not send ${cmd.slug} to a computer`
       }
       case "report":
