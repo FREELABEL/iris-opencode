@@ -2462,6 +2462,17 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-tag[data-tone="you"] { color: var(--pbf-you); border-color: color-mix(in srgb, var(--pbf-you) 45%, transparent); }
 .pbf-tag[data-tone="auto"] { color: var(--pbf-ink2); border-color: var(--pbf-rule); }
 .pbf-tag--state { border-style: solid; color: var(--pbf-ink); }
+/* Installed reads as done at a glance: green with a check; an update is amber. A tint, not an edge bar. */
+.pbf-tag--state[data-state="installed"] {
+  color: var(--pbf-think);
+  border-color: color-mix(in srgb, var(--pbf-think) 45%, transparent);
+  background: color-mix(in srgb, var(--pbf-think) 12%, transparent);
+}
+.pbf-tag--state[data-state="update"] {
+  color: var(--pbf-you);
+  border-color: color-mix(in srgb, var(--pbf-you) 45%, transparent);
+  background: color-mix(in srgb, var(--pbf-you) 12%, transparent);
+}
 .pbf-tag--src { border-style: dashed; color: var(--pbf-faint); font-family: var(--pbf-mono); font-size: 10.5px; }
 
 /* the detail (Info tab) */
@@ -2477,6 +2488,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-need b { color: var(--pbf-ink); font-weight: 600; }
 .pbf-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--pbf-ink2); }
 .pbf-note[data-tone="bad"] { color: var(--text-danger-base, #e07d7d); }
+.pbf-note[data-tone="good"] { color: var(--pbf-think); }
+.pbf-note--result { display: flex; align-items: flex-start; gap: 6px; }
+.pbf-note--result > :first-child { flex: none; margin-top: 1px; }
 .pbf-note code { font-family: var(--pbf-mono); font-size: 11px; color: var(--pbf-ink); background: var(--pbf-card); padding: 1px 5px; border-radius: 4px; }
 .pbf-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 4px 0 2px; }
 .pbf-facts > div { background: var(--pbf-card); border-radius: 8px; padding: 8px 9px; min-width: 0; }
