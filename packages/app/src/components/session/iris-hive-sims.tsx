@@ -76,6 +76,9 @@ export function IrisHiveSims(props: {
   }
 
   const selected = createMemo(() => pickRun(runs(), picked()))
+  // Raw output: follow the end while the reader is at the end.
+  let rawEl: HTMLPreElement | undefined
+  let follow = true
 
   // One reader at a time; a new selection starts from offset zero.
   let reading = false
@@ -98,9 +101,15 @@ export function IrisHiveSims(props: {
     }
   }
 
+  let rootEl: HTMLDivElement | undefined
   createEffect(
     on(selected, (id) => {
-      if (view()?.id !== id) setView(undefined)
+      if (view()?.id !== id) {
+        setView(undefined)
+        // A different run: start at its top, where its steps and MEASURED vs DRAWN are.
+        if (rootEl) rootEl.scrollTop = 0
+        follow = true
+      }
       void read()
     }),
   )
@@ -130,9 +139,6 @@ export function IrisHiveSims(props: {
     }
   }
 
-  // Raw output: follow the end while the reader is at the end.
-  let rawEl: HTMLPreElement | undefined
-  let follow = true
   const raw = createMemo(() => {
     const v = view()
     return v ? transcript(v) : ""
@@ -143,6 +149,8 @@ export function IrisHiveSims(props: {
     }),
   )
 
+  // The open run's chip reads the open run's progress: the list polls slower than the run.
+  const chipProgress = (r: RunSummary) => (view()?.id === r.id ? view()!.feed.progress : r.progress)
   const pct = createMemo(() => percent(view()?.feed.progress))
   const b = createMemo(() => {
     const v = view()
@@ -150,7 +158,7 @@ export function IrisHiveSims(props: {
   })
 
   return (
-    <div class="hsm" data-component="hive-sims">
+    <div class="hsm" data-component="hive-sims" ref={(el) => (rootEl = el)}>
       <Show
         when={props.sessionId}
         fallback={<p class="hsm-empty">Open a chat to see its simulations — they belong to the conversation that ran them.</p>}
@@ -179,8 +187,8 @@ export function IrisHiveSims(props: {
                 <Glyph status={r.status === "running" ? "running" : r.status === "passed" ? "passed" : "failed"} />
                 <span class="hsm-run-name">{engineName(r.engine)}</span>
                 <span class="hsm-run-meta hsc-num">
-                  {r.status === "running" && percent(r.progress) !== undefined
-                    ? `${percent(r.progress)}%`
+                  {r.status === "running" && percent(chipProgress(r)) !== undefined
+                    ? `${percent(chipProgress(r))}%`
                     : r.status === "running"
                       ? duration(tick() - r.started)
                       : STATUS_WORD[r.status]}

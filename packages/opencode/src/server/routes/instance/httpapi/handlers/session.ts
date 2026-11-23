@@ -399,7 +399,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const hiveSimList = Effect.fn("SessionHttpApi.hiveSimList")(function* (ctx: { params: { sessionID: SessionID } }) {
-      return { runs: HiveSim.list(ctx.params.sessionID).map(HiveSim.summary) }
+      return { runs: HiveSim.list(ctx.params.sessionID).map((r) => HiveSim.json(HiveSim.summary(r))) }
     })
 
     const hiveSimRead = Effect.fn("SessionHttpApi.hiveSimRead")(function* (ctx: {
@@ -408,7 +408,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       const run = HiveSim.get(ctx.params.sessionID, ctx.params.runID)
       if (!run) return yield* notFound(`Simulation not found: ${ctx.params.runID}`)
-      return HiveSim.read(run, HiveSim.parseFrom(ctx.query.from)) as unknown
+      return HiveSim.json(HiveSim.read(run, HiveSim.parseFrom(ctx.query.from)))
     })
 
     const hiveSimCancel = Effect.fn("SessionHttpApi.hiveSimCancel")(function* (ctx: {

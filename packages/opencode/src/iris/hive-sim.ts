@@ -393,7 +393,8 @@ python3 "$ENGINE" --worlds "\${worlds:-4000}" --cohort "\${cohort:-1000}" --days
         return
       }
       case "flip":
-        if (feed.flips.length < MAX_FLIPS) feed.flips.push({ text: ev.text, input: ev.input, range: ev.range })
+        if (feed.flips.length < MAX_FLIPS)
+          feed.flips.push({ text: ev.text, ...(ev.input ? { input: ev.input } : {}), ...(ev.range ? { range: ev.range } : {}) })
         return
     }
   }
@@ -439,7 +440,15 @@ python3 "$ENGINE" --worlds "\${worlds:-4000}" --cohort "\${cohort:-1000}" --days
 
   export function summary(run: Run): Summary {
     const { cancel: _c, steps, feed, header: _h, ...rest } = run
-    return { ...rest, steps: steps.map((s) => ({ id: s.id, status: s.status })), progress: feed.progress }
+    return { ...rest, steps: steps.map((s) => ({ id: s.id, status: s.status })), ...(feed.progress ? { progress: feed.progress } : {}) }
+  }
+
+  /**
+   * As the wire carries it. The routes describe a run as an unknown JSON value, and that encoder
+   * refuses `undefined` anywhere — a run with no progress yet answered 400 until this.
+   */
+  export function json<T>(value: T): unknown {
+    return JSON.parse(JSON.stringify(value))
   }
 
   export function parseFrom(q: string | undefined): number[] {

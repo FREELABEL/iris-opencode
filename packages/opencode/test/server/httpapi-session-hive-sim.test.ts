@@ -193,6 +193,13 @@ describe("session hive simulations (#194084)", () => {
         expect(done.feed).toMatchObject({ tables: [], flips: [], ignored: 0 })
         expect(done.feed.progress).toBeUndefined()
         expect(done.outputs.pull).toContain("using the dataset already on disk")
+        // The list carries a run with no progress yet: it answered 400 when a field was undefined.
+        const list = yield* requestJson<{ runs: { id: string; status: string; progress?: unknown }[] }>(
+          pathFor(SessionPaths.hiveSimList, { sessionID: session.id }),
+          { headers },
+        )
+        expect(list.runs).toMatchObject([{ id: started.id, status: "passed" }])
+        expect(list.runs[0].progress).toBeUndefined()
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
