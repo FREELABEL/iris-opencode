@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
-import { parsePlan, executeSkill } from "../../skill/executor"
+import { parsePlan, executeSkill, resolveArgs } from "../../skill/executor"
 import { dim, bold } from "./iris-api"
 import { printLedger, raiseAgreement, MERGE_OPTION, COUNTERSIGNER_OPTION } from "./platform-agreements"
 
@@ -42,6 +42,25 @@ async function resolvePlaybook(name: string) {
 }
 
 /** Run a playbook in-process, the same path `iris playbook run` takes. */
+/**
+ * #193830 — the args a door hands the executor. `iris playbook run` fills a playbook's own
+ * defaults through resolveArgs(); the doors called executeSkill() directly and skipped it, so
+ * any arg a door does not pass (engagement never passes `signed`) arrived unset instead of at
+ * its default. `${{args.mode}}-${{args.signed}} == draft-no` was then false, the draft step was
+ * skipped, and the door printed "completed" with no letter. Undefined is dropped first so a
+ * default is never overwritten by an absent flag.
+ */
+export function lexiconArgs(schema: Parameters<typeof resolveArgs>[0], args: Record<string, unknown>): Record<string, unknown> {
+  const given: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(args)) if (v !== undefined) given[k] = v
+  return { ...given, ...resolveArgs(schema ?? {}, [], given) }
+}
+
+/** A run that did not complete, or completed with a failed step, is a failure (#193830). */
+export function runFailed(result: { status: string; steps: Record<string, { status: string }> }): boolean {
+  return result.status !== "completed" || Object.values(result.steps ?? {}).some((s) => s.status === "failed")
+}
+
 async function runPlaybook(name: string, args: Record<string, unknown>): Promise<void> {
   const info = await resolvePlaybook(name)
   if (!info) {
@@ -52,11 +71,7 @@ async function runPlaybook(name: string, args: Record<string, unknown>): Promise
     directory: process.cwd(),
     fn: async () => {
       const plan = await parsePlan(info)
-      // Drop undefined so a playbook's own defaults survive.
-      const clean: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(args)) if (v !== undefined) clean[k] = v
-
-      const result = await executeSkill(plan, clean, { yes: Boolean(args.yes) })
+      const result = await executeSkill(plan, lexiconArgs(plan.args, args), { yes: Boolean(args.yes) })
 
       console.log("")
       console.log(`${bold(plan.name)} — ${result.status}  ${dim(`(run ${result.run_id})`)}`)
@@ -67,6 +82,9 @@ async function runPlaybook(name: string, args: Record<string, unknown>): Promise
         console.log(dim(`── ${step.id}`))
         console.log(sr.output.trim())
       }
+      // #193830: a door whose step failed (e.g. intake "✗ Could not read the new lead id") must not
+      // exit 0 — scripts and the console read the exit code, not the words.
+      if (runFailed(result)) process.exitCode = 1
     },
   })
 }
