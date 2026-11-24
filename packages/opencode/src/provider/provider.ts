@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { IRIS_RETIRED_MODELS, forwardRetired, parseRetired } from "@opencode-ai/core/util/iris-retired-models"
 
 /** The IRIS model endpoint. heyiris.io, never freelabel.net (#188508). */
 export const IRIS_OPENAI_BASE = "https://heyiris.io/api/v6/openai"
@@ -1219,6 +1220,8 @@ interface State {
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
+  /** Retired IRIS ids → replacement (bare ids). Built-in table plus the live manifest's `retired`. */
+  irisRetired: Record<string, string>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
@@ -1494,6 +1497,7 @@ const layer = Layer.effect(
         // manifest just dropped — the picker then offers models the server will not serve
         // (#187726: GPT-5.6 Luna on a dead OpenAI account, retried forever as a 429).
         const irisUnavailable = new Set<string>()
+        let irisRetired: Record<string, string> = { ...IRIS_RETIRED_MODELS }
         // Installs seeded before 2026-10-08 carry our OLD default baseURL in their own
         // opencode.json, and the desktop never rewrites an existing `iris` entry. That URL was
         // ours, not the user's choice, so upgrade it in memory (#188508). Any other URL stays.
@@ -1523,7 +1527,9 @@ const layer = Layer.effect(
                   limits?: { context?: number; input?: number; output?: number }
                   reasoning?: boolean
                 }>
+                retired?: unknown
               }
+              irisRetired = { ...irisRetired, ...parseRetired(manifestData.retired) }
               if (manifestData.data?.length) {
                 const irisModels: Record<string, Model> = {}
                 for (const m of manifestData.data) {
@@ -1873,6 +1879,7 @@ const layer = Layer.effect(
           sdk,
           modelLoaders,
           varsLoaders,
+          irisRetired,
         }
       }),
     )
@@ -2032,6 +2039,10 @@ const layer = Layer.effect(
 
       const info = provider.models[modelID]
       if (!info) {
+        // A saved selection naming a model the server retired: use what it now means (#194085).
+        const forwarded =
+          providerID === "iris" ? forwardRetired(modelID, (id) => !!provider.models[id], s.irisRetired) : undefined
+        if (forwarded) return provider.models[forwarded]
         const current = modelSuggestions(provider, modelID, runtimeFlags.enableExperimentalModels)
         const suggestions = current.length
           ? current

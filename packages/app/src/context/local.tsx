@@ -1,5 +1,6 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { base64Encode } from "@opencode-ai/core/util/encode"
+import { forwardRetired } from "@opencode-ai/core/util/iris-retired-models"
 import { useSessionParams } from "@/context/session-pane"
 import { batch, createEffect, createMemo, startTransition } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -103,11 +104,21 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       return !!provider?.models[model.modelID] && connected().has(model.providerID)
     }
 
+    // A saved pick naming a model IRIS retired becomes the model that replaced it, instead of
+    // being skipped for whatever the default happens to be (#194085).
+    const usableModel = (model: ModelKey): ModelKey | undefined => {
+      if (validModel(model)) return model
+      if (model.providerID !== "iris") return
+      const modelID = forwardRetired(model.modelID, (id) => validModel({ providerID: "iris", modelID: id }))
+      if (modelID) return { providerID: "iris", modelID }
+    }
+
     const firstModel = (...items: Array<() => ModelKey | undefined>) => {
       for (const item of items) {
         const model = item()
         if (!model) continue
-        if (validModel(model)) return model
+        const usable = usableModel(model)
+        if (usable) return usable
       }
     }
 
@@ -152,12 +163,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const configuredModel = () => {
       const model = resolveDefaultModel(providers.defaultModel(), sync().data.config.model)
       if (!model) return
-      if (validModel(model)) return model
+      return usableModel(model)
     }
 
     const recentModel = () => {
       for (const item of models.recent.list()) {
-        if (validModel(item)) return item
+        const usable = usableModel(item)
+        if (usable) return usable
       }
     }
 

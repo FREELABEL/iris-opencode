@@ -2169,3 +2169,56 @@ it.instance(
     },
   },
 )
+
+// #194085: OpenCode Go dropped kimi-k2.6 (and others). The server forwards the old ids, but the
+// manifest no longer lists them, so a saved selection failed locally as "Model unavailable"
+// before any request went out. getModel now resolves a retired id to its replacement.
+it.instance(
+  "iris: a retired model id resolves to the model that replaced it",
+  Effect.gen(function* () {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (url === "https://iris.test/api/v6/openai/models") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "iris/kimi-k2.7-code", name: "Kimi K2.7 Code", available: true },
+              { id: "iris/gemini-3.5-flash", name: "Gemini 3.5 Flash", available: true },
+            ],
+            // A retirement the desktop does not know yet arrives with the manifest.
+            retired: { "iris/gemini-2-flash": "iris/gemini-3.5-flash" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+    try {
+      const iris = ProviderV2.ID.make("iris")
+      const kimi = yield* Provider.use.getModel(iris, ModelV2.ID.make("kimi-k2.6"))
+      expect(String(kimi.id)).toBe("kimi-k2.7-code")
+      const gemini = yield* Provider.use.getModel(iris, ModelV2.ID.make("gemini-2-flash"))
+      expect(String(gemini.id)).toBe("gemini-3.5-flash")
+      // Retired, but its replacement is not offered here: still an error, not a wrong model.
+      const missing = yield* Provider.use.getModel(iris, ModelV2.ID.make("minimax-m2.7")).pipe(Effect.flip)
+      expect(missing._tag).toBe("ProviderModelNotFoundError")
+      // The retired ids are not offered in the picker.
+      const providers = yield* list
+      expect(Object.keys(providers[iris]!.models)).not.toContain("kimi-k2.6")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }),
+  {
+    config: {
+      provider: {
+        iris: {
+          name: "IRIS",
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://iris.test/api/v6/openai", apiKey: "test-key" },
+        },
+      },
+    },
+  },
+)
