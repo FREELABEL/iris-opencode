@@ -8,6 +8,8 @@ import {
   isPermanentByDefault,
   parseExpiration,
   resolveExpiration,
+  tooLargeMessage,
+  DIRECT_UPLOAD_THRESHOLD,
 } from "./platform-cloud-upload"
 
 // #193366 — `iris cloud:upload` used to default EVERY file to 180 days. Share cards (og:image),
@@ -104,5 +106,34 @@ describe("wiring", () => {
     expect(src).toContain("permanent: expiration.permanent")
     expect(src).toContain("warning,")
     expect(src).toContain("process.stderr.write(`WARNING: ${warning}")
+  })
+})
+
+// #194118 — a file over the limit printed a pointer to a PHP CLI nobody has, then "Done", and
+// exited 0. Anything driving the CLI recorded an upload that never happened.
+describe("an upload that did not happen never looks like one that did", () => {
+  const src = readFileSync(join(import.meta.dir, "platform-cloud-upload.ts"), "utf8")
+  const handler = src.slice(src.indexOf("async handler("))
+
+  test("the too-large message says nothing was uploaded and what to do instead", () => {
+    const m = tooLargeMessage(560 * 1024 * 1024)
+    expect(m).toContain("560.0 MB")
+    expect(m).toContain("95.0 MB")
+    expect(m).toContain("nothing was uploaded")
+    expect(m).not.toContain("PHP CLI")
+  })
+
+  test("the limit is still checked before reading the file", () => {
+    expect(handler).toContain("fileSize > DIRECT_UPLOAD_THRESHOLD")
+    expect(handler.indexOf("fileSize > DIRECT_UPLOAD_THRESHOLD")).toBeLessThan(handler.indexOf("readFileSync(localPath)"))
+    expect(DIRECT_UPLOAD_THRESHOLD).toBe(95 * 1024 * 1024)
+  })
+
+  test("only the success path says Done; every failure path goes through fail(), which exits 1", () => {
+    expect(handler.match(/prompts\.outro\("Done"\)/g)?.length).toBe(1)
+    // the only error print in the handler is the one inside fail()
+    expect(handler.match(/prompts\.log\.error\(/g)?.length).toBe(1)
+    const failFn = handler.slice(handler.indexOf("const fail ="), handler.indexOf("const fail =") + 200)
+    expect(failFn).toContain("process.exitCode = 1")
   })
 })

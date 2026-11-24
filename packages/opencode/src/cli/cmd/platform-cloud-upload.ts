@@ -6,7 +6,20 @@ import { existsSync, statSync, readFileSync } from "fs"
 import { basename } from "path"
 import { Auth } from "../../auth"
 
-const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
+export const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
+
+/**
+ * #194118 — a file over the limit used to print a pointer to a "PHP CLI" nobody has, then
+ * "Done", and exit 0. Scripts, playbooks and agents recorded an upload that never happened.
+ * Every path that uploads nothing now says so and exits 1.
+ */
+export function tooLargeMessage(size: number): string {
+  return (
+    `${formatBytes(size)} is over the ${formatBytes(DIRECT_UPLOAD_THRESHOLD)} upload limit — nothing was uploaded. ` +
+    `Large-file upload is not supported yet (#194118). For now, share it from Google Drive, Dropbox or AirDrop, ` +
+    `or split it into parts under ${formatBytes(DIRECT_UPLOAD_THRESHOLD)}.`
+  )
+}
 
 /**
  * #193366 — the default used to be "180" days for EVERY file. A share card (og:image), an email
@@ -131,7 +144,7 @@ export function expiryWarning(resolved: ResolvedExpiration, date: string | null)
   )
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"]
   let i = 0
   let size = bytes
@@ -172,13 +185,19 @@ export const PlatformCloudUploadCommand = cmd({
     UI.empty()
     if (!args.json) prompts.intro("◈  Cloud Upload")
 
+    // Every path that uploads nothing ends here: error, "Failed", exit 1 (#194118).
+    const fail = (message: string) => {
+      prompts.log.error(message)
+      prompts.outro("Failed")
+      process.exitCode = 1
+    }
+
     if (!args.file && !args.url) {
-      prompts.log.error("Provide a file path or --url")
-      prompts.outro("Done")
+      fail("Provide a file path or --url")
       return
     }
 
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { fail("Not signed in — run `iris login`"); return }
 
     let localPath: string
     let originalFilename: string
@@ -189,7 +208,7 @@ export const PlatformCloudUploadCommand = cmd({
         const sp = prompts.spinner()
         sp.start(`Downloading from ${args.url}…`)
         const r = await fetch(args.url)
-        if (!r.ok) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        if (!r.ok) { sp.stop("Failed", 1); fail(`Download failed: HTTP ${r.status}`); return }
         const buf = Buffer.from(await r.arrayBuffer())
         // Derive a real extension — Content-Type first (authoritative), then the URL
         // path. Without one the stored object is served as text/plain and the image
@@ -210,8 +229,7 @@ export const PlatformCloudUploadCommand = cmd({
         sp.stop(`Downloaded ${formatBytes(buf.length)}`)
       } else {
         if (!existsSync(args.file!)) {
-          prompts.log.error(`File not found: ${args.file}`)
-          prompts.outro("Done")
+          fail(`File not found: ${args.file}`)
           return
         }
         localPath = args.file!
@@ -225,10 +243,7 @@ export const PlatformCloudUploadCommand = cmd({
       }
 
       if (fileSize > DIRECT_UPLOAD_THRESHOLD) {
-        prompts.log.error(
-          `File >95MB. Direct S3 upload not yet supported in TypeScript port — use the PHP CLI for large files.`,
-        )
-        prompts.outro("Done")
+        fail(tooLargeMessage(fileSize))
         return
       }
 
@@ -236,9 +251,7 @@ export const PlatformCloudUploadCommand = cmd({
       try {
         expiration = resolveExpiration(args.expires, originalFilename)
       } catch (e) {
-        prompts.log.error(e instanceof Error ? e.message : String(e))
-        prompts.outro("Done")
-        process.exitCode = 1
+        fail(e instanceof Error ? e.message : String(e))
         return
       }
       const sp = prompts.spinner()
@@ -259,9 +272,7 @@ export const PlatformCloudUploadCommand = cmd({
       const userId = await resolveUserId()
       if (!userId) {
         sp.stop("Failed", 1)
-        prompts.log.error("Could not tell which account you are signed in as. Run `iris login` and try again.")
-        prompts.outro("Done")
-        process.exitCode = 1
+        fail("Could not tell which account you are signed in as. Run `iris login` and try again.")
         return
       }
       form.append("user_id", String(userId))
@@ -279,8 +290,7 @@ export const PlatformCloudUploadCommand = cmd({
       if (!res.ok) {
         sp.stop("Failed", 1)
         const msg = await res.text().catch(() => `HTTP ${res.status}`)
-        prompts.log.error(`Upload failed: ${msg.slice(0, 300)}`)
-        prompts.outro("Done")
+        fail(`Upload failed: ${msg.slice(0, 300)}`)
         return
       }
 
@@ -330,8 +340,7 @@ export const PlatformCloudUploadCommand = cmd({
         prompts.outro("Done")
       }
     } catch (err) {
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      fail(err instanceof Error ? err.message : String(err))
     } finally {
       if (tempFile) {
         try { require("fs").unlinkSync(tempFile) } catch {}
