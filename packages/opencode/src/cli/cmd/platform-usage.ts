@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { irisFetch, dim, bold, IRIS_API, writeJson } from "./iris-api"
 import { formatPlatformAnalytics } from "./platform-analytics-format"
+import { PlatformUsageStorageCommand } from "./platform-usage-storage"
 import { readdirSync, readFileSync, statSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -17,6 +18,7 @@ import { join } from "path"
  *   iris usage                what I ran, how much of it worked, what it cost
  *   iris usage --days 7
  *   iris usage --local        the same question for Claude Code / Codex, off disk
+ *   iris usage storage        what your account stores, by workspace (--all: every client, admins)
  *   iris traces               your recent runs, newest first
  *   iris traces <trace_id>    that run's steps
  *   iris traces <id> <span>   one step in full
@@ -363,7 +365,9 @@ export const PlatformUsageCommand = cmd({
       .option("local", { type: "boolean", default: false, describe: "local Claude Code / Codex sessions instead of the server" })
       .option("platform", { type: "boolean", default: false, describe: "the whole platform: active users, activity, tokens and cost (platform operator token)" })
       .option("external", { type: "boolean", default: false, describe: "with --platform: leave out internal @freelabel.net accounts" })
-      .option("json", { type: "boolean", default: false, describe: "machine-readable" }),
+      .option("json", { type: "boolean", default: false, describe: "machine-readable" })
+      // #193867 — billable storage per client: `iris usage storage` (own), `--all` (admins).
+      .command(PlatformUsageStorageCommand),
   async handler(args) {
     // Local history is a different corpus, not a filter on the same one — the server has
     // never seen these sessions — so it gets its own view rather than being blended into

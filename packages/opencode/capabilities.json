@@ -15903,7 +15903,15 @@
       "describe": "your AI spend and runs, account-wide — what you ran, how much of it worked, and what it cost",
       "aliases": [],
       "run": "iris usage",
-      "haystack": "usage your ai spend and runs, account-wide — what you ran, how much of it worked, and what it cost days window in days (1-365) source filter activity to one caller: cli | mcp | api | installer surface filter spend to one surface: command_bar | react_loop | heartbeat | proxy | transcription user another user local local claude code / codex sessions instead of the server platform the whole platform: active users, activity, tokens and cost (platform operator token) external with --platform: leave out internal @freelabel.net accounts json machine-readable spent on ai ai spend how much have i spent ai cost ai bill token spend"
+      "haystack": "usage your ai spend and runs, account-wide — what you ran, how much of it worked, and what it cost storage days window in days (1-365) source filter activity to one caller: cli | mcp | api | installer surface filter spend to one surface: command_bar | react_loop | heartbeat | proxy | transcription user another user local local claude code / codex sessions instead of the server platform the whole platform: active users, activity, tokens and cost (platform operator token) external with --platform: leave out internal @freelabel.net accounts json machine-readable spent on ai ai spend how much have i spent ai cost ai bill token spend"
+    },
+    {
+      "kind": "command",
+      "name": "usage storage",
+      "describe": "how much your account stores — files, by workspace, last 30 days (--all: every client, for admins)",
+      "aliases": [],
+      "run": "iris usage storage",
+      "haystack": "usage storage how much your account stores — files, by workspace, last 30 days (--all: every client, for admins) all every client ranked by storage (platform admins only) json machine-readable"
     },
     {
       "kind": "command",
