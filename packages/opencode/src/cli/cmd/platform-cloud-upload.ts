@@ -6,7 +6,46 @@ import { existsSync, statSync, readFileSync } from "fs"
 import { basename } from "path"
 import { Auth } from "../../auth"
 
-const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
+export const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
+
+/**
+ * #194118 — a file over the limit used to print a pointer to a "PHP CLI" nobody has, then
+ * "Done", and exit 0. Scripts, playbooks and agents recorded an upload that never happened.
+ * Every path that uploads nothing now says so and exits 1.
+ */
+export function tooLargeMessage(size: number): string {
+  return (
+    `${formatBytes(size)} is over ${formatBytes(DIRECT_UPLOAD_THRESHOLD)} and this server does not take large uploads yet — nothing was uploaded. ` +
+    `Share it from Google Drive, Dropbox or AirDrop, or split it into parts under ${formatBytes(DIRECT_UPLOAD_THRESHOLD)}.`
+  )
+}
+
+/** Content-Type for a direct upload. The presigned URL is signed for exactly this value. */
+export function guessContentType(filename: string): string {
+  const map: Record<string, string> = {
+    zip: "application/zip", gz: "application/gzip", tar: "application/x-tar", "7z": "application/x-7z-compressed",
+    rar: "application/vnd.rar", pdf: "application/pdf", json: "application/json", csv: "text/csv", txt: "text/plain",
+    wav: "audio/wav", mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac", ogg: "audio/ogg",
+    aif: "audio/aiff", aiff: "audio/aiff", mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+    mkv: "video/x-matroska", m4v: "video/x-m4v", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp", psd: "image/vnd.adobe.photoshop",
+  }
+  return map[fileExtension(filename)] ?? "application/octet-stream"
+}
+
+/**
+ * A refused upload, in words (#194118). The server says why (file_too_large,
+ * quota_exceeded) and how much space is left; say that, not "HTTP 413".
+ */
+export function refusalMessage(body: any, status: number): string {
+  const msg = body?.message ?? (typeof body === "string" ? body : "")
+  const st = body?.storage
+  const usage =
+    st && typeof st.used_bytes === "number" && typeof st.quota_bytes === "number" && st.quota_bytes >= 0
+      ? ` (using ${formatBytes(st.used_bytes)} of ${formatBytes(st.quota_bytes)}${st.tier_name ? ` on ${st.tier_name}` : ""} — see \`iris cloud:usage\`)`
+      : ""
+  return `${msg || `Upload refused (HTTP ${status})`}${usage}`
+}
 
 /**
  * #193366 — the default used to be "180" days for EVERY file. A share card (og:image), an email
@@ -131,7 +170,7 @@ export function expiryWarning(resolved: ResolvedExpiration, date: string | null)
   )
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"]
   let i = 0
   let size = bytes
@@ -149,6 +188,95 @@ async function resolveToken(): Promise<string> {
   if (process.env.FL_API_TOKEN) return process.env.FL_API_TOKEN
   if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
   return ""
+}
+
+export interface DirectUploadOptions {
+  path: string
+  filename: string
+  size: number
+  headers: Record<string, string>
+  title?: string
+  description?: string
+  bloq?: number
+  expiresDays?: number
+  onProgress?: (message: string) => void
+  /** injectable for tests */
+  fetchImpl?: typeof fetch
+  /** injectable for tests: the request body for the PUT */
+  body?: BodyInit
+}
+
+export type DirectUploadResult = { ok: true; data: any } | { ok: false; error: string }
+
+/**
+ * upload-url → PUT → complete (#194118). Never leaves a half-done upload
+ * behind on our side: if the PUT fails, it aborts, which deletes whatever
+ * arrived and releases the reserved space. (If the process dies mid-PUT, the
+ * server's cloud:reap-uploads does the same within a few hours.)
+ */
+export async function directUpload(o: DirectUploadOptions): Promise<DirectUploadResult> {
+  const f = o.fetchImpl ?? fetch
+  const json = { ...o.headers, "Content-Type": "application/json" }
+  const contentType = guessContentType(o.filename)
+
+  o.onProgress?.("Checking your storage…")
+  const start = await f(`${FL_API}/api/v1/cloud-files/upload-url`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({
+      original_filename: o.filename,
+      file_size: o.size,
+      filetype: contentType,
+      title: o.title,
+      description: o.description,
+      bloq_id: o.bloq,
+      expires_days: o.expiresDays,
+    }),
+  })
+  const startBody: any = await start.json().catch(() => ({}))
+  if (start.status === 404 || start.status === 405) return { ok: false, error: tooLargeMessage(o.size) }
+  if (start.status === 413) return { ok: false, error: refusalMessage(startBody, 413) }
+  if (!start.ok || !startBody?.data?.url) {
+    return { ok: false, error: `Could not start the upload: ${startBody?.message ?? `HTTP ${start.status}`}` }
+  }
+  const { upload_id: id, url, headers: signed } = startBody.data
+
+  const abort = () =>
+    f(`${FL_API}/api/v1/cloud-files/uploads/${id}/abort`, { method: "POST", headers: json }).catch(() => undefined)
+
+  const began = Date.now()
+  const tick = setInterval(() => {
+    const secs = Math.round((Date.now() - began) / 1000)
+    o.onProgress?.(`Uploading ${formatBytes(o.size)} straight to storage… ${secs}s`)
+  }, 1000)
+  let put: Response
+  try {
+    put = await f(url, {
+      method: "PUT",
+      headers: { ...(signed ?? {}), "Content-Type": signed?.["Content-Type"] ?? contentType },
+      // Bun.file streams from disk and sets Content-Length (signed URLs need it).
+      body: o.body ?? (Bun.file(o.path) as any),
+    })
+  } catch (e) {
+    clearInterval(tick)
+    await abort()
+    return { ok: false, error: `Upload interrupted: ${e instanceof Error ? e.message : String(e)} — nothing was kept.` }
+  }
+  clearInterval(tick)
+  if (!put.ok) {
+    const detail = (await put.text().catch(() => "")).slice(0, 200)
+    await abort()
+    return { ok: false, error: `Storage refused the file (HTTP ${put.status}) — nothing was kept. ${detail}`.trim() }
+  }
+
+  o.onProgress?.("Confirming…")
+  const done = await f(`${FL_API}/api/v1/cloud-files/uploads/${id}/complete`, { method: "POST", headers: json })
+  const doneBody: any = await done.json().catch(() => ({}))
+  if (!done.ok) {
+    if (done.status === 413) return { ok: false, error: refusalMessage(doneBody, 413) }
+    return { ok: false, error: `Upload could not be confirmed: ${doneBody?.message ?? `HTTP ${done.status}`}` }
+  }
+  return { ok: true, data: doneBody.data ?? doneBody }
 }
 
 export const PlatformCloudUploadCommand = cmd({
@@ -172,13 +300,19 @@ export const PlatformCloudUploadCommand = cmd({
     UI.empty()
     if (!args.json) prompts.intro("◈  Cloud Upload")
 
+    // Every path that uploads nothing ends here: error, "Failed", exit 1 (#194118).
+    const fail = (message: string) => {
+      prompts.log.error(message)
+      prompts.outro("Failed")
+      process.exitCode = 1
+    }
+
     if (!args.file && !args.url) {
-      prompts.log.error("Provide a file path or --url")
-      prompts.outro("Done")
+      fail("Provide a file path or --url")
       return
     }
 
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) { fail("Not signed in — run `iris login`"); return }
 
     let localPath: string
     let originalFilename: string
@@ -189,7 +323,7 @@ export const PlatformCloudUploadCommand = cmd({
         const sp = prompts.spinner()
         sp.start(`Downloading from ${args.url}…`)
         const r = await fetch(args.url)
-        if (!r.ok) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        if (!r.ok) { sp.stop("Failed", 1); fail(`Download failed: HTTP ${r.status}`); return }
         const buf = Buffer.from(await r.arrayBuffer())
         // Derive a real extension — Content-Type first (authoritative), then the URL
         // path. Without one the stored object is served as text/plain and the image
@@ -210,8 +344,7 @@ export const PlatformCloudUploadCommand = cmd({
         sp.stop(`Downloaded ${formatBytes(buf.length)}`)
       } else {
         if (!existsSync(args.file!)) {
-          prompts.log.error(`File not found: ${args.file}`)
-          prompts.outro("Done")
+          fail(`File not found: ${args.file}`)
           return
         }
         localPath = args.file!
@@ -224,25 +357,40 @@ export const PlatformCloudUploadCommand = cmd({
         prompts.log.info(`Size: ${formatBytes(fileSize)}`)
       }
 
-      if (fileSize > DIRECT_UPLOAD_THRESHOLD) {
-        prompts.log.error(
-          `File >95MB. Direct S3 upload not yet supported in TypeScript port — use the PHP CLI for large files.`,
-        )
-        prompts.outro("Done")
-        return
-      }
+      const direct = fileSize > DIRECT_UPLOAD_THRESHOLD
 
       let expiration: ResolvedExpiration
       try {
         expiration = resolveExpiration(args.expires, originalFilename)
       } catch (e) {
-        prompts.log.error(e instanceof Error ? e.message : String(e))
-        prompts.outro("Done")
-        process.exitCode = 1
+        fail(e instanceof Error ? e.message : String(e))
         return
       }
       const sp = prompts.spinner()
       sp.start("Uploading…")
+
+      const token = await resolveToken()
+      const headers: Record<string, string> = { Accept: "application/json" }
+      if (token) headers["Authorization"] = `Bearer ${token}`
+
+      let result: any
+      if (direct) {
+        // #194118 — large files go straight to storage: the server checks the
+        // plan and reserves the space, we PUT to the signed URL, the server
+        // measures what arrived and records it.
+        const out = await directUpload({
+          path: localPath, filename: originalFilename, size: fileSize, headers,
+          title: args.title, description: args.description, bloq: args.bloq,
+          expiresDays: expiration.permanent ? undefined : expiration.days,
+          onProgress: (m) => sp.message(m),
+        })
+        if (!out.ok) {
+          sp.stop("Failed", 1)
+          fail(out.error)
+          return
+        }
+        result = out.data
+      } else {
 
       const fileBuffer = readFileSync(localPath)
       const blob = new Blob([new Uint8Array(fileBuffer)])
@@ -259,16 +407,10 @@ export const PlatformCloudUploadCommand = cmd({
       const userId = await resolveUserId()
       if (!userId) {
         sp.stop("Failed", 1)
-        prompts.log.error("Could not tell which account you are signed in as. Run `iris login` and try again.")
-        prompts.outro("Done")
-        process.exitCode = 1
+        fail("Could not tell which account you are signed in as. Run `iris login` and try again.")
         return
       }
       form.append("user_id", String(userId))
-
-      const token = await resolveToken()
-      const headers: Record<string, string> = { Accept: "application/json" }
-      if (token) headers["Authorization"] = `Bearer ${token}`
 
       const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
         method: "POST",
@@ -278,14 +420,17 @@ export const PlatformCloudUploadCommand = cmd({
 
       if (!res.ok) {
         sp.stop("Failed", 1)
-        const msg = await res.text().catch(() => `HTTP ${res.status}`)
-        prompts.log.error(`Upload failed: ${msg.slice(0, 300)}`)
-        prompts.outro("Done")
+        const text = await res.text().catch(() => "")
+        let body: any = text
+        try { body = JSON.parse(text) } catch {}
+        fail(res.status === 413 ? refusalMessage(body, 413) : `Upload failed: ${String(body?.message ?? text ?? `HTTP ${res.status}`).slice(0, 300)}`)
         return
       }
 
       const data = (await res.json()) as any
-      const result = data?.data ?? data
+      result = data?.data ?? data
+      }
+
       const fileId = result.id
       const cdnUrl = result.cdn_url ?? result.url ?? result.filepath ?? ""
       const shareUrl = result.share_url ?? (fileId ? `https://elon.freelabel.net/content/Cloud/file/${fileId}` : "")
@@ -330,8 +475,7 @@ export const PlatformCloudUploadCommand = cmd({
         prompts.outro("Done")
       }
     } catch (err) {
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      fail(err instanceof Error ? err.message : String(err))
     } finally {
       if (tempFile) {
         try { require("fs").unlinkSync(tempFile) } catch {}
