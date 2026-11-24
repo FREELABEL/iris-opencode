@@ -38,3 +38,16 @@ describe("no command falls back to a fixed account (#193865)", () => {
     expect(hits.map((h) => `${h.f}:${h.n}: ${h.line.trim()}`)).toEqual([])
   })
 })
+
+describe("uploads let the server decide the account (#193867)", () => {
+  test("cloud:upload, deliver and hive-send send no user_id to cloud-files", () => {
+    const files = ["platform-cloud-upload.ts", "platform-deliver.ts", "platform-hive-send.ts"]
+    const hits = files.flatMap((f) =>
+      readFileSync(join(SRC, "cli", "cmd", f), "utf8")
+        .split("\n")
+        .map((line, i) => ({ f, n: i + 1, line }))
+        .filter((x) => /append\(\s*["']user_id["']/.test(x.line)),
+    )
+    expect(hits.map((h) => `${h.f}:${h.n}: ${h.line.trim()}`)).toEqual([])
+  })
+})

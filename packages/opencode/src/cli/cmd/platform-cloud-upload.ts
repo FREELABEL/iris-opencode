@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { FL_API, requireAuth, resolveUserId, printDivider, printKV, dim, bold, success, highlight, warn, writeJson } from "./iris-api"
+import { FL_API, requireAuth, printDivider, printKV, dim, bold, success, highlight, warn, writeJson } from "./iris-api"
 import { existsSync, statSync, readFileSync } from "fs"
 import { basename } from "path"
 import { Auth } from "../../auth"
@@ -401,16 +401,8 @@ export const PlatformCloudUploadCommand = cmd({
       if (args.description) form.append("description", args.description)
       if (args.bloq) form.append("bloq_id", String(args.bloq))
       if (expiration.days > 0) form.append("expires_days", String(expiration.days))
-      // user_id required by cloud-files endpoint. It must be the signed-in account: fl-api
-      // refuses any other ("You may only act on your own account"), and a fixed fallback
-      // claimed one account for everyone (#193865).
-      const userId = await resolveUserId()
-      if (!userId) {
-        sp.stop("Failed", 1)
-        fail("Could not tell which account you are signed in as. Run `iris login` and try again.")
-        return
-      }
-      form.append("user_id", String(userId))
+      // No user_id: fl-api takes the account from the login token (RequestCaller::actingFor,
+      // #187931). Sending one only ever added a way to be wrong (#193865, #193867).
 
       const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
         method: "POST",
@@ -423,7 +415,7 @@ export const PlatformCloudUploadCommand = cmd({
         const text = await res.text().catch(() => "")
         let body: any = text
         try { body = JSON.parse(text) } catch {}
-        fail(res.status === 413 ? refusalMessage(body, 413) : `Upload failed: ${String(body?.message ?? text ?? `HTTP ${res.status}`).slice(0, 300)}`)
+        fail(res.status === 401 ? "You are not signed in. Run `iris login` and try again." : res.status === 413 ? refusalMessage(body, 413) : `Upload failed: ${String(body?.message ?? text ?? `HTTP ${res.status}`).slice(0, 300)}`)
         return
       }
 
