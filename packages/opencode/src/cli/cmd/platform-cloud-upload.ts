@@ -15,10 +15,36 @@ export const DIRECT_UPLOAD_THRESHOLD = 95 * 1024 * 1024
  */
 export function tooLargeMessage(size: number): string {
   return (
-    `${formatBytes(size)} is over the ${formatBytes(DIRECT_UPLOAD_THRESHOLD)} upload limit — nothing was uploaded. ` +
-    `Large-file upload is not supported yet (#194118). For now, share it from Google Drive, Dropbox or AirDrop, ` +
-    `or split it into parts under ${formatBytes(DIRECT_UPLOAD_THRESHOLD)}.`
+    `${formatBytes(size)} is over ${formatBytes(DIRECT_UPLOAD_THRESHOLD)} and this server does not take large uploads yet — nothing was uploaded. ` +
+    `Share it from Google Drive, Dropbox or AirDrop, or split it into parts under ${formatBytes(DIRECT_UPLOAD_THRESHOLD)}.`
   )
+}
+
+/** Content-Type for a direct upload. The presigned URL is signed for exactly this value. */
+export function guessContentType(filename: string): string {
+  const map: Record<string, string> = {
+    zip: "application/zip", gz: "application/gzip", tar: "application/x-tar", "7z": "application/x-7z-compressed",
+    rar: "application/vnd.rar", pdf: "application/pdf", json: "application/json", csv: "text/csv", txt: "text/plain",
+    wav: "audio/wav", mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac", ogg: "audio/ogg",
+    aif: "audio/aiff", aiff: "audio/aiff", mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+    mkv: "video/x-matroska", m4v: "video/x-m4v", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", webp: "image/webp", psd: "image/vnd.adobe.photoshop",
+  }
+  return map[fileExtension(filename)] ?? "application/octet-stream"
+}
+
+/**
+ * A refused upload, in words (#194118). The server says why (file_too_large,
+ * quota_exceeded) and how much space is left; say that, not "HTTP 413".
+ */
+export function refusalMessage(body: any, status: number): string {
+  const msg = body?.message ?? (typeof body === "string" ? body : "")
+  const st = body?.storage
+  const usage =
+    st && typeof st.used_bytes === "number" && typeof st.quota_bytes === "number" && st.quota_bytes >= 0
+      ? ` (using ${formatBytes(st.used_bytes)} of ${formatBytes(st.quota_bytes)}${st.tier_name ? ` on ${st.tier_name}` : ""} — see \`iris cloud:usage\`)`
+      : ""
+  return `${msg || `Upload refused (HTTP ${status})`}${usage}`
 }
 
 /**
@@ -164,6 +190,95 @@ async function resolveToken(): Promise<string> {
   return ""
 }
 
+export interface DirectUploadOptions {
+  path: string
+  filename: string
+  size: number
+  headers: Record<string, string>
+  title?: string
+  description?: string
+  bloq?: number
+  expiresDays?: number
+  onProgress?: (message: string) => void
+  /** injectable for tests */
+  fetchImpl?: typeof fetch
+  /** injectable for tests: the request body for the PUT */
+  body?: BodyInit
+}
+
+export type DirectUploadResult = { ok: true; data: any } | { ok: false; error: string }
+
+/**
+ * upload-url → PUT → complete (#194118). Never leaves a half-done upload
+ * behind on our side: if the PUT fails, it aborts, which deletes whatever
+ * arrived and releases the reserved space. (If the process dies mid-PUT, the
+ * server's cloud:reap-uploads does the same within a few hours.)
+ */
+export async function directUpload(o: DirectUploadOptions): Promise<DirectUploadResult> {
+  const f = o.fetchImpl ?? fetch
+  const json = { ...o.headers, "Content-Type": "application/json" }
+  const contentType = guessContentType(o.filename)
+
+  o.onProgress?.("Checking your storage…")
+  const start = await f(`${FL_API}/api/v1/cloud-files/upload-url`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({
+      original_filename: o.filename,
+      file_size: o.size,
+      filetype: contentType,
+      title: o.title,
+      description: o.description,
+      bloq_id: o.bloq,
+      expires_days: o.expiresDays,
+    }),
+  })
+  const startBody: any = await start.json().catch(() => ({}))
+  if (start.status === 404 || start.status === 405) return { ok: false, error: tooLargeMessage(o.size) }
+  if (start.status === 413) return { ok: false, error: refusalMessage(startBody, 413) }
+  if (!start.ok || !startBody?.data?.url) {
+    return { ok: false, error: `Could not start the upload: ${startBody?.message ?? `HTTP ${start.status}`}` }
+  }
+  const { upload_id: id, url, headers: signed } = startBody.data
+
+  const abort = () =>
+    f(`${FL_API}/api/v1/cloud-files/uploads/${id}/abort`, { method: "POST", headers: json }).catch(() => undefined)
+
+  const began = Date.now()
+  const tick = setInterval(() => {
+    const secs = Math.round((Date.now() - began) / 1000)
+    o.onProgress?.(`Uploading ${formatBytes(o.size)} straight to storage… ${secs}s`)
+  }, 1000)
+  let put: Response
+  try {
+    put = await f(url, {
+      method: "PUT",
+      headers: { ...(signed ?? {}), "Content-Type": signed?.["Content-Type"] ?? contentType },
+      // Bun.file streams from disk and sets Content-Length (signed URLs need it).
+      body: o.body ?? (Bun.file(o.path) as any),
+    })
+  } catch (e) {
+    clearInterval(tick)
+    await abort()
+    return { ok: false, error: `Upload interrupted: ${e instanceof Error ? e.message : String(e)} — nothing was kept.` }
+  }
+  clearInterval(tick)
+  if (!put.ok) {
+    const detail = (await put.text().catch(() => "")).slice(0, 200)
+    await abort()
+    return { ok: false, error: `Storage refused the file (HTTP ${put.status}) — nothing was kept. ${detail}`.trim() }
+  }
+
+  o.onProgress?.("Confirming…")
+  const done = await f(`${FL_API}/api/v1/cloud-files/uploads/${id}/complete`, { method: "POST", headers: json })
+  const doneBody: any = await done.json().catch(() => ({}))
+  if (!done.ok) {
+    if (done.status === 413) return { ok: false, error: refusalMessage(doneBody, 413) }
+    return { ok: false, error: `Upload could not be confirmed: ${doneBody?.message ?? `HTTP ${done.status}`}` }
+  }
+  return { ok: true, data: doneBody.data ?? doneBody }
+}
+
 export const PlatformCloudUploadCommand = cmd({
   command: "cloud:upload [file]",
   describe: "upload a file to cloud storage and get CDN + share URLs",
@@ -242,10 +357,7 @@ export const PlatformCloudUploadCommand = cmd({
         prompts.log.info(`Size: ${formatBytes(fileSize)}`)
       }
 
-      if (fileSize > DIRECT_UPLOAD_THRESHOLD) {
-        fail(tooLargeMessage(fileSize))
-        return
-      }
+      const direct = fileSize > DIRECT_UPLOAD_THRESHOLD
 
       let expiration: ResolvedExpiration
       try {
@@ -256,6 +368,29 @@ export const PlatformCloudUploadCommand = cmd({
       }
       const sp = prompts.spinner()
       sp.start("Uploading…")
+
+      const token = await resolveToken()
+      const headers: Record<string, string> = { Accept: "application/json" }
+      if (token) headers["Authorization"] = `Bearer ${token}`
+
+      let result: any
+      if (direct) {
+        // #194118 — large files go straight to storage: the server checks the
+        // plan and reserves the space, we PUT to the signed URL, the server
+        // measures what arrived and records it.
+        const out = await directUpload({
+          path: localPath, filename: originalFilename, size: fileSize, headers,
+          title: args.title, description: args.description, bloq: args.bloq,
+          expiresDays: expiration.permanent ? undefined : expiration.days,
+          onProgress: (m) => sp.message(m),
+        })
+        if (!out.ok) {
+          sp.stop("Failed", 1)
+          fail(out.error)
+          return
+        }
+        result = out.data
+      } else {
 
       const fileBuffer = readFileSync(localPath)
       const blob = new Blob([new Uint8Array(fileBuffer)])
@@ -277,10 +412,6 @@ export const PlatformCloudUploadCommand = cmd({
       }
       form.append("user_id", String(userId))
 
-      const token = await resolveToken()
-      const headers: Record<string, string> = { Accept: "application/json" }
-      if (token) headers["Authorization"] = `Bearer ${token}`
-
       const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
         method: "POST",
         body: form,
@@ -289,13 +420,17 @@ export const PlatformCloudUploadCommand = cmd({
 
       if (!res.ok) {
         sp.stop("Failed", 1)
-        const msg = await res.text().catch(() => `HTTP ${res.status}`)
-        fail(`Upload failed: ${msg.slice(0, 300)}`)
+        const text = await res.text().catch(() => "")
+        let body: any = text
+        try { body = JSON.parse(text) } catch {}
+        fail(res.status === 413 ? refusalMessage(body, 413) : `Upload failed: ${String(body?.message ?? text ?? `HTTP ${res.status}`).slice(0, 300)}`)
         return
       }
 
       const data = (await res.json()) as any
-      const result = data?.data ?? data
+      result = data?.data ?? data
+      }
+
       const fileId = result.id
       const cdnUrl = result.cdn_url ?? result.url ?? result.filepath ?? ""
       const shareUrl = result.share_url ?? (fileId ? `https://elon.freelabel.net/content/Cloud/file/${fileId}` : "")

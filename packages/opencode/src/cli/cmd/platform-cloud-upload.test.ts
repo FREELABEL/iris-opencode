@@ -137,3 +137,110 @@ describe("an upload that did not happen never looks like one that did", () => {
     expect(failFn).toContain("process.exitCode = 1")
   })
 })
+
+// #194118 — large files go straight to storage: upload-url → PUT → complete.
+describe("direct upload", () => {
+  const { directUpload, refusalMessage, guessContentType } = require("./platform-cloud-upload")
+  const MB = 1024 * 1024
+
+  type Call = { url: string; method: string; body?: any; headers?: any }
+  function fakeServer(routes: Record<string, (c: Call) => Response>) {
+    const calls: Call[] = []
+    const impl = (async (url: string, init: any = {}) => {
+      const c: Call = { url, method: init.method ?? "GET", headers: init.headers, body: (() => { try { return JSON.parse(init.body) } catch { return init.body } })() }
+      calls.push(c)
+      const key = Object.keys(routes).find((k) => url.includes(k))
+      if (!key) throw new Error(`unexpected ${url}`)
+      return routes[key](c)
+    }) as any
+    return { calls, impl }
+  }
+  const json = (status: number, body: any) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
+  const started = () => json(201, { data: { upload_id: 7, url: "https://bucket.test/k?sig", headers: { "Content-Type": "application/zip" } } })
+  const opts = (fetchImpl: any) => ({ path: "/x", filename: "Vintage EP.zip", size: 560 * MB, headers: { Authorization: "Bearer t" }, expiresDays: 30, fetchImpl, body: "bytes" })
+
+  test("start → PUT to the signed URL with the signed headers → complete", async () => {
+    const s = fakeServer({
+      "/upload-url": started,
+      "bucket.test": () => new Response("", { status: 200 }),
+      "/uploads/7/complete": () => json(201, { data: { id: 99, share_url: "https://x/content/Cloud/file/99", cdn_url: "https://cdn/k" } }),
+    })
+    const r = await directUpload(opts(s.impl))
+    expect(r).toEqual({ ok: true, data: { id: 99, share_url: "https://x/content/Cloud/file/99", cdn_url: "https://cdn/k" } })
+    expect(s.calls.map((c) => c.method)).toEqual(["POST", "PUT", "POST"])
+    expect(s.calls[0].body).toMatchObject({ original_filename: "Vintage EP.zip", file_size: 560 * MB, filetype: "application/zip", expires_days: 30 })
+    expect(s.calls[1].headers["Content-Type"]).toBe("application/zip")
+    expect(s.calls[1].headers.Authorization).toBeUndefined() // never send our token to the bucket
+  })
+
+  test("a plan refusal comes back in words, with usage", async () => {
+    const s = fakeServer({
+      "/upload-url": () => json(413, {
+        error: "file_too_large",
+        message: "This file is 559.5 MB; the largest file your plan allows is 100.0 MB.",
+        storage: { used_bytes: 200 * MB, quota_bytes: 1024 * MB, tier_name: "Free" },
+      }),
+    })
+    const r = await directUpload(opts(s.impl))
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("largest file your plan allows is 100.0 MB")
+    expect(r.error).toContain("200.0 MB of 1.0 GB on Free")
+    expect(s.calls).toHaveLength(1)
+  })
+
+  test("an older server without the endpoint gets the honest too-large message", async () => {
+    const s = fakeServer({ "/upload-url": () => json(404, { message: "Not Found" }) })
+    const r = await directUpload(opts(s.impl))
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("nothing was uploaded")
+  })
+
+  test("a failed PUT aborts, so nothing is left reserved or stored", async () => {
+    const s = fakeServer({
+      "/upload-url": started,
+      "bucket.test": () => new Response("SignatureDoesNotMatch", { status: 403 }),
+      "/uploads/7/abort": () => json(200, { success: true }),
+    })
+    const r = await directUpload(opts(s.impl))
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("HTTP 403")
+    expect(r.error).toContain("nothing was kept")
+    expect(s.calls.at(-1)!.url).toContain("/uploads/7/abort")
+  })
+
+  test("a network error mid-PUT also aborts", async () => {
+    const s = fakeServer({
+      "/upload-url": started,
+      "bucket.test": () => { throw new Error("socket hang up") },
+      "/uploads/7/abort": () => json(200, {}),
+    })
+    const r = await directUpload(opts(s.impl))
+    expect(r.error).toContain("socket hang up")
+    expect(s.calls.some((c) => c.url.includes("/abort"))).toBe(true)
+  })
+
+  test("content types the signed URL is made for", () => {
+    expect(guessContentType("Vintage EP.zip")).toBe("application/zip")
+    expect(guessContentType("beat.WAV")).toBe("audio/wav")
+    expect(guessContentType("stems.unknownext")).toBe("application/octet-stream")
+  })
+
+  test("refusal without storage info still reads", () => {
+    expect(refusalMessage({ message: "Quota exceeded" }, 413)).toBe("Quota exceeded")
+    expect(refusalMessage({}, 413)).toBe("Upload refused (HTTP 413)")
+  })
+
+  test("large local files are never read into memory", () => {
+    const src = readFileSync(join(import.meta.dir, "platform-cloud-upload.ts"), "utf8")
+    const handler = src.slice(src.indexOf("async handler("))
+    expect(handler.indexOf("if (direct)")).toBeLessThan(handler.indexOf("readFileSync(localPath)"))
+  })
+})
+
+describe("cloud:usage", () => {
+  const { describeUsage } = require("./platform-cloud-usage")
+  test("describes used of quota, or unlimited", () => {
+    expect(describeUsage({ used_bytes: 1610612736, quota_bytes: 10737418240 })).toBe("1.5 GB of 10.0 GB (15%)")
+    expect(describeUsage({ used_bytes: 1024, quota_bytes: -1 })).toBe("1.0 KB (unlimited)")
+  })
+})
