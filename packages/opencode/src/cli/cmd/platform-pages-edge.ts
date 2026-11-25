@@ -27,6 +27,7 @@ import {
   keepRunning,
   listServed,
   portFor,
+  publicNameFor,
   readState,
   safeSlug,
   servedDir,
@@ -35,6 +36,9 @@ import {
   writeState,
 } from "./edge/served"
 import { openBrowser } from "../../util/browser"
+import { prepareRelayRunner } from "./platform-hive-tunnel"
+import { parseRunnerLine } from "./platform-hive-relay"
+import { spawn } from "child_process"
 import { Remote, loadConfig, newReleaseId, EXAMPLE_CONFIG, type Target } from "./edge/deploy"
 
 const DEFAULT_ORIGIN = "https://freelabel.net"
@@ -205,7 +209,13 @@ export const EdgeServeCmd = cmd({
   aliases: ["edge-serve"],
   describe: "serve an exported folder locally, with the SPA fallback a real host must replicate",
   builder: (y) =>
-    y.positional("dir", { type: "string", demandOption: true }).option("port", { type: "number", default: 8080 }),
+    y
+      .positional("dir", { type: "string", demandOption: true })
+      .option("port", { type: "number", default: 8080 })
+      .option("public-name", {
+        type: "string",
+        describe: "also publish it at https://<name>.t.heyiris.io through the Hive relay (used by `pages serve --public`)",
+      }),
   async handler(args) {
     const dir = resolve(String(args.dir))
     if (!existsSync(join(dir, "index.html"))) {
@@ -215,6 +225,42 @@ export const EdgeServeCmd = cmd({
     }
     const srv = await startStaticServer(dir, Number(args.port))
     UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)`)
+    const name = args["public-name"] ? String(args["public-name"]) : ""
+    if (name) {
+      // The relay runner is a CHILD of this server, so the two live and die together, and the OS
+      // keeper that restarts this process restarts the tunnel with it. The token is read here, at
+      // run time, from the CLI's own sign-in — never written into a plist, task or unit (#194213).
+      const prep = await prepareRelayRunner(name, srv.port)
+      if (!prep.ok) {
+        UI.error(`public address not opened: ${prep.error}`)
+        process.exit(1)
+      }
+      const child = spawn(prep.node, ["--no-warnings", ...prep.args], { env: prep.env, stdio: ["ignore", "pipe", "pipe"] })
+      let buf = ""
+      child.stdout.on("data", (d) => {
+        buf += String(d)
+        let i
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const ev = parseRunnerLine(buf.slice(0, i))
+          buf = buf.slice(i + 1)
+          if (ev) UI.println(`${new Date().toISOString()} relay ${JSON.stringify(ev)}`)
+        }
+      })
+      child.stderr.on("data", (d) => UI.println(`relay stderr: ${String(d).trim()}`))
+      const stop = (code: number) => {
+        child.kill("SIGTERM")
+        void srv.stop().finally(() => process.exit(code))
+      }
+      // A dead tunnel must not leave a server that LOOKS fine locally: exit, and let the keeper
+      // restart both.
+      child.on("exit", (code) => {
+        UI.println(`relay runner exited (${code}) — exiting so both restart`)
+        stop(1)
+      })
+      process.on("SIGTERM", () => stop(0))
+      process.on("SIGINT", () => stop(0))
+      UI.println(`public: ${prep.url}/p/  (through the Hive relay)`)
+    }
     UI.println(dim("ctrl-c to stop"))
     await new Promise(() => {})
   },
@@ -240,8 +286,15 @@ export const PagesServeCmd = cmd({
       .option("origin", { type: "string", describe: "origin to export from (default: the published host)" })
       .option("no-open", { type: "boolean", default: false, describe: "do not open it in a browser" })
       .option("no-autostart", { type: "boolean", default: false, describe: "serve it now only — do not start it when this computer restarts" })
+      .option("public", {
+        type: "boolean",
+        default: false,
+        describe: "also give it a public https address (Hive relay), the same one every time — so a phone can install it",
+      })
+      .option("name", { type: "string", describe: "with --public: the name in https://<name>.t.heyiris.io (default: from the slug)" })
       .option("json", { type: "boolean", default: false })
       .example("iris pages serve my-page", "running at http://localhost:<port>/p/my-page, starts with the computer")
+      .example("iris pages serve my-page --public", "…and at https://my-page.t.heyiris.io/p/my-page, for phones")
       .example("iris pages serve list", "what is served here, and whether it is answering")
       .example("iris pages serve stop my-page", "stop it and remove it from startup"),
   async handler(args) {
@@ -258,6 +311,7 @@ export const PagesServeCmd = cmd({
           `${r.up ? "●" : "○"} ${r.slug.padEnd(32)} http://localhost:${r.port}/p/${r.slug}  ` +
             dim(`synced ${when} · ${r.keeper}${r.up ? "" : " · NOT answering"}`),
         )
+        if (r.public_url) UI.println(`  ${" ".repeat(32)} ${r.public_url}`)
       }
       return
     }
@@ -295,6 +349,21 @@ export const PagesServeCmd = cmd({
     const prev = readState(slug)
     const taken = new Set(listServed().filter((s) => s.slug !== slug).map((s) => s.port))
     const port = Number(args.port ?? prev?.port ?? portFor(slug, taken))
+
+    // --public: claim the name and check this machine can run the relay BEFORE exporting anything,
+    // so "name taken" or "update your bridge" is said first, not after a minute of work.
+    const publicName = args.public ? String(args.name ?? prev?.public_name ?? publicNameFor(slug)) : undefined
+    let publicUrl: string | undefined
+    if (publicName) {
+      const claim = await prepareRelayRunner(publicName, port)
+      if (!claim.ok) {
+        if (json) return writeJson({ ok: false, reason: "public", detail: claim.error })
+        UI.error(`No public address: ${claim.error}${/taken|use/i.test(claim.error) ? ` — pick another with --name` : ""}`)
+        process.exitCode = 1
+        return
+      }
+      publicUrl = `${claim.url}/p/${slug}`
+    }
 
     if (!json) {
       UI.empty()
@@ -341,12 +410,13 @@ export const PagesServeCmd = cmd({
 
     // Re-serving: a server already answering on this port reads the swapped folder per request, so
     // it needs nothing. Otherwise (first serve, a changed port, or it died) start it and keep it.
-    const already = !!prev && prev.port === port && (await answering(port, slug))
+    // Public or not is part of the command the keeper runs, so changing it means a restart.
+    const already = !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName && (await answering(port, slug))
     let kept: ReturnType<typeof keepRunning> | null = null
     if (!already) {
       if (prev) stopKeeping(prev)
       sp?.message("Starting it…")
-      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"] })
+      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName })
     }
     const state = {
       slug,
@@ -355,6 +425,7 @@ export const PagesServeCmd = cmd({
       synced_at: new Date().toISOString(),
       keeper: kept?.keeper ?? prev!.keeper,
       ...(kept?.pid ? { pid: kept.pid } : already && prev?.pid ? { pid: prev.pid } : {}),
+      ...(publicName ? { public_name: publicName, public_url: publicUrl } : {}),
     }
     writeState(state)
 
@@ -364,9 +435,19 @@ export const PagesServeCmd = cmd({
     sp?.stop(up ? "Served" : "Started, but not answering yet")
 
     const survivesRestart = kept ? kept.keeper !== "process" : state.keeper !== "process"
-    if (json) return writeJson({ ok: up, url, ...state, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
+    // The public address: wait for the relay to answer (a first run fetches a certificate).
+    let publicUp = false
+    if (publicUrl) {
+      sp?.start("Opening the public address…")
+      for (let i = 0; i < 60 && !(publicUp = await fetch(publicUrl, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false)); i++)
+        await new Promise((r) => setTimeout(r, 2000))
+      sp?.stop(publicUp ? "Public" : "Public address not answering yet")
+    }
+
+    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
 
     UI.println(`  ${up ? "●" : "○"} ${url}`)
+    if (publicUrl) UI.println(`  ${publicUp ? "●" : "○"} ${publicUrl}  ${dim("anyone with this address can open it · on a phone: Share → Add to Home Screen")}`)
     if (already) UI.println(dim("  re-synced from IRIS Cloud; the running server picked it up"))
     if (survivesRestart) UI.println(dim(`  starts with this computer${kept ? ` (${kept.detail})` : ""}`))
     else if (!args["no-autostart"]) UI.println(`  ⚠ will NOT start after a restart${kept ? ` — ${kept.detail}` : ""}. Run this again after rebooting.`)

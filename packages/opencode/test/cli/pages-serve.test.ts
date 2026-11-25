@@ -11,6 +11,7 @@ import {
   serveArgv,
   serviceSelf,
   serviceCwd,
+  publicNameFor,
   swapSite,
   systemdService,
   windowsStartVbs,
@@ -52,6 +53,16 @@ describe("iris pages serve (#194212)", () => {
     expect(serviceCwd(["/usr/local/bin/iris"], "/home/x")).toBe("/home/x")
   })
 
+  test("--public: the tunnel rides on the served process; no token is written into any unit file", () => {
+    const argv = serveArgv(["/usr/local/bin/iris"], "/s", 7411, "playbook-library")
+    expect(argv.slice(-2)).toEqual(["--public-name", "playbook-library"])
+    for (const f of [launchdPlist("x", argv, "/l", "/h"), systemdService("x", argv, "/h"), windowsStartVbs(argv, "C:\\h")]) {
+      expect(f).not.toMatch(/IRIS_API_KEY|Bearer|token/i)
+    }
+    expect(publicNameFor("My_Page--v2")).toBe("my-page-v2")
+    expect(publicNameFor("x".repeat(80)).length).toBeLessThanOrEqual(63)
+  })
+
   test("macOS: a launchd agent that starts at login and restarts if it dies", () => {
     const p = launchdPlist("my-page", ["/opt/iris", "pages", "serve-edge", "/Users/a & b/site", "--port", "7411"], "/tmp/l.log", "/Users/a")
     expect(p).toContain("<string>io.heyiris.page.my-page</string>")
@@ -64,7 +75,8 @@ describe("iris pages serve (#194212)", () => {
   test("Windows: a logon task on a hidden-window script, with paths that contain spaces", () => {
     const vbs = windowsStartVbs(serveArgv(self, site, 7411), "C:\\Users\\First Last")
     // window style 0 = hidden: a console window someone can close is how a page dies
-    expect(vbs).toMatch(/, 0, False\r\n$/)
+    expect(vbs).toContain(", 0, True") // waits on the server…
+    expect(vbs).toMatch(/Do\r\n[\s\S]*WScript\.Sleep 3000\r\nLoop/) // …and starts it again if it exits
     expect(vbs).toContain('sh.CurrentDirectory = "C:\\Users\\First Last"')
     // each argument quoted on the command line; "" is a quote inside a VBScript string
     expect(vbs).toContain(`""C:\\Users\\First Last\\AppData\\Local\\iris\\iris.exe"" ""pages"" ""serve-edge"" ""${site}""`)

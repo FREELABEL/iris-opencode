@@ -29,6 +29,9 @@ export interface ServedState {
   synced_at: string
   keeper: "launchd" | "schtasks" | "systemd" | "process"
   pid?: number
+  /** --public: the Hive relay tunnel name, and the https address it answers on */
+  public_name?: string
+  public_url?: string
 }
 
 export const servedRoot = (home = homedir()) => join(home, ".iris", "served")
@@ -111,8 +114,13 @@ export function serviceCwd(self = selfCommand(), home = homedir()): string {
 // ── what each OS gets ──────────────────────────────────────────────────────────────────────────
 
 /** The command that serves the folder. `self` is how this CLI re-invokes itself (see selfCommand). */
-export function serveArgv(self: string[], site: string, port: number): string[] {
-  return [...self, "pages", "serve-edge", site, "--port", String(port)]
+export function serveArgv(self: string[], site: string, port: number, publicName?: string): string[] {
+  return [...self, "pages", "serve-edge", site, "--port", String(port), ...(publicName ? ["--public-name", publicName] : [])]
+}
+
+/** A tunnel name for a page: lowercase, the relay's alphabet, at most 63 characters. */
+export function publicNameFor(slug: string): string {
+  return slug.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "").slice(0, 63).replace(/-+$/, "") || "page"
 }
 
 export const launchdLabel = (slug: string) => `io.heyiris.page.${slug}`
@@ -146,7 +154,18 @@ export function launchdPlist(slug: string, argv: string[], logFile: string, cwd:
 export function windowsStartVbs(argv: string[], cwd: string): string {
   const cmdline = argv.map((a) => `"${a}"`).join(" ")
   const q = (x: string) => x.replace(/"/g, '""')
-  return `Set sh = CreateObject("WScript.Shell")\r\nsh.CurrentDirectory = "${q(cwd)}"\r\nsh.Run "${q(cmdline)}", 0, False\r\n`
+  // A logon task starts its program ONCE. Run waits (True) and the loop starts the server again if
+  // it ever exits — Windows' equivalent of launchd KeepAlive / systemd Restart. `schtasks /End`
+  // ends this script, and stopKeeping then ends the server by its port.
+  return [
+    `Set sh = CreateObject("WScript.Shell")`,
+    `sh.CurrentDirectory = "${q(cwd)}"`,
+    `Do`,
+    `  sh.Run "${q(cmdline)}", 0, True`,
+    `  WScript.Sleep 3000`,
+    `Loop`,
+    ``,
+  ].join("\r\n")
 }
 
 /** schtasks splits /TR on spaces — the script path is quoted INSIDE the value (#186663 lesson). */
@@ -184,10 +203,15 @@ export interface KeepResult {
  * is started as a plain background process and the caller says it will NOT come back after a
  * reboot — a page that will not return must never be reported as one that will.
  */
-export function keepRunning(slug: string, site: string, port: number, opts: { autostart: boolean; home?: string } = { autostart: true }): KeepResult {
+export function keepRunning(
+  slug: string,
+  site: string,
+  port: number,
+  opts: { autostart: boolean; home?: string; publicName?: string } = { autostart: true },
+): KeepResult {
   const home = opts.home ?? homedir()
   const dir = servedDir(slug, home)
-  const argv = serveArgv(serviceSelf(), site, port)
+  const argv = serveArgv(serviceSelf(), site, port, opts.publicName)
   const cwd = serviceCwd(selfCommand(), home)
   const log = join(dir, "serve.log")
   const os = osPlatform()
