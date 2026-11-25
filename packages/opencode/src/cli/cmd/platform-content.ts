@@ -254,6 +254,7 @@ export const UploadCommand = cmd({
       .option("title", { describe: "override title", type: "string" })
       .option("description", { describe: "override description", type: "string" })
       .option("draft", { describe: "create as draft (status=0)", type: "boolean", default: false })
+      .option("photo", { describe: "artwork URL (tracks/articles); square for the Station", type: "string" })
       .option("publish", { describe: "also publish to social (comma-separated: ig,tiktok,x)", type: "string" }),
   async handler(args: any) {
     UI.empty()
@@ -373,6 +374,10 @@ export const UploadCommand = cmd({
             title,
             description,
             media_id: mediaId || args.url,
+            // A track's URL IS its audio (#194159): without trackmp3 the track exists but never
+            // plays — the Station skips anything with no audio.
+            ...(contentType === "track" && /^https?:\/\//.test(args.url) ? { trackmp3: args.url } : {}),
+            ...(args.photo ? { photo: args.photo, poster: args.photo } : {}),
             status: args.draft ? 0 : 1,
           }),
         })
@@ -658,6 +663,29 @@ const SearchCommand = cmd({
 // Subcommands: Pull / Push / Diff
 // ---------------------------------------------------------------------------
 
+/**
+ * The fields `content push` sends and `content diff` compares, per type.
+ *
+ * Before #194159 push sent one fixed list (title, description, thumbnail_url, …) for every type,
+ * so a track's audio and artwork could be edited locally, pushed, reported "Updated" — and never
+ * leave the machine. A track whose `trackmp3` is empty does not play on the Station, so this was
+ * the difference between a set being on the air or not. Only keys present in the local file are
+ * sent: a pulled file missing a field must not blank it on the server.
+ */
+const BASE_PUSH_FIELDS = ["title", "description", "thumbnail_url", "twitter", "instagram", "status"]
+export const PUSH_FIELDS: Record<string, string[]> = {
+  video: [...BASE_PUSH_FIELDS, "photo", "poster"],
+  article: [...BASE_PUSH_FIELDS, "photo", "body"],
+  track: [...BASE_PUSH_FIELDS, "trackmp3", "photo", "poster", "genre", "tags", "import_method"],
+}
+export function pushBody(type: string, local: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {}
+  for (const f of PUSH_FIELDS[type] ?? BASE_PUSH_FIELDS) {
+    if (local[f] !== undefined) out[f] = local[f]
+  }
+  return out
+}
+
 const PullCommand = cmd({
   command: "pull <id>",
   describe: "download content JSON to local ./content/",
@@ -722,14 +750,7 @@ const PushCommand = cmd({
     const base = `/api/v1/content/${args.type}`
     const res = await irisFetch(`${base}/${args.id}`, {
       method: "PUT",
-      body: JSON.stringify({
-        title: local.title,
-        description: local.description,
-        thumbnail_url: local.thumbnail_url,
-        twitter: local.twitter,
-        instagram: local.instagram,
-        status: local.status,
-      }),
+      body: JSON.stringify(pushBody(args.type, local)),
     })
     const ok = await handleApiError(res, "push")
     spinner.stop(ok ? "Updated" : "Failed", ok ? 0 : 1)
@@ -772,7 +793,7 @@ const DiffCommand = cmd({
     const remote = body?.data?.data ?? body?.data ?? body
     spinner.stop("Comparing")
 
-    const compareFields = ["title", "description", "thumbnail_url", "twitter", "instagram", "status"]
+    const compareFields = PUSH_FIELDS[args.type] ?? BASE_PUSH_FIELDS
     let hasDiff = false
     console.log()
     for (const field of compareFields) {
