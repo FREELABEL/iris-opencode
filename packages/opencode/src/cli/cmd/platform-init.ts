@@ -14,6 +14,7 @@ import {
   resolveUserId,
   FL_API, PUBLIC_SITE, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
+import { upgradeUrl } from "./pricing-url"
 import { homedir } from "os"
 import { join } from "path"
 
@@ -409,7 +410,7 @@ const STEPS: StepDef[] = [
         if (sub?.daily_cap) printKV("Daily budget", `$${sub.daily_cap}`)
       } else {
         sp.stop("No active subscription")
-        console.log(`  ${dim("Start a subscription at")} ${highlight("https://heyiris.io/pricing")}`)
+        console.log(`  ${dim("Start a subscription at")} ${highlight(upgradeUrl("https://web.heyiris.io/pricing", { surface: "platform_init" }))}`)
       }
 
       const done = await prompts.confirm({ message: "Mark billing as reviewed?" })

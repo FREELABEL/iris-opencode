@@ -8,6 +8,7 @@ import { join } from "path"
 // catch, so each one silently returned "no such file". See the note on
 // getBridgeToken below.
 import { existsSync, readFileSync } from "fs"
+import { upgradeUrl } from "./pricing-url"
 
 // Quiet mode is handled by ./clack.ts — it exports noops for non-TTY contexts.
 const _quiet = !process.stdout.isTTY
@@ -448,9 +449,19 @@ export function formatPaymentRequired(body: unknown): { message: string; details
     details.push(`Fix:  ${UI.Style.TEXT_HIGHLIGHT}${b.cli_command}${UI.Style.TEXT_NORMAL}`)
   }
 
+  // Paid links get attribution tags (added only when absent; signed/Stripe URLs untouched) so an
+  // upgrade from this prompt is credited to it rather than looking "direct". Onboarding is not a
+  // purchase, so it is printed exactly as the server sent it.
+  const surface: Partial<Record<string, string>> = {
+    checkout_url: "subscription_error",
+    upgrade_url: "subscription_error",
+    buy_credits_url: "credits_error",
+  }
   for (const key of ["checkout_url", "onboarding_url", "buy_credits_url", "upgrade_url"] as const) {
     const url = b[key]
-    if (url) details.push(`${key.replace(/_url$/, "").replace(/_/g, " ")}: ${url}`)
+    if (!url) continue
+    const slug = surface[key]
+    details.push(`${key.replace(/_url$/, "").replace(/_/g, " ")}: ${slug ? upgradeUrl(url, { surface: slug }) : url}`)
   }
 
   return { message, details }

@@ -3135,7 +3135,11 @@ if [ "$AUTH_SUCCESS" = "true" ] && [ -n "$SDK_TOKEN" ] && [ "$tty_available" = "
         fi
 
         if [ -n "$DEVICE_ID" ]; then
-            PRICING_URL="https://web.heyiris.io/pricing?source=cli&device_id=$DEVICE_ID"
+            # Attribution: utm_* credit the upgrade to this prompt (same tags as the CLI's
+            # upgradeUrl helper, packages/opencode/src/cli/cmd/pricing-url.ts); device_id is
+            # mapped to cli_device_id on the Stripe checkout. The base has a fixed query string
+            # and DEVICE_ID is a UUID (hex + dashes), so plain '&' joins are safe here.
+            PRICING_URL="https://web.heyiris.io/pricing?source=cli&device_id=${DEVICE_ID}&utm_source=iris_cli&utm_medium=app&utm_campaign=upgrade&utm_content=install_script"
 
             echo -e ""
             echo -e "${CYAN}One more step — pick a plan${NC}"
