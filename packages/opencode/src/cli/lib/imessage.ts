@@ -80,6 +80,23 @@ export function diagnoseAccess(): string {
  * Run a raw SQL query against the Messages database.
  * Escapes double quotes in the SQL string.
  */
+/**
+ * `m.date > <nanoseconds>` for "sent in the last N seconds" (#194233).
+ *
+ * Every iMessage window used to compute on the column (divide by 1e9, add the Apple epoch, compare
+ * to now). Arithmetic on the column means SQLite cannot use `message_idx_date`, so it reads every
+ * message in chat.db. On Alex's MacBook (188,905 messages, busy disk) that took 87 s against
+ * query()'s 10 s timeout, and callers that swallow errors reported "no conversations" — the comms
+ * sweep logged nothing for five weeks. Compared against a constant, the same query takes 0.4 s.
+ * chat.db stores `date` as nanoseconds since 2001-01-01 (Apple epoch, 978307200 Unix).
+ */
+export const APPLE_EPOCH = 978307200
+export function sinceClause(seconds: number, nowMs: number = Date.now(), column = "m.date"): string {
+  const cutoffUnix = Math.floor(nowMs / 1000) - Math.max(0, Math.floor(seconds))
+  const ns = BigInt(cutoffUnix - APPLE_EPOCH) * 1000000000n
+  return `${column} > ${ns}`
+}
+
 /** Tests run real SQL against a fixture chat.db through this. Production never sets it. */
 let queryOverride: ((sql: string) => string) | null = null
 export function setQueryForTests(fn: ((sql: string) => string) | null): void {
@@ -262,7 +279,7 @@ export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number
   JOIN chat c ON cmj.chat_id = c.rowid
   LEFT JOIN handle h ON m.handle_id = h.rowid
   WHERE ${whereClause}
-    AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
+    AND ${sinceClause(cutoffSeconds)}
     AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
   ORDER BY m.date DESC
   LIMIT ${limit};`.replace(/\n/g, " ").trim()
@@ -480,7 +497,7 @@ export function listGroupChats(days = 90, limit = 30): GroupChat[] {
   JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
   JOIN message m ON cmj.message_id = m.rowid
   WHERE (SELECT COUNT(*) FROM chat_handle_join chj2 WHERE chj2.chat_id = c.rowid) > 1
-  AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
+  AND ${sinceClause(cutoffSeconds)}
   GROUP BY c.guid
   ORDER BY MAX(m.date) DESC
   LIMIT ${limit}`
@@ -601,7 +618,7 @@ export function getContactCards(options: { days?: number; limit?: number; chat?:
 
   try {
     let where = `(a.mime_type LIKE '%vcard%' OR a.uti LIKE '%vcard%' OR a.filename LIKE '%.vcf')
-      AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoff}`
+      AND ${sinceClause(cutoff)}`
     if (options.chat) {
       where += ` AND c.chat_identifier LIKE '%${options.chat.replace(/'/g, "''")}%'`
     }
@@ -715,7 +732,7 @@ export function listAttachments(
   const lit = (v: string) => "'" + v.replace(/'/g, "''") + "'"
   const like = (v: string) => "'%" + v.replace(/'/g, "''").replace(/[%_\\]/g, (c) => "\\" + c) + "%'"
 
-  const where = [`(m.date/1000000000 + 978307200) > unixepoch('now') - ${days * 86400}`]
+  const where = [sinceClause(days * 86400)]
   if (!options.includePluginPayloads)
     where.push(`COALESCE(a.transfer_name,'') NOT LIKE ${lit(PLUGIN_PAYLOAD)}`)
   if (options.search)
@@ -828,7 +845,7 @@ function outgoingRows(handle: string, sinceUnixSeconds: number): OutgoingRow[] {
     JOIN chat c ON cmj.chat_id = c.rowid
     LEFT JOIN handle h ON m.handle_id = h.rowid
     WHERE m.is_from_me = 1
-      AND m.date/1000000000 + 978307200 >= ${Math.floor(sinceUnixSeconds) - 5}
+      AND m.date >= ${BigInt(Math.floor(sinceUnixSeconds) - 5 - APPLE_EPOCH) * 1000000000n}
       AND ${handleMatch}
     ORDER BY m.date DESC LIMIT 10;`.replace(/\n/g, " ")
   const raw = query(sql)

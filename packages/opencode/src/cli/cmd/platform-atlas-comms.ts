@@ -678,7 +678,7 @@ function activeImessageHandles(days: number, cap: number): { identifier: string;
   // NOTE: the export is `query`; platform-imessage.ts imports it as `query as queryMessages`.
   // Requiring `queryMessages` directly yields undefined, and the try/catch below would swallow
   // the TypeError and report "no conversations" — a silent empty sweep. Caught by dry-running it.
-  const { query: queryMessages } = require("../lib/imessage")
+  const { query: queryMessages, sinceClause } = require("../lib/imessage")
   const cutoff = Math.max(1, days) * 86400
   const sql = `
     SELECT c.chat_identifier, COUNT(m.rowid) as msg_count,
@@ -686,7 +686,7 @@ function activeImessageHandles(days: number, cap: number): { identifier: string;
     FROM chat c
     JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
     JOIN message m ON cmj.message_id = m.rowid
-    WHERE m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoff}
+    WHERE ${sinceClause(cutoff)}
     GROUP BY c.chat_identifier
     ORDER BY MAX(m.date) DESC
     LIMIT ${Math.max(1, cap)};
@@ -702,8 +702,10 @@ function activeImessageHandles(days: number, cap: number): { identifier: string;
         return { identifier: identifier ?? "", count: parseInt(count || "0"), last: last ?? "" }
       })
       .filter((h: any) => h.identifier && !/^chat\d+$/i.test(h.identifier))
-  } catch {
-    return []
+  } catch (err: any) {
+    // Used to `return []`: a timeout or an unreadable chat.db then printed "No conversations in that
+    // window", which reads exactly like a quiet week (#194233). The caller says what failed instead.
+    throw err
   }
 }
 
@@ -811,9 +813,18 @@ async function ingestAllLeads(channel: string, days: number, limit: number, dryR
   // Richard (15743), Rashad (16750) and Flo (28165) were all outside the page and could never be
   // swept. A scheduled job would have reported success daily while touching none of the stale
   // records it existed to fix: silent success, the exact failure mode of the original bug.
-  const handles = activeImessageHandles(days, Math.max(limit * 4, 200))
+  let handles: { identifier: string; count: number; last: string }[]
+  try {
+    handles = activeImessageHandles(days, Math.max(limit * 4, 200))
+  } catch (err: any) {
+    sp.stop(`✗ Could not read iMessage: ${err?.message ?? err}`)
+    prompts.log.error("Nothing was checked. This is not the same as no conversations.")
+    process.exitCode = 1
+    prompts.outro("Done")
+    return
+  }
   if (handles.length === 0) {
-    sp.stop("No conversations in that window (or the message store is unreadable).")
+    sp.stop("No conversations in that window.")
     prompts.outro("Done")
     return
   }
