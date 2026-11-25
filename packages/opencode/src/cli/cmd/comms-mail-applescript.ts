@@ -95,7 +95,11 @@ export const MAIL_THREAD_READER_JXA = String.raw`function run(argv) {
 export type MailThreadRead = { ok: true; items: any[]; scanned: Record<string, number> } | { ok: false; reason: string }
 
 /** Is Mail answering at all? A busy Mail must not be handed more work — it would only queue. */
+/** AppleEvents to Mail.app exist only on macOS. Anywhere else this reader cannot run at all. */
+export const MAIL_READER_SUPPORTED = process.platform === "darwin"
+
 export function mailResponsive(timeoutMs = 15000): Promise<boolean> {
+  if (!MAIL_READER_SUPPORTED) return Promise.resolve(false)
   return new Promise((resolve) => {
     execFile("osascript", ["-l", "JavaScript", "-e", 'Application("Mail").accounts.name().length'], { timeout: timeoutMs }, (err, stdout) =>
       resolve(!err && /^\d+/.test(String(stdout).trim())),
@@ -104,6 +108,11 @@ export function mailResponsive(timeoutMs = 15000): Promise<boolean> {
 }
 
 export function readMailThread(address: string, days: number, account: string, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+  if (!MAIL_READER_SUPPORTED) {
+    // Say which thing is missing. "Mail.app is not answering" on Linux sends someone to debug a
+    // mail client that was never there.
+    return Promise.resolve({ ok: false, reason: `reading Mail.app requires macOS (this is ${process.platform}) — use --channel gmail, or ingest from a Mac` })
+  }
   return new Promise((resolve) => {
     const args = ["-l", "JavaScript", "-e", MAIL_THREAD_READER_JXA, address, String(days), account]
     if (withBody) args.push("body")

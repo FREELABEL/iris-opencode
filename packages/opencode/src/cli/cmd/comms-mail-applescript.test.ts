@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { MAIL_THREAD_READER_JXA, withoutLedgerDuplicates } from "./comms-mail-applescript"
+import { MAIL_READER_SUPPORTED, MAIL_THREAD_READER_JXA, readMailThread, withoutLedgerDuplicates } from "./comms-mail-applescript"
 
 describe("withoutLedgerDuplicates — two writers, two keys, one row", () => {
   // Measured on #28363: `iris mail send` logged "Test note is on CAS102812" at send time; the same
@@ -51,5 +51,17 @@ describe("the embedded Mail reader", () => {
     expect(MAIL_THREAD_READER_JXA).toContain("Mail.accounts.byName(acctName)")
     expect(MAIL_THREAD_READER_JXA).not.toContain("Mail.inbox")
     expect(MAIL_THREAD_READER_JXA).not.toContain("_contains")
+  })
+})
+
+describe("platform support", () => {
+  test("off macOS the reader names the platform, not a missing Mail.app", async () => {
+    if (MAIL_READER_SUPPORTED) {
+      expect(process.platform).toBe("darwin")
+      return
+    }
+    const r = await readMailThread("a@b.c", 30, "acct", false)
+    expect(r.ok).toBe(false)
+    expect((r as any).reason).toContain("requires macOS")
   })
 })
