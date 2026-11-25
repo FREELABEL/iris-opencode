@@ -449,7 +449,13 @@ jobs:
             packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe.sig
           if-no-files-found: warn
 
-  # LINUX (x86_64): AppImage, .deb and .rpm. The AppImage is also the updater payload — Tauri's
+  # LINUX (x86_64 AND arm64, #194238): AppImage, .deb and .rpm for each. arm64 exists for ARM
+  # Chromebooks (MediaTek / Snapdragon), whose Linux environment is Debian 12 on aarch64 — before
+  # it, /downloads could only send them to the terminal install. ubuntu-22.04-arm is GitHub's
+  # hosted ARM runner (free on public repos), same glibc 2.35 as the x64 build. x64 asset names
+  # are unchanged, so heyiris.io/download/linux and linux-deb keep working.
+  #
+  # Was: LINUX (x86_64): AppImage, .deb and .rpm. The AppImage is also the updater payload — Tauri's
   # updater replaces an AppImage in place and cannot update a package-manager install, so .deb
   # and .rpm users update by installing the next package, the same way they installed this one.
   #
@@ -465,7 +471,13 @@ jobs:
   linux:
     needs: plan
     if: needs.plan.outputs.linux == 'true'
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04,     rust_target: x86_64-unknown-linux-gnu,  oc_target: opencode-linux-x64,   arch: x64,   ai_arch: x86_64 }
+          - { os: ubuntu-22.04-arm, rust_target: aarch64-unknown-linux-gnu, oc_target: opencode-linux-arm64, arch: arm64, ai_arch: aarch64 }
+    runs-on: ${{ matrix.os }}
     continue-on-error: true
     timeout-minutes: 45
     steps:
@@ -500,7 +512,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: ${{ matrix.rust_target }}
 
       - name: Stamp the desktop app version
         run: |
@@ -531,10 +543,10 @@ jobs:
             echo "::error::sidecar name mismatch — lib.rs wants '$EXPECT' but externalBin ships '$CONF'. The app would build fine and fail to launch."
             exit 1
           fi
-          BIN=$(ls packages/opencode/dist/opencode-linux-x64/bin/iris)
+          BIN=$(ls packages/opencode/dist/${{ matrix.oc_target }}/bin/iris)
           mkdir -p packages/desktop/src-tauri/sidecars
-          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
-          chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-unknown-linux-gnu"
+          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-${{ matrix.rust_target }}"
+          chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-${{ matrix.rust_target }}"
 
       - name: Build IRIS desktop app (Tauri)
         # OPENCODE_CHANNEL=latest for the same reason as macOS: unset, vite defaults to "dev"
@@ -555,7 +567,7 @@ jobs:
           cd packages/desktop
           tb() {
             ./node_modules/.bin/tauri build --verbose --config ./src-tauri/tauri.prod.conf.json \
-              --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-unknown-linux-gnu --bundles "$1"
+              --config '{"bundle":{"createUpdaterArtifacts":true}}' --target ${{ matrix.rust_target }} --bundles "$1"
           }
           tb deb,rpm
 
@@ -565,8 +577,8 @@ jobs:
           # desktop-v1.18.95 bring-up). So linuxdeploy gets a stand-in, and the real binary goes
           # back into the finished AppImage, which is then repacked and RE-SIGNED — the signature
           # Tauri made covers the stand-in.
-          SC=src-tauri/sidecars/$(grep -oE '\.sidecar\("[^"]+"\)' src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')-x86_64-unknown-linux-gnu
-          SIDECAR_NAME=$(basename "$SC" -x86_64-unknown-linux-gnu)
+          SC=src-tauri/sidecars/$(grep -oE '\.sidecar\("[^"]+"\)' src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')-${{ matrix.rust_target }}
+          SIDECAR_NAME=$(basename "$SC" -${{ matrix.rust_target }})
           cp "$SC" "$RUNNER_TEMP/sidecar.real"
           cp /bin/true "$SC"
           set +e
@@ -574,10 +586,10 @@ jobs:
           rc=${PIPESTATUS[0]}
           set -e
           cp "$RUNNER_TEMP/sidecar.real" "$SC"
-          AI=$(ls src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage 2>/dev/null | head -1 || true)
+          AI=$(ls src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage 2>/dev/null | head -1 || true)
           if [ "$rc" -ne 0 ] || [ -z "$AI" ]; then
             echo "::warning::AppImage bundling failed (exit $rc) — this release ships .deb/.rpm only, and Linux will not auto-update from it. See the linuxdeploy output above."
-            rm -f src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage*
+            rm -f src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage*
           else
             AI="$PWD/$AI"
             W=$(mktemp -d)
@@ -585,14 +597,14 @@ jobs:
             DEST=$(find "$W/squashfs-root" -type f -path "*/usr/bin/$SIDECAR_NAME" | head -1)
             [ -n "$DEST" ] || { echo "::error::sidecar '$SIDECAR_NAME' not found inside the AppImage"; exit 1; }
             cp "$RUNNER_TEMP/sidecar.real" "$DEST"; chmod +x "$DEST"
-            curl -fsSL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            curl -fsSL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.ai_arch }}.AppImage
             chmod +x "$RUNNER_TEMP/appimagetool"
             rm -f "$AI" "$AI.sig"
             # appimagetool (continuous, from 2026-10-29) refuses an AppDir with 0700 directories, and
             # --appimage-extract leaves some. They would also be unreadable to other users (#191786).
             chmod -R a+rX "$W/squashfs-root"
             chmod a+rx "$W/squashfs-root/AppRun"
-            ARCH=x86_64 "$RUNNER_TEMP/appimagetool" --no-appstream "$W/squashfs-root" "$AI"
+            ARCH=${{ matrix.ai_arch }} "$RUNNER_TEMP/appimagetool" --no-appstream "$W/squashfs-root" "$AI"
             ./node_modules/.bin/tauri signer sign "$AI"
             test -f "$AI.sig" || { echo "::error::re-signing the repacked AppImage produced no .sig"; exit 1; }
             echo "AppImage repacked with the real sidecar and re-signed ✓"
@@ -611,19 +623,19 @@ jobs:
         # The .deb is required; the AppImage and .rpm are not (see the build step).
         run: |
           set -euo pipefail
-          B=packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          B=packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle
           mkdir -p "$B/out"
           DEB=$(ls "$B"/deb/*.deb 2>/dev/null | head -1 || true)
           [ -n "$DEB" ] || { echo "::error::no .deb produced"; ls -laR "$B" | head -50; exit 1; }
-          cp "$DEB" "$B/out/IRIS-tauri-linux-x64.deb"
+          cp "$DEB" "$B/out/IRIS-tauri-linux-${{ matrix.arch }}.deb"
           RPM=$(ls "$B"/rpm/*.rpm 2>/dev/null | head -1 || true)
-          if [ -n "$RPM" ]; then cp "$RPM" "$B/out/IRIS-tauri-linux-x64.rpm"; else echo "::warning::no .rpm produced"; fi
+          if [ -n "$RPM" ]; then cp "$RPM" "$B/out/IRIS-tauri-linux-${{ matrix.arch }}.rpm"; else echo "::warning::no .rpm produced"; fi
           AI=$(ls "$B"/appimage/*.AppImage 2>/dev/null | head -1 || true)
           if [ -n "$AI" ]; then
             test -f "$AI.sig" || { echo "::error::AppImage is UNSIGNED — no .AppImage.sig (TAURI_SIGNING_PRIVATE_KEY missing?)"; exit 1; }
-            cp "$AI"     "$B/out/IRIS-tauri-linux-x64.AppImage"
-            cp "$AI.sig" "$B/out/IRIS-tauri-linux-x64.AppImage.sig"
-            chmod +x "$B/out/IRIS-tauri-linux-x64.AppImage"
+            cp "$AI"     "$B/out/IRIS-tauri-linux-${{ matrix.arch }}.AppImage"
+            cp "$AI.sig" "$B/out/IRIS-tauri-linux-${{ matrix.arch }}.AppImage.sig"
+            chmod +x "$B/out/IRIS-tauri-linux-${{ matrix.arch }}.AppImage"
           else
             echo "::warning::no AppImage — Linux installs cannot auto-update from this release"
           fi
@@ -637,9 +649,9 @@ jobs:
         # binary would show up as an app that installs and never starts.
         run: |
           set -uo pipefail
-          B=$PWD/packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/out
+          B=$PWD/packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/out
           SIDECAR=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          DEBV=$(dpkg-deb -f "$B/IRIS-tauri-linux-x64.deb" Version)
+          DEBV=$(dpkg-deb -f "$B/IRIS-tauri-linux-${{ matrix.arch }}.deb" Version)
           if [ "$DEBV" != "${{ steps.version.outputs.version }}" ]; then
             echo "::error::.deb reports $DEBV but this release is ${{ steps.version.outputs.version }}"
             exit 1
@@ -662,18 +674,18 @@ jobs:
             echo "$3: engine healthy ✓"
           }
           W=$(mktemp -d)
-          dpkg-deb -x "$B/IRIS-tauri-linux-x64.deb" "$W/deb"
+          dpkg-deb -x "$B/IRIS-tauri-linux-${{ matrix.arch }}.deb" "$W/deb"
           boot "$(find "$W/deb" -type f -name "$SIDECAR" | head -1)" 47999 ".deb" || exit 1
-          if [ -f "$B/IRIS-tauri-linux-x64.AppImage" ]; then
-            (cd "$W" && "$B/IRIS-tauri-linux-x64.AppImage" --appimage-extract >/dev/null) || { echo "::error::AppImage will not extract"; exit 1; }
+          if [ -f "$B/IRIS-tauri-linux-${{ matrix.arch }}.AppImage" ]; then
+            (cd "$W" && "$B/IRIS-tauri-linux-${{ matrix.arch }}.AppImage" --appimage-extract >/dev/null) || { echo "::error::AppImage will not extract"; exit 1; }
             boot "$(find "$W/squashfs-root" -type f -name "$SIDECAR" | head -1)" 47998 "AppImage" || exit 1
           fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: IRIS-tauri-linux-x64
-          path: packages/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/out/IRIS-tauri-linux-x64.*
+          name: IRIS-tauri-linux-${{ matrix.arch }}
+          path: packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/out/IRIS-tauri-linux-${{ matrix.arch }}.*
           if-no-files-found: warn
 
   publish:
@@ -749,6 +761,11 @@ jobs:
             cmp dist/IRIS-tauri-linux-x64.AppImage dist/IRIS-tauri-linux-x64-update.AppImage \
               || { echo "::error::Linux updater copy differs from the AppImage — its signature would not validate"; exit 1; }
           fi
+          if [ -f dist/IRIS-tauri-linux-arm64.AppImage ]; then
+            cp dist/IRIS-tauri-linux-arm64.AppImage dist/IRIS-tauri-linux-arm64-update.AppImage
+            cmp dist/IRIS-tauri-linux-arm64.AppImage dist/IRIS-tauri-linux-arm64-update.AppImage \
+              || { echo "::error::Linux arm64 updater copy differs from the AppImage — its signature would not validate"; exit 1; }
+          fi
           python3 - "$TAG" "$BASE" "${{ steps.version.outputs.version }}" <<'PY'
           import json, os, sys, pathlib
           tag, base, version = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -762,6 +779,7 @@ jobs:
               "darwin-x86_64":  ("IRIS-tauri-darwin-x64.app.tar.gz",   "IRIS-tauri-darwin-x64.app.tar.gz"),
               "windows-x86_64": ("IRIS-tauri-windows-x64-update.exe",  "IRIS-tauri-windows-x64-setup.exe"),
               "linux-x86_64":   ("IRIS-tauri-linux-x64-update.AppImage", "IRIS-tauri-linux-x64.AppImage"),
+              "linux-aarch64":  ("IRIS-tauri-linux-arm64-update.AppImage", "IRIS-tauri-linux-arm64.AppImage"),
           }
           platforms = {}
           for target, (asset, sig_for) in targets.items():
