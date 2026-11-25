@@ -1614,6 +1614,13 @@ const layer = Layer.effect(
                     }),
                   }
                 }
+                // A retired id the manifest no longer serves, but the bundled seed or an older
+                // opencode.json still lists: hide it like an unavailable one, so the picker drops it
+                // and a saved pick forwards to its replacement in getModel (#194085).
+                for (const id of Object.keys(irisRetired)) {
+                  if (irisModels[id]) continue
+                  if (forwardRetired(id, (target) => !!irisModels[target], irisRetired)) irisUnavailable.add(id)
+                }
                 if (Object.keys(irisModels).length) {
                   database["iris"] = {
                     id: ProviderV2.ID.make("iris"),

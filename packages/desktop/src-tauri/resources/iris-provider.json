@@ -66,11 +66,6 @@
           "reasoning": true,
           "modalities": { "input": ["text"], "output": ["text"] }
         },
-        "glm-5.2": {
-          "name": "GLM 5.2",
-          "tools": true,
-          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-        },
         "glm-5.3-flash": {
           "name": "GLM 5.3 Flash",
           "tools": true,
@@ -87,12 +82,6 @@
           "tools": true,
           "modalities": { "input": ["text"], "output": ["text"] }
         },
-        "mimo-v2.5-go": {
-          "name": "MiMo V2.5 Go",
-          "tools": true,
-          "reasoning": true,
-          "modalities": { "input": ["text"], "output": ["text"] }
-        },
         "mimo-v2.5-pro": {
           "name": "MiMo V2.5 Pro",
           "tools": true,
@@ -101,11 +90,6 @@
         },
         "muse-spark-1.3": {
           "name": "Muse Spark 1.3",
-          "tools": true,
-          "modalities": { "input": ["text"], "output": ["text"] }
-        },
-        "deepseek-v4-flash-go": {
-          "name": "DeepSeek V4 Flash Go",
           "tools": true,
           "modalities": { "input": ["text"], "output": ["text"] }
         },

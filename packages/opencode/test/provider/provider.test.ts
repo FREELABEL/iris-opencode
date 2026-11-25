@@ -2222,3 +2222,51 @@ it.instance(
     },
   },
 )
+
+// #194085: the bundled seed (and opencode.json files copied from it) still listed mimo-v2.5-go and
+// deepseek-v4-flash-go. Present in config, they stayed in the picker and went out under the
+// retired name instead of being forwarded.
+it.instance(
+  "iris: a retired id still in config is hidden and forwards to its replacement",
+  Effect.gen(function* () {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (url === "https://iris.test/api/v6/openai/models") {
+        return new Response(
+          JSON.stringify({ data: [{ id: "iris/mimo-v2.6-flash", name: "MiMo V2.6 Flash", available: true }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+    try {
+      const iris = ProviderV2.ID.make("iris")
+      const ids = Object.keys((yield* list)[iris]!.models)
+      expect(ids).not.toContain("mimo-v2.5-go")
+      // Retired, but its replacement is not served here: left alone rather than hidden.
+      expect(ids).toContain("deepseek-v4-flash-go")
+      expect(ids).toContain("my-own-model")
+      const mimo = yield* Provider.use.getModel(iris, ModelV2.ID.make("mimo-v2.5-go"))
+      expect(String(mimo.id)).toBe("mimo-v2.6-flash")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }),
+  {
+    config: {
+      provider: {
+        iris: {
+          name: "IRIS",
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://iris.test/api/v6/openai", apiKey: "test-key" },
+          models: {
+            "mimo-v2.5-go": { name: "MiMo V2.5 Go" },
+            "deepseek-v4-flash-go": { name: "DeepSeek V4 Flash Go" },
+            "my-own-model": { name: "Mine" },
+          },
+        },
+      },
+    },
+  },
+)
