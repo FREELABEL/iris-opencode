@@ -494,12 +494,14 @@ jobs:
 
       - name: Install Linux build dependencies
         # Tauri v2's documented set for Debian/Ubuntu, plus rpm (for the .rpm bundle) and
-        # libfuse2 (linuxdeploy, which builds the AppImage, is itself an AppImage).
+        # libfuse2 (linuxdeploy, which builds the AppImage, is itself an AppImage). xdg-utils:
+        # the AppImage bundler calls /usr/bin/xdg-mime; the x64 runner image happens to ship it,
+        # ubuntu-22.04-arm does not, and its AppImage failed without it (#194238 bring-up run).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libgtk-3-dev build-essential curl wget file libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf rpm libfuse2
+            libayatana-appindicator3-dev librsvg2-dev patchelf rpm libfuse2 xdg-utils
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
