@@ -68,7 +68,8 @@ const QueueListCommand = cmd({
     if (!(await requireAuth())) return
     const res = await irisFetch("/api/v1/station/queue")
     if (!(await handleApiError(res, "station queue"))) { process.exitCode = 1; return }
-    const entries: any[] = ((await res.json()) as any)?.data?.entries ?? []
+    const raw = ((await res.json()) as any)?.data?.entries
+    const entries: any[] = Array.isArray(raw) ? raw : []
     if (args.json) return writeJson(entries)
     UI.empty()
     prompts.intro(bold("◈  Station queue"))
