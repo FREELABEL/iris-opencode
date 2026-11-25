@@ -1026,7 +1026,8 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
     const msg = "Mail.app is not answering — not adding work to its queue. Try again when it is idle."
     return args.json ? out({ ok: false, error: msg }) : void prompts.log.error(msg)
   }
-  const read = await readSentMail(args.account, args.days, args.backfill)
+  // Headers only, always: fast for any window. Bodies are fetched below for the gaps alone (#194235).
+  const read = await readSentMail(args.account, args.days, false)
   if (!read.ok) {
     process.exitCode = 1
     return args.json ? out({ ok: false, error: read.reason }) : void prompts.log.error(read.reason)
@@ -1074,6 +1075,16 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
     process.exitCode = 1
     if (!args.json) prompts.outro(`${gaps.length} sent message(s) missing from a lead's record. Write them with: iris mail audit --sent --account "${args.account}" --backfill`)
     return
+  }
+
+  // Bodies for the missing messages only. If that read fails, the sends are still logged with a
+  // placeholder rather than not at all — a gap with no text beats a gap.
+  const bodies = await readSentMail(args.account, args.days, true, 120000, gaps.map((g) => g.item.external_message_id ?? "").filter(Boolean))
+  if (bodies.ok) {
+    const byId = new Map((bodies.items as SentItem[]).map((i) => [i.external_message_id, i.body]))
+    for (const g of gaps) g.item.body = byId.get(g.item.external_message_id) ?? g.item.body
+  } else if (!args.json) {
+    prompts.log.warn(`${bodies.reason} — logging without message text`)
   }
 
   let written = 0

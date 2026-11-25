@@ -249,7 +249,12 @@ export const MAIL_SENT_READER_JXA = String.raw`function run(argv) {
   const days = Number(argv[0] || 2)
   const acctName = String(argv[1] || "")
   const withBody = argv[2] === "body"
-  if (!acctName) throw new Error("usage: <days> <account> [body]")
+  // argv[3]: optional JSON array of Message-IDs. When given, only those messages are returned and
+  // only their bodies are read — reading every body in a 14-day window timed out at 120 s (#194235).
+  const only = argv[3] ? JSON.parse(String(argv[3])) : null
+  const wanted = {}
+  if (only) for (const id of only) wanted[id] = 1
+  if (!acctName) throw new Error("usage: <days> <account> [body] [ids-json]")
   const Mail = Application("Mail")
   const cutoff = new Date(Date.now() - days * 864e5)
   const acct = Mail.accounts.byName(acctName)
@@ -269,6 +274,7 @@ export const MAIL_SENT_READER_JXA = String.raw`function run(argv) {
     const bcc = msgs.bccRecipients.address()
     for (let i = 0; i < ids.length; i++) {
       if (!ids[i] || seen[ids[i]]) continue
+      if (only && !wanted[ids[i]]) continue
       seen[ids[i]] = 1
       const item = {
         external_message_id: "rfc822_" + ids[i],
@@ -290,14 +296,31 @@ export const MAIL_SENT_READER_JXA = String.raw`function run(argv) {
 }
 `
 
-export function readSentMail(account: string, days: number, withBody: boolean, timeoutMs = 120000): Promise<MailThreadRead> {
+/** osascript argv for the Sent reader. `onlyIds` (Message-IDs, with or without the rfc822_ prefix)
+ *  limits the read — and the body fetch — to those messages. */
+export function sentReaderArgs(account: string, days: number, withBody: boolean, onlyIds?: string[]): string[] {
+  const args = ["-l", "JavaScript", "-e", MAIL_SENT_READER_JXA, String(days), account, withBody ? "body" : ""]
+  if (onlyIds && onlyIds.length) args.push(JSON.stringify(onlyIds.map((id) => id.replace(/^rfc822_/, ""))))
+  return args
+}
+
+/** Why an osascript read failed, in one line. A timeout used to print the start of the SCRIPT
+ *  (execFile's message is "Command failed: osascript -l JavaScript -e function run(argv) {…"),
+ *  cut at 240 characters, so the cause never showed (#194235). */
+export function describeMailReadFailure(err: any, stderr: string, timeoutMs: number): string {
+  if (err?.killed || err?.signal === "SIGTERM" || err?.code === "ETIMEDOUT")
+    return `timed out after ${Math.round(timeoutMs / 1000)} s — try a smaller --days`
+  const line = String(stderr || "").replace(/\s+/g, " ").trim()
+  if (line) return line.slice(0, 240)
+  return String(err?.message ?? err).replace(/^Command failed: osascript[\s\S]*$/, "osascript failed with no error output").slice(0, 240)
+}
+
+export function readSentMail(account: string, days: number, withBody: boolean, timeoutMs = 120000, onlyIds?: string[]): Promise<MailThreadRead> {
   return new Promise((resolve) => {
-    const args = ["-l", "JavaScript", "-e", MAIL_SENT_READER_JXA, String(days), account]
-    if (withBody) args.push("body")
+    const args = sentReaderArgs(account, days, withBody, onlyIds)
     execFile("osascript", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
-        const msg = String(stderr || err.message).replace(/\s+/g, " ").trim().slice(0, 240)
-        return resolve({ ok: false, reason: `Mail.app Sent read failed for "${account}": ${msg}` })
+        return resolve({ ok: false, reason: `Mail.app Sent read failed for "${account}": ${describeMailReadFailure(err, String(stderr ?? ""), timeoutMs)}` })
       }
       try {
         const d = JSON.parse(String(stdout))
