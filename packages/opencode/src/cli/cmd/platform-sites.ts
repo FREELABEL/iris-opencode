@@ -118,6 +118,7 @@ const ShowCmd = cmd({
       printKV("Status", site.status)
       printKV("Owner", `${site.owner_type}:${site.owner_id ?? "null"}`)
       printKV("Pages", site.pages?.length ?? site.pages_count ?? 0)
+      printKV("Icon", site.favicon_url || dim("none — set one: iris sites config " + site.id + " --favicon https://…"))
 
       const settings = site.settings ?? {}
       const emails = settings.notification_emails ?? []
@@ -151,12 +152,57 @@ const ConfigCmd = cmd({
     y.positional("id", { type: "number", demandOption: true })
       .option("notification-emails", { type: "string", describe: "comma-separated email list" })
       .option("clear-notification-emails", { type: "boolean", default: false, describe: "remove all notification emails" })
-      .option("json", { type: "boolean", default: false }),
+      .option("favicon", {
+        type: "string",
+        describe: "the site's icon (an https image URL): the browser-tab icon for every page on the site's domain that has none of its own",
+      })
+      .option("clear-favicon", { type: "boolean", default: false, describe: "remove the site's icon" })
+      .option("json", { type: "boolean", default: false })
+      .example("iris sites config 14 --favicon https://cdn.heyiris.io/cloud-files/logo.png", "every page on the site wears this tab icon"),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Site #${args.id} Settings`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
+
+    // The site's icon (#194264): the tab icon for every page on the site's own domain that has none
+    // of its own. A column on the site itself, so it goes to the site record, not /settings.
+    if (args.favicon !== undefined || args["clear-favicon"]) {
+      const fav = args["clear-favicon"] ? null : String(args.favicon ?? "").trim()
+      const bad = siteFaviconProblem(fav)
+      if (bad) {
+        UI.error(bad)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      sp.start(fav ? "Setting the site's icon…" : "Removing the site's icon…")
+      const res = await pagesFetch(`/api/v1/sites/${args.id}`, { method: "PUT", body: JSON.stringify({ favicon_url: fav }) })
+      if (!(await handleApiError(res, "Set site icon"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const site = (((await res.json()) as any).data ?? {}) as any
+      // Read back: a write the server drops returns 200 too (PageSiteController's allowlist).
+      if ((site.favicon_url ?? null) !== fav) {
+        sp.stop("Not saved", 1)
+        UI.error(`The server answered OK but the site's icon is ${JSON.stringify(site.favicon_url ?? null)}, not what was sent.`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      sp.stop(success(fav ? "Site icon set" : "Site icon removed"))
+      if (args.json) {
+        await writeJson({ id: site.id, slug: site.slug, favicon_url: site.favicon_url ?? null })
+      } else {
+        printDivider()
+        printKV("Site", `${site.name ?? ""} (#${site.id})`)
+        printKV("Icon", site.favicon_url ?? dim("none — pages without their own icon show IRIS's"))
+        printDivider()
+        UI.println(dim("  Pages with their own icon keep it. Others on the site's domain show this within about 10 minutes."))
+      }
+      if (!args["notification-emails"] && !args["clear-notification-emails"]) {
+        prompts.outro("Done")
+        return
+      }
+    }
 
     const isUpdate = args["notification-emails"] || args["clear-notification-emails"]
 
@@ -209,6 +255,21 @@ const ConfigCmd = cmd({
     prompts.outro("Done")
   },
 })
+
+/** Why a site icon would not work, or null. https only: an http icon is blocked on an https page. */
+export function siteFaviconProblem(url: string | null): string | null {
+  if (url === null) return null
+  if (!url) return "Give the icon's address: --favicon https://…/logo.png (or --clear-favicon to remove it)"
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return `"${url}" is not a web address. Upload the image first: iris cloud:upload ./logo.png`
+  }
+  if (u.protocol !== "https:") return "The icon must be an https:// address — browsers block an http icon on an https page."
+  if (url.length > 500) return "That address is longer than 500 characters, which a site can store."
+  return null
+}
 
 // ============================================================================
 // Create — make a new site
