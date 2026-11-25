@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
-import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd } from "./platform-pages-edge"
+import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd, PagesServeCmd } from "./platform-pages-edge"
 import { AccessLinkCmd, AccessLinkListCmd, AccessLinkRevokeCmd } from "./platform-pages-access-link"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 import { firstArray } from "../../util/array"
@@ -1346,7 +1346,8 @@ export const PushCmd = cmd({
  */
 const DevCmd = cmd({
   command: "dev <slug>",
-  aliases: ["serve", "preview-local"],
+  // `serve` was an alias here until #194212: it now runs the published page on this computer.
+  aliases: ["preview-local"],
   describe: "serve the page you are editing locally, rendered by production, without publishing",
   builder: (y) =>
     y
@@ -5953,6 +5954,7 @@ export const PlatformPagesCommand = productCommand({
       .command(PullCmd)
       .command(PushCmd)
       .command(DevCmd)
+      .command(PagesServeCmd)
       .command(DiffCmd)
       .command(MergeCmd)
       .command(withAccessFooter(PublishCmd))

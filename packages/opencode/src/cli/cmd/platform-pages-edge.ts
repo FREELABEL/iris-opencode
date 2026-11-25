@@ -14,7 +14,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, writeJson } from "./iris-api"
-import { existsSync, mkdirSync } from "fs"
+import { existsSync, mkdirSync, rmSync } from "fs"
 import { join, resolve } from "path"
 import { publicUrl } from "./page-ref"
 import { exportPage, writeProvenance, readProvenance, discard } from "./edge/export"
@@ -22,6 +22,23 @@ import { exportPageData } from "./edge/export-data"
 import { harvest } from "./edge/harvest"
 import { verifyExport } from "./edge/verify"
 import { startStaticServer, HOST_CONFIG } from "./edge/serve"
+import {
+  answering,
+  keepRunning,
+  listServed,
+  portFor,
+  publicNameFor,
+  readState,
+  safeSlug,
+  servedDir,
+  stopKeeping,
+  swapSite,
+  writeState,
+} from "./edge/served"
+import { openBrowser } from "../../util/browser"
+import { prepareRelayRunner } from "./platform-hive-tunnel"
+import { parseRunnerLine } from "./platform-hive-relay"
+import { spawn } from "child_process"
 import { Remote, loadConfig, newReleaseId, EXAMPLE_CONFIG, type Target } from "./edge/deploy"
 
 const DEFAULT_ORIGIN = "https://freelabel.net"
@@ -192,7 +209,13 @@ export const EdgeServeCmd = cmd({
   aliases: ["edge-serve"],
   describe: "serve an exported folder locally, with the SPA fallback a real host must replicate",
   builder: (y) =>
-    y.positional("dir", { type: "string", demandOption: true }).option("port", { type: "number", default: 8080 }),
+    y
+      .positional("dir", { type: "string", demandOption: true })
+      .option("port", { type: "number", default: 8080 })
+      .option("public-name", {
+        type: "string",
+        describe: "also publish it at https://<name>.t.heyiris.io through the Hive relay (used by `pages serve --public`)",
+      }),
   async handler(args) {
     const dir = resolve(String(args.dir))
     if (!existsSync(join(dir, "index.html"))) {
@@ -202,8 +225,237 @@ export const EdgeServeCmd = cmd({
     }
     const srv = await startStaticServer(dir, Number(args.port))
     UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)`)
+    const name = args["public-name"] ? String(args["public-name"]) : ""
+    if (name) {
+      // The relay runner is a CHILD of this server, so the two live and die together, and the OS
+      // keeper that restarts this process restarts the tunnel with it. The token is read here, at
+      // run time, from the CLI's own sign-in — never written into a plist, task or unit (#194213).
+      const prep = await prepareRelayRunner(name, srv.port)
+      if (!prep.ok) {
+        UI.error(`public address not opened: ${prep.error}`)
+        process.exit(1)
+      }
+      const child = spawn(prep.node, ["--no-warnings", ...prep.args], { env: prep.env, stdio: ["ignore", "pipe", "pipe"] })
+      let buf = ""
+      child.stdout.on("data", (d) => {
+        buf += String(d)
+        let i
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const ev = parseRunnerLine(buf.slice(0, i))
+          buf = buf.slice(i + 1)
+          if (ev) UI.println(`${new Date().toISOString()} relay ${JSON.stringify(ev)}`)
+        }
+      })
+      child.stderr.on("data", (d) => UI.println(`relay stderr: ${String(d).trim()}`))
+      const stop = (code: number) => {
+        child.kill("SIGTERM")
+        void srv.stop().finally(() => process.exit(code))
+      }
+      // A dead tunnel must not leave a server that LOOKS fine locally: exit, and let the keeper
+      // restart both.
+      child.on("exit", (code) => {
+        UI.println(`relay runner exited (${code}) — exiting so both restart`)
+        stop(1)
+      })
+      process.on("SIGTERM", () => stop(0))
+      process.on("SIGINT", () => stop(0))
+      UI.println(`public: ${prep.url}/p/  (through the Hive relay)`)
+    }
     UI.println(dim("ctrl-c to stop"))
     await new Promise(() => {})
+  },
+})
+
+// ── pages serve: a page running on this computer (#194212) ──────────────────────────────────────
+
+/**
+ * `iris pages serve <slug>` — export the published page, serve it on this computer, keep it served
+ * after a reboot (launchd / logon task / systemd), and open it so it can be installed as an app.
+ * Run it again to re-sync from the cloud; `list` and `stop <slug>` manage what is served.
+ *
+ * Read-only: a served copy shows the page as published. Forms and edits still go to IRIS Cloud.
+ */
+export const PagesServeCmd = cmd({
+  command: "serve <slug> [target]",
+  describe: "run a published page on this computer — starts with the computer, installable as an app",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true, describe: "page slug — or `list`, or `stop <slug>`" })
+      .positional("target", { type: "string", describe: "with stop: the page to stop" })
+      .option("port", { type: "number", describe: "local port (default: the same one every time for this page)" })
+      .option("origin", { type: "string", describe: "origin to export from (default: the published host)" })
+      .option("no-open", { type: "boolean", default: false, describe: "do not open it in a browser" })
+      .option("no-autostart", { type: "boolean", default: false, describe: "serve it now only — do not start it when this computer restarts" })
+      .option("public", {
+        type: "boolean",
+        default: false,
+        describe: "also give it a public https address (Hive relay), the same one every time — so a phone can install it",
+      })
+      .option("name", { type: "string", describe: "with --public: the name in https://<name>.t.heyiris.io (default: from the slug)" })
+      .option("json", { type: "boolean", default: false })
+      .example("iris pages serve my-page", "running at http://localhost:<port>/p/my-page, starts with the computer")
+      .example("iris pages serve my-page --public", "…and at https://my-page.t.heyiris.io/p/my-page, for phones")
+      .example("iris pages serve list", "what is served here, and whether it is answering")
+      .example("iris pages serve stop my-page", "stop it and remove it from startup"),
+  async handler(args) {
+    const json = Boolean(args.json)
+    const first = String(args.slug)
+
+    if (first === "list") {
+      const rows = await Promise.all(listServed().map(async (s) => ({ ...s, up: await answering(s.port, s.slug) })))
+      if (json) return writeJson({ ok: true, served: rows })
+      if (!rows.length) return UI.println("Nothing is served on this computer. Start one: iris pages serve <slug>")
+      for (const r of rows) {
+        const when = r.synced_at.slice(0, 16).replace("T", " ")
+        UI.println(
+          `${r.up ? "●" : "○"} ${r.slug.padEnd(32)} http://localhost:${r.port}/p/${r.slug}  ` +
+            dim(`synced ${when} · ${r.keeper}${r.up ? "" : " · NOT answering"}`),
+        )
+        if (r.public_url) UI.println(`  ${" ".repeat(32)} ${r.public_url}`)
+      }
+      return
+    }
+
+    if (first === "stop") {
+      const slug = safeSlug(String(args.target ?? ""))
+      const s = slug ? readState(slug) : null
+      if (!s) {
+        UI.error(`Nothing served as "${args.target ?? ""}". See: iris pages serve list`)
+        process.exitCode = 1
+        return
+      }
+      const removed = stopKeeping(s)
+      rmSync(servedDir(s.slug), { recursive: true, force: true })
+      if (json) return writeJson({ ok: true, stopped: s.slug, removed })
+      UI.println(`Stopped ${s.slug}${removed.length ? dim(` — removed ${removed.join(", ")}`) : ""}`)
+      return
+    }
+
+    const slug = safeSlug(first)
+    if (!slug) {
+      UI.error(`"${first}" is not a page slug (letters, digits, - and _).`)
+      process.exitCode = 1
+      return
+    }
+
+    // `serve` was an alias of `dev` until #194212. Someone with a local draft and the old habit
+    // gets a local COPY of the published page now — say so, rather than surprise them.
+    if (!json && existsSync(join("pages", `${slug}.json`))) {
+      UI.println(dim(`(previewing your local edits? that is \`iris pages dev ${slug}\` — serve runs the PUBLISHED page)`))
+    }
+
+    const origin = originFor(args.origin as string | undefined)
+    const dir = servedDir(slug)
+    const prev = readState(slug)
+    const taken = new Set(listServed().filter((s) => s.slug !== slug).map((s) => s.port))
+    const port = Number(args.port ?? prev?.port ?? portFor(slug, taken))
+
+    // --public: claim the name and check this machine can run the relay BEFORE exporting anything,
+    // so "name taken" or "update your bridge" is said first, not after a minute of work.
+    const publicName = args.public ? String(args.name ?? prev?.public_name ?? publicNameFor(slug)) : undefined
+    let publicUrl: string | undefined
+    if (publicName) {
+      const claim = await prepareRelayRunner(publicName, port)
+      if (!claim.ok) {
+        if (json) return writeJson({ ok: false, reason: "public", detail: claim.error })
+        UI.error(`No public address: ${claim.error}${/taken|use/i.test(claim.error) ? ` — pick another with --name` : ""}`)
+        process.exitCode = 1
+        return
+      }
+      publicUrl = `${claim.url}/p/${slug}`
+    }
+
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Serve ${slug} on this computer`)
+    }
+    const sp = json ? null : prompts.spinner()
+    sp?.start(`Exporting ${origin}/p/${slug}…`)
+
+    const stage = join(dir, "next")
+    rmSync(stage, { recursive: true, force: true })
+    mkdirSync(stage, { recursive: true })
+    const res = await exportPage(slug, stage, { origin })
+    if (!res.ok) {
+      sp?.stop("Not served")
+      rmSync(stage, { recursive: true, force: true })
+      const f = res.failure!
+      const why =
+        f.kind === "gated"
+          ? "this page is behind a sign-in, which only IRIS Cloud can check — keep it on IRIS Cloud"
+          : f.kind === "torn"
+            ? "a deploy landed mid-export — run it again"
+            : `${f.missing.length} asset(s) missing`
+      if (json) return writeJson({ ok: false, reason: f.kind, detail: why })
+      UI.error(`Could not export ${slug}: ${why}`)
+      process.exitCode = 3
+      return
+    }
+    sp?.message("Pulling in what the page loads at runtime…")
+    let harvestNote = ""
+    try {
+      await harvest(res.site, { origin })
+    } catch (e: any) {
+      // Harvest needs a Chrome-family browser. Without one the page still serves from its asset
+      // graph; what it injects at runtime may be missing. Say so instead of failing the serve.
+      harvestNote = String(e?.message ?? e).split("\n")[0]!
+    }
+    try {
+      await exportPageData(res.site, { slug, origin })
+    } catch {}
+
+    swapSite(dir, res.site)
+    rmSync(stage, { recursive: true, force: true })
+    const site = join(dir, "site")
+
+    // Re-serving: a server already answering on this port reads the swapped folder per request, so
+    // it needs nothing. Otherwise (first serve, a changed port, or it died) start it and keep it.
+    // Public or not is part of the command the keeper runs, so changing it means a restart.
+    const already = !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName && (await answering(port, slug))
+    let kept: ReturnType<typeof keepRunning> | null = null
+    if (!already) {
+      if (prev) stopKeeping(prev)
+      sp?.message("Starting it…")
+      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName })
+    }
+    const state = {
+      slug,
+      port,
+      origin,
+      synced_at: new Date().toISOString(),
+      keeper: kept?.keeper ?? prev!.keeper,
+      ...(kept?.pid ? { pid: kept.pid } : already && prev?.pid ? { pid: prev.pid } : {}),
+      ...(publicName ? { public_name: publicName, public_url: publicUrl } : {}),
+    }
+    writeState(state)
+
+    let up = false
+    for (let i = 0; i < 30 && !(up = await answering(port, slug)); i++) await new Promise((r) => setTimeout(r, 500))
+    const url = `http://localhost:${port}/p/${slug}`
+    sp?.stop(up ? "Served" : "Started, but not answering yet")
+
+    const survivesRestart = kept ? kept.keeper !== "process" : state.keeper !== "process"
+    // The public address: wait for the relay to answer (a first run fetches a certificate).
+    let publicUp = false
+    if (publicUrl) {
+      sp?.start("Opening the public address…")
+      for (let i = 0; i < 60 && !(publicUp = await fetch(publicUrl, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false)); i++)
+        await new Promise((r) => setTimeout(r, 2000))
+      sp?.stop(publicUp ? "Public" : "Public address not answering yet")
+    }
+
+    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
+
+    UI.println(`  ${up ? "●" : "○"} ${url}`)
+    if (publicUrl) UI.println(`  ${publicUp ? "●" : "○"} ${publicUrl}  ${dim("anyone with this address can open it · on a phone: Share → Add to Home Screen")}`)
+    if (already) UI.println(dim("  re-synced from IRIS Cloud; the running server picked it up"))
+    if (survivesRestart) UI.println(dim(`  starts with this computer${kept ? ` (${kept.detail})` : ""}`))
+    else if (!args["no-autostart"]) UI.println(`  ⚠ will NOT start after a restart${kept ? ` — ${kept.detail}` : ""}. Run this again after rebooting.`)
+    if (harvestNote) UI.println(`  ⚠ some things the page loads at runtime may be missing: ${harvestNote}`)
+    UI.println(dim("  install it as an app: Chrome or Edge → Install · Safari (Mac) → File → Add to Dock"))
+    UI.println(dim(`  update it: iris pages serve ${slug}   stop it: iris pages serve stop ${slug}`))
+    if (up && !args["no-open"]) openBrowser(url)
+    if (!up) process.exitCode = 1
   },
 })
 
