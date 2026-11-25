@@ -1,7 +1,7 @@
 /**
  * `iris mail audit --sent --backfill` — #194235.
  *
- * The backfill read the BODY of every sent message in the window. 14 days of alex@freelabel.net
+ * The backfill read the BODY of every sent message in the window. 14 days of me@example.net
  * (62 messages) passed the 120 s timeout, and the error printed the start of the JXA script, cut
  * at 240 characters, so the cause never showed. Now headers are read for the window and bodies
  * only for the gaps: on the same Mac, 11 s for 62 headers and 9.5 s for the 3 missing bodies.
@@ -11,13 +11,13 @@ import { sentReaderArgs, describeMailReadFailure, MAIL_SENT_READER_JXA } from ".
 
 describe("sentReaderArgs (#194235)", () => {
   test("headers only: no body flag, no id list", () => {
-    const a = sentReaderArgs("alex@freelabel.net", 14, false)
-    expect(a.slice(4)).toEqual(["14", "alex@freelabel.net", ""])
+    const a = sentReaderArgs("me@example.net", 14, false)
+    expect(a.slice(4)).toEqual(["14", "me@example.net", ""])
   })
 
   test("bodies for named messages only, rfc822_ prefix stripped", () => {
-    const a = sentReaderArgs("alex@freelabel.net", 14, true, ["rfc822_abc@x", "def@y"])
-    expect(a.slice(4)).toEqual(["14", "alex@freelabel.net", "body", JSON.stringify(["abc@x", "def@y"])])
+    const a = sentReaderArgs("me@example.net", 14, true, ["rfc822_abc@x", "def@y"])
+    expect(a.slice(4)).toEqual(["14", "me@example.net", "body", JSON.stringify(["abc@x", "def@y"])])
   })
 
   test("an empty id list is not 'every message'", () => {

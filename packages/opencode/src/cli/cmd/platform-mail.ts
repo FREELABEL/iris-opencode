@@ -30,7 +30,7 @@ import {
 } from "./mail-account-read"
 import { classifySender } from "../lib/mail-classify"
 import { newGroupId, buildLogPayloads, checkLogged } from "./comms-log-group"
-import { mailResponsive, readSentMail, unloggedSent, type SentItem } from "./comms-mail-applescript"
+import { mailResponsive, readSentMail, unloggedSent, unloggedInbound, type SentItem, type MailboxKind } from "./comms-mail-applescript"
 import { gmailExec, lastGmailAccount, searchMessages } from "../lib/gmail"
 import {
   composeOutgoing,
@@ -946,11 +946,12 @@ const MailAuditCommand = cmd({
       // The spool only knows sends that went through `iris mail send`. A raw osascript send never
       // touched it (#191605). Sent Mail is the record every send leaves, however it was made.
       .option("sent", { type: "boolean", default: false, describe: "also check this Mac's Sent Mail against every lead's record — catches sends that skipped the router" })
-      .option("account", { type: "string", describe: "with --sent: the Mail.app account to read (one account, never the unified mailbox)" })
+      .option("inbox", { type: "boolean", default: false, describe: "check this Mac's Inbox: mail FROM a lead that is on no record is logged as inbound (#194236)" })
+      .option("account", { type: "string", describe: "with --sent/--inbox: the Mail.app account to read (one account, never the unified mailbox)" })
       .option("days", { type: "number", default: 2, describe: "with --sent: how far back to read" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    if (args.sent) return auditSentMail(args as any)
+    if (args.sent || args.inbox) return auditSentMail(args as any)
     const entries = await readUnlogged()
 
     if (args.json) {
@@ -1010,16 +1011,19 @@ const MailAuditCommand = cmd({
 })
 
 /** `iris mail audit --sent`: what this Mac sent to leads that is on nobody's record. */
-async function auditSentMail(args: { account?: string; days: number; backfill: boolean; json: boolean }): Promise<void> {
+async function auditSentMail(args: { account?: string; days: number; backfill: boolean; json: boolean; inbox?: boolean }): Promise<void> {
   const out = (o: unknown) => writeJson(o)
+  // --inbox: the same audit over RECEIVED mail — the sender is the lead, rows are inbound (#194236).
+  const kind: MailboxKind = args.inbox ? "inbox" : "sent"
+  const box = kind === "inbox" ? "Inbox" : "Sent Mail"
   if (!args.account) {
     process.exitCode = 64
-    const msg = "--sent needs --account <Mail.app account name> (see: iris mail accounts) — one account, never the unified mailbox"
+    const msg = "--sent/--inbox needs --account <Mail.app account name> (see: iris mail accounts) — one account, never the unified mailbox"
     return args.json ? out({ ok: false, error: msg }) : void prompts.log.error(msg)
   }
   if (!args.json) {
     UI.empty()
-    prompts.intro(`◈  Comms audit — Sent Mail in "${args.account}", last ${args.days} day(s)`)
+    prompts.intro(`◈  Comms audit — ${box} in "${args.account}", last ${args.days} day(s)`)
   }
   if (!(await mailResponsive())) {
     process.exitCode = 1
@@ -1027,7 +1031,7 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
     return args.json ? out({ ok: false, error: msg }) : void prompts.log.error(msg)
   }
   // Headers only, always: fast for any window. Bodies are fetched below for the gaps alone (#194235).
-  const read = await readSentMail(args.account, args.days, false)
+  const read = await readSentMail(args.account, args.days, false, 120000, undefined, kind)
   if (!read.ok) {
     process.exitCode = 1
     return args.json ? out({ ok: false, error: read.reason }) : void prompts.log.error(read.reason)
@@ -1037,7 +1041,8 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
   // Every address once, exact match only; a tie is reported, never guessed.
   const leadByAddress = new Map<string, number | null>()
   const ties: string[] = []
-  for (const a of splitAddresses(sent.flatMap((i) => [...i.to, ...i.cc, ...i.bcc]))) {
+  const addressesOf = (i: SentItem) => (kind === "inbox" ? (i.from ? [i.from] : []) : [...i.to, ...i.cc, ...i.bcc])
+  for (const a of splitAddresses(sent.flatMap(addressesOf))) {
     const r = await resolveLeadForHandle(a)
     leadByAddress.set(a.toLowerCase(), r.reason === "ok" ? (r.leadId ?? null) : null)
     if (r.reason === "ambiguous") ties.push(a)
@@ -1054,7 +1059,7 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
     ledger.set(id, Array.isArray(d?.data?.data) ? d.data.data : Array.isArray(d?.data) ? d.data : [])
   }
 
-  const gaps = unloggedSent(sent, (a) => leadByAddress.get(a), (id) => ledger.get(id) ?? [])
+  const gaps = (kind === "inbox" ? unloggedInbound : unloggedSent)(sent, (a) => leadByAddress.get(a), (id) => ledger.get(id) ?? [])
   if (args.json && !args.backfill) {
     if (gaps.length) process.exitCode = 1
     return out({ ok: true, account: args.account, days: args.days, scanned: sent.length, ambiguous: ties, unlogged: gaps })
@@ -1062,24 +1067,24 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
   if (!args.json) {
     for (const t of ties) prompts.log.warn(`${t} matches several leads — not checked; log it by hand with iris comms log`)
     if (!gaps.length) {
-      prompts.outro(`Clean — ${sent.length} sent message(s), every one to a lead is on that lead's record`)
+      prompts.outro(`Clean — ${sent.length} ${kind === "inbox" ? "received" : "sent"} message(s), every one ${kind === "inbox" ? "from" : "to"} a lead is on that lead's record`)
       return
     }
     for (const g of gaps) {
       prompts.log.warn(`${g.item.sent_at}  ${g.item.subject}`)
-      prompts.log.info(`   to: ${[...g.item.to, ...g.item.cc].join(", ")}`)
+      prompts.log.info(kind === "inbox" ? `   from: ${g.item.from}` : `   to: ${[...g.item.to, ...g.item.cc].join(", ")}`)
       prompts.log.info(`   missing on: ${g.missing.map((id) => `#${id}`).join(", ")}${g.logged.length ? dim(`  (already on ${g.logged.map((id) => `#${id}`).join(", ")})`) : ""}`)
     }
   }
   if (!args.backfill) {
     process.exitCode = 1
-    if (!args.json) prompts.outro(`${gaps.length} sent message(s) missing from a lead's record. Write them with: iris mail audit --sent --account "${args.account}" --backfill`)
+    if (!args.json) prompts.outro(`${gaps.length} ${kind === "inbox" ? "received" : "sent"} message(s) missing from a lead's record. Write them with: iris mail audit --${kind === "inbox" ? "inbox" : "sent"} --account "${args.account}" --backfill`)
     return
   }
 
   // Bodies for the missing messages only. If that read fails, the sends are still logged with a
   // placeholder rather than not at all — a gap with no text beats a gap.
-  const bodies = await readSentMail(args.account, args.days, true, 120000, gaps.map((g) => g.item.external_message_id ?? "").filter(Boolean))
+  const bodies = await readSentMail(args.account, args.days, true, 120000, gaps.map((g) => g.item.external_message_id ?? "").filter(Boolean), kind)
   if (bodies.ok) {
     const byId = new Map((bodies.items as SentItem[]).map((i) => [i.external_message_id, i.body]))
     for (const g of gaps) g.item.body = byId.get(g.item.external_message_id) ?? g.item.body
@@ -1090,18 +1095,19 @@ async function auditSentMail(args: { account?: string; days: number; backfill: b
   let written = 0
   let failed = 0
   for (const g of gaps) {
-    const everyone = splitAddresses(g.item.to, g.item.cc, g.item.bcc)
-    const recipients = g.missing.map((id) => ({ lead_id: id, name: null, email: everyone.find((a) => leadByAddress.get(a.toLowerCase()) === id) ?? null }))
+    const everyone = kind === "inbox" ? [] : splitAddresses(g.item.to, g.item.cc, g.item.bcc)
+    const recipients = g.missing.map((id) => ({ lead_id: id, name: null, email: kind === "inbox" ? (g.item.from ?? null) : (everyone.find((a) => leadByAddress.get(a.toLowerCase()) === id) ?? null) }))
     const payloads = buildLogPayloads(recipients, {
       channel: "apple_mail",
-      direction: "outbound",
-      body: g.item.body || "(recovered from Sent Mail by iris mail audit --sent)",
+      direction: kind === "inbox" ? "inbound" : "outbound",
+      body: g.item.body || `(recovered from ${box} by iris mail audit --${kind})`,
       subject: g.item.subject,
       sentAt: g.item.sent_at,
       groupId: newGroupId(),
       cc: everyone.filter((a) => leadByAddress.get(a.toLowerCase()) == null),
       toIdentifiers: g.item.to,
-      loggedVia: "iris mail audit --sent",
+      ...(kind === "inbox" && g.item.from ? { fromIdentifier: g.item.from } : {}),
+      loggedVia: `iris mail audit --${kind}`,
       metadata: { external_message_id: g.item.external_message_id, to: g.item.to, cc_all: g.item.cc },
     })
     for (const body of payloads) {
