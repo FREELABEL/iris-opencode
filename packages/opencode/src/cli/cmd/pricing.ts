@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, printDivider, dim, writeJson, PUBLIC_SITE } from "./iris-api"
+import { upgradeUrl } from "./pricing-url"
 
 /**
  * `iris pricing` — where to sign up, answered on the machine the agent is running on.
@@ -106,7 +107,8 @@ const ListCmd = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
     const brand: Brand = (args.brand as Brand) ?? DEFAULT_BRAND
-    const site = SITE[brand]
+    // Tag the link with where the upgrade came from. Host stays the brand's own (rule 2 above).
+    const site = { ...SITE[brand], pricing: upgradeUrl(SITE[brand].pricing, { surface: "pricing_cmd" }) }
 
     // --url is for piping and for the agent. No chrome, no spinner, no auth, one line.
     if (args.url) {
