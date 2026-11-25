@@ -80,9 +80,13 @@ export function assetGraph(manifest: Record<string, any>, html: string): { requi
   }
   const paths = new Set<string>([...files].map((f) => "/build/" + f))
 
-  for (const m of html.matchAll(/(?:src|href)="(\/[^"?#]+)"/g)) {
+  // A query string or fragment does not make it a different file: `app-icon-180.png?v=ef51…` is
+  // /p/x/app-icon-180.png on disk. The pattern used to end at the path and require the closing
+  // quote right after it, so every versioned link was skipped — and Genesis versions its home-screen
+  // icons (#194211). `.webmanifest` is 11 characters, past the old 2–6 extension window.
+  for (const m of html.matchAll(/(?:src|href)="(\/[^"?#]+)(?:[?#][^"]*)?"/g)) {
     const p = m[1]!
-    if (!p.startsWith("//") && /\.[A-Za-z0-9]{2,6}$/.test(p)) paths.add(p)
+    if (!p.startsWith("//") && /\.(?:[A-Za-z0-9]{2,6}|webmanifest)$/.test(p)) paths.add(p)
   }
 
   // Site chrome that most IRIS pages have and some do not. Guesses, not graph members.
@@ -90,6 +94,36 @@ export function assetGraph(manifest: Record<string, any>, html: string): { requi
     (p) => !paths.has(p),
   )
   return { required: [...paths].sort(), optional }
+}
+
+/**
+ * The icons a web app manifest names, as same-origin paths (#194211).
+ *
+ * An installed page's 512px and maskable icons are named ONLY inside its manifest — no HTML tag and
+ * no browser fetch during a page load ever asks for them. Without this an exported page installed
+ * offline with its small icons and 404'd the ones Android draws its splash screen and home icon from.
+ * `manifestPath` resolves relative `src` values the way a browser does.
+ */
+export function manifestIcons(manifestJson: string, manifestPath: string): string[] {
+  let m: any
+  try {
+    m = JSON.parse(manifestJson)
+  } catch {
+    return []
+  }
+  const out = new Set<string>()
+  for (const icon of Array.isArray(m?.icons) ? m.icons : []) {
+    if (typeof icon?.src !== "string") continue
+    let u: URL
+    try {
+      u = new URL(icon.src, "https://export.invalid" + manifestPath)
+    } catch {
+      continue
+    }
+    if (u.origin !== "https://export.invalid") continue // another host's icon is not ours to copy
+    out.add(decodeURIComponent(u.pathname))
+  }
+  return [...out].sort()
 }
 
 /**
@@ -166,6 +200,20 @@ export async function exportPage(slug: string, outDir: string, opts: { origin: s
   await mirror(origin, site, required)
   // Optional assets are fetched but never gate the export. An absent one is the honest state.
   await mirror(origin, site, optional)
+
+  // 3b. A page's own app manifest names icons nothing else references. Mirror them as REQUIRED:
+  // an installable page whose icons 404 installs with the browser's default glyph.
+  const appIcons: string[] = []
+  for (const p of required.filter((x) => x.endsWith(".webmanifest"))) {
+    const file = join(site, p)
+    if (!existsSync(file)) continue
+    for (const icon of manifestIcons(readFileSync(file, "utf8"), p)) if (!required.includes(icon)) appIcons.push(icon)
+  }
+  if (appIcons.length) {
+    await mirror(origin, site, appIcons)
+    required.push(...appIcons)
+    log.push(`${appIcons.length} app icon(s) named by the page's manifest`)
+  }
 
   // 4. EMPTY ≠ MISSING — existence, not size. Only REQUIRED paths are checked.
   const missing = required.filter((p) => !existsSync(join(site, p)))
