@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle, confirmOutgoing } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle, confirmOutgoing, sinceClause } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
 import { routerSend, describeSend, routerFailureKind } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
@@ -285,7 +285,7 @@ const ImessageChatsCommand = cmd({
       FROM chat c
       JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
       JOIN message m ON cmj.message_id = m.rowid
-      WHERE m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
+      WHERE ${sinceClause(cutoffSeconds)}
       GROUP BY c.chat_identifier
       ORDER BY MAX(m.date) DESC
       LIMIT ${args.limit};
