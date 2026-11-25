@@ -72,6 +72,7 @@ import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
 import { PlatformDiscoverCommand } from "./cli/cmd/platform-discover"
+import { PlatformStationCommand } from "./cli/cmd/platform-station"
 import { FreelabelCommand } from "./cli/cmd/platform-freelabel"
 import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
 import { PlatformBountiesCommand } from "./cli/cmd/platform-bounties"
@@ -464,6 +465,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformN8nCommand))
   .command(reg(PlatformBoardsCommand))
   .command(reg(PlatformDiscoverCommand))
+  .command(reg(PlatformStationCommand))
   .command(reg(FreelabelCommand))
   .command(reg(PlatformOpportunitiesCommand))
   .command(reg(PlatformBountiesCommand))
