@@ -1,4 +1,5 @@
 import { Beacon } from "../../telemetry/beacon"
+import { playbookDependencies } from "./playbook-deps"
 import { cmd } from "./cmd"
 import { resolveTargets, toCursorRule, isGenerated, upsertAgentsBlock, upsertPlaybookSection, type SyncTarget } from "../lib/playbook-targets"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
@@ -3119,6 +3120,29 @@ const PlaybookAvailableCommand = cmd({
   },
 })
 
+/**
+ * Install the playbooks `parent` needs that are not on this machine yet (its `requires:` and every
+ * `mode: playbook` child). Before this, a parent installed cleanly and then failed mid-run with
+ * `Skill "<child>" not found` — the install that would have prevented it was never named.
+ * Recursive through the same install command; a chain longer than 5, or a cycle, stops with a note.
+ */
+async function installMissingDependencies(parent: string, content: string, args: any, mode: InstallMode): Promise<void> {
+  if (args["no-deps"] || args.json) return
+  const chain: string[] = Array.isArray(args._chain) ? args._chain : []
+  const deps = playbookDependencies(content, parent).filter((d) => !chain.includes(d))
+  if (!deps.length) return
+  const missing = deps.filter((d) => !existsSync(installTarget(d, mode).file))
+  console.log(dim(`  Requires: ${deps.join(", ")}${missing.length ? ` — installing ${missing.join(", ")}` : " — all installed"}`))
+  if (!missing.length) return
+  if (chain.length >= 5) {
+    console.log(`  ${bold("!")} Dependency chain is deeper than 5 at ${parent} — install the rest by name: ${missing.map((m) => `iris playbook install ${m}`).join(" · ")}`)
+    return
+  }
+  for (const dep of missing) {
+    await PlaybookInstallCommand.handler({ ...args, name: dep, force: false, _chain: [...chain, parent] } as any)
+  }
+}
+
 export const PlaybookInstallCommand = cmd({
   command: "install <name>",
   aliases: ["pull"],
@@ -3142,6 +3166,10 @@ export const PlaybookInstallCommand = cmd({
         type: "string",
         describe: "also install for another agent: cursor (.cursor/rules), agents (AGENTS.md / ~/.codex/AGENTS.md), gemini (GEMINI.md / ~/.gemini/GEMINI.md), auto (detect), or all — comma-separate for several",
       })
+      // Dependencies: everything in the playbook's `requires:` plus every child a `mode: playbook`
+      // step runs. Installed after it, recursively. --no-deps is its own literal flag (boolean
+      // negation is disabled globally — see the --no-sync note above).
+      .option("no-deps", { type: "boolean", default: false, describe: "do not install the playbooks this one requires" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const name = String(args.name)
@@ -3193,6 +3221,7 @@ export const PlaybookInstallCommand = cmd({
       }
       console.error(`  ${bold("Already installed")} ${dim(file)}`)
       console.error(`  ${verdict.state === "current" ? dim(verdict.message) : bold(verdict.message)}`)
+      await installMissingDependencies(name, content, args, mode)
       prompts.outro("Done"); return
     }
 
@@ -3326,6 +3355,7 @@ export const PlaybookInstallCommand = cmd({
       console.log(dim(`    Delete that folder so this install is the one that runs: ${pathJoin(s, "..")}`))
     }
     console.log(dim(`  Update later: iris playbook install ${name} --force`))
+    await installMissingDependencies(name, content, args, mode)
 
     prompts.outro(`${success("✓")} Installed ${highlight(name)}`)
   },

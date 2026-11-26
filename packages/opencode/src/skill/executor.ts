@@ -2233,7 +2233,7 @@ export async function executeSkill(
           }
           const targetSkill = await Skill.get(step.skillRef)
           if (!targetSkill) {
-            lastResult = { output: `Skill "${step.skillRef}" not found`, exit_code: 1 }
+            lastResult = { output: `Playbook "${step.skillRef}" is not installed — this step runs it. Install it, then resume: iris playbook install ${step.skillRef}`, exit_code: 1 }
             break
           }
           const targetPlan = await parsePlan(targetSkill)
