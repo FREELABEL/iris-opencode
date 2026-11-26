@@ -4,10 +4,13 @@ import { createEffect, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createSimpleContext } from "../context/helper"
-import oc2ThemeJson from "./themes/oc-2.json"
+import irisThemeJson from "./themes/iris.json"
 import { resolveThemeVariant, themeToCss } from "./resolve"
 import { resolveThemeVariantV2, themeV2ToCss } from "./v2/resolve"
 import type { DesktopTheme } from "./types"
+import { DEFAULT_THEME_ID } from "./default-id"
+
+export { DEFAULT_THEME_ID }
 
 export type ColorScheme = "light" | "dark" | "system"
 
@@ -19,6 +22,9 @@ const STORAGE_KEYS = {
 } as const
 
 const THEME_STYLE_ID = "oc-theme"
+
+/** Launch ground per mode, cached so the pre-JS splash paints the active theme's colour (no flash). */
+const groundKey = (mode: "light" | "dark") => `opencode-theme-ground-${mode}`
 let files: Record<string, () => Promise<{ default: DesktopTheme }>> | undefined
 let ids: string[] | undefined
 let known: Set<string> | undefined
@@ -44,6 +50,7 @@ function knownThemes() {
 }
 
 const names: Record<string, string> = {
+  iris: "IRIS",
   "oc-2": "OC-2",
   amoled: "AMOLED",
   aura: "Aura",
@@ -83,7 +90,7 @@ const names: Record<string, string> = {
   vesper: "Vesper",
   zenburn: "Zenburn",
 }
-const oc2Theme = oc2ThemeJson as DesktopTheme
+const defaultTheme = irisThemeJson as DesktopTheme
 
 function normalize(id: string | null | undefined) {
   return id === "oc-1" ? "oc-2" : id
@@ -138,9 +145,9 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   const css = themeToCss(tokens)
   const v2 = themeV2ToCss(resolveThemeVariantV2(variant, isDark))
 
-  if (themeId !== "oc-2") {
-    write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
-  }
+  write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
+  const ground = themeGround(variant, isDark)
+  write(groundKey(mode), ground)
 
   const fullCss = `:root {
   color-scheme: ${mode};
@@ -153,15 +160,23 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   ensureThemeStyleElement().textContent = fullCss
   document.documentElement.dataset.theme = themeId
   document.documentElement.dataset.colorScheme = mode
-  document.documentElement.style.backgroundColor = isDark ? "#080808" : "#fafafa"
+  document.documentElement.style.backgroundColor = ground
 
   // Update theme-color meta tag to match light/dark mode
   const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute("content", isDark ? "#080808" : "#fafafa")
+  if (meta) meta.setAttribute("content", ground)
 }
 
-function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
-  if (themeId === "oc-2") return
+/** The window ground (`--v2-background-bg-deep`) of a theme variant, as a hex colour. */
+export function themeGround(variant: DesktopTheme["light"], isDark: boolean) {
+  const tokens = resolveThemeVariantV2(variant, isDark) as Record<string, string>
+  let value = tokens["v2-background-bg-deep"] ?? ""
+  for (let i = 0; i < 8 && value.startsWith("var(--"); i++) value = tokens[value.slice(6, -1)] ?? ""
+  if (!value.startsWith("#")) return isDark ? "#16140f" : "#efede8"
+  return value.length === 9 ? value.slice(0, 7) : value
+}
+
+function cacheThemeVariants(theme: DesktopTheme) {
   for (const mode of ["light", "dark"] as const) {
     const isDark = mode === "dark"
     const variant = isDark ? theme.dark : theme.light
@@ -169,6 +184,7 @@ function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
     const css = themeToCss(tokens)
     const v2 = themeV2ToCss(resolveThemeVariantV2(variant, isDark))
     write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
+    write(groundKey(mode), themeGround(variant, isDark))
   }
 }
 
@@ -178,12 +194,12 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     defaultTheme?: string
     onThemeApplied?: (theme: DesktopTheme, mode: "light" | "dark", scheme: ColorScheme) => void
   }) => {
-    const themeId = normalize(read(STORAGE_KEYS.THEME_ID) ?? props.defaultTheme) ?? "oc-2"
+    const themeId = normalize(read(STORAGE_KEYS.THEME_ID) ?? props.defaultTheme) ?? DEFAULT_THEME_ID
     const colorScheme = (read(STORAGE_KEYS.COLOR_SCHEME) as ColorScheme | null) ?? "system"
     const mode = colorScheme === "system" ? getSystemMode() : colorScheme
     const [store, setStore] = createStore({
       themes: {
-        "oc-2": oc2Theme,
+        [DEFAULT_THEME_ID]: defaultTheme,
       } as Record<string, DesktopTheme>,
       themeId,
       colorScheme,
@@ -236,15 +252,11 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       if (e.key === STORAGE_KEYS.THEME_ID && e.newValue) {
         const next = normalize(e.newValue)
         if (!next) return
-        if (next !== "oc-2" && !knownThemes().has(next) && !store.themes[next]) return
+        if (!knownThemes().has(next) && !store.themes[next]) return
         setStore("themeId", next)
-        if (next === "oc-2") {
-          clear()
-          return
-        }
         void load(next).then((theme) => {
           if (!theme || store.themeId !== next) return
-          cacheThemeVariants(theme, next)
+          cacheThemeVariants(theme)
         })
       }
       if (e.key === STORAGE_KEYS.COLOR_SCHEME && e.newValue) {
@@ -264,7 +276,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       makeEventListener(mediaQuery, "change", onMedia)
 
       const rawTheme = read(STORAGE_KEYS.THEME_ID)
-      const savedTheme = normalize(rawTheme ?? props.defaultTheme) ?? "oc-2"
+      const savedTheme = normalize(rawTheme ?? props.defaultTheme) ?? DEFAULT_THEME_ID
       const savedScheme = (read(STORAGE_KEYS.COLOR_SCHEME) as ColorScheme | null) ?? "system"
       if (rawTheme && rawTheme !== savedTheme) {
         write(STORAGE_KEYS.THEME_ID, savedTheme)
@@ -275,7 +287,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       setStore("mode", savedScheme === "system" ? getSystemMode() : savedScheme)
       void load(savedTheme).then((theme) => {
         if (!theme || store.themeId !== savedTheme) return
-        cacheThemeVariants(theme, savedTheme)
+        cacheThemeVariants(theme)
       })
     })
 
@@ -291,19 +303,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         console.warn(`Theme "${id}" not found`)
         return
       }
-      if (next !== "oc-2" && !knownThemes().has(next) && !store.themes[next]) {
+      if (!knownThemes().has(next) && !store.themes[next]) {
         console.warn(`Theme "${id}" not found`)
         return
       }
       setStore("themeId", next)
-      if (next === "oc-2") {
-        write(STORAGE_KEYS.THEME_ID, next)
-        clear()
-        return
-      }
       void load(next).then((theme) => {
         if (!theme || store.themeId !== next) return
-        cacheThemeVariants(theme, next)
+        cacheThemeVariants(theme)
         write(STORAGE_KEYS.THEME_ID, next)
       })
     }
@@ -328,7 +335,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       previewTheme: (id: string) => {
         const next = normalize(id)
         if (!next) return
-        if (next !== "oc-2" && !knownThemes().has(next) && !store.themes[next]) return
+        if (!knownThemes().has(next) && !store.themes[next]) return
         setStore("previewThemeId", next)
         void load(next).then((theme) => {
           if (!theme || store.previewThemeId !== next) return
