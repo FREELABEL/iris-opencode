@@ -161,6 +161,10 @@ export const WorkspaceSayCommand = cmd({
     })
     if (!body) return
     if (args.json) return writeJson(body)
+    if (body.delivery_held) {
+      console.log(`  ${success("✓")} saved in the room ${dim("· " + (body.delivery_note ?? "not typed into the live session this minute"))}`)
+      return
+    }
     const reached = (body.node_deliveries ?? []).length
     console.log(`  ${success("✓")} sent ${dim(reached ? `· delivered to ${reached} live session${reached === 1 ? "" : "s"}` : "· no live session took it (is the host machine on?)")}`)
   },
