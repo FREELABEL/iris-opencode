@@ -733,6 +733,12 @@
       "dest": "how-to/review-studio-timecodes.md",
       "managed": true,
       "purpose": "Time-coded Review Studio notes (seek-on-click) and replacing a video render behind the same URL."
+    },
+    {
+      "src": "how-to/direct-a-product-demo-film.md",
+      "dest": "how-to/direct-a-product-demo-film.md",
+      "managed": true,
+      "purpose": "Directing a product demo film of your real app: five beats, one camera move each, pixels and pointer recorded separately, the payoff held from when it is visible, rendered with genesis-motion and shipped to the CDN."
     }
   ]
 }

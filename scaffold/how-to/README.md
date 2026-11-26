@@ -16,6 +16,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "law firm", "legal matter", "legal case", "new case", "new client matter", "conflict check", "engagement letter", "retainer", "demand letter", "chronology", "Lexicon" | `run-a-case-in-lexicon.md` |
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
+| "demo video", "product film", "screen recording", "launch video of the app", "record the UI", "Screen Studio" | `direct-a-product-demo-film.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
 | "template", "starter template", "start from a template", "clone a page in my brand", "genesis-ui.com", "use this template", "make it my brand" | `genesis-starter-templates.md` |
 | "make my page a template", "brand tokens", "any brand can use it", "submit a template", "template gallery" | `genesis-make-a-template.md` |
