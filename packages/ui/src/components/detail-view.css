@@ -1,0 +1,90 @@
+/* DetailView (#194363): header, actions, then facts in two columns. */
+[data-component="detail-view"] {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 16px;
+  min-width: 0;
+
+  [data-slot="detail-view-header"] {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  [data-slot="detail-view-media"] {
+    flex: none;
+  }
+  [data-slot="detail-view-heading"] {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  [data-slot="detail-view-title-row"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  [data-slot="detail-view-title"] {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-strong);
+    font-size: var(--font-size-large);
+    line-height: var(--font-size-large--line-height);
+    font-weight: var(--font-weight-semibold);
+  }
+  [data-slot="detail-view-subtitle"] {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-weak);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+  }
+  [data-slot="detail-view-actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  [data-slot="detail-view-facts"] {
+    display: grid;
+    grid-template-columns: minmax(96px, max-content) 1fr;
+    column-gap: 24px;
+    row-gap: 0;
+    margin: 0;
+    border-top: 1px solid var(--border-weaker-base);
+  }
+  [data-slot="detail-view-fact"] {
+    display: contents;
+
+    & > dt,
+    & > dd {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-weaker-base);
+      font-size: var(--font-size-small);
+      line-height: var(--font-size-small--line-height);
+    }
+    & > dt {
+      color: var(--text-weak);
+    }
+    & > dd {
+      margin: 0;
+      min-width: 0;
+      color: var(--text-strong);
+      overflow-wrap: anywhere;
+    }
+    & > dd[data-numeric] {
+      font-variant-numeric: tabular-nums;
+      font-weight: var(--font-weight-medium);
+    }
+    &[data-wide] > dd {
+      white-space: pre-wrap;
+    }
+  }
+}

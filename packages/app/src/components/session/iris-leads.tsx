@@ -2,6 +2,12 @@ import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import "./iris-leads.css"
 import { AiHistoryView, SequenceView, ThreadBody, useThread } from "./iris-inbox"
 import { channelLabel, readableBody } from "./iris-inbox-model"
+import { Button } from "@opencode-ai/ui/button"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { usePlatform } from "@/context/platform"
+import { useLanguage } from "@/context/language"
+import { stageTone } from "./iris-leads-list-model"
+import "./iris-lead-detail.css"
 import {
   agoLine,
   displayName,
@@ -10,7 +16,6 @@ import {
   isDone,
   leadSummary,
   peopleNotes,
-  statusColor,
   systemNotes,
   type LeadNote,
   type LeadRow,
@@ -43,14 +48,6 @@ export function leadsCall(doFetch: Fetch) {
   }
 }
 
-function StatusPill(props: { status?: string | null }) {
-  return (
-    <Show when={props.status}>
-      <span class="iris-ld-pill" style={{ "--pill": statusColor(props.status) }}>{props.status}</span>
-    </Show>
-  )
-}
-
 export function LeadDetail(props: {
   call: (o: Op) => Promise<Answer>
   row: LeadRow
@@ -63,6 +60,20 @@ export function LeadDetail(props: {
 }) {
   const id = props.row.id
   const [tab, setTab] = createSignal<Tab>(props.initialTab ?? "Details")
+  const language = useLanguage()
+  const [editingValue, setEditingValue] = createSignal(false)
+  const platform = (() => {
+    try {
+      return usePlatform()
+    } catch {
+      return undefined
+    }
+  })()
+  const openMail = (to: string) => {
+    const url = `mailto:${to}`
+    if (platform?.openExternal) platform.openExternal(url)
+    else window.open(url)
+  }
   const [error, setError] = createSignal<string>()
   const [lead, { refetch }] = createResource(async () => {
     const r = await props.call({ op: "get", leadId: id })
@@ -96,13 +107,37 @@ export function LeadDetail(props: {
         <Show when={!props.hideBack}>
           <button type="button" class="iris-ld-back" onClick={props.onBack}>← Leads</button>
         </Show>
-        <div class="iris-ld-title">
+        <div class="iris-ld-title" data-slot="iris-lead-header">
           <span class="iris-ld-avatar">{initials(current())}</span>
-          <h3>{displayName(current())}</h3>
-          <StatusPill status={current().status} />
-          <select aria-label="Change status" value={current().status ?? ""} onChange={(e) => save({ op: "update", leadId: id, body: { status: e.currentTarget.value } })}>
-            <For each={statuses()}>{(s) => <option value={s}>{s}</option>}</For>
-          </select>
+          {/* A product header (#194363): name and stage badge, the company under it. */}
+          <div class="iris-ld-heading">
+            <div class="iris-ld-name">
+              <h3>{displayName(current())}</h3>
+              <Show when={current().status}>
+                <StatusBadge tone={stageTone(current().status)}>{current().status}</StatusBadge>
+              </Show>
+            </div>
+            <Show when={current().company && current().company !== displayName(current())}>
+              <p class="iris-ld-sub">{current().company}</p>
+            </Show>
+          </div>
+        </div>
+        {/* What you do with a lead, as buttons: move its stage, write to them, note what happened. */}
+        <div class="iris-ld-actions" data-slot="iris-lead-actions">
+          <label class="iris-ld-stage">
+            <span>{language.t("iris.lead.stage")}</span>
+            <select aria-label="Change status" value={current().status ?? ""} onChange={(e) => save({ op: "update", leadId: id, body: { status: e.currentTarget.value } })}>
+              <For each={statuses()}>{(s) => <option value={s}>{s}</option>}</For>
+            </select>
+          </label>
+          <Show when={current().email}>
+            <Button size="small" variant="secondary" onClick={() => openMail(current().email!)}>
+              {language.t("iris.lead.email")}
+            </Button>
+          </Show>
+          <Button size="small" variant="secondary" onClick={() => setTab("Notes")}>
+            {language.t("iris.lead.addNote")}
+          </Button>
         </div>
       </div>
       {/* Value and the latest note first (#194358): what someone opening a lead needs before its address. */}
@@ -113,7 +148,35 @@ export function LeadDetail(props: {
               {(v) => (
                 <>
                   <dt>Value</dt>
-                  <dd data-slot="iris-lead-value">{v()}</dd>
+                  <dd data-slot="iris-lead-value">
+                    {/* The one place the value is shown; click it to change it (#194363). */}
+                    <Show
+                      when={editingValue()}
+                      fallback={
+                        <button type="button" class="iris-ld-value" title={language.t("iris.lead.editValue")} onClick={() => setEditingValue(true)}>
+                          {v()}
+                        </button>
+                      }
+                    >
+                      <input
+                        class="iris-ld-input iris-ld-value-input"
+                        type="number"
+                        min="0"
+                        aria-label={language.t("iris.lead.editValue")}
+                        value={String(current().price_bid ?? "")}
+                        ref={(el) => queueMicrotask(() => el.select())}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") setEditingValue(false)
+                          if (e.key === "Enter") e.currentTarget.blur()
+                        }}
+                        onBlur={async (e) => {
+                          const next = e.currentTarget.value.trim()
+                          setEditingValue(false)
+                          if (next !== String(current().price_bid ?? "")) await save({ op: "update", leadId: id, body: { price_bid: next } })
+                        }}
+                      />
+                    </Show>
+                  </dd>
                 </>
               )}
             </Show>
@@ -163,7 +226,8 @@ export function LeadDetail(props: {
 }
 
 const EDITABLE: { key: keyof LeadRow; label: string }[] = [
-  { key: "nickname", label: "Name" },
+  // `nickname` is the name this lead goes by when it differs from the record's own; "Name" read as missing.
+  { key: "nickname", label: "Display name" },
   { key: "company", label: "Company" },
   { key: "email", label: "Email" },
   { key: "phone", label: "Phone" },
@@ -180,7 +244,9 @@ function DetailsTab(props: { lead: LeadRow; onSave: (body: Record<string, unknow
   const dirty = () => Object.keys(edits()).length > 0
   // What is known leads; empty fields wait behind one "Add" line instead of a stack of blank inputs.
   const filled = (f: (typeof EDITABLE)[number]) => f.key in edits() || String(props.lead[f.key] ?? "").trim() !== ""
-  const shown = () => EDITABLE.filter((f) => addingDetails() || filled(f))
+  // A value already set is edited where it is shown, in the header (#194363); here only to add one.
+  const inHeader = (f: (typeof EDITABLE)[number]) => f.key === "price_bid" && !(f.key in edits()) && String(props.lead.price_bid ?? "").trim() !== ""
+  const shown = () => EDITABLE.filter((f) => !inHeader(f) && (addingDetails() || filled(f)))
   const empty = () => EDITABLE.filter((f) => !filled(f))
   return (
     <>
@@ -196,7 +262,7 @@ function DetailsTab(props: { lead: LeadRow; onSave: (body: Record<string, unknow
           )}
         </For>
         <Show when={!addingDetails() && empty().length > 0}>
-          <dt>Missing</dt>
+          <dt>More</dt>
           <dd>
             <button type="button" class="iris-ld-addmore" onClick={() => setAddingDetails(true)}>
               + Add {empty().map((f) => f.label.toLowerCase()).join(", ")}

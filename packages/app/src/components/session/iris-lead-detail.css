@@ -1,0 +1,90 @@
+/* The lead's header and actions (#194363): a product header, then buttons — not a form row. */
+.iris-ld-title[data-slot="iris-lead-header"] {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.iris-ld-title[data-slot="iris-lead-header"] .iris-ld-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+.iris-ld-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.iris-ld-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.iris-ld-title[data-slot="iris-lead-header"] h3 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-large);
+  line-height: var(--font-size-large--line-height);
+  font-weight: var(--font-weight-semibold);
+}
+.iris-ld-sub {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-weak);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+}
+.iris-ld-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.iris-ld-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+}
+.iris-ld-stage select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+}
+/* The deal value is the figure someone opening a lead looks for first. */
+[data-slot="iris-lead-value"] {
+  color: var(--text-strong);
+  font-size: var(--font-size-x-large);
+  line-height: var(--font-size-x-large--line-height);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.iris-ld-value {
+  padding: 0 4px;
+  margin: 0 -4px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: text;
+
+  &:hover {
+    background: color-mix(in srgb, var(--text-base) 6%, transparent);
+  }
+}
+.iris-ld-value-input {
+  max-width: 180px;
+  font-size: var(--font-size-large);
+}
