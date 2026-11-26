@@ -308,7 +308,7 @@ function BodyDesignClass() {
 
     const enabled = settings.general.newLayoutDesigns()
     document.body.toggleAttribute("data-new-layout", enabled)
-    document.body.classList.toggle("text-12-regular", !enabled)
+    document.body.classList.toggle("text-13-regular", !enabled)
     document.body.classList.toggle("font-(family-name:--font-family-text)", enabled)
     document.body.classList.toggle("text-[13px]", enabled)
     document.body.classList.toggle("font-[440]", enabled)
@@ -541,11 +541,11 @@ function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key:
           <span class="text-text-strong font-medium">{name()}</span>
           {unreachable()[1]}
         </p>
-        <p class="mt-1 text-12-regular text-text-weak">{language.t("app.server.retrying")}</p>
+        <p class="mt-1 text-13-regular text-text-weak">{language.t("app.server.retrying")}</p>
       </div>
       <Show when={others().length > 0}>
         <div class="flex flex-col gap-2 w-full max-w-sm">
-          <span class="text-12-regular text-text-base text-center">{language.t("app.server.otherServers")}</span>
+          <span class="text-13-regular text-text-base text-center">{language.t("app.server.otherServers")}</span>
           <div class="flex flex-col gap-1 bg-surface-base rounded-lg p-2">
             <For each={others()}>
               {(conn) => {

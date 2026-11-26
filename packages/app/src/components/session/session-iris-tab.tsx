@@ -4047,7 +4047,7 @@ export function SessionIrisTab() {
                 the WHOLE side panel — so clicking "Document" blanked everything to "Loading…" for
                 as long as the fetch took (`.latest` still suspends before the first value). Here
                 only the body waits; the title, tabs and back link stay put. */}
-            <Suspense fallback={<p class="text-12-regular text-text-weak py-2">Reading…</p>}>
+            <Suspense fallback={<p class="text-13-regular text-text-weak py-2">Reading…</p>}>
               <Switch>
                 <Match when={detailTab() === "info"}>
                   {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
@@ -4126,7 +4126,7 @@ export function SessionIrisTab() {
                       {([k, v]) => (
                         <>
                           <dt class="text-11-regular text-text-weaker">{k}</dt>
-                          <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
+                          <dd class="text-13-regular text-text-base min-w-0 break-words">{v}</dd>
                         </>
                       )}
                     </For>
@@ -4153,7 +4153,7 @@ export function SessionIrisTab() {
                   <Show
                     when={openRow()!.raw?.url}
                     fallback={
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No public URL yet — this page is {openRow()!.raw?.status ?? "unpublished"}.
                       </p>
                     }
@@ -4182,10 +4182,10 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "edit"}>
                   <Switch>
                     <Match when={pageDoc.loading && !pageDoc.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading page…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading page…</p>
                     </Match>
                     <Match when={pageDoc.latest && !pageDoc.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load this page — {pageDoc.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
@@ -4241,15 +4241,15 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "tools"}>
                   <Switch>
                     <Match when={mcpTools.loading && !mcpTools.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                      <p class="text-13-regular text-text-weak py-2">Reading…</p>
                     </Match>
                     <Match when={mcpTools.error}>
-                      <p class="text-12-regular text-text-danger-base py-2">
+                      <p class="text-13-regular text-text-danger-base py-2">
                         {String(mcpTools.error?.message ?? mcpTools.error)}
                       </p>
                     </Match>
                     <Match when={(mcpTools.latest?.length ?? 0) === 0}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No tools.
                         {openRow()!.raw?.status === "connected"
                           ? ""
@@ -4261,7 +4261,7 @@ export function SessionIrisTab() {
                       <For each={mcpTools.latest}>
                         {(t) => (
                           <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                            <div class="font-mono text-12-regular text-text-base">{t.name}</div>
+                            <div class="font-mono text-13-regular text-text-base">{t.name}</div>
                             <Show when={t.description}>
                               {/* Clamped: some descriptions are a page of prose (iris_agent), and one
                                 of those pushes every other tool off the screen. Full text on hover. */}
@@ -4280,7 +4280,7 @@ export function SessionIrisTab() {
                   <Show
                     when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
                     fallback={
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         This playbook publishes no step summary. The Document tab has the real thing when it is
                         installed on this machine.
                       </p>
@@ -4314,7 +4314,7 @@ export function SessionIrisTab() {
                               {i() + 1}
                             </span>
                             <div class="min-w-0 flex-1">
-                              <p class="text-12-regular text-text-base">{st.title}</p>
+                              <p class="text-13-regular text-text-base">{st.title}</p>
                               <p class="font-mono text-11-regular text-text-weaker truncate">
                                 {st.id}
                                 {st.integrations?.length ? ` · ${st.integrations.join(", ")}` : ""}
@@ -4334,11 +4334,11 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "doc"}>
                   <Switch>
                     <Match when={playbookDoc.loading && !playbookDoc.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                      <p class="text-13-regular text-text-weak py-2">Reading…</p>
                     </Match>
                     <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
                       {/* Neither copy exists: not installed here AND not published. */}
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No document — this playbook is not installed on this machine and has not been published.
                         <br />
                         <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
@@ -4356,7 +4356,7 @@ export function SessionIrisTab() {
                         {playbookDoc.latest!.path}
                       </p>
                       <div
-                        class="iris-markdown text-12-regular"
+                        class="iris-markdown text-13-regular"
                         innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
                       />
                     </Match>
@@ -4370,17 +4370,17 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "tasks"}>
                   <Switch>
                     <Match when={agentTasks.loading && !agentTasks.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading tasks…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading tasks…</p>
                     </Match>
                     <Match when={agentTasks.latest && !agentTasks.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load tasks — {agentTasks.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
                     <Match when={(agentTasks.latest?.tasks?.length ?? 0) === 0}>
                       {/* A GENUINE zero, and it says what it means: attached to a board is not
                         the same as given something to do. */}
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Nothing assigned. This agent belongs to a board but has not been handed any work — assign an
                         item with <span class="font-mono text-11-regular">iris agents assign</span>.
                       </p>
@@ -4403,7 +4403,7 @@ export function SessionIrisTab() {
                             </span>
                             <div class="min-w-0 flex-1">
                               <p
-                                class="text-12-regular"
+                                class="text-13-regular"
                                 classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}
                               >
                                 {t.title}
@@ -4448,15 +4448,15 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "records"}>
                   <Switch>
                     <Match when={records.loading && !records.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading records…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading records…</p>
                     </Match>
                     <Match when={records.latest && !records.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load records — {records.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
                     <Match when={(records.latest?.rows?.length ?? 0) === 0}>
-                      <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
+                      <p class="text-13-regular text-text-weak py-2">This dataset has no records.</p>
                     </Match>
                     <Match when={records.latest}>
                       {/* ABSENCE OF A PHI FLAG IS NOT A CLAIM OF SAFETY.
@@ -4616,7 +4616,7 @@ export function SessionIrisTab() {
           fallback={
             <div
               data-slot="iris-pane-loading"
-              class="flex h-full items-center justify-center text-12-regular text-text-weak py-6"
+              class="flex h-full items-center justify-center text-13-regular text-text-weak py-6"
             >
               Loading…
             </div>
@@ -4820,17 +4820,17 @@ export function SessionIrisTab() {
               />
             </Match>
             <Match when={view() === "loading"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
+              <p class="px-2 py-2 text-13-regular text-text-weak">Loading…</p>
             </Match>
 
             {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
             <Match when={view() === "unreachable"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
               </p>
             </Match>
             <Match when={view() === "surface-error"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.
               </p>
             </Match>
@@ -4839,13 +4839,13 @@ export function SessionIrisTab() {
               {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
                 says Offline and what is waiting (#191003). */}
               <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
-                <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
+                <p class="px-2 pb-2 text-13-regular text-text-weak">{current()!.reason}</p>
               </Show>
 
               <Switch>
                 <Match when={pane() === "atlas"}>
                   <Show when={atlasRows().length === 0 && rows().length > 0}>
-                    <p class="px-2 py-2 text-12-regular text-text-weak">
+                    <p class="px-2 py-2 text-13-regular text-text-weak">
                       Nothing matches these filters.{" "}
                       <button
                         type="button"
@@ -4864,7 +4864,7 @@ export function SessionIrisTab() {
                   />
                   <Show when={moveNote()}>
                     {(note) => (
-                      <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
+                      <p class="px-2 pb-2 text-13-regular text-text-weak" role="status">
                         {note()}{" "}
                         <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
                           Dismiss
@@ -5053,7 +5053,7 @@ export function SessionIrisTab() {
                                             />
                                           )}
                                         </Show>
-                                        <span class="text-12-regular text-text-base">{item.title}</span>
+                                        <span class="text-13-regular text-text-base">{item.title}</span>
                                         <CardBadges item={item} now={now()} />
                                         <Show when={fileDrop()?.itemId === item.id}>
                                           <span class="iris-card__uploading" role="status">
@@ -5099,7 +5099,7 @@ export function SessionIrisTab() {
                                 <For each={pendingCards().filter((p) => p.listId === list.id)}>
                                   {(p) => (
                                     <div class="iris-board__card iris-board__card--pending" aria-busy="true">
-                                      <span class="text-12-regular text-text-base">{p.title}</span>
+                                      <span class="text-13-regular text-text-base">{p.title}</span>
                                       <span class="iris-board__meta">saving…</span>
                                     </div>
                                   )}
@@ -5396,7 +5396,7 @@ export function SessionIrisTab() {
                         >
                           ●
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{a.name}</span>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
                           {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
                         </span>
@@ -5414,7 +5414,7 @@ export function SessionIrisTab() {
                         onClick={() => setOpenRow(describeRow(pane(), l))}
                       >
                         <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{l.name}</span>
                         <Show when={l.status}>
                           <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
                         </Show>
@@ -5441,7 +5441,7 @@ export function SessionIrisTab() {
                         >
                           {m.status === "connected" ? "●" : "○"}
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{m.name}</span>
                         {/* The status is the whole point of the row — "failed" and "needs_auth" are
                           the two a person acts on. */}
                         <span class="font-mono text-11-regular text-text-weaker shrink-0">
@@ -5462,7 +5462,7 @@ export function SessionIrisTab() {
                       >
                         <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{p.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{p.name}</span>
                           <span class="block text-11-regular text-text-weaker truncate">
                             {p.inviter ? "you invited" : "invited you"}
                             {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
@@ -5496,7 +5496,7 @@ export function SessionIrisTab() {
                           >
                             {st.status === "published" ? "●" : "○"}
                           </span>
-                          <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
+                          <span class="text-13-regular text-text-base min-w-0 flex-1">{st.name}</span>
                           {/* The page count IS the reason a site exists. Leading with it says
                             what kind of thing this row is at a glance. */}
                           <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
@@ -5549,10 +5549,10 @@ export function SessionIrisTab() {
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
                   <Show when={projectScope() && !project() && projectInterior.loading}>
-                    <p class="px-2 py-6 text-12-regular text-text-weak">Loading this board's graph…</p>
+                    <p class="px-2 py-6 text-13-regular text-text-weak">Loading this board's graph…</p>
                   </Show>
                   <Show when={projectScope() && project()?.measured === false}>
-                    <p class="px-2 py-6 text-12-regular text-text-weak">
+                    <p class="px-2 py-6 text-13-regular text-text-weak">
                       Not connected — this board's graph could not be read
                       {(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
                     </p>
@@ -5614,7 +5614,7 @@ export function SessionIrisTab() {
                     failed load rather than the finding it is. Offer the way out instead. */}
                   <Show when={!projectScope() && graphBoardIsolated()}>
                     <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
-                      <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
+                      <p class="text-13-regular text-text-weak">Nothing links to this board yet.</p>
                       <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
                         Show the full atlas
                       </button>
@@ -5630,7 +5630,7 @@ export function SessionIrisTab() {
                         {(n) => (
                           <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
                             <div class="flex items-baseline gap-2">
-                              <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
+                              <span class="text-13-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
                               <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
                                 {n.degree}
                               </span>
@@ -5684,7 +5684,7 @@ export function SessionIrisTab() {
                           <span class="iris-int__fallback">{providerMark(c.type, c.name)}</span>
                         </span>
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{c.name}</span>
                           {/* The one-line description the registry leads with. Without it the list
                             is 79 brand names and no way to tell what any of them would do. */}
                           <Show when={c.description}>
@@ -5766,7 +5766,7 @@ export function SessionIrisTab() {
                           <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
                         </span>
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{i.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{i.name}</span>
                           {/* An error says WHY here. A red mark with no reason is not actionable. */}
                           <Show when={i.lastError}>
                             <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
@@ -5791,7 +5791,7 @@ export function SessionIrisTab() {
                         onClick={() => setOpenRow(describeRow(pane(), sc))}
                       >
                         <div class="flex items-baseline gap-2">
-                          <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
+                          <span class="text-13-regular text-text-base min-w-0 flex-1">{sc.name}</span>
                           {/* Scope is shown because 40 of these belong to the account, not the
                             board — hiding that would put account-wide schemas under a board
                             heading, which is the Pages bug again. */}
@@ -5830,7 +5830,7 @@ export function SessionIrisTab() {
                         >
                           {pg.status === "published" ? "●" : "○"}
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{pg.title}</span>
                         <Show when={pg.slug}>
                           <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
                         </Show>
@@ -5843,7 +5843,7 @@ export function SessionIrisTab() {
 
             {/* Only reachable when measured===true — a genuine empty surface. */}
             <Match when={view() === "empty"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 {/* "This board is empty" and "your search matched nothing" are different facts,
                   and the first one is alarming when it is not true. */}
                 <Show

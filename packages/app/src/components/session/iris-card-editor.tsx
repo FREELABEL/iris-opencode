@@ -1597,11 +1597,11 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     >
       <Switch>
         <Match when={doc.loading && !doc.latest}>
-          <p class="px-4 py-2 text-12-regular text-text-weak">Loading…</p>
+          <p class="px-4 py-2 text-13-regular text-text-weak">Loading…</p>
         </Match>
         {/* NOT MEASURED — never drawn as an empty card. */}
         <Match when={doc.latest && !doc.latest.measured}>
-          <p class="px-4 py-2 text-12-regular text-text-weak">Could not load this card — {doc.latest!.reason ?? "unknown"}.</p>
+          <p class="px-4 py-2 text-13-regular text-text-weak">Could not load this card — {doc.latest!.reason ?? "unknown"}.</p>
         </Match>
         <Match when={doc.latest?.measured}>
           <div class="iris-card__frame">
@@ -2226,7 +2226,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         </SideHead>
                         <Show
                           when={doc.latest!.tasksMeasured}
-                          fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
+                          fallback={<p class="text-13-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
                         >
                           <Show when={doc.latest!.tasks.length > 0}>
                             <div class="iris-card__progressbar iris-tasks__bar" title={`${doc.latest!.tasks.filter((t) => t.done).length} of ${doc.latest!.tasks.length} done`}>

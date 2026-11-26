@@ -215,7 +215,7 @@ function ReviewPanelV2Sidebar(props: {
       <Show
         when={props.diffsReady()}
         fallback={
-          <div class="px-2 py-2 text-12-regular text-text-weak">
+          <div class="px-2 py-2 text-13-regular text-text-weak">
             {language.t("common.loading")}
             {language.t("common.loading.ellipsis")}
           </div>
@@ -235,7 +235,7 @@ function ReviewPanelV2Sidebar(props: {
         >
           <Show
             when={props.filteredFiles().length > 0}
-            fallback={<div class="px-2 py-2 text-12-regular text-text-weak">{language.t("palette.empty")}</div>}
+            fallback={<div class="px-2 py-2 text-13-regular text-text-weak">{language.t("palette.empty")}</div>}
           >
             <SessionFileListV2
               files={props.filteredFiles()}

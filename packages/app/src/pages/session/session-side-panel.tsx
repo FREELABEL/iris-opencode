@@ -184,7 +184,7 @@ export function SessionSidePanel(props: {
     <div class="h-full flex flex-col">
       <div class="h-6 shrink-0" aria-hidden />
       <div class="flex-1 pb-64 flex items-center justify-center text-center">
-        <div class="text-12-regular text-text-weak">{msg}</div>
+        <div class="text-13-regular text-text-weak">{msg}</div>
       </div>
     </div>
   )
@@ -1125,7 +1125,7 @@ export function SessionSidePanel(props: {
                             <Show
                               when={props.diffsReady()}
                               fallback={
-                                <div class="px-2 py-2 text-12-regular text-text-weak">
+                                <div class="px-2 py-2 text-13-regular text-text-weak">
                                   {language.t("common.loading")}
                                   {language.t("common.loading.ellipsis")}
                                 </div>

@@ -28,7 +28,6 @@
     "src/components/file-icons/sprite.svg",
     "src/components/provider-icons/sprite.svg",
     "src/assets/icons/app/*",
-    "src/assets/fonts/*",
     "src/assets/audio/*",
     "LICENSE"
   ],
@@ -49,7 +48,6 @@
     "./icons/provider": "./src/components/provider-icons/types.ts",
     "./icons/file-type": "./src/components/file-icons/types.ts",
     "./icons/app": "./src/components/app-icons/types.ts",
-    "./fonts/*": "./src/assets/fonts/*",
     "./audio/*": "./src/assets/audio/*",
     "./v2/*.css": "./src/v2/components/*.css",
     "./v2/*": "./src/v2/components/*.tsx",
@@ -61,7 +59,10 @@
     "test": "bun test src --only-failures",
     "dev": "vite",
     "generate:tailwind": "bun run script/tailwind.ts",
-    "generate:v2-oc2": "bun run script/build-oc2-v2-overrides.ts"
+    "generate:iris": "bun run script/build-iris-theme.ts && bun run script/build-theme-fallback.ts",
+    "generate:fallback": "bun run script/build-theme-fallback.ts",
+    "check:contrast": "bun run script/check-contrast.ts",
+    "lint:tokens": "bun run script/lint-tokens.ts"
   },
   "devDependencies": {
     "@solidjs/meta": "catalog:",
