@@ -27,11 +27,11 @@
  */
 .iris-ui {
   --ui-hover: color-mix(in srgb, var(--text-strong) 5%, transparent);
-  --ui-sel: var(--background-element);
-  --ui-good: color-mix(in srgb, #10b981 72%, var(--text-strong));
-  --ui-warn: color-mix(in srgb, #f59e0b 70%, var(--text-strong));
-  --ui-bad: color-mix(in srgb, #ef4444 72%, var(--text-strong));
-  --ui-info: color-mix(in srgb, #3b82f6 70%, var(--text-strong));
+  --ui-sel: var(--surface-raised-base);
+  --ui-good: color-mix(in srgb, var(--v2-state-fg-success) 72%, var(--text-strong));
+  --ui-warn: color-mix(in srgb, var(--v2-state-fg-warning) 70%, var(--text-strong));
+  --ui-bad: color-mix(in srgb, var(--v2-state-fg-danger) 72%, var(--text-strong));
+  --ui-info: color-mix(in srgb, var(--text-interactive-base) 70%, var(--text-strong));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -52,60 +52,60 @@
 /* ── toolbar ── */
 .iris-ui-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); min-width: 0; }
 .iris-ui-spacer { flex: 1 1 0; }
-.iris-ui-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 120px; max-width: 320px; border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 0 6px 0 8px; color: var(--text-weak); }
+.iris-ui-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 120px; max-width: 320px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 0 6px 0 8px; color: var(--text-weak); }
 .iris-ui-search:focus-within { border-color: var(--border-strong-base, var(--text-weak)); }
-.iris-ui-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: 12px; padding: 5px 0; }
-.iris-ui-search kbd { font: inherit; font-size: 10px; color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: 4px; padding: 0 4px; line-height: 14px; pointer-events: none; }
+.iris-ui-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-caption); padding: 5px 0; }
+.iris-ui-search kbd { font: inherit; font-size: var(--font-size-x-small); color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: var(--radius-sm); padding: 0 4px; line-height: 14px; pointer-events: none; }
 .iris-ui-search:focus-within kbd { display: none; }
-.iris-ui-seg { display: inline-flex; flex: none; border: 1px solid var(--border-weak-base); border-radius: 6px; padding: 1px; gap: 1px; }
-.iris-ui-seg > button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--text-weak); border-radius: 4px; padding: 3px 7px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.iris-ui-seg { display: inline-flex; flex: none; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 1px; gap: 1px; }
+.iris-ui-seg > button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--text-weak); border-radius: var(--radius-sm); padding: 3px 7px; font-size: var(--font-size-caption); cursor: pointer; white-space: nowrap; }
 .iris-ui-seg > button:hover { color: var(--text-strong); }
 .iris-ui-seg > button[aria-pressed="true"], .iris-ui-seg > button[aria-selected="true"] { background: var(--ui-sel); color: var(--text-strong); }
 
 /* ── buttons ── */
-.iris-ui-btn { display: inline-flex; align-items: center; gap: 5px; flex: none; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: 6px; padding: 4px 10px; font-size: 12px; line-height: 16px; cursor: pointer; white-space: nowrap; }
+.iris-ui-btn { display: inline-flex; align-items: center; gap: 5px; flex: none; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: var(--radius-md); padding: 4px 10px; font-size: var(--font-size-caption); line-height: 16px; cursor: pointer; white-space: nowrap; }
 .iris-ui-btn:hover:not(:disabled) { background: var(--ui-hover); color: var(--text-strong); }
 .iris-ui-btn:disabled { opacity: 0.45; cursor: default; }
-.iris-ui-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: 500; }
+.iris-ui-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: var(--font-weight-medium); }
 .iris-ui-btn[data-primary]:hover:not(:disabled) { background: var(--text-strong); color: var(--background-base); opacity: 0.88; }
 .iris-ui-btn[data-primary][data-tone="warn"] { background: var(--ui-warn); border-color: var(--ui-warn); color: var(--background-base); }
-.iris-ui-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--text-weak); cursor: pointer; }
+.iris-ui-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-weak); cursor: pointer; }
 .iris-ui-icon:hover:not(:disabled) { background: var(--ui-hover); color: var(--text-strong); }
 .iris-ui-icon:disabled { opacity: 0.45; cursor: default; }
 .iris-ui-icon[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); }
 
 /* ── filter row with counts ── */
 .iris-ui-tabs { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; min-width: 0; }
-.iris-ui-tab { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; color: var(--text-weak); font-size: 12px; padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.iris-ui-tab { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; color: var(--text-weak); font-size: var(--font-size-caption); padding: 3px 8px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; }
 .iris-ui-tab:hover { color: var(--text-strong); }
 .iris-ui-tab[aria-pressed="true"], .iris-ui-tab[aria-selected="true"] { background: var(--ui-sel); color: var(--text-strong); }
 .iris-ui-tab .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
 
 /* ── chips ── */
-.iris-ui-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px; background: var(--background-element); color: var(--text-weak); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iris-ui-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: var(--font-size-x-small); line-height: 18px; padding: 0 7px; border-radius: var(--radius-full); background: var(--surface-raised-base); color: var(--text-weak); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iris-ui-chip[data-tone] { color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); }
 .iris-ui-chip .iris-ui-ic, .iris-ui-chip .iris-ui-svg { width: 12px; height: 12px; }
 
 /* ── callouts, empty and error ── */
-.iris-ui-callout { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; padding: 7px 10px; border-radius: 6px; background: var(--background-element); color: var(--text-base); }
+.iris-ui-callout { display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-size-caption); padding: 7px 10px; border-radius: var(--radius-md); background: var(--surface-raised-base); color: var(--text-base); }
 .iris-ui-callout[data-tone] { background: color-mix(in srgb, var(--tone) 11%, transparent); }
 .iris-ui-callout[data-tone] > .iris-ui-ic { color: var(--tone); }
-.iris-ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 36px 16px; color: var(--text-weak); font-size: 13px; text-align: center; }
-.iris-ui-empty code { font-size: 11.5px; color: var(--text-base); background: var(--background-element); border-radius: 4px; padding: 1px 5px; }
+.iris-ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 36px 16px; color: var(--text-weak); font-size: var(--font-size-small); text-align: center; }
+.iris-ui-empty code { font-size: var(--font-size-x-small); color: var(--text-base); background: var(--surface-raised-base); border-radius: var(--radius-sm); padding: 1px 5px; }
 
 /* ── confirm ── */
-.iris-ui-scrim { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--background-base) 72%, transparent); backdrop-filter: blur(2px); }
-.iris-ui-dialog { width: min(420px, 100%); background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 10px; padding: 18px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
-.iris-ui-dialog-icon { display: inline-flex; padding: 8px; border-radius: 999px; background: var(--background-element); color: var(--text-strong); margin-bottom: 10px; }
+.iris-ui-scrim { position: absolute; inset: 0; z-index: calc(var(--z-raised) + 19); display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--background-base) 72%, transparent); backdrop-filter: blur(2px); }
+.iris-ui-dialog { width: min(420px, 100%); background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-2xl); padding: 18px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
+.iris-ui-dialog-icon { display: inline-flex; padding: 8px; border-radius: var(--radius-full); background: var(--surface-raised-base); color: var(--text-strong); margin-bottom: 10px; }
 .iris-ui-dialog-icon[data-tone] { color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); }
-.iris-ui-dialog h3 { font-size: 15px; font-weight: 500; color: var(--text-strong); margin: 0 0 6px; overflow-wrap: anywhere; }
-.iris-ui-dialog p { font-size: 12.5px; line-height: 1.5; color: var(--text-base); margin: 0 0 8px; overflow-wrap: anywhere; }
+.iris-ui-dialog h3 { font-size: var(--font-size-base); font-weight: var(--font-weight-medium); color: var(--text-strong); margin: 0 0 6px; overflow-wrap: anywhere; }
+.iris-ui-dialog p { font-size: var(--font-size-caption); line-height: 1.5; color: var(--text-base); margin: 0 0 8px; overflow-wrap: anywhere; }
 .iris-ui-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
 
 /* ── menus ── */
-.iris-ui-menu { position: absolute; z-index: 15; min-width: 200px; max-height: 320px; overflow-y: auto; padding: 4px; background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 8px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.22); }
-.iris-ui-menu > button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; font-size: 12px; padding: 6px 8px; border-radius: 5px; cursor: pointer; }
+.iris-ui-menu { position: absolute; z-index: calc(var(--z-raised) + 14); min-width: 200px; max-height: 320px; overflow-y: auto; padding: 4px; background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-lg); box-shadow: 0 10px 30px rgb(0 0 0 / 0.22); }
+.iris-ui-menu > button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; font-size: var(--font-size-caption); padding: 6px 8px; border-radius: var(--radius-md); cursor: pointer; }
 .iris-ui-menu > button:hover, .iris-ui-menu > button:focus-visible { background: var(--ui-hover); color: var(--text-strong); outline: none; }
-.iris-ui-menu > button[aria-checked="true"] { color: var(--text-strong); font-weight: 500; }
-.iris-ui-menu .sub { display: block; font-size: 11px; color: var(--text-weak); font-weight: 400; }
+.iris-ui-menu > button[aria-checked="true"] { color: var(--text-strong); font-weight: var(--font-weight-medium); }
+.iris-ui-menu .sub { display: block; font-size: var(--font-size-x-small); color: var(--text-weak); font-weight: var(--font-weight-regular); }
 @media (prefers-reduced-motion: reduce) { .iris-ui * { transition: none !important; } }

@@ -19,21 +19,21 @@
   gap: 6px;
   padding: 12px 14px;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 8px;
-  background: var(--background-element);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised-base);
   text-align: left;
 }
 .iris-camp--compact .iris-camp__card {
   max-width: none;
 }
 .iris-camp__card--error {
-  background: var(--surface-critical-weak, var(--background-element));
+  background: var(--surface-critical-weak, var(--surface-raised-base));
 }
 .iris-camp__title {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-strong);
 }
 .iris-camp__warn {
@@ -41,7 +41,7 @@
   color: var(--icon-critical-base, var(--text-weak));
 }
 .iris-camp__text {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
   color: var(--text-weak);
 }
@@ -54,7 +54,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
 }
 .iris-camp__spin {
@@ -80,14 +80,14 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   text-align: left;
 }
 .iris-camp__board:hover {
   background: var(--surface-raised-base-hover, var(--background-base));
 }
 .iris-camp__board-name {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-strong);
   overflow: hidden;
   white-space: nowrap;
@@ -95,10 +95,10 @@
 }
 .iris-camp__tag {
   flex: none;
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   color: var(--text-weak);
   background: var(--background-base);
 }
@@ -114,20 +114,20 @@
   column-gap: 6px;
   align-items: center;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   text-align: left;
   color: var(--text-interactive-base);
 }
 .iris-camp__entry:hover {
-  background: var(--surface-raised-base-hover, var(--background-element));
+  background: var(--surface-raised-base-hover, var(--surface-raised-base));
 }
 .iris-camp__entry-title {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-strong);
 }
 .iris-camp__entry-hint {
   grid-column: 2;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
 }
 
@@ -139,13 +139,13 @@
   gap: 8px;
 }
 .iris-camp--active .iris-camp__title {
-  font-size: 15px;
+  font-size: var(--font-size-base);
 }
 .iris-camp__step {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 .iris-camp__kinds {
@@ -163,30 +163,30 @@
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   text-align: left;
 }
 .iris-camp__kind:hover,
 .iris-camp__kind:focus-visible {
-  background: var(--surface-raised-base-hover, var(--background-element));
+  background: var(--surface-raised-base-hover, var(--surface-raised-base));
 }
 .iris-camp__kind-title {
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-strong);
 }
 .iris-camp__kind-hint {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.4;
   color: var(--text-weak);
 }
 .iris-camp__input {
   width: 100%;
   padding: 7px 10px;
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-strong);
   background: var(--background-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   outline: none;
 }
 .iris-camp__input:focus {
@@ -202,17 +202,17 @@
   flex: none;
   width: 28px;
   height: 28px;
-  border-radius: 7px;
+  border-radius: var(--radius-lg);
   display: grid;
   place-items: center;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.02em;
   color: hsl(var(--face-hue) 55% 32%);
   background: hsl(var(--face-hue) 70% 90%);
 }
 .iris-camp__face--emoji {
-  font-size: 16px;
+  font-size: var(--font-size-large);
   background: var(--background-base);
 }
 [data-color-scheme="dark"] .iris-camp__face:not(.iris-camp__face--emoji) {
@@ -230,7 +230,7 @@
   line-height: 16px;
 }
 .iris-camp__board-meta {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 14px;
   color: var(--text-weak);
   font-variant-numeric: tabular-nums;

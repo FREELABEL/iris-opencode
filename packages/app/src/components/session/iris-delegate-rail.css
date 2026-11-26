@@ -20,9 +20,9 @@
   overflow-y: auto;
   margin: 0 8px 12px 0;
   padding: 8px;
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 .iris-delegate--live {
   border-color: var(--border-weak-base);
@@ -38,13 +38,13 @@
   gap: 4px;
 }
 .iris-delegate__label {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .iris-delegate__empty {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
   padding: 2px 0;
 }
@@ -54,7 +54,7 @@
   gap: 8px;
   padding: 6px 8px;
   border: 1px dashed transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--background-base);
   transition:
     border-color 80ms,
@@ -66,7 +66,7 @@
 .iris-delegate__target--over {
   border-color: var(--border-interactive-base, var(--border-strong-base)) !important;
   border-style: solid;
-  background: var(--surface-interactive-weak, var(--background-element));
+  background: var(--surface-interactive-weak, var(--surface-raised-base));
 }
 .iris-delegate__target--pending {
   opacity: 0.6;
@@ -76,14 +76,14 @@
   width: 7px;
   height: 7px;
   margin-top: 5px;
-  border-radius: 999px;
-  background: var(--icon-weak-base, #888);
+  border-radius: var(--radius-full);
+  background: var(--icon-weak-base);
 }
 .iris-delegate__target[data-tone="free"] .iris-delegate__dot {
-  background: var(--icon-success-base, #4a9);
+  background: var(--icon-success-base);
 }
 .iris-delegate__target[data-tone="busy"] .iris-delegate__dot {
-  background: var(--icon-warning-base, #c8a349);
+  background: var(--icon-warning-base);
 }
 .iris-delegate__target[data-tone="off"] {
   opacity: 0.55;
@@ -93,7 +93,7 @@
   display: flex;
   align-items: flex-start;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   padding-top: 3px;
   color: var(--text-weak);
@@ -106,16 +106,16 @@
 /* The outcome's colour sits on the icon only; the words stay readable grey. */
 .iris-delegate__note[data-outcome="assigned"] [data-component="icon"],
 .iris-delegate__note[data-outcome="sent"] [data-component="icon"] {
-  color: var(--icon-success-base, #4a9);
+  color: var(--icon-success-base);
 }
 .iris-delegate__note[data-outcome="queued"] [data-component="icon"] {
-  color: var(--icon-warning-base, #c8a349);
+  color: var(--icon-warning-base);
 }
 .iris-delegate__note[data-outcome="already"] [data-component="icon"] {
-  color: var(--icon-weak-base, #888);
+  color: var(--icon-weak-base);
 }
 .iris-delegate__note[data-outcome="failed"] {
-  color: var(--text-critical-base, #c44);
+  color: var(--v2-state-fg-danger);
 }
 /* While held over a row: the action, in the text colour — a promise, not yet a result. */
 .iris-delegate__intent {
