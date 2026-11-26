@@ -32,6 +32,8 @@ export interface ServedState {
   /** --public: the Hive relay tunnel name, and the https address it answers on */
   public_name?: string
   public_url?: string
+  /** live mode (#194353): the page's binding names; absent = a frozen snapshot */
+  live_bindings?: string[]
 }
 
 export const servedRoot = (home = homedir()) => join(home, ".iris", "served")
@@ -114,8 +116,13 @@ export function serviceCwd(self = selfCommand(), home = homedir()): string {
 // ── what each OS gets ──────────────────────────────────────────────────────────────────────────
 
 /** The command that serves the folder. `self` is how this CLI re-invokes itself (see selfCommand). */
-export function serveArgv(self: string[], site: string, port: number, publicName?: string): string[] {
-  return [...self, "pages", "serve-edge", site, "--port", String(port), ...(publicName ? ["--public-name", publicName] : [])]
+export function serveArgv(self: string[], site: string, port: number, publicName?: string, liveSlug?: string): string[] {
+  return [
+    ...self, "pages", "serve-edge", site, "--port", String(port),
+    ...(publicName ? ["--public-name", publicName] : []),
+    // Never both: live forwards with the owner's session, and a public address is the internet.
+    ...(liveSlug && !publicName ? ["--live", liveSlug] : []),
+  ]
 }
 
 /** A tunnel name for a page: lowercase, the relay's alphabet, at most 63 characters. */
@@ -207,11 +214,11 @@ export function keepRunning(
   slug: string,
   site: string,
   port: number,
-  opts: { autostart: boolean; home?: string; publicName?: string } = { autostart: true },
+  opts: { autostart: boolean; home?: string; publicName?: string; liveSlug?: string } = { autostart: true },
 ): KeepResult {
   const home = opts.home ?? homedir()
   const dir = servedDir(slug, home)
-  const argv = serveArgv(serviceSelf(), site, port, opts.publicName)
+  const argv = serveArgv(serviceSelf(), site, port, opts.publicName, opts.liveSlug)
   const cwd = serviceCwd(selfCommand(), home)
   const log = join(dir, "serve.log")
   const os = osPlatform()
