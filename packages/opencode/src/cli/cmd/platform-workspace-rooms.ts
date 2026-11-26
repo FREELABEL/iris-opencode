@@ -240,14 +240,3 @@ export const WorkspaceInviteCommand = cmd({
     console.log(dim(`  ${link.permission} · ${args.email ? `only ${args.email}` : "anyone with the link"}${link.expires_at ? ` · until ${link.expires_at}` : ""}`))
   },
 })
-
-export const WORKSPACE_ROOM_COMMANDS = [
-  WorkspaceRoomsCommand,
-  WorkspaceOpenCommand,
-  WorkspaceShareCommand,
-  WorkspaceUnshareCommand,
-  WorkspaceSayCommand,
-  WorkspaceWatchCommand,
-  WorkspaceStopCommand,
-  WorkspaceInviteCommand,
-]

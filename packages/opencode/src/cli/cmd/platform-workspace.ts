@@ -11,7 +11,16 @@ import {
   success,
   highlight, writeJson } from "./iris-api"
 import { firstArray } from "../../util/array"
-import { WORKSPACE_ROOM_COMMANDS } from "./platform-workspace-rooms"
+import {
+  WorkspaceRoomsCommand,
+  WorkspaceOpenCommand,
+  WorkspaceShareCommand,
+  WorkspaceUnshareCommand,
+  WorkspaceSayCommand,
+  WorkspaceWatchCommand,
+  WorkspaceStopCommand,
+  WorkspaceInviteCommand,
+} from "./platform-workspace-rooms"
 
 // ============================================================================
 // iris workspace — Workspace (team) ↔ Google Workspace identity sync, from the CLI
@@ -289,7 +298,17 @@ export const PlatformWorkspaceCommand = cmd({
   aliases: ["workspaces", "ws"],
   describe: "shared workspaces — your team's live AI chats in one place (rooms, open, say, watch, stop, invite) + Google Workspace sync",
   builder: (yargs) =>
-    WORKSPACE_ROOM_COMMANDS.reduce((y: any, c) => y.command(c), yargs)
+    // Each registered by name, not in a loop: the capability index (`iris find`, MCP discovery)
+    // is built by reading these `.command(X)` calls, and a loop hid all eight from it.
+    yargs
+      .command(WorkspaceRoomsCommand)
+      .command(WorkspaceOpenCommand)
+      .command(WorkspaceShareCommand)
+      .command(WorkspaceUnshareCommand)
+      .command(WorkspaceSayCommand)
+      .command(WorkspaceWatchCommand)
+      .command(WorkspaceStopCommand)
+      .command(WorkspaceInviteCommand)
       .command(ShowCommand)
       .command(BindCommand)
       .command(SyncCommand)
