@@ -3616,9 +3616,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* ── Card editor, Elon's layout (CardEditor.vue) ─────────────────────────────────────────
    Title in the header row beside who is on the card and an icon cluster; the description fills
    the left; Details | Tasks | Chat on a ~440px right sidebar. Theme tokens throughout, so light
-   and dark both hold; the one fixed colour is Elon's red accent on the active tab. */
+   and dark both hold. The active tab uses the theme accent (#194375: one accent, not Elon's red). */
 .iris-card--elon {
-  --iris-elon-accent: var(--v2-state-fg-danger);
+  --iris-elon-accent: var(--text-interactive-base);
 }
 [data-slot="dialog-container"]:has(> .iris-card--elon) {
   height: min(85vh, 1100px);

@@ -14,7 +14,7 @@
   --ihd-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--ihd-ink);
 }
-.ihd-label { font: var(--font-weight-medium) var(--font-size-x-small)/1 var(--ihd-mono); letter-spacing: .08em; text-transform: uppercase; }
+.ihd-label { font: var(--font-weight-medium) var(--font-size-x-small)/1 var(--ihd-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ihd-mute); }
 .ihd-hello { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .ihd-h1 { font-size: var(--font-size-2x-large); line-height: 1.15; font-weight: var(--font-weight-semibold); letter-spacing: -.02em; margin: 6px 0 0; }
 .ihd-grad { color: var(--ihd-ink); }

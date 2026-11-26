@@ -1825,7 +1825,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                     {/* ───────────── DETAILS ───────────── */}
                     <Match when={side() === "details"}>
                       <div class="iris-sec">
-                        <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="#3b82f6">
+                        <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="var(--text-interactive-base)">
                           Assigned
                         </SideHead>
                         <MembersRow
@@ -1929,7 +1929,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="pin"
                           count={doc.latest!.labels.length || undefined}
-                          tint="#a855f7"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button
                               type="button"
@@ -1985,7 +1985,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="photo"
                           count={files.latest?.measured ? files.latest.files.length || undefined : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <label class="iris-sh__add" style={{ cursor: uploading() ? "default" : "pointer" }}>
                               {uploading() ? "Uploading…" : "+ Add"}
@@ -2028,7 +2028,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="checklist"
                           count={doc.latest!.tasksMeasured && doc.latest!.tasks.length ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
-                          tint="#3b82f6"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setSide("tasks")}>
                               {doc.latest!.tasks.length ? "View all" : "+ Add"}
@@ -2072,7 +2072,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="clock"
                           count={events.latest?.measured ? events.latest.events.length || undefined : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setEvOpen(!evOpen())}>
                               {evOpen() ? "Cancel" : "+ Add"}
@@ -2117,7 +2117,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="hand"
                           count={asks.latest?.measured ? asks.latest.asks.filter((a) => a.status === "open").length || undefined : undefined}
-                          tint="#f59e0b"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setAskOpen(!askOpen())}>
                               {askOpen() ? "Cancel" : "+ Add"}
@@ -2207,7 +2207,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="checklist"
                           count={doc.latest!.tasksMeasured && doc.latest!.tasks.length > 0 ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button
                               type="button"
