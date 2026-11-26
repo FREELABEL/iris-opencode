@@ -75,7 +75,7 @@ export const dict = {
   "split.none.description": "Could not start a new chat for the column. Open another session tab and try again.",
   "split.narrow.title": "Window too narrow to split",
   "split.narrow.description": "Widen the window or close the sidebar to fit a second column.",
-  "command.review.toggle": "Toggle review",
+  "command.review.toggle": "Toggle side panel",
   "command.pulse.open": "Open Pulse",
   "command.pulse.open.description": "Check where a topic stands, or what you owe a contact",
   "command.terminal.new": "New terminal",

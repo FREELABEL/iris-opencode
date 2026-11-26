@@ -614,8 +614,10 @@ export default function Page() {
   const info = createMemo(() => (params.id ? sync().session.get(params.id) : undefined))
   const isChildSession = createMemo(() => !!info()?.parentID)
   const canReview = createMemo(() => !!sync().project)
-  // Review defaults open only where there is something to review. See TabsInput.reviewFirst.
-  const reviewFirst = createMemo(() => sync().project?.vcs === "git")
+  // The side panel opens on IRIS, not Review (#194365). It opened on "Review · No file changes yet"
+  // in every git project — for an IRIS account the IRIS surface is the product. Review stays one
+  // click away, and a tab the person opened themselves still wins (see TabsInput.reviewFirst).
+  const reviewFirst = () => false
   const reviewTab = createMemo(() => isDesktop())
   const tabState = createSessionTabs({
     tabs,
