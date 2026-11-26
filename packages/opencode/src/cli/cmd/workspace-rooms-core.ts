@@ -63,3 +63,35 @@ export function parseProjectId(v: string | number | undefined | null): number | 
   if (!/^[1-9][0-9]*$/.test(s)) return null
   return Number(s)
 }
+
+const HARNESS_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  claude_code: "Claude Code",
+  opencode: "IRIS Desktop / opencode",
+  acp: "Codex/Gemini (ACP)",
+}
+
+function since(fromIso: string | null | undefined, now: Date): string | null {
+  if (!fromIso) return null
+  const mins = Math.max(0, Math.round((now.getTime() - new Date(fromIso).getTime()) / 60000))
+  if (Number.isNaN(mins)) return null
+  if (mins < 60) return `${mins} min`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+
+/** Where each of a room's sessions runs, in words — and, when that computer is asleep, for how long. */
+export function sessionLines(
+  sessions: Array<{ session_id: string; provider?: string | null; machine?: string | null; online?: boolean; last_seen?: string | null }> | undefined | null,
+  now: Date = new Date(),
+): string[] {
+  if (!sessions || sessions.length === 0) return ["no live session in this room"]
+  return sessions.map((s) => {
+    if (!s.machine) return "a session no computer reports right now"
+    const what = HARNESS_NAMES[String(s.provider ?? "")] ?? "a session"
+    if (s.online) return `${what} on ${s.machine} · online`
+    const ago = since(s.last_seen, now)
+    return `${what} on ${s.machine} · offline${ago ? ` for ${ago}` : ""} — messages wait until it is back`
+  })
+}

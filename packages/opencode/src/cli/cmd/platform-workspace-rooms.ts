@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson, IRIS_API } from "./iris-api"
 import { mintShareLink, inviteWebUrl } from "./platform-bloqs"
-import { roomSessions, unseen, formatLine, openRoomBody, parseProjectId, HARNESS_HINT } from "./workspace-rooms-core"
+import { roomSessions, unseen, formatLine, openRoomBody, parseProjectId, sessionLines, HARNESS_HINT } from "./workspace-rooms-core"
 
 // ============================================================================
 // iris workspace rooms|open|share|unshare|say|watch|stop|invite — shared workspaces (#194307)
@@ -151,7 +151,7 @@ export const WorkspaceSayCommand = cmd({
   builder: (y) =>
     json(room(y))
       .positional("message", { describe: "what to say", type: "string", array: true })
-      .option("agents", { describe: "also let the room's IRIS agents reply (spends their tokens)", type: "boolean", default: false }),
+      .option("agents", { describe: "also let the room's IRIS agents reply — room owner only (they run on the owner's account)", type: "boolean", default: false }),
   async handler(args: Args) {
     const content = (Array.isArray(args.message) ? args.message.join(" ") : String(args.message ?? "")).trim()
     if (!content) return fail(args, "Nothing to say.")
@@ -163,6 +163,11 @@ export const WorkspaceSayCommand = cmd({
     if (args.json) return writeJson(body)
     if (body.delivery_held) {
       console.log(`  ${success("✓")} saved in the room ${dim("· " + (body.delivery_note ?? "not typed into the live session this minute"))}`)
+      return
+    }
+    if (body.agents_note) console.log(`  ${dim(body.agents_note)}`)
+    if ((body.node_deliveries ?? []).some((d: any) => d.parked)) {
+      console.log(`  ${success("✓")} saved ${dim("· " + (body.delivery_note ?? "the computer is offline; it will get this when it is back"))}`)
       return
     }
     const reached = (body.node_deliveries ?? []).length
@@ -186,7 +191,8 @@ export const WorkspaceWatchCommand = cmd({
       if (!body) return
       if (first && !args.json) {
         UI.empty()
-        prompts.intro(`◈  ${body.thread?.name || "Room"}  ${dim(`${roomSessions(body.thread?.participants).length} live session(s)`)}`)
+        prompts.intro(`◈  ${body.thread?.name || "Room"}`)
+        for (const line of sessionLines(body.sessions)) console.log(`  ${dim(line)}`)
         first = false
       }
       for (const m of unseen(seen, body.messages ?? [])) {

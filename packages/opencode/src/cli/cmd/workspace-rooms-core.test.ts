@@ -6,6 +6,7 @@ import {
   openRoomBody,
   parseProjectId,
   HARNESS_HINT,
+  sessionLines,
 } from "./workspace-rooms-core"
 
 describe("workspace rooms — shared workspaces on Atlas projects (#194307)", () => {
@@ -56,5 +57,23 @@ describe("workspace rooms — shared workspaces on Atlas projects (#194307)", ()
 
   test("the harness hint names every harness a shared room can steer today", () => {
     for (const h of ["Claude Code", "opencode", "Codex", "Gemini", "iris acp run --keep"]) expect(HARNESS_HINT).toContain(h)
+  })
+  test("each session says where it runs and, when the machine is asleep, since when", () => {
+    const now = new Date("2026-11-26T18:00:00Z")
+    expect(
+      sessionLines(
+        [
+          { session_id: "ses_1", provider: "claude-code", machine: "alex-mbp", online: true, last_seen: "2026-11-26T17:59:40Z" },
+          { session_id: "acp_2", provider: "acp", machine: "flo-pc", online: false, last_seen: "2026-11-26T16:20:00Z" },
+          { session_id: "ses_3", provider: null, machine: null, online: false, last_seen: null },
+        ],
+        now,
+      ),
+    ).toEqual([
+      "Claude Code on alex-mbp · online",
+      "Codex/Gemini (ACP) on flo-pc · offline for 1 h 40 min — messages wait until it is back",
+      "a session no computer reports right now",
+    ])
+    expect(sessionLines(undefined, now)).toEqual(["no live session in this room"])
   })
 })
