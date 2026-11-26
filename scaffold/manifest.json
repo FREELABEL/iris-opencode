@@ -15,6 +15,12 @@
       "purpose": "Index of all how-to recipes. The agent lists this directory and reads README.md to find the right recipe."
     },
     {
+      "src": "how-to/page-as-app.md",
+      "dest": "how-to/page-as-app.md",
+      "managed": true,
+      "purpose": "Put a Genesis page on a phone or computer home screen as an app, and serve it from your own machine."
+    },
+    {
       "src": "how-to/agentic-loops.md",
       "dest": "how-to/agentic-loops.md",
       "managed": true,
