@@ -23,6 +23,8 @@ import { harvest } from "./edge/harvest"
 import { verifyExport } from "./edge/verify"
 import { startStaticServer, HOST_CONFIG } from "./edge/serve"
 import { LivePage, liveHooks } from "./edge/live"
+import { LocalActions, parseDecl, execRunner, dialogApprover, appVersion, describe as describePowers, type LocalDecl } from "./edge/local-actions"
+import { selfCommand } from "./hive-relay-ssh"
 import {
   answering,
   keepRunning,
@@ -242,7 +244,17 @@ export const EdgeServeCmd = cmd({
         cacheDir: join(dirname(dir), "live"),
       })
       const srvPort = Number(args.port)
-      hooks = liveHooks(live, liveSlug, () => srvPort)
+      // Local actions (#194354): the page's `local` block, read fresh (30 s) so a publish that
+      // changes what it asks for takes effect — and, through the version hash, asks again.
+      let declCache: { at: number; decl: LocalDecl | null } = { at: 0, decl: null }
+      const decl = async () => {
+        if (Date.now() - declCache.at < 30000) return declCache.decl
+        const c = await pageContent(liveSlug)
+        declCache = { at: Date.now(), decl: c ? parseDecl(c.local) : declCache.decl }
+        return declCache.decl
+      }
+      const local = new LocalActions(liveSlug, servedDir(liveSlug), decl, () => live.document(), execRunner, dialogApprover, selfCommand())
+      hooks = liveHooks(live, liveSlug, () => srvPort, local)
     }
     const srv = await startStaticServer(dir, Number(args.port), hooks)
     UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)${liveSlug ? " · live data, signed in as you" : ""}`)
@@ -287,20 +299,25 @@ export const EdgeServeCmd = cmd({
   },
 })
 
-/** The binding names a page declares (json_content.bindings). [] when it has none or cannot be read. */
-async function pageBindings(slug: string): Promise<string[]> {
+/** A page's json_content, read with this CLI's sign-in. Null when it cannot be read. */
+async function pageContent(slug: string): Promise<any | null> {
   try {
     const res = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?include_json=1`)
-    if (!res.ok) return []
+    if (!res.ok) return null
     const j = (await res.json()) as any
     const page = j?.data ?? j
     let c = page?.json_content
     if (typeof c === "string") c = JSON.parse(c)
-    const b = c?.bindings
-    return b && typeof b === "object" && !Array.isArray(b) ? Object.keys(b).filter((k) => /^[A-Za-z0-9_.-]{1,64}$/.test(k)) : []
+    return c && typeof c === "object" ? c : null
   } catch {
-    return []
+    return null
   }
+}
+
+/** The binding names a page declares (json_content.bindings). [] when it has none or cannot be read. */
+async function pageBindings(slug: string): Promise<string[]> {
+  const b = (await pageContent(slug))?.bindings
+  return b && typeof b === "object" && !Array.isArray(b) ? Object.keys(b).filter((k) => /^[A-Za-z0-9_.-]{1,64}$/.test(k)) : []
 }
 
 // ── pages serve: a page running on this computer (#194212) ──────────────────────────────────────
@@ -514,6 +531,70 @@ export const PagesServeCmd = cmd({
     UI.println(dim(`  update it: iris pages serve ${slug}   stop it: iris pages serve stop ${slug}`))
     if (up && !args["no-open"]) openBrowser(url)
     if (!up) process.exitCode = 1
+  },
+})
+
+// ── pages allow: approve what an app may do on this computer (#194354) ─────────────────────────
+
+/**
+ * `iris pages allow <slug>` — the approval for local actions, from the terminal. Shows exactly what
+ * the app asks for (every file, every command, verbatim) and records the approval for THIS version;
+ * a publish that changes the app asks again. `--revoke` removes every approval for the page.
+ */
+export const PagesAllowCmd = cmd({
+  command: "allow <slug>",
+  describe: "allow an app served on this computer to do what it asks for here (notifications, your agents, listed files and commands)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("yes", { type: "boolean", default: false, describe: "allow without asking (you have read the list)" })
+      .option("revoke", { type: "boolean", default: false, describe: "remove every approval for this app" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const slug = safeSlug(String(args.slug))
+    const st = slug ? readState(slug) : null
+    if (!slug || !st) {
+      UI.error(`"${args.slug}" is not served on this computer. Serve it first: iris pages serve ${args.slug ?? "<slug>"}`)
+      process.exitCode = 1
+      return
+    }
+    const dir = servedDir(slug)
+    if (args.revoke) {
+      rmSync(join(dir, "approvals.json"), { force: true })
+      if (args.json) return writeJson({ ok: true, revoked: slug })
+      return UI.println(`Removed every approval for ${slug}. It will ask again.`)
+    }
+    const decl = parseDecl((await pageContent(slug))?.local)
+    if (!decl) {
+      if (args.json) return writeJson({ ok: true, slug, asks_for: [] })
+      return UI.println(`${slug} asks for nothing on this computer.`)
+    }
+    const live = new LivePage({ slug, origin: st.origin, bindings: [], token: () => resolveToken(), cacheDir: join(dir, "live") })
+    const doc = await live.document()
+    if (doc === null) {
+      UI.error("Could not read the app from IRIS, and there is no saved copy. Try again when online.")
+      process.exitCode = 1
+      return
+    }
+    const version = appVersion(decl, doc)
+    const powers = describePowers(decl)
+    const actions = new LocalActions(slug, dir, async () => decl, async () => doc, execRunner, async () => false)
+    if (!args.json) {
+      UI.println(`${slug} wants to:`)
+      for (const p of powers) UI.println(`  • ${p}`)
+    }
+    let ok = Boolean(args.yes)
+    if (!ok && !args.json) {
+      const answer = await prompts.confirm({ message: "Allow this version of it?", initialValue: false })
+      ok = answer === true
+    }
+    if (!ok) {
+      if (args.json) return writeJson({ ok: false, slug, version, asks_for: powers, reason: "not_confirmed" })
+      return UI.println("Not allowed.")
+    }
+    actions.grant(version, powers)
+    if (args.json) return writeJson({ ok: true, slug, version, allowed: powers })
+    UI.println(dim(`Allowed for this version. If the app changes, it will ask again. Undo: iris pages allow ${slug} --revoke`))
   },
 })
 
