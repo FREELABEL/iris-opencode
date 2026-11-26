@@ -1,0 +1,46 @@
+/*
+ * Atlas lists read like a product, not a database (#194370, #194371). Kept out of
+ * session-iris-tab.css so colour work there and this layout work merge independently.
+ */
+
+/* An internal card id is not something to read on every row: it appears on hover or focus, where
+   it still copies on click (and `c` still copies it from the keyboard). */
+.iris-atlas-row .iris-atlas-row__id {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.iris-atlas-row:hover .iris-atlas-row__id,
+.iris-atlas-row:focus-within .iris-atlas-row__id,
+.iris-atlas-row:focus .iris-atlas-row__id {
+  opacity: 1;
+}
+
+/* Rows aligned like the Leads list: the title is the thing, strong; the time is weak, tabular. */
+.iris-atlas-row .iris-atlas-row__title {
+  color: var(--text-strong);
+  font-size: var(--font-size-base);
+  line-height: var(--font-size-base--line-height);
+  font-weight: var(--font-weight-medium);
+}
+.iris-atlas-row--done .iris-atlas-row__title {
+  color: var(--text-weak);
+  font-weight: var(--font-weight-regular);
+}
+.iris-atlas-row .iris-atlas-row__meta {
+  font-family: var(--font-family-sans);
+  color: var(--text-weak);
+}
+
+/* "5 cards", in the sans face: a count is a label, not code. */
+.iris-atlas-list__count {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+  color: var(--text-weak);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The panel's own empty and loading states sit in the pane with room to breathe. */
+[data-slot="iris-pane-loading"] {
+  padding: 8px 12px;
+}

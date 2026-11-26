@@ -1,0 +1,65 @@
+/* StatusBadge (#194364): tint fill + text in the tone. No edge bars. */
+[data-component="status-badge"] {
+  --status-badge-ink: var(--text-base);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--status-badge-ink) 13%, transparent);
+  color: var(--status-badge-ink);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+
+  &[data-size="small"] {
+    height: 18px;
+    padding: 0 6px;
+    font-size: var(--font-size-x-small);
+    line-height: var(--font-size-x-small--line-height);
+  }
+
+  &[data-tone="neutral"] {
+    --status-badge-ink: var(--text-weak);
+    background: color-mix(in srgb, var(--text-base) 9%, transparent);
+  }
+  &[data-tone="info"] {
+    --status-badge-ink: var(--surface-info-strong);
+  }
+  &[data-tone="accent"] {
+    --status-badge-ink: var(--text-interactive-base);
+  }
+  &[data-tone="warning"] {
+    --status-badge-ink: var(--surface-warning-strong);
+  }
+  &[data-tone="success"] {
+    --status-badge-ink: var(--surface-success-strong);
+  }
+  &[data-tone="critical"] {
+    --status-badge-ink: var(--surface-critical-strong);
+  }
+
+  [data-slot="status-badge-dot"] {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: var(--radius-full);
+    background: currentColor;
+  }
+  [data-slot="status-badge-mark"] {
+    flex: none;
+    font-size: var(--font-size-x-small);
+  }
+  [data-slot="status-badge-label"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

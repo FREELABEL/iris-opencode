@@ -28,7 +28,7 @@
 .iris-markdown h3,
 .iris-markdown h4 {
   color: var(--text-strong);
-  font-weight: 560;
+  font-weight: var(--font-weight-semibold);
   margin: 1.2em 0 0.4em;
   line-height: 1.3;
 }
@@ -41,19 +41,19 @@
  * h2 is where the sections actually begin.
  */
 .iris-markdown h1 {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--font-size-large);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.01em;
   margin: 0 0 0.5em;
 }
 .iris-markdown h2 {
-  font-size: 14.5px;
+  font-size: var(--font-size-base);
   margin-top: 1.6em;
   padding-top: 0.7em;
   border-top: 1px solid var(--border-weaker-base);
 }
-.iris-markdown h3 { font-size: 13px; margin-top: 1.2em; }
-.iris-markdown h4 { font-size: 12px; color: var(--text-base); margin-top: 1em; }
+.iris-markdown h3 { font-size: var(--font-size-small); margin-top: 1.2em; }
+.iris-markdown h4 { font-size: var(--font-size-caption); color: var(--text-base); margin-top: 1em; }
 
 /* The first heading of a body should not push the whole document down. */
 .iris-markdown > h1:first-child,
@@ -61,7 +61,7 @@
 
 .iris-markdown p { margin: 0.55em 0; }
 
-.iris-markdown strong { color: var(--text-strong); font-weight: 560; }
+.iris-markdown strong { color: var(--text-strong); font-weight: var(--font-weight-semibold); }
 .iris-markdown em { font-style: italic; }
 
 /* The one accent. */
@@ -101,16 +101,16 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.92em;
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   padding: 0.05em 0.3em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .iris-markdown pre {
   margin: 0.6em 0;
   padding: 0.6em 0.7em;
-  border-radius: 6px;
-  background: var(--background-element);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised-base);
   overflow-x: auto;   /* code is the one thing allowed its own horizontal scroll */
 }
 .iris-markdown pre code { background: none; padding: 0; }
@@ -130,7 +130,7 @@
   text-align: start;
   font-variant-numeric: tabular-nums;
 }
-.iris-markdown th { font-weight: 560; color: var(--text-strong); }
+.iris-markdown th { font-weight: var(--font-weight-semibold); color: var(--text-strong); }
 
 /*
  * Drop the segmented control's ring, only here.
@@ -169,13 +169,13 @@
 
 /* Hover reads before you commit; pressed is the same fill, one step stronger. */
 .iris-surfaces [data-slot="segmented-control-v2-item"]:where(:hover):not([data-pressed]) {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
 }
 
 .iris-surfaces [data-slot="segmented-control-v2-item"]:where([data-pressed]) {
   box-shadow: none;
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-strong);
 }
 
@@ -304,7 +304,7 @@
   cursor: pointer;
   white-space: nowrap;
   padding: 4px 8px 6px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   /* 1.45, not 100% — at 12px a line-box the height of the em-square clips the descender of a
      'g', which is how the strip above shipped clipped twice before anyone measured it. */
   line-height: 1.45;
@@ -326,11 +326,11 @@
   margin-left: 5px;
   min-width: 14px;
   padding: 0 4px;
-  border-radius: 7px;
-  background: color-mix(in srgb, #10b981 18%, transparent);
-  color: color-mix(in srgb, #10b981 78%, var(--text-strong));
-  font-size: 10px;
-  font-weight: 600;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--v2-state-fg-success) 18%, transparent);
+  color: color-mix(in srgb, var(--v2-state-fg-success) 78%, var(--text-strong));
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   line-height: 14px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -364,8 +364,8 @@
   cursor: pointer;
   white-space: nowrap;
   padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 11px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-x-small);
   line-height: 1.45;
   color: var(--text-weak);
   background: transparent;
@@ -373,11 +373,11 @@
 }
 .iris-detailnav__item:hover {
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-detailnav__item--active {
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 
 /*
@@ -394,22 +394,22 @@
 .iris-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .iris-table {
   border-collapse: collapse;
   width: max-content;
   min-width: 100%;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
 }
 .iris-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   text-align: start;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: var(--text-weak);
-  background: var(--background-panel, var(--background-element));
+  background: var(--background-panel, var(--surface-raised-base));
   padding: 5px 8px;
   white-space: nowrap;
   border-bottom: 1px solid var(--border-weaker-base);
@@ -424,7 +424,7 @@
   border-bottom: 0;
 }
 .iris-table tbody tr:hover td {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 /*
  * Cells are CLAMPED, not wrapped. One 400-character `snippet` sets the row height for every
@@ -448,8 +448,8 @@
 .iris-table__phi {
   margin-inline-start: 5px;
   padding: 0 4px;
-  border-radius: 3px;
-  font-size: 9px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-x-small);
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--text-weaker);
@@ -466,7 +466,7 @@
  */
 .iris-table__undeclared {
   margin-inline-start: 4px;
-  font-size: 9px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   opacity: 0.6;
   cursor: help;
@@ -487,7 +487,7 @@
   height: 70vh;
   min-height: 320px;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: #fff;
 }
 
@@ -503,13 +503,13 @@
   width: 100%;
   text-align: start;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 1.5;
   padding: 7px 9px;
   margin-bottom: 12px;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
   cursor: pointer;
   word-break: break-all;
@@ -535,11 +535,11 @@
 }
 .iris-json__num {
   color: var(--text-base);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 .iris-json__bool {
   color: var(--text-base);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-json__null {
   color: var(--text-weaker);
@@ -565,30 +565,30 @@
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
   line-height: 1;
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-weaker);
 }
 
 /* Live: full contrast, and a green edge. */
 .iris-int__mark--live {
   color: var(--text-strong);
-  border-color: color-mix(in srgb, #3fb950 55%, var(--border-weaker-base));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #3fb950 22%, transparent);
+  border-color: color-mix(in srgb, var(--v2-state-fg-success) 55%, var(--border-weaker-base));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v2-state-fg-success) 22%, transparent);
 }
 
 /* Failing: red, and it sorts to the top of the list as well. Colour alone would not be enough
    if someone cannot see it — the row also carries the error text. */
 .iris-int__mark--error {
-  color: #f0836a;
-  border-color: color-mix(in srgb, #f0836a 60%, var(--border-weaker-base));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f0836a 22%, transparent);
+  color: var(--v2-state-fg-danger);
+  border-color: color-mix(in srgb, var(--v2-state-fg-danger) 60%, var(--border-weaker-base));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--v2-state-fg-danger) 22%, transparent);
 }
 
 /* Off: greyed right down, so the live ones are what your eye lands on. */
@@ -614,12 +614,12 @@
   cursor: pointer;
   white-space: nowrap;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-weak);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 1.5;
   transition: color 0.12s ease, border-color 0.12s ease;
 }
@@ -640,9 +640,9 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   object-fit: contain;
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-int__mark {
   position: relative;
@@ -675,14 +675,14 @@
   flex: 1 1 0;
   min-width: 3px;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--border-weaker-base);
 }
 .iris-bars__bar--up {
-  background: color-mix(in srgb, #3fb950 70%, var(--border-weaker-base));
+  background: color-mix(in srgb, var(--v2-state-fg-success) 70%, var(--border-weaker-base));
 }
 .iris-bars__bar--down {
-  background: color-mix(in srgb, #f0836a 75%, var(--border-weaker-base));
+  background: color-mix(in srgb, var(--v2-state-fg-danger) 75%, var(--border-weaker-base));
 }
 
 /*
@@ -699,13 +699,13 @@
   height: 60vh;
   resize: vertical;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 1.5;
   tab-size: 2;
   padding: 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
 }
 .iris-editor:focus {
@@ -724,12 +724,12 @@
   flex: 1 1 auto;
   min-width: 0;
   appearance: none;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   padding: 4px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
 }
 .iris-search__input::placeholder {
@@ -744,7 +744,7 @@
   border: 0;
   background: none;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
 }
 .iris-search__clear:hover {
@@ -758,7 +758,7 @@
   align-items: center;
   gap: 6px 12px;
   padding: 0 8px 8px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 .iris-atlas-tools__field,
@@ -772,9 +772,9 @@
   appearance: none;
   font: inherit;
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -785,7 +785,7 @@
 .iris-atlas-tools__chips {
   display: inline-flex;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 .iris-atlas-tools__chips button {
@@ -801,7 +801,7 @@
   border-left: 1px solid var(--border-weaker-base);
 }
 .iris-atlas-tools__chips button[aria-pressed="true"] {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
 }
 .iris-atlas-tools__check input {
@@ -822,13 +822,13 @@
   color: var(--text-weak);
   background: var(--background-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   padding: 0 8px 0 7px;
   cursor: pointer;
 }
 .iris-atlas-presence:hover {
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 /* Faces in the pill: solid, not translucent — overlapping translucent circles bleed into each
    other — and ringed in the pill's own colour so each one reads as separate. */
@@ -838,7 +838,7 @@
 .iris-atlas-presence .iris-avatar {
   width: 16px;
   height: 16px;
-  font-size: 7px;
+  font-size: var(--font-size-x-small);
   letter-spacing: 0;
   color: var(--text-base);
   background: color-mix(in srgb, var(--text-base) 12%, var(--background-base));
@@ -850,7 +850,7 @@
   margin-inline-start: 0;
 }
 .iris-atlas-presence:hover .iris-avatar {
-  box-shadow: 0 0 0 1.5px var(--background-element);
+  box-shadow: 0 0 0 1.5px var(--surface-raised-base);
 }
 .iris-atlas-presence__count {
   font-variant-numeric: tabular-nums;
@@ -875,7 +875,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  --tl-plan: #6366f1;
+  --tl-plan: var(--text-interactive-base);
 }
 .iris-atlas-tl__tools {
   display: flex;
@@ -883,14 +883,14 @@
   align-items: center;
   gap: 8px;
   padding: 0 8px 8px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
 }
 .iris-atlas-tl__undated {
   appearance: none;
   border: 0;
   background: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 22px;
   padding: 0 8px 0 22px;
   color: var(--text-weak);
@@ -907,7 +907,7 @@
   border: 0;
   background: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 24px;
   padding: 2px 8px;
   color: var(--text-weak);
@@ -927,16 +927,16 @@
   top: 6px;
   height: 14px;
   min-width: 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px dashed var(--tl-plan);
   pointer-events: none;
 }
 .iris-atlas-tl__date {
   position: absolute;
   top: 5px;
-  z-index: 1;
+  z-index: var(--z-raised);
   padding-inline-start: 6px;
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   white-space: nowrap;
   color: var(--text-base);
@@ -969,7 +969,7 @@
 .iris-atlas-tl__head {
   position: sticky;
   top: 0;
-  z-index: 3;
+  z-index: calc(var(--z-raised) + 2);
   display: flex;
   height: 24px;
   background: var(--background-stronger);
@@ -978,7 +978,7 @@
 .iris-atlas-tl__corner {
   position: sticky;
   left: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   flex-shrink: 0;
   background: var(--background-stronger);
 }
@@ -990,19 +990,19 @@
   position: absolute;
   top: 5px;
   padding-inline-start: 3px;
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 14px;
   white-space: nowrap;
   color: var(--text-weaker);
 }
 .iris-atlas-tl__dates .iris-atlas-tl__tick--today {
-  color: #ef4444;
-  font-weight: 600;
+  color: var(--v2-state-fg-danger);
+  font-weight: var(--font-weight-semibold);
 }
 .iris-atlas-tl__group {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: calc(var(--z-raised) + 1);
   background: var(--background-stronger);
 }
 .iris-atlas-tl__row {
@@ -1012,13 +1012,13 @@
 .iris-atlas-tl__name {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: calc(var(--z-raised) + 1);
   flex-shrink: 0;
   appearance: none;
   border: 0;
   background: var(--background-stronger);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 26px;
   padding: 0 8px 0 22px;
   text-align: start;
@@ -1033,7 +1033,7 @@
   flex-shrink: 0;
 }
 .iris-atlas-tl__row:hover .iris-atlas-tl__track {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-atlas-tl__grid {
   position: absolute;
@@ -1056,7 +1056,7 @@
   top: 0;
   bottom: 0;
   width: 1px;
-  background: #ef4444;
+  background: var(--v2-state-fg-danger);
 }
 .iris-atlas-tl__bar {
   position: absolute;
@@ -1066,7 +1066,7 @@
   padding: 0;
   appearance: none;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--tl-plan);
   cursor: grab;
   touch-action: none;
@@ -1082,10 +1082,10 @@
   outline-offset: 1px;
 }
 .iris-atlas-tl__bar[data-state="overdue"] {
-  background: #ef4444;
+  background: var(--v2-state-fg-danger);
 }
 .iris-atlas-tl__bar[data-state="soon"] {
-  background: #f59e0b;
+  background: var(--v2-state-fg-warning);
 }
 .iris-atlas-tl__bar[data-state="done"] {
   background: var(--text-weaker);
@@ -1110,10 +1110,10 @@
   padding: 6px 8px;
   text-align: start;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .iris-atlas-list__head:hover {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-atlas-list__chev {
   display: inline-block;
@@ -1130,23 +1130,23 @@
    of folded lists read as a page of grey text with no structure. */
 .iris-atlas-list__title {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--font-size-small);
   line-height: 20px;
-  font-weight: 700;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.005em;
   color: var(--text-strong);
 }
 .iris-atlas-list--folded .iris-atlas-list__title {
   color: var(--text-base);
-  font-weight: 650;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-atlas-list__count {
-  font-size: 10.5px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   color: var(--text-weak);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 /* The list's cards hang one step in from its title, on a guide line that starts under the
    chevron — so which list a card belongs to is visible without reading the headings. */
@@ -1161,13 +1161,13 @@
   align-items: baseline;
   gap: 8px;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   outline: none;
 }
 .iris-atlas-row:hover,
 .iris-atlas-row:focus-visible {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-atlas-row:focus-visible {
   box-shadow: inset 0 0 0 1px var(--border-weak-base);
@@ -1175,7 +1175,7 @@
 .iris-atlas-row__mark {
   flex-shrink: 0;
   width: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
 }
 .iris-atlas-row__text {
@@ -1186,12 +1186,12 @@
   gap: 1px;
 }
 .iris-atlas-row__title {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 18px;
   color: var(--text-base);
 }
 .iris-atlas-row__preview {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   color: var(--text-weaker);
   white-space: nowrap;
@@ -1208,12 +1208,12 @@
   border: 0;
   background: none;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--font-size-base);
   line-height: 1;
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-weaker);
   cursor: pointer;
   opacity: 0;
@@ -1224,23 +1224,23 @@
 }
 .iris-atlas-list__add:hover {
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-atlas-addcard {
   appearance: none;
   border: 0;
   background: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   padding: 3px 8px 3px 26px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: start;
 }
 .iris-atlas-addcard:hover {
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-atlas-addlist {
   padding-inline-start: 8px;
@@ -1252,11 +1252,11 @@
 .iris-atlas-composer input {
   width: 100%;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weak-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   padding: 5px 8px;
   outline: none;
 }
@@ -1265,7 +1265,7 @@
 }
 .iris-atlas-composer__error {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 .iris-atlas-row--pending {
@@ -1289,7 +1289,7 @@
   text-align: end;
   color: var(--text-weaker);
   cursor: copy;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .iris-atlas-row__id:hover {
   color: var(--text-base);
@@ -1406,11 +1406,11 @@
   align-items: center;
   gap: 5px;
   padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--background-element);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
   color: var(--text-base);
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 18px;
   cursor: pointer;
   transition: opacity 120ms ease;
@@ -1421,7 +1421,7 @@
 .iris-graph__swatch {
   width: 10px;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   flex: none;
 }
 .iris-graph__reset {
@@ -1429,14 +1429,14 @@
   top: 8px;
   right: 8px;
   padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--background-element);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
   color: var(--text-base);
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 18px;
   cursor: pointer;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 .iris-graph__reset:hover {
   border-color: var(--border-base);
@@ -1447,11 +1447,11 @@
   left: 8px;
   bottom: 8px;
   padding: 3px 7px;
-  border-radius: 4px;
-  background: var(--background-element);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
   color: var(--text-base);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   pointer-events: none;
 }
 
@@ -1473,7 +1473,7 @@
   padding-inline: 16px;
   list-style: none;
   padding: 6px 8px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   /*
    * NO GROUND HERE EITHER.
@@ -1550,8 +1550,8 @@
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 11px;
-  font-weight: 400;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-regular);
 }
 /* Full screen and the sidebar, sitting in the dialog header beside the close. */
 .iris-card__winbtns {
@@ -1566,14 +1566,14 @@
   gap: 4px;
   height: 24px;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-base);
 }
 .iris-card__rec:hover:not(:disabled) {
   background: var(--surface-raised-base-hover, var(--surface-base-hover));
 }
 .iris-card__rec[data-phase="recording"] {
-  color: var(--text-danger-base, #e07d7d);
+  color: var(--v2-state-fg-danger);
 }
 .iris-card__rec[data-phase="recording"] svg {
   animation: iris-card-rec-pulse 1.4s ease-in-out infinite;
@@ -1617,11 +1617,12 @@
   border: 0;
   border-bottom: 1px solid transparent;
   background: transparent;
-  padding: 2px 0;
-  font-size: 16px;
-  font-weight: 560;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  /* One title rule (#194375): this used to be 16/560 here and 20/700 further down. */
+  padding: 6px 0 2px;
+  font-size: var(--font-size-x-large);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-x-large--line-height);
+  letter-spacing: -0.015em;
   color: var(--text-strong);
 }
 .iris-card__title:hover { border-bottom-color: var(--border-weaker-base); }
@@ -1661,7 +1662,9 @@
   resize: none;
 }
 .iris-card__side {
-  width: 300px;
+  /* Gives way in a narrow panel instead of clipping the body (#194375). */
+  width: min(300px, 42%);
+  min-width: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1679,7 +1682,7 @@
   margin-inline-start: 5px;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-variant-numeric: tabular-nums;
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
 }
 
@@ -1691,7 +1694,7 @@
   padding-bottom: 10px;
 }
 .iris-field__label {
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-weaker);
@@ -1701,12 +1704,12 @@
   width: 100%;
   min-width: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   padding: 4px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
 }
 .iris-field__input:focus { outline: none; border-color: var(--text-interactive-base); }
@@ -1732,12 +1735,12 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   background: transparent;
   cursor: pointer;
   padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-x-small);
   line-height: 1.5;
   color: var(--text-weak);
 }
-.iris-card__linkbtn:hover:not(:disabled) { color: var(--text-strong); background: var(--background-element); }
+.iris-card__linkbtn:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base); }
 .iris-card__linkbtn:disabled { cursor: default; color: var(--text-weaker); }
 .iris-card__linkbtn--primary:not(:disabled) { color: var(--text-strong); border: 1px solid var(--border-weak-base); }
 
@@ -1747,18 +1750,18 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__save {
   appearance: none;
   cursor: pointer;
-  border: 1px solid var(--surface-success-strong);
-  background: var(--surface-success-strong);
-  color: var(--text-on-success-strong);
-  border-radius: 4px;
+  border: 1px solid var(--surface-brand-base);
+  background: var(--surface-brand-base);
+  color: var(--text-on-brand-base);
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 11px;
-  font-weight: 560;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   line-height: 1.5;
   padding: 3px 12px;
 }
-.iris-card__save:hover:not(:disabled) { filter: brightness(1.08); }
-.iris-card__save:focus-visible { outline: 2px solid var(--border-success-hover); outline-offset: 1px; }
+.iris-card__save:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
+.iris-card__save:focus-visible { outline: 2px solid var(--border-interactive-focus); outline-offset: 1px; }
 .iris-card__save:disabled {
   cursor: default;
   background: transparent;
@@ -1776,16 +1779,16 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   margin: 0;
   padding-top: 8px;
   border-top: 1px solid var(--border-weaker-base);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
 }
 .iris-card__facts dt { color: var(--text-weaker); }
 .iris-card__facts dd { margin: 0; min-width: 0; color: var(--text-base); display: flex; flex-wrap: wrap; gap: 3px; }
 .iris-card__chip {
   display: inline-block;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-weaker-base);
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 1.6;
   color: var(--text-weak);
   white-space: nowrap;
@@ -1800,7 +1803,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   border-bottom: 1px solid var(--border-weaker-base);
 }
 .iris-card__check { margin: 3px 0 0; flex-shrink: 0; accent-color: var(--text-interactive-base); }
-.iris-card__tasktext { flex: 1; min-width: 0; font-size: 12px; line-height: 1.45; color: var(--text-base); word-break: break-word; }
+.iris-card__tasktext { flex: 1; min-width: 0; font-size: var(--font-size-caption); line-height: 1.45; color: var(--text-base); word-break: break-word; }
 .iris-card__tasktext--done { color: var(--text-weaker); text-decoration: line-through; }
 .iris-card__x {
   appearance: none;
@@ -1809,13 +1812,13 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   cursor: pointer;
   flex-shrink: 0;
   padding: 0 4px;
-  border-radius: 3px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   color: var(--text-weaker);
 }
-.iris-card__x:hover { color: var(--text-strong); background: var(--background-element); }
-.iris-card__x--armed { color: #f0836a; font-size: 10px; }
+.iris-card__x:hover { color: var(--text-strong); background: var(--surface-raised-base); }
+.iris-card__x--armed { color: var(--v2-state-fg-danger); font-size: var(--font-size-x-small); }
 /* The title gets its own line; due date, agent and Add share the next (#189794). */
 .iris-card__addtask {
   display: grid;
@@ -1837,7 +1840,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   gap: 8px;
   padding: 6px 16px;
   border-top: 1px solid var(--border-weaker-base);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 
@@ -1851,8 +1854,8 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   margin: 14px 0 6px;
   padding-top: 10px;
   border-top: 1px solid var(--border-weaker-base);
-  font-size: 10px;
-  font-weight: 500;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-medium);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-weaker);
@@ -1863,30 +1866,30 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__unwired {
   margin: 0 0 6px;
   padding: 5px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px dashed var(--border-weak-base);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 1.45;
   color: var(--text-weak);
 }
 .iris-card__warn {
   margin: 0 0 6px;
   padding: 5px 8px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-x-small);
   line-height: 1.45;
-  color: #f0836a;
-  border: 1px solid color-mix(in srgb, #f0836a 45%, var(--border-weaker-base));
-  background: color-mix(in srgb, #f0836a 8%, transparent);
+  color: var(--v2-state-fg-danger);
+  border: 1px solid color-mix(in srgb, var(--v2-state-fg-danger) 45%, var(--border-weaker-base));
+  background: color-mix(in srgb, var(--v2-state-fg-danger) 8%, transparent);
 }
 .iris-card__pub {
   padding: 0 5px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, #f0836a 55%, var(--border-weaker-base));
-  font-size: 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--v2-state-fg-danger) 55%, var(--border-weaker-base));
+  font-size: var(--font-size-x-small);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #f0836a;
+  color: var(--v2-state-fg-danger);
 }
 
 .iris-card__chips { display: flex; flex-wrap: wrap; gap: 4px; padding-bottom: 6px; min-height: 18px; }
@@ -1898,7 +1901,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   margin-inline-start: 3px;
   padding: 0 2px;
   color: var(--text-weaker);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 1;
 }
 .iris-card__chipx:hover { color: var(--text-strong); }
@@ -1930,7 +1933,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   gap: 7px;
   padding: 4px 0;
   border-bottom: 1px solid var(--border-weaker-base);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   color: var(--text-base);
 }
@@ -1941,22 +1944,22 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__drop {
   min-height: 34px;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px dashed var(--border-weaker-base);
   display: flex;
   flex-direction: column;
   gap: 4px;
   justify-content: center;
 }
-.iris-card__file { display: flex; align-items: center; gap: 7px; font-size: 12px; min-width: 0; }
-.iris-card__file--missing .iris-card__filename { color: #f0836a; }
+.iris-card__file { display: flex; align-items: center; gap: 7px; font-size: var(--font-size-caption); min-width: 0; }
+.iris-card__file--missing .iris-card__filename { color: var(--v2-state-fg-danger); }
 .iris-card__filetype {
   flex-shrink: 0;
   padding: 0 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-weaker-base);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 9px;
+  font-size: var(--font-size-x-small);
   text-transform: uppercase;
   color: var(--text-weaker);
 }
@@ -1966,7 +1969,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__seg {
   display: inline-flex;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 .iris-card__segitem {
@@ -1975,11 +1978,11 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   background: transparent;
   cursor: pointer;
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
 }
 .iris-card__segitem + .iris-card__segitem { border-inline-start: 1px solid var(--border-weaker-base); }
-.iris-card__segitem--on { background: var(--background-element); color: var(--text-strong); }
+.iris-card__segitem--on { background: var(--surface-raised-base); color: var(--text-strong); }
 .iris-card__segitem:disabled { cursor: default; }
 .iris-card__url {
   display: flex;
@@ -1987,8 +1990,8 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   gap: 6px;
   margin-top: 6px;
   padding: 4px 8px;
-  border-radius: 4px;
-  background: var(--background-element);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised-base);
   color: var(--text-base);
   min-width: 0;
 }
@@ -2000,12 +2003,12 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__msgs { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 0 8px; }
 .iris-card__msg { display: flex; flex-direction: column; gap: 2px; max-width: 92%; align-self: flex-start; }
 .iris-card__msg--me { align-self: flex-end; align-items: flex-end; }
-.iris-card__msgwho { font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-weaker); }
+.iris-card__msgwho { font-size: var(--font-size-x-small); letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-weaker); }
 .iris-card__msgtext {
   padding: 6px 9px;
-  border-radius: 8px;
-  background: var(--background-element);
-  font-size: 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised-base);
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   color: var(--text-base);
   word-break: break-word;
@@ -2020,17 +2023,17 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-artifacts__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 38%; overflow-y: auto; flex-shrink: 0; }
 .iris-artifacts__row {
   display: grid; grid-template-columns: 1fr auto; grid-template-areas: "title kind" "by by";
-  width: 100%; text-align: left; padding: 5px 7px; border-radius: 5px; border: 1px solid transparent; gap: 1px 8px;
+  width: 100%; text-align: left; padding: 5px 7px; border-radius: var(--radius-md); border: 1px solid transparent; gap: 1px 8px;
 }
-.iris-artifacts__row:hover { background: var(--background-element); }
+.iris-artifacts__row:hover { background: var(--surface-raised-base); }
 .iris-artifacts__row--open { border-color: var(--border-weak-base); }
 .iris-artifacts__row--fresh .iris-artifacts__title::after { content: " •"; color: var(--text-strong); }
-.iris-artifacts__title { grid-area: title; font-size: 12px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iris-artifacts__kind { grid-area: kind; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weaker); }
-.iris-artifacts__by { grid-area: by; font-size: 11px; color: var(--text-weak); font-variant-numeric: tabular-nums; }
+.iris-artifacts__title { grid-area: title; font-size: var(--font-size-caption); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-artifacts__kind { grid-area: kind; font-size: var(--font-size-x-small); text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weaker); }
+.iris-artifacts__by { grid-area: by; font-size: var(--font-size-x-small); color: var(--text-weak); font-variant-numeric: tabular-nums; }
 .iris-artifacts__preview { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
-.iris-artifacts__note { font-size: 11px; color: var(--text-weak); }
-.iris-artifacts__head { font-size: 11px; color: var(--text-weak); flex-shrink: 0; }
+.iris-artifacts__note { font-size: var(--font-size-x-small); color: var(--text-weak); }
+.iris-artifacts__head { font-size: var(--font-size-x-small); color: var(--text-weak); flex-shrink: 0; }
 /* The page sits FLUSH in the pane: no border, no radius, and it cancels the pane's own padding on
    the sides and bottom so it meets the panel edges — a window onto the page, not a card in it. */
 .iris-artifacts__frame {
@@ -2038,7 +2041,7 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   width: calc(100% + 16px); margin: 0 -8px -6px;
   border: 0; border-radius: 0; background: #fff;
 }
-.iris-artifacts__doc { flex: 1; min-height: 0; overflow: auto; font-size: 12px; }
+.iris-artifacts__doc { flex: 1; min-height: 0; overflow: auto; font-size: var(--font-size-caption); }
 .iris-artifacts__code { font-family: var(--font-mono, ui-monospace, monospace); white-space: pre; margin: 0; }
 .iris-artifacts__table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .iris-artifacts__table th, .iris-artifacts__table td { border: 1px solid var(--border-weaker-base); padding: 2px 6px; text-align: left; }
@@ -2046,25 +2049,25 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 /* ── Agents › Rooms (#186511) — reuses the card chat's message styles ── */
 .iris-rooms { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; }
 .iris-rooms__bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; flex-shrink: 0; }
-.iris-rooms__members { font-size: 11px; color: var(--text-weak); flex-shrink: 0; }
+.iris-rooms__members { font-size: var(--font-size-x-small); color: var(--text-weak); flex-shrink: 0; }
 .iris-rooms__msgs { flex: 1; min-height: 0; }
 .iris-rooms__to { text-transform: none; letter-spacing: 0; color: var(--text-weak); }
-.iris-rooms__re { font-size: 11px; color: var(--text-weaker); }
-.iris-rooms__note { font-size: 11px; color: var(--text-weak); }
-.iris-rooms__hint { font-size: 11px; color: var(--text-weaker); }
+.iris-rooms__re { font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-rooms__note { font-size: var(--font-size-x-small); color: var(--text-weak); }
+.iris-rooms__hint { font-size: var(--font-size-x-small); color: var(--text-weaker); }
 .iris-rooms__composer { position: relative; flex-shrink: 0; }
-.iris-rooms__recipients { font-size: 11px; color: var(--text-weak); padding-top: 4px; }
-.iris-rooms__recipients--warn { color: var(--text-strong); font-weight: 600; }
+.iris-rooms__recipients { font-size: var(--font-size-x-small); color: var(--text-weak); padding-top: 4px; }
+.iris-rooms__recipients--warn { color: var(--text-strong); font-weight: var(--font-weight-semibold); }
 .iris-rooms__suggest {
   position: absolute; bottom: 100%; left: 0; right: 0; margin: 0 0 4px; padding: 4px; list-style: none;
-  background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 6px; z-index: 2;
+  background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); z-index: calc(var(--z-raised) + 1);
 }
-.iris-rooms__suggest button { display: block; width: 100%; text-align: left; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
-.iris-rooms__suggest button:hover { background: var(--background-element); }
-.iris-rooms__create { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; padding: 6px; border: 1px solid var(--border-weaker-base); border-radius: 6px; }
+.iris-rooms__suggest button { display: block; width: 100%; text-align: left; padding: 4px 6px; border-radius: var(--radius-sm); font-size: var(--font-size-caption); }
+.iris-rooms__suggest button:hover { background: var(--surface-raised-base); }
+.iris-rooms__create { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; padding: 6px; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-md); }
 .iris-rooms__picks { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; }
-.iris-rooms__pick { display: flex; gap: 6px; align-items: center; font-size: 12px; }
-.iris-rooms__tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weak); }
+.iris-rooms__pick { display: flex; gap: 6px; align-items: center; font-size: var(--font-size-caption); }
+.iris-rooms__tag { font-size: var(--font-size-x-small); text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-weak); }
 
 /* The catalogue's reachability dot (#186542).
    Three tones, and the third is the point: unmeasured is GREY, never red. Several connectors
@@ -2076,11 +2079,11 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   height: 7px;
   border-radius: 50%;
   display: block;
-  background: var(--icon-weak-base, #888);
+  background: var(--icon-weak-base);
 }
-.iris-cat__dot[data-tone="up"] { background: var(--icon-success-base, #4a9); }
-.iris-cat__dot[data-tone="down"] { background: var(--icon-critical-base, #d55); }
-.iris-cat__dot[data-tone="unknown"] { background: var(--border-weak-base, #666); }
+.iris-cat__dot[data-tone="up"] { background: var(--icon-success-base); }
+.iris-cat__dot[data-tone="down"] { background: var(--icon-critical-base); }
+.iris-cat__dot[data-tone="unknown"] { background: var(--border-weak-base); }
 
 /* The monogram is a FALLBACK, not a watermark.
    It sits behind the logo so a row that loses its image to a dropped request still says which
@@ -2099,121 +2102,121 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-det { display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; max-width: 640px; }
 .iris-det__head { display: flex; align-items: center; gap: 10px; }
 .iris-det__mark {
-  position: relative; width: 34px; height: 34px; flex: none; border-radius: 8px;
+  position: relative; width: 34px; height: 34px; flex: none; border-radius: var(--radius-lg);
   display: flex; align-items: center; justify-content: center; overflow: hidden;
-  background: var(--background-element); color: var(--text-weak);
-  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  background: var(--surface-raised-base); color: var(--text-weak);
+  font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); letter-spacing: .02em;
 }
-.iris-det__logo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; }
+.iris-det__logo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius-lg); }
 .iris-det__mark[data-logo="1"] .iris-det__fallback { visibility: hidden; }
-.iris-det__title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-base); line-height: 1.2; }
-.iris-det__slug { margin: 1px 0 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weaker); }
-.iris-det__lede { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-weak); max-width: 60ch; }
+.iris-det__title { margin: 0; font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--text-base); line-height: 1.2; }
+.iris-det__slug { margin: 1px 0 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-det__lede { margin: 0; font-size: var(--font-size-caption); line-height: 1.5; color: var(--text-weak); max-width: 60ch; }
 
 .iris-det__cta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.iris-det__by { font-size: 11px; color: var(--text-weaker); }
-.iris-det__note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-weaker); max-width: 62ch; }
-.iris-det__note[data-tone="bad"] { color: var(--text-danger-base, #e07d7d); }
+.iris-det__by { font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-det__note { margin: 0; font-size: var(--font-size-x-small); line-height: 1.5; color: var(--text-weaker); max-width: 62ch; }
+.iris-det__note[data-tone="bad"] { color: var(--v2-state-fg-danger); }
 
 .iris-det__sec { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-weaker-base); }
-.iris-det__h { margin: 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-weaker); font-weight: 500; }
+.iris-det__h { margin: 0; font-size: var(--font-size-x-small); letter-spacing: .12em; text-transform: uppercase; color: var(--text-weaker); font-weight: var(--font-weight-medium); }
 
 /* Uptime: five day-columns, capped so they read as days rather than one wide slab. */
 .iris-det__bars { display: flex; gap: 4px; align-items: flex-end; height: 26px; }
-.iris-det__bars i { flex: 1 1 0; max-width: 40px; border-radius: 2px; display: block; height: 8px; background: var(--border-weak-base); }
-.iris-det__bars i[data-state="up"] { height: 26px; background: var(--icon-success-base, #4a9); }
-.iris-det__bars i[data-state="partial"] { height: 17px; background: var(--icon-warning-base, #c8a349); }
-.iris-det__bars i[data-state="down"] { height: 11px; background: var(--icon-critical-base, #d55); }
+.iris-det__bars i { flex: 1 1 0; max-width: 40px; border-radius: var(--radius-sm); display: block; height: 8px; background: var(--border-weak-base); }
+.iris-det__bars i[data-state="up"] { height: 26px; background: var(--icon-success-base); }
+.iris-det__bars i[data-state="partial"] { height: 17px; background: var(--icon-warning-base); }
+.iris-det__bars i[data-state="down"] { height: 11px; background: var(--icon-critical-base); }
 .iris-det__days { display: flex; gap: 4px; }
-.iris-det__days span { flex: 1 1 0; max-width: 40px; text-align: center; font-size: 9.5px; color: var(--text-weaker); }
-.iris-det__verdict { margin: 2px 0 0; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-base); }
+.iris-det__days span { flex: 1 1 0; max-width: 40px; text-align: center; font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-det__verdict { margin: 2px 0 0; display: flex; align-items: center; gap: 7px; font-size: var(--font-size-caption); color: var(--text-base); }
 .iris-det__dot { width: 7px; height: 7px; border-radius: 50%; display: block; background: var(--border-weak-base); flex: none; }
-.iris-det__dot[data-tone="up"] { background: var(--icon-success-base, #4a9); }
-.iris-det__dot[data-tone="down"] { background: var(--icon-critical-base, #d55); }
-.iris-det__when { font-size: 11px; color: var(--text-weaker); }
+.iris-det__dot[data-tone="up"] { background: var(--icon-success-base); }
+.iris-det__dot[data-tone="down"] { background: var(--icon-critical-base); }
+.iris-det__when { font-size: var(--font-size-x-small); color: var(--text-weaker); }
 
 .iris-det__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-.iris-det__card { border: 1px solid var(--border-weaker-base); border-radius: 8px; padding: 9px 11px; }
-.iris-det__card h5 { margin: 0 0 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-weaker); font-weight: 500; }
-.iris-det__card p { margin: 0; font-size: 12px; color: var(--text-weak); }
-.iris-det__big { font-size: 18px !important; color: var(--text-base) !important; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.iris-det__card { border: 1px solid var(--border-weaker-base); border-radius: var(--radius-lg); padding: 9px 11px; }
+.iris-det__card h5 { margin: 0 0 4px; font-size: var(--font-size-x-small); letter-spacing: .1em; text-transform: uppercase; color: var(--text-weaker); font-weight: var(--font-weight-medium); }
+.iris-det__card p { margin: 0; font-size: var(--font-size-caption); color: var(--text-weak); }
+.iris-det__big { font-size: var(--font-size-large) !important; color: var(--text-base) !important; font-variant-numeric: tabular-nums; line-height: 1.1; }
 
 /* Usage: thirty thin bars, deliberately unlike the five chunky day-columns above — that answers
    "is it up", this answers "is anyone using it", and they must not be mistakable. */
 .iris-det__use { display: flex; gap: 2px; align-items: flex-end; height: 30px; }
-.iris-det__use i { flex: 1 1 0; border-radius: 1px; display: block; min-height: 2px; background: var(--icon-accent-base, #c284b0); opacity: .85; }
+.iris-det__use i { flex: 1 1 0; border-radius: var(--radius-sm); display: block; min-height: 2px; background: var(--text-interactive-base); opacity: .85; }
 .iris-det__use i[data-zero="1"] { background: var(--border-weak-base); opacity: .5; }
 .iris-det__useline { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
-.iris-det__band { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--icon-accent-base, #c284b0); }
+.iris-det__band { font-size: var(--font-size-x-small); letter-spacing: .06em; text-transform: uppercase; color: var(--text-interactive-base); }
 
 .iris-det__fns { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.iris-det__fns li { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-weak); min-width: 0; }
-.iris-det__fnbar { flex: 0 0 40px; height: 3px; border-radius: 2px; background: var(--border-weaker-base); overflow: hidden; }
+.iris-det__fns li { display: flex; align-items: center; gap: 8px; font-size: var(--font-size-x-small); color: var(--text-weak); min-width: 0; }
+.iris-det__fnbar { flex: 0 0 40px; height: 3px; border-radius: var(--radius-sm); background: var(--border-weaker-base); overflow: hidden; }
 .iris-det__fnbar[data-none="1"] { opacity: .35; }
-.iris-det__fnbar > span { display: block; height: 100%; background: var(--icon-accent-base, #c284b0); }
+.iris-det__fnbar > span { display: block; height: 100%; background: var(--text-interactive-base); }
 .iris-det__fnname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-det__fnname[data-top="1"] { color: var(--text-base); }
 
-.iris-det__cli { margin: 0; font-size: 10.5px; color: var(--text-weaker); }
-.iris-det__cli code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; }
+.iris-det__cli { margin: 0; font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-det__cli code { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); }
 /* ── Genesis › Artifacts: publish (artifact → page) ── */
 .iris-publish { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 .iris-publish__bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .iris-publish__spacer { flex: 1; }
-.iris-publish__link { font-size: 11px; color: var(--text-strong); text-decoration: underline; text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
-.iris-publish__behind { font-size: 11px; color: var(--text-weak); }
-.iris-publish__muted { font-size: 11px; color: var(--text-weaker); }
-.iris-publish__form { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--border-weak-base); border-radius: 8px; }
-.iris-publish__field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-weak); }
+.iris-publish__link { font-size: var(--font-size-x-small); color: var(--text-strong); text-decoration: underline; text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+.iris-publish__behind { font-size: var(--font-size-x-small); color: var(--text-weak); }
+.iris-publish__muted { font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-publish__form { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-lg); }
+.iris-publish__field { display: flex; flex-direction: column; gap: 3px; font-size: var(--font-size-x-small); color: var(--text-weak); }
 .iris-publish__scopes { display: flex; flex-direction: column; gap: 4px; border: 0; margin: 0; padding: 0; }
-.iris-publish__scopes legend { font-size: 11px; color: var(--text-weak); margin-bottom: 4px; }
-.iris-publish__scope { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; padding: 5px 7px; border: 1px solid var(--border-weaker-base); border-radius: 6px; cursor: pointer; }
+.iris-publish__scopes legend { font-size: var(--font-size-x-small); color: var(--text-weak); margin-bottom: 4px; }
+.iris-publish__scope { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; padding: 5px 7px; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-md); cursor: pointer; }
 .iris-publish__scope--on { border-color: var(--text-weak); }
-.iris-publish__scopename { font-size: 12px; font-weight: 600; color: var(--text-strong); }
-.iris-publish__check { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-base, var(--text-weak)); }
+.iris-publish__scopename { font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: var(--text-strong); }
+.iris-publish__check { display: flex; gap: 6px; align-items: center; font-size: var(--font-size-caption); color: var(--text-base, var(--text-weak)); }
 .iris-publish__actions { display: flex; justify-content: flex-end; gap: 6px; }
-.iris-publish__note { font-size: 11px; color: var(--text-weak); word-break: break-all; }
-.iris-publish__note--bad { color: var(--text-strong); font-weight: 600; }
+.iris-publish__note { font-size: var(--font-size-x-small); color: var(--text-weak); word-break: break-all; }
+.iris-publish__note--bad { color: var(--text-strong); font-weight: var(--font-weight-semibold); }
 .iris-publish__addr { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-.iris-publish__url { font-size: 11px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.iris-publish__url { font-size: var(--font-size-x-small); font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ── Two rows, not three (#187130) ── */
 /* The product's views and the focus toggle share one row; the views scroll, the toggle does not. */
 .iris-subrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .iris-subrow > .iris-subnav { flex: 1 1 0; min-width: 0; }
-.iris-focusbtn { width: 26px; height: 24px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; color: var(--text-weak); background: var(--background-element); transition: color .15s, transform .2s ease; }
+.iris-focusbtn { width: 26px; height: 24px; flex-shrink: 0; display: grid; place-items: center; border-radius: var(--radius-md); color: var(--text-weak); background: var(--surface-raised-base); transition: color .15s, transform .2s ease; }
 .iris-focusbtn:hover { color: var(--text-strong); }
 .iris-focusbtn--on { color: var(--text-strong); transform: rotate(180deg); }
 /* No views row to sit in (a product without sub-views, or focus mode): the corner, above content. */
-.iris-focusbtn--float { position: absolute; top: 0; right: 8px; z-index: 5; }
+.iris-focusbtn--float { position: absolute; top: 0; right: 8px; z-index: calc(var(--z-raised) + 4); }
 
 /* The scope chip on the side panel's product row (#187130 option C). It must not read as a tab or
    as a property of the product beside it: a hairline before it, muted type, no underline, no tab
    shape. It truncates before the tabs do — the tabs are navigation, the chip is context. */
 /* Capped (#192544): a long board name took the width the product tabs need, and "Marketing" was cut to "Mark". */
 .iris-scopechip { flex: 0 1 auto; min-width: 3.5rem; max-width: min(42%, 12rem); display: flex; align-items: center; align-self: stretch; padding-inline-start: 8px; margin-inline-start: 2px; border-inline-start: 1px solid var(--border-weaker-base); }
-.iris-scopechip__body { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 2px 6px; border-radius: 6px; font-size: 11px; line-height: 16px; color: var(--text-weak); white-space: nowrap; }
+.iris-scopechip__body { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 2px 6px; border-radius: var(--radius-md); font-size: var(--font-size-x-small); line-height: 16px; color: var(--text-weak); white-space: nowrap; }
 .iris-scopechip__name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 button.iris-scopechip__body { cursor: pointer; }
-button.iris-scopechip__body:hover { color: var(--text-strong); background: var(--background-element); }
+button.iris-scopechip__body:hover { color: var(--text-strong); background: var(--surface-raised-base); }
 .iris-scopechip__chev { flex-shrink: 0; opacity: .7; }
 .iris-scope-toggle { display: inline-flex; flex-shrink: 0; gap: 2px; margin-left: 8px; }
-.iris-scope-toggle button { font-size: 12px; padding: 3px 8px; border-radius: 6px; opacity: .7; }
+.iris-scope-toggle button { font-size: var(--font-size-caption); padding: 3px 8px; border-radius: var(--radius-md); opacity: .7; }
 .iris-scope-toggle button:hover { opacity: 1; }
-.iris-scope-toggle button[aria-selected="true"] { opacity: 1; color: var(--text-strong); background: var(--background-element); }
+.iris-scope-toggle button[aria-selected="true"] { opacity: 1; color: var(--text-strong); background: var(--surface-raised-base); }
 .iris-scopechip__id { flex-shrink: 0; font-family: var(--font-family-mono, ui-monospace, monospace); font-size: .92em; opacity: .5; }
 @keyframes iris-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
 /* One-line artifact toolbar: ‹ All ▾ │ title · author  …  Save · Publish. The publish component
    joins the row (display: contents); its form wraps onto a full-width line underneath. */
 .iris-artifacts__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; flex-shrink: 0; position: relative; min-height: 32px; }
 .iris-artifacts__all { position: relative; }
-.iris-artifacts__allbtn { padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-weak); white-space: nowrap; }
-.iris-artifacts__allbtn:hover, .iris-artifacts__allbtn--open { color: var(--text-strong); background: var(--background-element); }
-.iris-artifacts__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: min(420px, 80vw); max-height: 320px; padding: 6px;
-  background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.35); animation: iris-pop .16s ease; }
+.iris-artifacts__allbtn { padding: 4px 8px; border-radius: var(--radius-md); font-size: var(--font-size-caption); color: var(--text-weak); white-space: nowrap; }
+.iris-artifacts__allbtn:hover, .iris-artifacts__allbtn--open { color: var(--text-strong); background: var(--surface-raised-base); }
+.iris-artifacts__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: calc(var(--z-raised) + 19); width: min(420px, 80vw); max-height: 320px; padding: 6px;
+  background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-2xl); box-shadow: 0 14px 40px rgba(0,0,0,.35); animation: iris-pop .16s ease; }
 .iris-artifacts__sep { width: 1px; height: 16px; background: var(--border-weak-base); }
-.iris-artifacts__tbtitle { font-size: 13px; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-.iris-artifacts__tbmeta { font-size: 11px; color: var(--text-weaker); font-family: var(--font-mono, ui-monospace, monospace); white-space: nowrap; }
+.iris-artifacts__tbtitle { font-size: var(--font-size-small); color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.iris-artifacts__tbmeta { font-size: var(--font-size-x-small); color: var(--text-weaker); font-family: var(--font-mono, ui-monospace, monospace); white-space: nowrap; }
 .iris-artifacts__toolbar .iris-publish { display: contents; }
 .iris-artifacts__toolbar .iris-publish__bar { flex: 1; justify-content: flex-end; min-width: 0; }
 .iris-artifacts__toolbar .iris-publish__spacer { display: none; }
@@ -2235,19 +2238,19 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-artifacts__toolbar .iris-publish__note { flex-basis: 100%; }
 
 /* PROMOTE (#186584/#186585): files this session made, in the Artifacts list and viewer. */
-.iris-artifacts__group { padding: 8px 8px 2px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-weaker); list-style: none; }
+.iris-artifacts__group { padding: 8px 8px 2px; font-size: var(--font-size-x-small); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-weaker); list-style: none; }
 .iris-file__sheet { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
 .iris-file__tabs { display: flex; gap: 2px; padding: 0 8px 6px; overflow-x: auto; flex-shrink: 0; }
-.iris-file__tabs button { appearance: none; border: 1px solid var(--border-weaker-base); background: none; color: var(--text-weak); font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
-.iris-file__tabs button[aria-selected="true"] { background: var(--background-element); color: var(--text-base); }
+.iris-file__tabs button { appearance: none; border: 1px solid var(--border-weaker-base); background: none; color: var(--text-weak); font: inherit; font-size: var(--font-size-x-small); padding: 2px 8px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; }
+.iris-file__tabs button[aria-selected="true"] { background: var(--surface-raised-base); color: var(--text-base); }
 .iris-file__doc { overflow: auto; }
-.iris-file__title { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--text-strong); }
-.iris-file__pre { margin: 0 0 2px; font-size: 11px; color: var(--text-weak); max-width: 80ch; }
+.iris-file__title { margin: 0 0 2px; font-size: var(--font-size-small); font-weight: var(--font-weight-semibold); color: var(--text-strong); }
+.iris-file__pre { margin: 0 0 2px; font-size: var(--font-size-x-small); color: var(--text-weak); max-width: 80ch; }
 .iris-file__title + .iris-file__pre, .iris-file__pre:last-of-type { margin-bottom: 8px; }
 /* Wide text wraps inside a capped column; the table scrolls sideways instead of squeezing. */
 .iris-file__table th, .iris-file__table td { max-width: 32ch; min-width: 6ch; vertical-align: top; line-height: 1.4; }
-.iris-file__table th { position: sticky; top: 0; z-index: 1; background: var(--background-base); font-weight: 600; white-space: nowrap; }
-.iris-file__table td { font-size: 11px; }
+.iris-file__table th { position: sticky; top: 0; z-index: var(--z-raised); background: var(--background-base); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+.iris-file__table td { font-size: var(--font-size-x-small); }
 
 /* A machine that is UP, and a peer connection that is LIVE.
    Green because that is the thing you open this list to find, and breathing because a heartbeat
@@ -2261,23 +2264,23 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border-radius: 50%;
   display: block;
   box-sizing: border-box;
-  border: 1.5px solid var(--border-weak-base, #6b6b6b);
+  border: 1.5px solid var(--border-weak-base);
   background: transparent;
 }
 .iris-hive__dot[data-on="1"] {
   border-color: transparent;
-  background: #3fb950;
+  background: var(--v2-state-fg-success);
   animation: iris-hive-pulse 2s ease-out infinite;
 }
 @keyframes iris-hive-pulse {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, #3fb950 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 55%, transparent);
   }
   70% {
-    box-shadow: 0 0 0 5px color-mix(in srgb, #3fb950 0%, transparent);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent);
   }
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, #3fb950 0%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2288,15 +2291,15 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* ── Publish modal (#187131) ── */
 .iris-publish__form--modal { padding: 0 0 4px; gap: 12px; border: 0; }
 .iris-publish__dest { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
-.iris-publish__dest > legend { font-size: 12px; color: var(--text-weak); margin-bottom: 4px; }
-.iris-publish__destrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border-radius: 6px; background: var(--background-element); }
-.iris-publish__destname { font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.iris-publish__dest > legend { font-size: var(--font-size-caption); color: var(--text-weak); margin-bottom: 4px; }
+.iris-publish__destrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border-radius: var(--radius-md); background: var(--surface-raised-base); }
+.iris-publish__destname { font-size: var(--font-size-small); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .iris-publish__picker { display: flex; flex-direction: column; gap: 6px; }
 .iris-publish__boards { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow-y: auto; }
-.iris-publish__board { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 6px; font-size: 12px; color: var(--text-base); text-align: start; cursor: pointer; }
-.iris-publish__board:hover, .iris-publish__board--on { background: var(--background-element); color: var(--text-strong); }
-.iris-publish__boardid { margin-inline-start: auto; flex-shrink: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-weaker); }
-.iris-publish__summary { font-size: 12px; color: var(--text-strong); padding: 8px; border-radius: 6px; border: 1px solid var(--border-weak-base); overflow-wrap: anywhere; }
+.iris-publish__board { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: var(--radius-md); font-size: var(--font-size-caption); color: var(--text-base); text-align: start; cursor: pointer; }
+.iris-publish__board:hover, .iris-publish__board--on { background: var(--surface-raised-base); color: var(--text-strong); }
+.iris-publish__boardid { margin-inline-start: auto; flex-shrink: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-publish__summary { font-size: var(--font-size-caption); color: var(--text-strong); padding: 8px; border-radius: var(--radius-md); border: 1px solid var(--border-weak-base); overflow-wrap: anywhere; }
 
 /* Atlas › Artifacts (#187717): the note's URL on the toolbar gives way before the buttons do. */
 .iris-atlas-note__url { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
@@ -2304,66 +2307,52 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* Agents › Live (#187921) — is it stuck? */
 .iris-live { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; overflow-y: auto; }
 .iris-live__bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; flex-shrink: 0; }
-.iris-live__verdict { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--background-element); color: var(--text-strong); }
-.iris-live__verdict--warn { border-inline-start: 3px solid var(--border-warning-base, #d4a017); }
-.iris-live__verdict--paused { border-inline-start: 3px solid var(--border-interactive-base, #3b82f6); }
+.iris-live__verdict { font-size: var(--font-size-small); padding: 6px 8px; border-radius: var(--radius-md); background: var(--surface-raised-base); color: var(--text-strong); }
+.iris-live__verdict--warn { background: var(--v2-state-bg-warning); color: var(--v2-state-fg-warning); }
+.iris-live__verdict--paused { background: var(--surface-interactive-weak); }
 .iris-live__verdict--idle { color: var(--text-weak); }
-.iris-live__meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-weak); }
+.iris-live__meta { display: flex; gap: 12px; font-size: var(--font-size-x-small); color: var(--text-weak); }
 .iris-live__handback { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
-.iris-live__message { font-size: 12px; resize: vertical; min-height: 48px; }
-.iris-live__note, .iris-live__error, .iris-live__empty { font-size: 12px; color: var(--text-weak); }
-.iris-live__heading { font-size: 11px; color: var(--text-weak); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
+.iris-live__message { font-size: var(--font-size-caption); resize: vertical; min-height: 48px; }
+.iris-live__note, .iris-live__error, .iris-live__empty { font-size: var(--font-size-caption); color: var(--text-weak); }
+.iris-live__heading { font-size: var(--font-size-x-small); color: var(--text-weak); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
 .iris-live__calls { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.iris-live__call { font-size: 12px; font-family: var(--font-mono, monospace); padding: 2px 4px; border-radius: 4px; }
-.iris-live__call--error { color: var(--text-danger, #c0392b); }
-.iris-live__call--running { color: var(--text-strong); background: var(--background-element); }
+.iris-live__call { font-size: var(--font-size-caption); font-family: var(--font-mono, monospace); padding: 2px 4px; border-radius: var(--radius-sm); }
+.iris-live__call--error { color: var(--v2-state-fg-danger); }
+.iris-live__call--running { color: var(--text-strong); background: var(--surface-raised-base); }
 .iris-live__call--skipped, .iris-live__call--held { color: var(--text-weak); }
 .iris-live__step { color: var(--text-weaker); }
-.iris-live__callerr { font-size: 11px; white-space: normal; }
+.iris-live__callerr { font-size: var(--font-size-x-small); white-space: normal; }
 
 /*
  * PLAYBOOKS — "03 Flow" (heyiris.io/p/playbooks-panel-directions), in the "hybrid" palette Alex
  * chose 2026-10-09: the house paper neutrals, jade for "IRIS thinks", a quiet graphite for "Runs on
  * its own", IRIS amber for "Needs you".
  *
- * ALL COLOUR LIVES IN THIS ONE BLOCK. Each token is written twice: a dark value first (what an old
- * engine without light-dark() keeps) and then light-dark(light, dark). light-dark() follows the
- * root `color-scheme`, which the theme loader sets from the app's own light/dark setting — so the
- * panel follows the app, not the OS. Light values are derived from the same roles (jade #0f7a5c and
- * amber #b45309 on paper #f6f5f1, ink #1d1c19).
+ * ALL COLOUR LIVES IN THIS ONE BLOCK, and every value is a theme token (#194375): the roles stay
+ * (jade = the theme's success colour, amber = its warning colour, paper and ink = its grounds and
+ * text), so the panel follows the app's theme in light and dark with nothing written twice.
  *
  * Two rules the palette exists to keep: jade is a step type and is NEVER a button (Run it is warm
  * ink), and "Fully automatic" is neutral — only "Needs you" is allowed to shout.
  * Numbers are mono. The strip fills left-to-right once, on the panel's first render only.
  */
 .pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title, .pbf-segctl {
-  --pbf-surface: #131312;
-  --pbf-surface: light-dark(#f6f5f1, #131312);
-  --pbf-card: #1b1b19;
-  --pbf-card: light-dark(#ebeae4, #1b1b19);
-  --pbf-rule: #34342e;
-  --pbf-rule: light-dark(#d8d7cf, #34342e);
-  --pbf-ink: #e8e8e0;
-  --pbf-ink: light-dark(#1d1c19, #e8e8e0);
-  --pbf-ink2: #9c9c92;
-  --pbf-ink2: light-dark(#5c5b54, #9c9c92);
-  --pbf-faint: #6e6e66;
-  --pbf-faint: light-dark(#8a897f, #6e6e66);
+  --pbf-surface: var(--v2-background-bg-base);
+  --pbf-card: var(--v2-background-bg-layer-01);
+  --pbf-rule: var(--v2-border-border-base);
+  --pbf-ink: var(--v2-text-text-base);
+  --pbf-ink2: var(--v2-text-text-muted);
+  --pbf-faint: var(--v2-text-text-faint);
   /* who does the step */
-  --pbf-think: #4fd1a5;
-  --pbf-think: light-dark(#0f7a5c, #4fd1a5);
-  --pbf-auto: #4a4a44;
-  --pbf-auto: light-dark(#b3b2a8, #4a4a44);
-  --pbf-you: #f59e0b;
-  --pbf-you: light-dark(#b45309, #f59e0b);
+  --pbf-think: var(--v2-state-fg-success);
+  --pbf-auto: var(--v2-border-border-strong);
+  --pbf-you: var(--v2-state-fg-warning);
   --pbf-none: var(--pbf-rule);
   /* text on each numbered dot */
-  --pbf-on-think: #131312;
-  --pbf-on-think: light-dark(#f6f5f1, #131312);
-  --pbf-on-auto: #e8e8e0;
-  --pbf-on-auto: light-dark(#1d1c19, #e8e8e0);
-  --pbf-on-you: #131312;
-  --pbf-on-you: light-dark(#f6f5f1, #131312);
+  --pbf-on-think: var(--v2-text-text-inverse);
+  --pbf-on-auto: var(--v2-text-text-base);
+  --pbf-on-you: var(--v2-text-text-inverse);
   --pbf-mono: var(--font-mono, ui-monospace, monospace);
 }
 .pbf-num { font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; }
@@ -2371,18 +2360,18 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* filters + legend */
 .pbf-filters { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 6px; }
 /* one segmented control for how hands-off (#191697) */
-.pbf-segctl { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: 8px; background: var(--pbf-card); }
+.pbf-segctl { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: var(--radius-lg); background: var(--pbf-card); }
 .pbf-segctl button {
-  appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
-  padding: 6px 10px; border-radius: 6px; border: 0; background: none; color: var(--pbf-ink2);
+  appearance: none; font: inherit; font-size: var(--font-size-caption); line-height: 1; cursor: pointer;
+  padding: 6px 10px; border-radius: var(--radius-md); border: 0; background: none; color: var(--pbf-ink2);
 }
 .pbf-segctl button:hover { color: var(--pbf-ink); }
 .pbf-segctl button[aria-pressed="true"] { background: var(--pbf-surface); color: var(--pbf-ink); box-shadow: 0 0 0 1px var(--pbf-rule); }
 .pbf-segctl button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 1px; }
 .pbf-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .pbf-chip {
-  appearance: none; font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
-  padding: 6px 10px; border-radius: 999px;
+  appearance: none; font: inherit; font-size: var(--font-size-caption); line-height: 1; cursor: pointer;
+  padding: 6px 10px; border-radius: var(--radius-full);
   border: 1px solid var(--pbf-rule); background: none; color: var(--pbf-ink2);
 }
 .pbf-chip:hover { color: var(--pbf-ink); }
@@ -2390,21 +2379,21 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-chip:focus-visible, .pbf-row:focus-visible, .pbf-link:focus-visible, .pbf-dev summary:focus-visible {
   outline: 2px solid var(--border-interactive-focus, var(--text-interactive-base)); outline-offset: 2px;
 }
-.pbf-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--pbf-ink2); }
+.pbf-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--font-size-x-small); color: var(--pbf-ink2); }
 .pbf-leg { display: inline-flex; align-items: center; gap: 5px; }
 .pbf-leg .pbf-seg { width: 14px; height: 6px; flex: none; }
-.pbf-count { margin: 0; font-size: 11px; color: var(--pbf-faint); font-family: var(--pbf-mono); }
+.pbf-count { margin: 0; font-size: var(--font-size-x-small); color: var(--pbf-faint); font-family: var(--pbf-mono); }
 
 /* the strip */
-.pbf-seg { display: block; height: 6px; flex: 1 1 0; border-radius: 3px; background: var(--pbf-none); }
+.pbf-seg { display: block; height: 6px; flex: 1 1 0; border-radius: var(--radius-sm); background: var(--pbf-none); }
 .pbf-seg[data-who="think"] { background: var(--pbf-think); }
 .pbf-seg[data-who="auto"] { background: var(--pbf-auto); }
 .pbf-seg[data-who="you"] { background: var(--pbf-you); }
 .pbf-strip { display: flex; gap: 3px; min-width: 0; align-items: center; }
-.pbf-strip--big .pbf-seg { height: 7px; border-radius: 4px; }
+.pbf-strip--big .pbf-seg { height: 7px; border-radius: var(--radius-sm); }
 .pbf-strip--empty {
-  height: 14px; border: 1px dashed var(--pbf-rule); border-radius: 4px;
-  font-size: 9.5px; line-height: 10px; letter-spacing: .04em; color: var(--pbf-faint);
+  height: 14px; border: 1px dashed var(--pbf-rule); border-radius: var(--radius-sm);
+  font-size: var(--font-size-x-small); line-height: 10px; letter-spacing: .04em; color: var(--pbf-faint);
   padding: 0 6px; justify-content: center; white-space: nowrap; overflow: hidden;
 }
 .pbf-strip--enter .pbf-seg {
@@ -2421,7 +2410,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-list { container-type: inline-size; }
 .pbf-group {
   margin: 0; padding: 12px 8px 4px; border-top: 1px solid var(--pbf-rule);
-  font-size: 11px; font-weight: 500; color: var(--pbf-faint);
+  font-size: var(--font-size-x-small); font-weight: var(--font-weight-medium); color: var(--pbf-faint);
 }
 .pbf-row {
   display: flex; align-items: center; gap: 16px;
@@ -2432,30 +2421,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-row:hover { background: var(--pbf-card); }
 .pbf-row__main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pbf-row__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.pbf-row__title { font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--pbf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbf-row__title { font-size: var(--font-size-small); font-weight: var(--font-weight-medium); line-height: 1.35; color: var(--pbf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* scope and installed: an icon each, the words in the tooltip (#191697) */
 .pbf-row__icon { flex: none; display: inline-flex; align-items: center; color: var(--pbf-faint); cursor: help; }
 .pbf-row__icon:hover { color: var(--pbf-ink); }
 .pbf-row__icon[data-state="installed"] { color: var(--pbf-think); }
 .pbf-row__icon[data-state="update"] { color: var(--pbf-you); }
-.pbf-row__out { font-size: 12px; line-height: 1.4; color: var(--pbf-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbf-row__out { font-size: var(--font-size-caption); line-height: 1.4; color: var(--pbf-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pbf-row__side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 96px; }
-.pbf-row__n { flex: none; font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--pbf-faint); white-space: nowrap; }
+.pbf-row__n { flex: none; font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; font-size: var(--font-size-x-small); color: var(--pbf-faint); white-space: nowrap; }
 /* the hands-off indicator: three dots and the word, like a legend */
-.pbf-ind { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--pbf-ink2); white-space: nowrap; }
-.pbf-ind--none { color: var(--pbf-faint); font-size: 11px; }
+.pbf-ind { display: inline-flex; align-items: center; gap: 7px; font-size: var(--font-size-caption); color: var(--pbf-ink2); white-space: nowrap; }
+.pbf-ind--none { color: var(--pbf-faint); font-size: var(--font-size-x-small); }
 .pbf-dots { display: inline-flex; gap: 3px; }
 .pbf-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--pbf-rule); }
 .pbf-ind[data-tone="auto"] .pbf-dots i.on { background: var(--pbf-think); }
 .pbf-ind[data-tone="you"] .pbf-dots i.on { background: var(--pbf-you); }
-.pbf-none { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--pbf-ink2); }
+.pbf-none { margin: 0; padding: 14px 8px; font-size: var(--font-size-caption); color: var(--pbf-ink2); }
 .pbf-link { appearance: none; border: 0; background: none; padding: 0; font: inherit; color: var(--text-interactive-base); cursor: pointer; }
 .pbf-link:hover { text-decoration: underline; }
 
 /* tags — facts, never decoration */
 .pbf-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .pbf-tag {
-  font-size: 11px; line-height: 1; padding: 4px 7px; border-radius: 999px; white-space: nowrap;
+  font-size: var(--font-size-x-small); line-height: 1; padding: 4px 7px; border-radius: var(--radius-full); white-space: nowrap;
   border: 1px solid var(--pbf-rule); color: var(--pbf-ink2);
 }
 .pbf-tag--area { background: var(--pbf-card); border-color: transparent; color: var(--pbf-ink); }
@@ -2473,31 +2462,31 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border-color: color-mix(in srgb, var(--pbf-you) 45%, transparent);
   background: color-mix(in srgb, var(--pbf-you) 12%, transparent);
 }
-.pbf-tag--src { border-style: dashed; color: var(--pbf-faint); font-family: var(--pbf-mono); font-size: 10.5px; }
+.pbf-tag--src { border-style: dashed; color: var(--pbf-faint); font-family: var(--pbf-mono); font-size: var(--font-size-x-small); }
 
 /* the detail (Info tab) */
-.pbf-title { font-size: 17px !important; line-height: 1.25; font-weight: 650; padding-top: 2px; }
+.pbf-title { font-size: var(--font-size-large) !important; line-height: 1.25; font-weight: var(--font-weight-semibold); padding-top: 2px; }
 /* A slug is an identifier: drawn in mono, exactly as typed in the CLI and the URL. */
 .pbf-slug { font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace); letter-spacing: -0.01em; }
-.pbf-title.pbf-slug { font-size: 15px !important; font-weight: 600; }
-.pbf-row__slug, .pbf-detail__slug { font-size: 11.5px; color: var(--pbf-faint); margin-top: 1px; }
+.pbf-title.pbf-slug { font-size: var(--font-size-base) !important; font-weight: var(--font-weight-semibold); }
+.pbf-row__slug, .pbf-detail__slug { font-size: var(--font-size-x-small); color: var(--pbf-faint); margin-top: 1px; }
 .pbf-detail { display: flex; flex-direction: column; gap: 10px; max-width: 640px; padding-bottom: 8px; container-type: inline-size; }
-.pbf-detail__out { margin: 0; font-size: 13px; line-height: 1.5; color: var(--pbf-ink2); max-width: 62ch; }
+.pbf-detail__out { margin: 0; font-size: var(--font-size-small); line-height: 1.5; color: var(--pbf-ink2); max-width: 62ch; }
 .pbf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
-.pbf-need { font-size: 11.5px; color: var(--pbf-faint); }
-.pbf-need b { color: var(--pbf-ink); font-weight: 600; }
-.pbf-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--pbf-ink2); }
-.pbf-note[data-tone="bad"] { color: var(--text-danger-base, #e07d7d); }
+.pbf-need { font-size: var(--font-size-x-small); color: var(--pbf-faint); }
+.pbf-need b { color: var(--pbf-ink); font-weight: var(--font-weight-semibold); }
+.pbf-note { margin: 0; font-size: var(--font-size-x-small); line-height: 1.5; color: var(--pbf-ink2); }
+.pbf-note[data-tone="bad"] { color: var(--v2-state-fg-danger); }
 .pbf-note[data-tone="good"] { color: var(--pbf-think); }
 .pbf-note--result { display: flex; align-items: flex-start; gap: 6px; }
 .pbf-note--result > :first-child { flex: none; margin-top: 1px; }
-.pbf-note code { font-family: var(--pbf-mono); font-size: 11px; color: var(--pbf-ink); background: var(--pbf-card); padding: 1px 5px; border-radius: 4px; }
+.pbf-note code { font-family: var(--pbf-mono); font-size: var(--font-size-x-small); color: var(--pbf-ink); background: var(--pbf-card); padding: 1px 5px; border-radius: var(--radius-sm); }
 .pbf-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 4px 0 2px; }
-.pbf-facts > div { background: var(--pbf-card); border-radius: 8px; padding: 8px 9px; min-width: 0; }
-.pbf-facts dt { font-size: 10.5px; color: var(--pbf-faint); }
-.pbf-facts dd { margin: 2px 0 0; font-size: 14px; line-height: 1.25; color: var(--pbf-ink); }
+.pbf-facts > div { background: var(--pbf-card); border-radius: var(--radius-lg); padding: 8px 9px; min-width: 0; }
+.pbf-facts dt { font-size: var(--font-size-x-small); color: var(--pbf-faint); }
+.pbf-facts dd { margin: 2px 0 0; font-size: var(--font-size-base); line-height: 1.25; color: var(--pbf-ink); }
 @container (max-width: 360px) { .pbf-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.pbf-h { margin: 6px 0 0; font-family: var(--pbf-mono); font-size: 10.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--pbf-faint); }
+.pbf-h { margin: 6px 0 0; font-family: var(--pbf-mono); font-size: var(--font-size-x-small); font-weight: var(--font-weight-semibold); letter-spacing: .12em; text-transform: uppercase; color: var(--pbf-faint); }
 .pbf-steps { list-style: none; margin: 0; padding: 0; }
 .pbf-step {
   display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center;
@@ -2505,24 +2494,24 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .pbf-step__n {
   width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
-  font: 600 11px/1 var(--pbf-mono); color: var(--pbf-on-auto); background: var(--pbf-auto);
+  font: var(--font-weight-semibold) var(--font-size-x-small)/1 var(--pbf-mono); color: var(--pbf-on-auto); background: var(--pbf-auto);
 }
 .pbf-step[data-who="think"] .pbf-step__n { background: var(--pbf-think); }
 .pbf-step[data-who="auto"] .pbf-step__n { background: var(--pbf-auto); }
 .pbf-step[data-who="you"] .pbf-step__n { background: var(--pbf-you); }
-.pbf-step__t { font-size: 12.5px; line-height: 1.4; color: var(--pbf-ink); }
-.pbf-step__who { font-size: 11px; color: var(--pbf-faint); white-space: nowrap; }
+.pbf-step__t { font-size: var(--font-size-caption); line-height: 1.4; color: var(--pbf-ink); }
+.pbf-step__who { font-size: var(--font-size-x-small); color: var(--pbf-faint); white-space: nowrap; }
 .pbf-step[data-who="you"] .pbf-step__who { color: var(--pbf-you); }
 .pbf-step[data-who="think"] .pbf-step__n { color: var(--pbf-on-think); }
 .pbf-step[data-who="you"] .pbf-step__n { color: var(--pbf-on-you); }
 .pbf-step[data-who="think"] .pbf-step__who { color: var(--pbf-think); }
-.pbf-dev { margin-top: 6px; font-size: 11.5px; color: var(--pbf-faint); }
+.pbf-dev { margin-top: 6px; font-size: var(--font-size-x-small); color: var(--pbf-faint); }
 .pbf-dev summary { cursor: pointer; padding: 2px 0; }
 .pbf-dev[open] summary { margin-bottom: 8px; }
 .pbf-dev .iris-command { margin-bottom: 6px; }
 .pbf-devlist { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 6px 0 0; }
 .pbf-devlist dt { color: var(--pbf-faint); }
-.pbf-devlist dd { margin: 0; color: var(--pbf-ink); font-family: var(--pbf-mono); font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
+.pbf-devlist dd { margin: 0; color: var(--pbf-ink); font-family: var(--pbf-mono); font-size: var(--font-size-x-small); min-width: 0; overflow-wrap: anywhere; }
 
 /* icons — one meaning each, coloured by the words beside them */
 .pbf-ic { display: inline-flex; flex: none; color: inherit; line-height: 0; }
@@ -2537,14 +2526,14 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .pbf-leg[data-who="you"] .pbf-ic { color: var(--pbf-you); }
 .pbf-row__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 3px; }
 .pbf-row__meta .pbf-tags { margin-top: 0; }
-.pbf-views { font-size: 11px; color: var(--pbf-faint); }
+.pbf-views { font-size: var(--font-size-x-small); color: var(--pbf-faint); }
 .pbf-dev summary { list-style: none; }
 .pbf-dev summary::-webkit-details-marker { display: none; }
 .pbf-search-ic { display: inline-flex; color: var(--text-weaker); }
 /* Run it is warm ink — never jade, which is a step type. */
 .pbf-actions .pbf-run[data-variant="primary"] {
   background-color: var(--pbf-ink); border-color: var(--pbf-ink); color: var(--pbf-surface);
-  display: inline-flex; align-items: center; gap: 6px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px; font-weight: var(--font-weight-semibold);
 }
 .pbf-actions .pbf-run[data-variant="primary"]:hover:not(:disabled) { background-color: color-mix(in srgb, var(--pbf-ink) 88%, var(--pbf-surface)); }
 .pbf-actions [data-component="button"] { display: inline-flex; align-items: center; gap: 6px; }
@@ -2555,7 +2544,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   gap: 8px;
   padding-bottom: 8px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
 }
 .iris-records-tools__filter {
@@ -2563,11 +2552,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-width: 0;
   max-width: 280px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   padding: 3px 8px;
   outline: none;
 }
@@ -2581,13 +2570,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   color: var(--text-weak);
   background: none;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   padding: 2px 8px;
   cursor: pointer;
 }
 .iris-records-tools__btn:hover:not(:disabled) {
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-table__sort {
   cursor: pointer;
@@ -2611,14 +2600,15 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   scroll-snap-type: x proximity;
 }
 .iris-board__col {
-  flex: 0 0 248px;
-  max-width: 248px;
+  /* Never wider than the board itself in a narrow side panel (#194375). */
+  flex: 0 0 min(248px, 85%);
+  max-width: min(248px, 85%);
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 220px);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   scroll-snap-align: start;
 }
 .iris-board__col--over {
@@ -2646,7 +2636,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   text-align: start;
   background: var(--background-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   overflow-wrap: anywhere;
 }
@@ -2667,10 +2657,10 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: none;
 }
 .iris-board__ghost {
-  --ghost: var(--border-interactive-base, #3b82f6);
+  --ghost: var(--border-interactive-base);
   flex: none;
   border: 1.5px dashed color-mix(in srgb, var(--ghost) 70%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--ghost) 12%, transparent);
   animation: iris-ghost-pulse 1.5s ease-in-out infinite;
 }
@@ -2694,17 +2684,17 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 .iris-board__empty {
   margin: 0;
   padding: 10px 4px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   text-align: center;
   color: var(--text-weak);
   border: 1px dashed var(--border-weaker-base);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 @media (prefers-reduced-motion: no-preference) {
   .iris-board__card {
@@ -2726,12 +2716,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10.5px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-weak);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
   white-space: nowrap;
 }
@@ -2741,7 +2731,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-badge--loud {
   color: var(--text-strong);
   border-color: var(--border-weak-base);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-badge--due[data-due="overdue"] {
   color: var(--text-on-critical-weak);
@@ -2754,7 +2744,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border-color: var(--border-warning-base);
 }
 .iris-badge--complete {
-  color: var(--text-on-success-strong, #fff);
+  color: var(--text-on-success-strong);
   background: var(--surface-success-strong);
   border-color: transparent;
 }
@@ -2769,11 +2759,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 8.5px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.02em;
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1.5px solid var(--background-base);
   margin-inline-start: -4px;
 }
@@ -2781,7 +2771,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   margin-inline-start: 0;
 }
 .iris-avatar--agent {
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   color: var(--text-interactive-base);
 }
 .iris-avatar--more {
@@ -2798,8 +2788,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-card__progressbar {
   flex: 1;
   height: 6px;
-  border-radius: 3px;
-  background: var(--background-element);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised-base);
   overflow: hidden;
 }
 .iris-card__progressbar > span {
@@ -2853,13 +2843,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-members__row .iris-avatar {
   width: 24px;
   height: 24px;
-  font-size: 9.5px;
+  font-size: var(--font-size-x-small);
   margin: 0;
 }
 .iris-members__who {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-base);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2893,11 +2883,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-board__composer input {
   width: 100%;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weak-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   padding: 6px 8px;
   outline: none;
 }
@@ -2912,7 +2902,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 /* ── Change a card from its face (#189806) ─────────────────────────────── */
 .iris-quick {
   position: fixed;
-  z-index: 60;
+  z-index: calc(var(--z-raised) + 59);
   width: 280px;
   max-height: min(420px, calc(100vh - 16px));
   overflow-y: auto;
@@ -2922,12 +2912,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   padding: 10px;
   background: var(--background-base);
   border: 1px solid var(--border-weak-base, var(--border-weaker-base));
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
 }
 .iris-quick__title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--text-strong);
 }
 .iris-quick__head {
@@ -2935,18 +2925,18 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   gap: 6px;
   margin: 0 0 4px;
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-weak);
 }
 .iris-quick__head kbd {
   font-family: var(--font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   padding: 0 4px;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   text-transform: none;
   color: var(--text-weaker, var(--text-weak));
 }
@@ -2956,12 +2946,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   gap: 4px;
 }
 .iris-quick__chip {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   line-height: 20px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weaker-base);
   cursor: pointer;
 }
@@ -2973,7 +2963,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-quick__chip[aria-pressed="true"] {
   color: var(--text-strong);
   border-color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-quick__chip--quiet {
   background: transparent;
@@ -2981,13 +2971,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-quick__date {
   height: 22px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   max-width: 130px;
 }
 .iris-quick__note {
   margin: 0;
-  font-size: 11px;
-  color: var(--text-critical-base, #d33);
+  font-size: var(--font-size-x-small);
+  color: var(--v2-state-fg-danger);
 }
 
 /* ── A card's trail (#189799) ──────────────────────────────────────────── */
@@ -3003,12 +2993,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: grid;
   grid-template-columns: 18px 1fr;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-base);
 }
 .iris-trail__meta {
   display: block;
-  font-size: 10.5px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 
@@ -3019,15 +3009,15 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   margin: -7px -9px 2px;
   max-height: 120px;
   object-fit: cover;
-  border-radius: 6px 6px 0 0;
-  background: var(--background-element);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--surface-raised-base);
 }
 .iris-card--fileover {
   outline: 2px dashed var(--text-weak);
   outline-offset: -2px;
 }
 .iris-card__uploading {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 
@@ -3038,14 +3028,14 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-weak);
   cursor: pointer;
 }
 .iris-atlas-bell:hover,
 .iris-atlas-bell:focus-visible {
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   outline: none;
 }
 /* The board drew from this machine's copy (#190231 phase 1): "Updating…", or offline. */
@@ -3058,8 +3048,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
   background: transparent;
   cursor: pointer;
@@ -3092,11 +3082,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
-  border-radius: 8px;
-  background: color-mix(in srgb, #10b981 18%, transparent);
-  color: #10b981;
-  font-size: 10px;
-  font-weight: 600;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--v2-state-fg-success) 18%, transparent);
+  color: var(--v2-state-fg-success);
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -3121,12 +3111,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-notify__label {
   display: block;
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-strong);
 }
 .iris-notify__hint {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 
@@ -3140,13 +3130,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   left: 0;
   right: 0;
   top: 100%;
-  z-index: 5;
+  z-index: calc(var(--z-raised) + 4);
   margin: 2px 0 0;
   padding: 4px;
   list-style: none;
   background: var(--background-base);
   border: 1px solid var(--border-weaker-base);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 6px 18px rgb(0 0 0 / 0.18);
 }
 .iris-comment__mentions button {
@@ -3155,45 +3145,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   justify-content: space-between;
   gap: 8px;
   padding: 4px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
   text-align: start;
   color: var(--text-base);
   cursor: pointer;
 }
 .iris-comment__mentions button:hover,
 .iris-comment__mentions button:focus-visible {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   outline: none;
 }
 .iris-trail__row--comment > span:last-child {
   padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--background-element);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised-base);
   white-space: pre-wrap;
 }
 
 /* ── The card's facts, at the top (#190269) ─────────────────────────────── */
-/* The IRIS hairline: the brand's gradient, once, across the top of the card. */
+/* No coloured strip across the top (house rule: tint, text colour or icon, never an edge bar). */
 .iris-card__head {
   position: relative;
   gap: 10px;
   padding: 4px 18px 14px;
-}
-.iris-card__head::before {
-  content: "";
-  position: absolute;
-  inset: -2px 18px auto;
-  height: 2px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, #d946ef, #3b82f6, #22d3ee);
-  opacity: 0.85;
-}
-.iris-card__title {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  padding: 6px 0 2px;
 }
 
 .iris-facts {
@@ -3208,11 +3183,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   gap: 6px;
   height: 28px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-base);
-  font-size: 12.5px;
+  font-size: var(--font-size-caption);
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
@@ -3224,36 +3199,36 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-fact__label {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-weak);
 }
 .iris-fact__value {
-  font-weight: 560;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-strong);
   text-transform: capitalize;
   white-space: nowrap;
 }
 .iris-fact[data-empty] .iris-fact__value {
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
   color: var(--text-weak);
   text-transform: none;
 }
 .iris-fact__dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
 }
 .iris-fact[data-tone="danger"] {
-  border-color: color-mix(in srgb, #ef4444 55%, transparent);
-  background: color-mix(in srgb, #ef4444 12%, var(--background-element));
+  border-color: color-mix(in srgb, var(--v2-state-fg-danger) 55%, transparent);
+  background: color-mix(in srgb, var(--v2-state-fg-danger) 12%, var(--surface-raised-base));
 }
 .iris-fact[data-tone="warn"] {
-  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
-  background: color-mix(in srgb, #f59e0b 12%, var(--background-element));
+  border-color: color-mix(in srgb, var(--v2-state-fg-warning) 55%, transparent);
+  background: color-mix(in srgb, var(--v2-state-fg-warning) 12%, var(--surface-raised-base));
 }
 .iris-fact--select {
   padding-right: 4px;
@@ -3264,7 +3239,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   background: transparent;
   color: var(--text-strong);
   font: inherit;
-  font-weight: 560;
+  font-weight: var(--font-weight-semibold);
   padding: 0 14px 0 0;
   cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
@@ -3286,11 +3261,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   height: 24px;
   padding: 0 9px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(90deg, #9333ea, #2563eb);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-strong);
+  background: var(--surface-raised-strong);
 }
 .iris-label--add {
   color: var(--text-weak);
@@ -3329,8 +3304,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   right: -5px;
   width: 16px;
   height: 16px;
-  border-radius: 999px;
-  font-size: 11px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-x-small);
   line-height: 14px;
   color: var(--text-strong);
   background: var(--background-base);
@@ -3346,8 +3321,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-members2__add {
   width: 28px;
   height: 28px;
-  border-radius: 999px;
-  font-size: 16px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-large);
   line-height: 1;
   color: var(--text-weak);
   border: 1px dashed var(--border-weak-base, var(--border-weaker-base));
@@ -3359,13 +3334,13 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border-color: var(--text-weak);
 }
 .iris-members2__empty {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
   margin-left: 4px;
 }
 .iris-members2__note {
-  font-size: 11.5px;
-  color: var(--text-critical-base, #ef4444);
+  font-size: var(--font-size-x-small);
+  color: var(--v2-state-fg-danger);
 }
 .iris-members2__note[data-ok] {
   color: var(--text-weak);
@@ -3375,28 +3350,28 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: #fff;
-  font-weight: 700;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.02em;
   box-shadow: 0 0 0 2px var(--background-base);
   user-select: none;
 }
 .iris-avatar2[data-kind="agent"] {
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 /* The picker: tick as many as you like. */
 .iris-pick {
   position: fixed;
-  z-index: 70;
+  z-index: calc(var(--z-raised) + 69);
   width: 320px;
   max-height: min(420px, calc(100vh - 24px));
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-2xl);
   border: 1px solid var(--border-weaker-base);
   background: var(--background-base);
   box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
@@ -3405,15 +3380,15 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   width: 100%;
   height: 30px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   color: var(--text-strong);
-  font-size: 12.5px;
+  font-size: var(--font-size-caption);
 }
 .iris-pick__search:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--text-interactive-base);
 }
 .iris-pick__list {
   overflow-y: auto;
@@ -3424,8 +3399,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-pick__head {
   padding: 8px 6px 4px;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-weak);
@@ -3435,20 +3410,20 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-small);
   color: var(--text-base);
   cursor: pointer;
 }
 .iris-pick__row:hover {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-pick__row[data-on] .iris-pick__name {
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-pick__row input {
-  accent-color: #3b82f6;
+  accent-color: var(--text-interactive-base);
   cursor: pointer;
 }
 .iris-pick__name {
@@ -3459,7 +3434,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   white-space: nowrap;
 }
 .iris-pick__hint {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
 .iris-pick__none {
@@ -3503,33 +3478,33 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-width: 26px;
   height: 26px;
   padding: 0 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   box-shadow: 0 0 0 2px var(--background-base);
 }
 .iris-avatar2 {
   position: relative;
 }
 .iris-avatar2[data-kind="agent"] {
-  border-radius: 7px;
+  border-radius: var(--radius-lg);
 }
 .iris-avatar2__spark {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 12px;
-  height: 12px;
+  right: -4px;
+  bottom: -4px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  font-size: 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-x-small);
   line-height: 1;
-  color: #fff;
-  background: #22d3ee;
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
   box-shadow: 0 0 0 2px var(--background-base);
 }
 
@@ -3538,17 +3513,17 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   height: 26px;
   padding: 0 10px;
   margin-right: 4px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--text-strong);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   cursor: pointer;
 }
 .iris-card__share:hover,
 .iris-card__share[aria-pressed="true"] {
-  border-color: #3b82f6;
+  border-color: var(--text-interactive-base);
 }
 
 /* Left column: description, checklist, files — one scroll. */
@@ -3567,16 +3542,16 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-height: 2.5em;
 }
 .iris-card__read {
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px 6px;
   margin: 0 -6px;
   cursor: text;
 }
 .iris-card__read:hover {
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-card__read:focus-visible {
-  outline: 1px solid #3b82f6;
+  outline: 2px solid var(--border-interactive-focus);
 }
 .iris-card__editbtn {
   opacity: 0.6;
@@ -3591,9 +3566,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   margin: 10px 12px 4px;
   padding: 3px;
   gap: 2px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-weaker-base);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   align-self: flex-start;
 }
 .iris-seg__item {
@@ -3602,18 +3577,19 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   gap: 6px;
   height: 26px;
   padding: 0 12px;
-  border-radius: 999px;
-  font-size: 12.5px;
-  font-weight: 560;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--text-weak);
   cursor: pointer;
 }
 .iris-seg__item[aria-selected="true"] {
-  color: #fff;
-  background: linear-gradient(90deg, #9333ea, #2563eb);
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
 }
 .iris-seg__item[aria-selected="true"] .iris-card__count {
-  color: rgb(255 255 255 / 0.8);
+  color: var(--text-on-brand-base);
+  opacity: 0.8;
 }
 .iris-card__sidebar-head {
   display: flex;
@@ -3629,20 +3605,20 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   field-sizing: content;
   max-height: 60vh;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-small);
   line-height: 1.55;
   padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid #3b82f6;
-  background: var(--background-element);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--text-interactive-base);
+  background: var(--surface-raised-base);
 }
 
 /* ── Card editor, Elon's layout (CardEditor.vue) ─────────────────────────────────────────
    Title in the header row beside who is on the card and an icon cluster; the description fills
    the left; Details | Tasks | Chat on a ~440px right sidebar. Theme tokens throughout, so light
-   and dark both hold; the one fixed colour is Elon's red accent on the active tab. */
+   and dark both hold. The active tab uses the theme accent (#194375: one accent, not Elon's red). */
 .iris-card--elon {
-  --iris-elon-accent: #ef4444;
+  --iris-elon-accent: var(--text-interactive-base);
 }
 [data-slot="dialog-container"]:has(> .iris-card--elon) {
   height: min(85vh, 1100px);
@@ -3672,8 +3648,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 20px;
-  font-weight: 500;
+  font-size: var(--font-size-x-large);
+  font-weight: var(--font-weight-medium);
   line-height: 1.4;
   letter-spacing: -0.01em;
   color: var(--text-strong);
@@ -3685,12 +3661,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-card--elon .iris-card__title {
   flex: 1;
   min-width: 120px;
-  font-size: 20px;
-  font-weight: 500;
+  font-size: var(--font-size-x-large);
+  font-weight: var(--font-weight-medium);
   padding: 0;
   border-bottom: 1px solid var(--iris-elon-accent);
 }
-.iris-card--elon .iris-members2__add { width: 24px; height: 24px; font-size: 14px; }
+.iris-card--elon .iris-members2__add { width: 24px; height: 24px; font-size: var(--font-size-base); }
 .iris-card--elon .iris-members2[data-compact] .iris-members2__empty { display: none; }
 
 /* The icon cluster: 32px squares, muted, highlighted on hover (Elon L151-410). */
@@ -3703,7 +3679,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-width: 32px;
   height: 32px;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-weak);
   background: transparent;
   cursor: pointer;
@@ -3718,7 +3694,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   justify-content: center;
   width: 32px;
   height: 32px;
-  color: #22c55e;
+  color: var(--v2-state-fg-success);
 }
 .iris-card__saved[data-state="unsaved"] { color: var(--text-interactive-base); }
 .iris-card__saved[data-state="saving"] { color: var(--text-interactive-base); animation: iris-card-rec-pulse 1s ease-in-out infinite; }
@@ -3740,7 +3716,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-height: 0;
   overflow-y: auto;
   padding: 24px 28px;
-  font-size: 16px;
+  font-size: var(--font-size-large);
   line-height: 1.65;
   color: var(--text-base);
   outline: none;
@@ -3750,10 +3726,10 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   position: absolute;
   top: 14px;
   right: 18px;
-  z-index: 2;
+  z-index: calc(var(--z-raised) + 1);
   width: 34px;
   height: 34px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3772,7 +3748,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-card__empty {
   margin: 24px 28px;
   text-align: left;
-  font-size: 16px;
+  font-size: var(--font-size-large);
   color: var(--text-weaker);
   cursor: text;
 }
@@ -3787,7 +3763,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   background: transparent;
   padding: 24px 28px;
   font-family: var(--font-family-sans);
-  font-size: 16px;
+  font-size: var(--font-size-large);
   line-height: 1.65;
   color: var(--text-strong);
 }
@@ -3803,12 +3779,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 
 /* Sidebar: 440 / 400 / 360, like Elon's 460 / 400 / 360. */
 .iris-card--elon .iris-card__side {
-  width: 440px;
+  width: min(440px, 42%);
   padding-top: 0;
   background: var(--surface-raised-base, transparent);
 }
-@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: 400px; } }
-@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: 360px; } }
+@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: min(400px, 42%); } }
+@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: min(360px, 42%); } }
 .iris-card--elon .iris-card__sidebody { padding: 4px 16px 16px; }
 
 .iris-tabs {
@@ -3820,14 +3796,14 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   flex-shrink: 0;
 }
 .iris-tabs--back { align-items: center; gap: 10px; min-height: 48px; }
-.iris-tabs__title { font-size: 13px; font-weight: 500; color: var(--text-strong); }
+.iris-tabs__title { font-size: var(--font-size-small); font-weight: var(--font-weight-medium); color: var(--text-strong); }
 .iris-tabs__tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 14px 10px 12px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
   color: var(--text-weak);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -3837,12 +3813,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-tabs__tab:hover { color: var(--text-strong); }
 .iris-tabs__tab[aria-selected="true"] { color: var(--text-strong); border-bottom-color: var(--iris-elon-accent); }
 .iris-tabs__count {
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   font-variant-numeric: tabular-nums;
   padding: 0 6px;
-  border-radius: 999px;
-  color: #93c5fd;
-  background: color-mix(in srgb, #3b82f6 25%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--text-interactive-base);
+  background: color-mix(in srgb, var(--text-interactive-base) 25%, transparent);
 }
 
 /* Sections: icon + sentence-case grey head + tinted count + "+ Add" on the right. */
@@ -3853,36 +3829,36 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   gap: 7px;
   margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
   color: var(--text-weak);
 }
 .iris-sh > [data-component="icon"] { color: var(--text-weaker); }
 .iris-sh__count {
-  --tint: #3b82f6;
-  font-size: 11px;
-  font-weight: 500;
+  --tint: var(--text-interactive-base);
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: color-mix(in srgb, var(--tint) 75%, var(--text-strong));
   background: color-mix(in srgb, var(--tint) 22%, transparent);
 }
 .iris-sh__right { margin-inline-start: auto; display: inline-flex; }
 .iris-sh__add {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   padding: 3px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-base);
   background: var(--surface-raised-base-hover);
   cursor: pointer;
 }
 .iris-sh__add:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base-active); }
 .iris-sh__add:disabled { cursor: default; color: var(--text-weaker); }
-.iris-sec__none { font-size: 12.5px; color: var(--text-weaker); margin: 0 0 6px; }
-.iris-sec__when { font-size: 11.5px; color: var(--text-weaker); font-variant-numeric: tabular-nums; flex-shrink: 0; }
-.iris-sec__more { font-size: 12px; color: var(--text-interactive-base); padding: 4px 0; cursor: pointer; }
+.iris-sec__none { font-size: var(--font-size-caption); color: var(--text-weaker); margin: 0 0 6px; }
+.iris-sec__when { font-size: var(--font-size-x-small); color: var(--text-weaker); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.iris-sec__more { font-size: var(--font-size-caption); color: var(--text-interactive-base); padding: 4px 0; cursor: pointer; }
 
 /* Assigned list. */
 .iris-members2__list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -3891,19 +3867,19 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   align-items: center;
   gap: 9px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised-base-hover);
 }
-.iris-members2__name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iris-members2__kind { font-size: 11px; color: var(--text-weaker); }
-.iris-members2__rowx { width: 20px; height: 20px; border-radius: 6px; color: var(--text-weaker); cursor: pointer; }
-.iris-members2__rowx:hover:not(:disabled) { color: var(--iris-elon-accent, #ef4444); background: var(--surface-raised-base-active); }
+.iris-members2__name { flex: 1; min-width: 0; font-size: var(--font-size-small); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iris-members2__kind { font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-members2__rowx { width: 20px; height: 20px; border-radius: var(--radius-md); color: var(--text-weaker); cursor: pointer; }
+.iris-members2__rowx:hover:not(:disabled) { color: var(--iris-elon-accent, var(--v2-state-fg-danger)); background: var(--surface-raised-base-active); }
 .iris-members2__faces[data-list] .iris-members2__add {
   width: auto;
   height: 30px;
   padding: 0 12px;
-  border-radius: 8px;
-  font-size: 12.5px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-caption);
   border-style: dashed;
 }
 .iris-card--elon .iris-sec .iris-members2 { display: block; }
@@ -3918,29 +3894,29 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   min-width: 0;
   height: 36px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-weaker-base);
   background: var(--surface-raised-base-hover);
   color: var(--text-weak);
-  font-size: 13px;
+  font-size: var(--font-size-small);
   text-align: left;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
 .iris-dd:hover, .iris-dd:focus-within { border-color: var(--border-weak-base); background: var(--surface-raised-base-active); }
 .iris-dd--wide { grid-column: 1 / -1; }
-.iris-dd__label { font-size: 12px; color: var(--text-weaker); flex-shrink: 0; }
+.iris-dd__label { font-size: var(--font-size-caption); color: var(--text-weaker); flex-shrink: 0; }
 .iris-dd__value {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: var(--text-strong);
   text-transform: capitalize;
 }
-.iris-dd[data-empty] .iris-dd__value { font-weight: 400; color: var(--text-weaker); text-transform: none; }
+.iris-dd[data-empty] .iris-dd__value { font-weight: var(--font-weight-regular); color: var(--text-weaker); text-transform: none; }
 .iris-dd__select {
   flex: 1;
   min-width: 0;
@@ -3948,26 +3924,26 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   border: 0;
   background: transparent;
   font: inherit;
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: var(--text-strong);
   cursor: pointer;
   outline: none;
 }
-.iris-dd[data-empty] .iris-dd__select { color: var(--text-weaker); font-weight: 400; }
+.iris-dd[data-empty] .iris-dd__select { color: var(--text-weaker); font-weight: var(--font-weight-regular); }
 .iris-dd__select option { color: var(--text-strong); background: var(--background-base); }
 .iris-dd > [data-component="icon"]:last-child { color: var(--text-weaker); flex-shrink: 0; }
 
 /* Labels and attachments: tinted pills (Elon: color+20 background, matching border and text). */
 .iris-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .iris-pill {
-  --tint: #94a3b8;
+  --tint: var(--text-interactive-base);
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 3px 4px 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   color: color-mix(in srgb, var(--tint) 80%, var(--text-strong));
   background: color-mix(in srgb, var(--tint) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
@@ -3975,8 +3951,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-pill__x {
   width: 18px;
   height: 18px;
-  border-radius: 999px;
-  font-size: 13px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-small);
   line-height: 1;
   color: inherit;
   opacity: 0.7;
@@ -3989,30 +3965,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   gap: 6px;
   max-width: 100%;
   padding: 3px 4px 3px 4px;
-  border-radius: 999px;
-  font-size: 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-caption);
   color: var(--text-base);
   background: var(--surface-raised-base-hover);
   border: 1px solid var(--border-weaker-base);
 }
 .iris-file__type {
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   padding: 2px 6px;
-  border-radius: 999px;
-  color: #86efac;
-  background: color-mix(in srgb, #22c55e 22%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--v2-state-fg-success);
+  background: color-mix(in srgb, var(--v2-state-fg-success) 22%, transparent);
 }
 .iris-file__name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
 a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: underline; }
-.iris-file--missing { border-color: color-mix(in srgb, #ef4444 50%, transparent); color: #f0836a; }
+.iris-file--missing { border-color: color-mix(in srgb, var(--v2-state-fg-danger) 50%, transparent); color: var(--v2-state-fg-danger); }
 .iris-drop {
   margin: 8px 0 4px;
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px dashed var(--border-weak-base);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   text-align: center;
   color: var(--text-weaker);
 }
@@ -4024,50 +4000,50 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   align-items: center;
   gap: 8px;
   padding: 7px 9px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised-base-hover);
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-base);
 }
 .iris-minitask .iris-card__check { margin: 0; }
 .iris-minitask__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-minitask--done { opacity: 0.55; }
 .iris-minitask--done .iris-minitask__text { text-decoration: line-through; }
-.iris-card--elon .iris-card__row { padding: 6px 0; font-size: 13px; }
+.iris-card--elon .iris-card__row { padding: 6px 0; font-size: var(--font-size-small); }
 
 /* "More": sharing, list and id, updated — Elon's collapsible at the foot of Details. */
-.iris-more { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-weak); cursor: pointer; }
+.iris-more { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-small); font-weight: var(--font-weight-medium); color: var(--text-weak); cursor: pointer; }
 .iris-more:hover { color: var(--text-strong); }
 .iris-more__facts {
   display: grid;
   grid-template-columns: 96px 1fr;
   gap: 8px 10px;
   margin: 12px 0 4px;
-  font-size: 12.5px;
+  font-size: var(--font-size-caption);
 }
 .iris-more__facts dt { color: var(--text-weaker); }
 .iris-more__facts dd { margin: 0; min-width: 0; color: var(--text-base); }
 
 /* Tasks tab. */
 .iris-card--elon .iris-card__progress { margin: 6px 0 10px; }
-.iris-card--elon .iris-card__task { padding-top: 6px; padding-bottom: 6px; border-radius: 6px; }
+.iris-card--elon .iris-card__task { padding-top: 6px; padding-bottom: 6px; border-radius: var(--radius-md); }
 .iris-card--elon .iris-card__task:hover { background: var(--surface-raised-base-hover); }
-.iris-card--elon .iris-card__tasktext { font-size: 13px; }
+.iris-card--elon .iris-card__tasktext { font-size: var(--font-size-small); }
 
 /* ── One field shell for the whole card: the Details dropdowns' faint fill (#191793) ────────────
    Alex, 2026-10-29: "I like the faint background on these inputs — that's what I want on the share
    tab and on the others." Two reasons the Sharing fields read as loose text: .iris-field__input
-   paints var(--background-element), which no theme defines (so: transparent), and its hairline
+   paints var(--surface-raised-base), which no theme defines (so: transparent), and its hairline
    (--border-weaker-base, #202020 in dark) all but vanishes on the card. Inside the card both now
    come from the same tokens as .iris-dd. */
 .iris-card--elon { --background-element: var(--surface-raised-base-hover); }
 .iris-card--elon .iris-field__input {
   height: 36px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-weaker-base);
   background-color: var(--surface-raised-base-hover);
-  font-size: 13px;
+  font-size: var(--font-size-small);
   color: var(--text-strong);
 }
 .iris-card--elon .iris-field__input::placeholder { color: var(--text-weaker); }
@@ -4087,7 +4063,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   min-width: 0;
   height: 36px;
   padding-inline-end: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-weaker-base);
   background: var(--surface-raised-base-hover);
   transition: border-color 0.12s, background 0.12s;
@@ -4098,7 +4074,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   flex: 1;
   height: 34px;
   border: 0;
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
   background-color: transparent;
 }
 .iris-card--elon .iris-card__shell > select.iris-field__input {
@@ -4114,9 +4090,9 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   flex-shrink: 0;
   height: 28px;
   padding: 0 10px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  font-weight: 500;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   color: var(--text-strong);
   background: var(--surface-raised-base-active);
   cursor: pointer;
@@ -4133,10 +4109,10 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   padding: 2px;
   gap: 2px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised-base-hover);
 }
-.iris-card--elon .iris-card__segitem { padding: 6px 12px; border-radius: 6px; font-size: 12.5px; }
+.iris-card--elon .iris-card__segitem { padding: 6px 12px; border-radius: var(--radius-md); font-size: var(--font-size-caption); }
 .iris-card--elon .iris-card__segitem + .iris-card__segitem { border-inline-start: 0; }
 .iris-card--elon .iris-card__segitem:hover:not(:disabled) { color: var(--text-strong); }
 .iris-card--elon .iris-card__segitem--on { color: var(--text-strong); background: var(--surface-raised-stronger); box-shadow: 0 0 0 1px var(--border-weak-base); }
@@ -4144,23 +4120,23 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   height: 36px;
   margin-top: 10px;
   padding: 0 4px 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-weaker-base);
   background: var(--surface-raised-base-hover);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .iris-card--elon .iris-card__url > :first-child { flex: 1; min-width: 0; color: var(--text-base); }
 .iris-card--elon .iris-card__cmd { margin-top: 0; }
 .iris-card--elon .iris-card__cmd > code { color: var(--text-strong); }
-.iris-card__help { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-weak); }
-.iris-card--elon .iris-card__warn { padding: 6px 10px; border-radius: 8px; }
+.iris-card__help { margin: 8px 0 0; font-size: var(--font-size-caption); line-height: 1.5; color: var(--text-weak); }
+.iris-card--elon .iris-card__warn { padding: 6px 10px; border-radius: var(--radius-lg); }
 .iris-card--elon .iris-card__chips { padding-bottom: 8px; }
 .iris-card--elon .iris-card__rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .iris-card--elon .iris-card__row {
   gap: 9px;
   padding: 6px 6px 6px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-raised-base-hover);
 }
 .iris-card--elon .iris-card__row > select.iris-field__input { height: 28px; width: auto; max-width: 96px; }
@@ -4176,9 +4152,9 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   width: 100%;
   height: 36px;
   margin-top: 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
   color: var(--text-strong);
   background: var(--surface-raised-stronger);
   box-shadow: 0 0 0 1px var(--border-weak-base);
@@ -4190,16 +4166,16 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-share__get:focus-visible { outline: 2px solid var(--text-interactive-base); outline-offset: 1px; }
 .iris-share__chips { margin-top: 10px; }
 .iris-share__allow { margin-top: 10px; }
-.iris-share__confirm { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; font-size: 12px; }
+.iris-share__confirm { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; font-size: var(--font-size-caption); }
 .iris-share__confirmacts { display: flex; justify-content: flex-end; gap: 6px; }
-.iris-card__act--danger:not(:disabled) { color: #fff; background: #dc2626; }
-.iris-card__act--danger:hover:not(:disabled) { background: #b91c1c; }
+.iris-card__act--danger:not(:disabled) { color: var(--v2-text-text-inverse); background: var(--v2-state-fg-danger); }
+.iris-card__act--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--v2-state-fg-danger) 88%, var(--text-strong)); }
 
 /* ── Task rows (#191794) ─────────────────────────────────────────────────────────────────────────
    A row card per task: a 3px bar for state, always with its word on the second line, so colour is
    never the only signal (kit 03, rule 01); a Done button where the checkbox was. */
 .iris-tasks__bar { display: block; width: 100%; height: 4px; margin: 0 0 12px; background: var(--surface-raised-base-hover); }
-.iris-card--elon .iris-card__progressbar > span { background: #22c55e; }
+.iris-card--elon .iris-card__progressbar > span { background: var(--v2-state-fg-success); }
 .iris-card--elon .iris-card__addtask {
   grid-template-columns: 1fr 1fr;
   gap: 6px;
@@ -4217,34 +4193,27 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   gap: 8px;
   min-width: 0;
   padding: 9px 8px 9px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-2xl);
   border: 1px solid var(--border-weaker-base);
   background: var(--surface-raised-base-hover);
   overflow: hidden;
 }
-.iris-task::before {
-  content: "";
-  position: absolute;
-  inset: 8px auto 8px 0;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--bar);
-}
+/* A task's state is its coloured word (.iris-task__word), not a bar on its edge. */
 .iris-task[data-sub] { padding-block: 7px; }
 .iris-task[data-state="agent"] { --bar: var(--text-interactive-base); }
-.iris-task[data-state="soon"] { --bar: #f59e0b; }
-.iris-task[data-state="overdue"] { --bar: #ef4444; }
-.iris-task[data-state="done"] { --bar: #22c55e; }
+.iris-task[data-state="soon"] { --bar: var(--v2-state-fg-warning); }
+.iris-task[data-state="overdue"] { --bar: var(--v2-state-fg-danger); }
+.iris-task[data-state="done"] { --bar: var(--v2-state-fg-success); }
 .iris-task__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.iris-task__title { font-size: 13px; line-height: 1.4; color: var(--text-strong); word-break: break-word; }
+.iris-task__title { font-size: var(--font-size-small); line-height: 1.4; color: var(--text-strong); word-break: break-word; }
 .iris-task[data-state="done"] .iris-task__title { color: var(--text-weak); text-decoration: line-through; }
 .iris-task__sub { display: flex; align-items: center; gap: 8px; min-height: 22px; }
-.iris-task__meta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--text-weak); }
-.iris-task__word { font-weight: 500; }
+.iris-task__meta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: var(--font-size-x-small); color: var(--text-weak); }
+.iris-task__word { font-weight: var(--font-weight-medium); }
 .iris-task[data-state="agent"] .iris-task__word { color: var(--text-interactive-base); }
-.iris-task[data-state="soon"] .iris-task__word { color: #f59e0b; }
-.iris-task[data-state="overdue"] .iris-task__word { color: #ef4444; }
-.iris-task[data-state="done"] .iris-task__word { color: #22c55e; }
+.iris-task[data-state="soon"] .iris-task__word { color: var(--v2-state-fg-warning); }
+.iris-task[data-state="overdue"] .iris-task__word { color: var(--v2-state-fg-danger); }
+.iris-task[data-state="done"] .iris-task__word { color: var(--v2-state-fg-success); }
 .iris-task__due { font-family: var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
 .iris-task__who { display: inline-flex; align-items: center; gap: 5px; }
 .iris-task__acts { display: flex; flex-shrink: 0; gap: 2px; opacity: 0; transition: opacity 0.12s; }
@@ -4259,13 +4228,13 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   min-width: 22px;
   height: 22px;
   padding: 0 3px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-weak);
   cursor: pointer;
 }
 .iris-task__icon:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-raised-base-active); }
 .iris-task__icon--armed,
-.iris-task__icon--armed:hover:not(:disabled) { padding: 0 8px; font-size: 11.5px; font-weight: 500; color: #ef4444; background: color-mix(in srgb, #ef4444 14%, transparent); }
+.iris-task__icon--armed:hover:not(:disabled) { padding: 0 8px; font-size: var(--font-size-x-small); font-weight: var(--font-weight-medium); color: var(--v2-state-fg-danger); background: color-mix(in srgb, var(--v2-state-fg-danger) 14%, transparent); }
 .iris-task__state {
   flex-shrink: 0;
   display: inline-flex;
@@ -4273,15 +4242,15 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   gap: 3px;
   height: 28px;
   padding: 0 10px 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-base);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   color: var(--text-base);
   cursor: pointer;
 }
 .iris-task__state:hover:not(:disabled) { color: var(--text-strong); border-color: var(--text-weak); }
-.iris-task__state[aria-pressed="true"] { border-color: transparent; color: #22c55e; background: color-mix(in srgb, #22c55e 14%, transparent); }
+.iris-task__state[aria-pressed="true"] { border-color: transparent; color: var(--v2-state-fg-success); background: color-mix(in srgb, var(--v2-state-fg-success) 14%, transparent); }
 .iris-task__state:disabled { cursor: default; opacity: 0.6; }
 
 /* Chat: Team | AI, with Elon's colours (green team, blue AI). */
@@ -4290,15 +4259,15 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-subtabs__tab {
   padding: 6px 2px 8px;
   margin-bottom: -1px;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   color: var(--text-weak);
   border-bottom: 2px solid transparent;
   cursor: pointer;
 }
 .iris-subtabs__tab:hover { color: var(--text-strong); }
-.iris-subtabs__tab[aria-selected="true"][data-tone="team"] { color: #4ade80; border-bottom-color: #4ade80; }
-.iris-subtabs__tab[aria-selected="true"][data-tone="ai"] { color: #60a5fa; border-bottom-color: #60a5fa; }
+.iris-subtabs__tab[aria-selected="true"][data-tone="team"] { color: var(--v2-state-fg-success); border-bottom-color: var(--v2-state-fg-success); }
+.iris-subtabs__tab[aria-selected="true"][data-tone="ai"] { color: var(--text-interactive-base); border-bottom-color: var(--text-interactive-base); }
 .iris-thread,
 .iris-card--elon .iris-card__msgs {
   flex: 1;
@@ -4313,12 +4282,12 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-bubble--me { align-self: flex-end; flex-direction: row-reverse; }
 .iris-bubble__col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .iris-bubble--me .iris-bubble__col { align-items: flex-end; }
-.iris-bubble__meta { display: flex; gap: 6px; font-size: 11px; color: var(--text-weaker); }
-.iris-bubble__who { font-weight: 500; color: var(--text-weak); }
+.iris-bubble__meta { display: flex; gap: 6px; font-size: var(--font-size-x-small); color: var(--text-weaker); }
+.iris-bubble__who { font-weight: var(--font-weight-medium); color: var(--text-weak); }
 .iris-bubble__text {
   padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 13px;
+  border-radius: var(--radius-2xl);
+  font-size: var(--font-size-small);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -4326,13 +4295,13 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   background: var(--surface-raised-strong, var(--background-strong));
 }
 .iris-bubble__text.iris-markdown { white-space: normal; }
-.iris-bubble--me .iris-bubble__text { color: #fff; background: #2563eb; }
+.iris-bubble--me .iris-bubble__text { color: var(--text-on-brand-base); background: var(--surface-brand-base); }
 .iris-event {
   display: flex;
   align-items: baseline;
   gap: 7px;
   align-self: stretch;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weaker);
   padding: 0 4px;
 }
@@ -4347,25 +4316,25 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-event--group > summary::-webkit-details-marker { display: none; }
 .iris-event--group > summary:hover .iris-event__text { color: var(--text-weak); }
 .iris-event__text { flex: 1; min-width: 0; }
-.iris-event__text b { font-weight: 500; color: var(--text-weak); }
-.iris-event__at { flex-shrink: 0; font-size: 11px; color: var(--text-weaker); font-variant-numeric: tabular-nums; }
+.iris-event__text b { font-weight: var(--font-weight-medium); color: var(--text-weak); }
+.iris-event__at { flex-shrink: 0; font-size: var(--font-size-x-small); color: var(--text-weaker); font-variant-numeric: tabular-nums; }
 .iris-event--group ul { list-style: none; margin: 6px 0 2px 18px; padding: 0 0 0 10px; border-left: 1px solid var(--border-weaker-base); }
 .iris-event--group li { display: flex; gap: 8px; justify-content: space-between; padding: 2px 0; }
 .iris-card--elon .iris-card__compose { border-top: 1px solid var(--border-weaker-base); padding-top: 8px; align-items: end; }
-.iris-card--elon .iris-card__composetext { min-height: 40px; font-size: 13px; }
+.iris-card--elon .iris-card__composetext { min-height: 40px; font-size: var(--font-size-small); }
 .iris-send {
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: #2563eb;
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
   cursor: pointer;
 }
 .iris-send:disabled { cursor: default; opacity: 0.4; }
-.iris-send:hover:not(:disabled) { background: #1d4ed8; }
+.iris-send:hover:not(:disabled) { background: var(--surface-brand-hover); }
 .iris-quick[data-only] section[data-quick]:not([data-active]) { display: none; }
 .iris-quick[data-only] { min-width: 240px; }
 
@@ -4381,7 +4350,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   padding: 24px 28px;
 }
 .iris-card--elon .iris-card__body .iris-card__read:hover { background: transparent; }
-.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: none; }
+.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: 2px solid var(--border-interactive-focus); outline-offset: -2px; }
 .iris-card--elon .iris-card__body .iris-card__textarea {
   flex: 1 1 auto;
   min-height: 0;
@@ -4391,7 +4360,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   border: 0;
   border-radius: 0;
   padding: 24px 28px;
-  font-size: 16px;
+  font-size: var(--font-size-large);
   line-height: 1.65;
   background: transparent;
 }
@@ -4404,7 +4373,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   color: var(--text-on-warning-weak);
   background: var(--surface-warning-weak);
   border-color: var(--border-warning-base);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 .iris-held {
   display: flex;
@@ -4414,31 +4383,31 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 }
 .iris-held__item {
   border: 1px solid var(--border-warning-base, var(--border-base));
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
   background: var(--background-weak);
 }
-.iris-held__card { font-size: 12px; font-weight: 600; color: var(--text-strong); margin: 0 0 2px; }
-.iris-held__msg { font-size: 12px; color: var(--text-base); margin: 0 0 8px; }
-.iris-held__table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.iris-held__card { font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: var(--text-strong); margin: 0 0 2px; }
+.iris-held__msg { font-size: var(--font-size-caption); color: var(--text-base); margin: 0 0 8px; }
+.iris-held__table { width: 100%; border-collapse: collapse; font-size: var(--font-size-caption); table-layout: fixed; }
 .iris-held__table th,
 .iris-held__table td { text-align: left; padding: 4px 6px; border-top: 1px solid var(--border-weaker-base); vertical-align: top; overflow-wrap: anywhere; }
-.iris-held__table thead th { border-top: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-weak); }
-.iris-held__table tbody th { width: 22%; color: var(--text-weak); font-weight: 500; }
+.iris-held__table thead th { border-top: 0; font-size: var(--font-size-x-small); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: .04em; color: var(--text-weak); }
+.iris-held__table tbody th { width: 22%; color: var(--text-weak); font-weight: var(--font-weight-medium); }
 .iris-held__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .iris-held__btn {
   height: 24px;
   padding: 0 10px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-weak-base);
   cursor: pointer;
 }
-.iris-held__btn--primary { background: var(--surface-strong, var(--background-element)); font-weight: 600; }
+.iris-held__btn--primary { background: var(--surface-strong, var(--surface-raised-base)); font-weight: var(--font-weight-semibold); }
 .iris-held__btn:disabled { opacity: .5; cursor: default; }
-.iris-held__error { font-size: 12px; color: var(--text-on-critical-weak); margin: 0; }
+.iris-held__error { font-size: var(--font-size-caption); color: var(--text-on-critical-weak); margin: 0; }
 
 /* ── A card in the side panel (#193330) ─────────────────────────────────────────────────
    The editor's own frame, as a box filling the panel instead of a pop-up. It covers the board,
@@ -4447,7 +4416,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-card-panel-host {
   position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: calc(var(--z-raised) + 19);
   display: flex;
   flex-direction: column;
   background: var(--background-base);
@@ -4474,7 +4443,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   min-width: 0;
 }
 .iris-card--panel .iris-card__hdr { gap: 6px; }
-.iris-card--panel .iris-card__htitle { font-size: 15px; }
+.iris-card--panel .iris-card__htitle { font-size: var(--font-size-base); }
 .iris-card--panel .iris-card__step { display: inline-flex; gap: 0; margin-inline-end: 2px; }
 .iris-card--panel .iris-card__step .iris-ib:disabled { opacity: 0.35; cursor: default; }
 .iris-card--panel [data-slot="dialog-body"] {
@@ -4505,8 +4474,8 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-terminal__tab { display: inline-flex; align-items: stretch; }
 .iris-terminal__close {
   appearance: none; background: none; border: 0; cursor: pointer;
-  padding: 0 4px 2px; margin-left: -6px; font-size: 13px; line-height: 1;
-  color: var(--text-weaker); border-radius: 4px;
+  padding: 0 4px 2px; margin-left: -6px; font-size: var(--font-size-small); line-height: 1;
+  color: var(--text-weaker); border-radius: var(--radius-sm);
 }
 .iris-terminal__close:hover { color: var(--text-strong); }
 .iris-terminal__body { position: relative; flex: 1 1 auto; min-height: 120px; margin-top: 6px; }
@@ -4520,7 +4489,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 /* Full screen (#193785): the same tab over the window, below the title bar. */
 .iris-terminal--full {
   /* height: auto, not the base 100%: top + bottom decide it, or it runs past the window by the title bar. */
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; height: auto;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: calc(var(--z-raised) + 59); height: auto;
   padding: 6px 12px 10px; background: var(--background-base, var(--v2-background-bg-base));
 }
 /* Split (#193785): terminals side by side, as iTerm panes. Each pane has a full hairline frame;
@@ -4528,21 +4497,21 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-terminal__cells { position: absolute; inset: 0; display: flex; gap: 6px; }
 .iris-terminal__cell {
   position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
-  border: 1px solid transparent; border-radius: 6px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
 }
 .iris-terminal__cells > .iris-terminal__cell + .iris-terminal__cell,
 .iris-terminal__cells > .iris-terminal__cell:first-child:not(:only-child) { border-color: var(--border-weaker-base); }
 .iris-terminal__cell--active { border-color: color-mix(in srgb, var(--text-interactive-base) 55%, transparent) !important; }
 .iris-terminal__cellbar {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 2px 4px 2px 8px; font-size: 11px; color: var(--text-weak); flex-shrink: 0;
+  padding: 2px 4px 2px 8px; font-size: var(--font-size-x-small); color: var(--text-weak); flex-shrink: 0;
 }
 .iris-terminal__celltitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-terminal__xterm { position: relative; flex: 1 1 auto; min-height: 0; }
 .iris-terminal__xterm > * { position: absolute; inset: 0; }
 .iris-terminal__btn {
   appearance: none; background: none; border: 0; cursor: pointer; white-space: nowrap;
-  padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--text-weak);
+  padding: 2px 6px; border-radius: var(--radius-sm); font-size: var(--font-size-caption); color: var(--text-weak);
 }
 .iris-terminal__btn:hover:not(:disabled) { color: var(--text-strong); background: var(--surface-base-hover, rgba(127, 127, 127, 0.12)); }
 .iris-terminal__btn:disabled { opacity: 0.45; cursor: default; }
@@ -4556,11 +4525,11 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   width: 100%;
   height: 28px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--v2-border-border-base, var(--border-weak-base));
   background: var(--v2-background-bg-layer-01, transparent);
   color: var(--v2-text-text-base, inherit);
-  font-size: 12.5px;
+  font-size: var(--font-size-caption);
   outline: none;
 }
 .iris-pinsearch__input:focus {
@@ -4568,7 +4537,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 }
 .iris-pinsearch__none {
   padding: 6px 10px 8px;
-  font-size: 12.5px;
+  font-size: var(--font-size-caption);
   color: var(--v2-text-text-muted, var(--text-weak));
 }
 

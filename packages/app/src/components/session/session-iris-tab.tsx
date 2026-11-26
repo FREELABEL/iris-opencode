@@ -153,6 +153,17 @@ import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
 import { IrisDelegateRail } from "./iris-delegate-rail"
 import { slideCards } from "./iris-board-motion"
 import { useLanguage } from "@/context/language"
+import { usePrompt } from "@/context/prompt"
+import { DetailView } from "@opencode-ai/ui/detail-view"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { emptyCopy, type EmptyAction } from "./iris-empty-states"
+import { LeadsListRow } from "./iris-leads-list"
+import { stageTone } from "./iris-leads-list-model"
+import { rememberIrisNames } from "./iris-names"
+import { recordDetail } from "./iris-record-detail"
+import "./iris-ad-screens.css"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
@@ -1466,6 +1477,16 @@ export function SessionIrisTab() {
   const navFocused = usePaneFocused()
   const dialog = useDialog()
   const language = useLanguage()
+  // "5 cards", not a bare "5" (#194370).
+  const cardCount = (n: number) =>
+    language.t(n === 1 ? "iris.atlas.cards.one" : "iris.atlas.cards.other", { count: n.toLocaleString("en-US") })
+  const prompt = (() => {
+    try {
+      return usePrompt()
+    } catch {
+      return undefined
+    }
+  })()
   const serverSDK = useServerSDK()
   const platform = usePlatform()
   /**
@@ -2158,6 +2179,12 @@ export function SessionIrisTab() {
       .catch(() => {})
   })
   const labelsInUse = createMemo(() => (pane() === "atlas" ? boardLabels(atlasBoard()) : []))
+  // The chat names what the agent touched by these (#194362): "Added … to Call today".
+  createEffect(() => {
+    if (pane() === "atlas") rememberIrisNames({ lists: rows() as AtlasList[] })
+    if (pane() === "leads") rememberIrisNames({ leads: rows() as any[] })
+    rememberIrisNames({ boards: settled(bloqs)?.bloqs ?? [] })
+  })
   const atlasRows = createMemo<AtlasList[]>((prev) =>
     pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now(), meId())) : [],
   )
@@ -3433,6 +3460,22 @@ export function SessionIrisTab() {
    * Hive), with nothing on screen saying the click had registered. Now the tab and header change
    * at once and only the pane body shows "Loading…", in its own <Suspense> round the pane <Switch>.
    */
+  /** The next step an empty view offers (#194369). An "ask" puts a sentence in the chat box to finish. */
+  function runEmptyAction(kind: EmptyAction) {
+    if (kind === "add-list") return openComposer("list")
+    if (kind === "marketplace") return chooseSub("marketplace", "playbooks")
+    if (kind === "connect") return chooseSub("add", "integrations")
+    if (kind === "clear-search") {
+      setQuery("")
+      setApplied("")
+      return
+    }
+    const text = language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt")
+    if (!prompt) return
+    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
+  }
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -4009,6 +4052,8 @@ export function SessionIrisTab() {
             classList={{
               "pbf-title": openRow()!.pane === "playbooks",
               "pbf-slug": openRow()!.pane === "playbooks" && !playbookSlugLine(openRow()!.raw),
+              // The record's own header carries the title (#194363).
+              hidden: !!recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k),
             }}
             title={openRow()!.pane === "playbooks" ? openRow()!.raw?.name : undefined}
           >
@@ -4108,7 +4153,49 @@ export function SessionIrisTab() {
                       onConnect={() => void startConnect(String(openRow()!.raw.type))}
                     />
                   </Show>
-                  <Show when={openRow()!.command && openRow()!.pane !== "catalog" && openRow()!.pane !== "playbooks"}>
+                  {/* A LEAD OR AN AGENT IS READ AS A RECORD YOU ACT ON (#194363): badge, the facts that
+                    matter in plain words, real buttons. Ids and scores stay in the JSON tab. */}
+                  <Show when={recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k, p) => language.t(k as any, p))}>
+                    {(d) => (
+                      <DetailView
+                        data-slot="iris-record-detail"
+                        title={d().title}
+                        subtitle={d().subtitle}
+                        badge={d().badge ? <StatusBadge tone={d().badge!.tone}>{d().badge!.label}</StatusBadge> : undefined}
+                        facts={d().facts}
+                        actions={
+                          <>
+                            <Show when={openRow()!.pane === "agents" && openRow()!.raw?.id}>
+                              <Button
+                                size="small"
+                                variant="primary"
+                                onClick={() => {
+                                  const row = openRow()!.raw
+                                  setOpenRow(null)
+                                  setAgentEditor({ agentId: Number(row.id), row })
+                                }}
+                              >
+                                {language.t("iris.detail.edit")}
+                              </Button>
+                            </Show>
+                            <Show when={openRow()!.command}>
+                              <Button size="small" variant="ghost" onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}>
+                                {language.t("iris.detail.copyCommand")}
+                              </Button>
+                            </Show>
+                          </>
+                        }
+                      />
+                    )}
+                  </Show>
+                  <Show
+                    when={
+                      openRow()!.command &&
+                      openRow()!.pane !== "catalog" &&
+                      openRow()!.pane !== "playbooks" &&
+                      !recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k)
+                    }
+                  >
                     <button
                       type="button"
                       class="iris-command"
@@ -4120,7 +4207,12 @@ export function SessionIrisTab() {
                   </Show>
                   <dl
                     class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
-                    classList={{ hidden: openRow()!.pane === "catalog" || openRow()!.pane === "playbooks" }}
+                    classList={{
+                      hidden:
+                        openRow()!.pane === "catalog" ||
+                        openRow()!.pane === "playbooks" ||
+                        !!recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k),
+                    }}
                   >
                     <For each={openRow()!.fields}>
                       {([k, v]) => (
@@ -4614,12 +4706,8 @@ export function SessionIrisTab() {
             switch is immediate and only this box waits. See chooseSurface. */}
         <Suspense
           fallback={
-            <div
-              data-slot="iris-pane-loading"
-              class="flex h-full items-center justify-center text-13-regular text-text-weak py-6"
-            >
-              Loading…
-            </div>
+            // The shape of what is coming, not the word "Loading…" (#194371).
+            <SkeletonRows data-slot="iris-pane-loading" heading={pane() === "atlas"} rows={7} trailing label={language.t("iris.loading")} />
           }
         >
           <Switch>
@@ -4931,7 +5019,7 @@ export function SessionIrisTab() {
                               <header class="iris-board__head">
                                 {/* Same heading as List view (#189764): a column title is not a card. */}
                                 <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
-                                <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                                <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
                               </header>
                               <div class="iris-board__cards">
                                 <For each={windowOf(list.items, shownCards()[list.id])}>
@@ -4956,7 +5044,7 @@ export function SessionIrisTab() {
                                         }}
                                         {...fileDropHandlers(item.id)}
                                         draggable={canDrag() || delegateOpen()}
-                                        title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
+                                        title={`${canDrag() ? "Open this card, or drag it to move it" : "Open this card"}${item.id > 0 ? ` · #${item.id}` : ""}`}
                                         onClick={() => openCard(item.id)}
                                         onContextMenu={(e) => {
                                           e.preventDefault()
@@ -5074,9 +5162,10 @@ export function SessionIrisTab() {
                                               </span>
                                             )}
                                           </Show>
-                                          <span class="font-mono tabular-nums text-text-weaker ml-auto">
-                                            {item.id < 0 ? "new" : `#${item.id}`}
-                                          </span>
+                                          {/* No internal id on the card face (#194370): it is in the card itself, and c copies it. */}
+                                          <Show when={item.id < 0}>
+                                            <span class="font-mono tabular-nums text-text-weaker ml-auto">new</span>
+                                          </Show>
                                         </span>
                                       </div>
                                     </>
@@ -5198,7 +5287,7 @@ export function SessionIrisTab() {
                                 ›
                               </span>
                               <h3 class="iris-atlas-list__title">{list.name}</h3>
-                              <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                              <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
                             </button>
                             <button
                               type="button"
@@ -5406,19 +5495,13 @@ export function SessionIrisTab() {
                 </Match>
 
                 <Match when={pane() === "leads"}>
+                  {/* The same row as the Leads tab (#194364): name, company, stage, value. */}
                   <For each={rows()}>
                     {(l) => (
-                      <button
-                        type="button"
-                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), l))}
-                      >
-                        <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
-                        <span class="text-13-regular text-text-base min-w-0 flex-1">{l.name}</span>
-                        <Show when={l.status}>
-                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
-                        </Show>
-                      </button>
+                      <LeadsListRow
+                        lead={{ id: l.id, name: l.name, company: l.company, status: l.status, price_bid: l.bid, updated_at: l.createdAt }}
+                        onOpen={() => setOpenRow(describeRow(pane(), l))}
+                      />
                     )}
                   </For>
                 </Match>
@@ -5818,22 +5901,17 @@ export function SessionIrisTab() {
                     {(pg) => (
                       <button
                         type="button"
-                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
                         onClick={() => setOpenRow(describeRow(pane(), pg))}
                       >
-                        <span
-                          class="shrink-0"
-                          classList={{
-                            "text-text-base": pg.status === "published",
-                            "text-text-weak": pg.status !== "published",
-                          }}
-                        >
-                          {pg.status === "published" ? "●" : "○"}
-                        </span>
-                        <span class="text-13-regular text-text-base min-w-0 flex-1">{pg.title}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1 truncate">{pg.title}</span>
                         <Show when={pg.slug}>
-                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
+                          <span class="font-mono text-11-regular text-text-weak shrink-0 truncate">/{pg.slug}</span>
                         </Show>
+                        {/* Draft or Published in words (#194372), not a hollow circle. */}
+                        <StatusBadge tone={pg.status === "published" ? "success" : "neutral"} size="small" class="shrink-0">
+                          {pg.status === "published" ? "Published" : pg.status === "draft" ? "Draft" : pg.status}
+                        </StatusBadge>
                       </button>
                     )}
                   </For>
@@ -5842,6 +5920,23 @@ export function SessionIrisTab() {
             </Match>
 
             {/* Only reachable when measured===true — a genuine empty surface. */}
+            <Match when={view() === "empty" && emptyCopy(pane(), applied() && SEARCH_PLACEHOLDER[pane()] ? applied() : undefined)}>
+              {(copy) => (
+                // What goes here and the one next step (#194369), not "Nothing in Atlas › Schemas".
+                <EmptyState
+                  data-slot="iris-empty"
+                  title={language.t(copy().title as any)}
+                  description={copy().body ? language.t(copy().body as any) : undefined}
+                  action={
+                    copy().action ? (
+                      <Button size="small" variant="secondary" onClick={() => runEmptyAction(copy().action!.kind)}>
+                        {language.t(copy().action!.label as any)}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              )}
+            </Match>
             <Match when={view() === "empty"}>
               <p class="px-2 py-2 text-13-regular text-text-weak">
                 {/* "This board is empty" and "your search matched nothing" are different facts,
