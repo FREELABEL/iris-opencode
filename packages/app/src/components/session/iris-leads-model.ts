@@ -97,6 +97,23 @@ export const noteTotal = (l: LeadRow) => l.notes?.length ?? noteCount(l)
 export const peopleNotes = (notes: LeadNote[] = []) => notes.filter((n) => !n.is_system_generated)
 export const systemNotes = (notes: LeadNote[] = []) => notes.filter((n) => n.is_system_generated)
 
+/**
+ * What opening a lead shows first (#194358): the deal value and the newest note a person wrote.
+ * The detail opened on company, email and city; a $40,000 lead's value sat fourth in an input and
+ * its notes behind a tab. Empty when the lead has neither, so nothing renders as "$0" or "—".
+ */
+export function leadSummary(l: Pick<LeadRow, "price_bid" | "notes">, max = 200): { value?: string; note?: { text: string; at?: string } } {
+  const value = moneyLine(l.price_bid) || undefined
+  const newest = [...peopleNotes(l.notes ?? [])]
+    .filter((n) => String(n.content ?? "").trim())
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))[0]
+  const text = newest ? String(newest.content).replace(/\\n/g, "\n").trim() : ""
+  return {
+    ...(value ? { value } : {}),
+    ...(text ? { note: { text: text.length > max ? text.slice(0, max - 1) + "…" : text, at: newest!.created_at ?? undefined } } : {}),
+  }
+}
+
 export const isDone = (t: LeadTask) => t.is_completed === true || t.status === "completed" || t.status === "done" || !!t.completed_at
 
 /** Build the list query as ELON sends it. Empty filters are left out, not sent blank. */

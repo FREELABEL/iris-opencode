@@ -808,6 +808,14 @@ const LeadsResponse = Schema.Struct({
       createdAt: Schema.optional(Schema.String),
       repliedAt: Schema.optional(Schema.Boolean),
       keywords: Schema.optional(Schema.String),
+      bid: Schema.optional(described(Schema.Finite, "Deal value in money (fl-api price_bid). Absent when the lead has none.")),
+      noteCount: Schema.optional(Schema.Finite),
+      latestNote: Schema.optional(
+        described(
+          Schema.Struct({ text: Schema.String, createdAt: Schema.optional(Schema.String) }),
+          "The newest note a person wrote on the lead (system lines skipped), cut to 280 characters.",
+        ),
+      ),
     }).annotate({ identifier: "IrisLead" }),
   ),
 }).annotate({ identifier: "IrisLeadsResponse" })
