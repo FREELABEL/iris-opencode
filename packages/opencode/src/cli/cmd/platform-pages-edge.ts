@@ -14,7 +14,8 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, writeJson, irisFetch, resolveToken } from "./iris-api"
-import { existsSync, mkdirSync, rmSync } from "fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs"
+import { homedir } from "os"
 import { dirname, join, resolve } from "path"
 import { publicUrl } from "./page-ref"
 import { exportPage, writeProvenance, readProvenance, discard } from "./edge/export"
@@ -22,6 +23,7 @@ import { exportPageData } from "./edge/export-data"
 import { harvest } from "./edge/harvest"
 import { verifyExport } from "./edge/verify"
 import { startStaticServer, HOST_CONFIG } from "./edge/serve"
+import { buildIco, buildIcns, linuxDesktopEntry, macAppFiles, safeName, shortcutPaths, windowsShortcutScript, type IconPng } from "./edge/shortcut"
 import { LivePage, liveHooks } from "./edge/live"
 import { LocalActions, parseDecl, execRunner, dialogApprover, appVersion, describe as describePowers, type LocalDecl } from "./edge/local-actions"
 import { selfCommand } from "./hive-relay-ssh"
@@ -41,7 +43,7 @@ import {
 import { openBrowser } from "../../util/browser"
 import { prepareRelayRunner } from "./platform-hive-tunnel"
 import { parseRunnerLine } from "./platform-hive-relay"
-import { spawn } from "child_process"
+import { spawn, spawnSync } from "child_process"
 import { Remote, loadConfig, newReleaseId, EXAMPLE_CONFIG, type Target } from "./edge/deploy"
 
 const DEFAULT_ORIGIN = "https://freelabel.net"
@@ -531,6 +533,126 @@ export const PagesServeCmd = cmd({
     UI.println(dim(`  update it: iris pages serve ${slug}   stop it: iris pages serve stop ${slug}`))
     if (up && !args["no-open"]) openBrowser(url)
     if (!up) process.exitCode = 1
+  },
+})
+
+// ── pages install: the app in the Start menu / Dock / launcher (#194356) ──────────────────────
+
+/**
+ * `iris pages install <slug>` — a real shortcut with the app's own icon, opening in its own window.
+ * `--local` points it at the copy served on this computer (`iris pages serve`); default is IRIS
+ * Cloud. `--remove` takes it out again.
+ */
+export const PagesInstallCmd = cmd({
+  command: "install <slug>",
+  describe: "put an app in your Start menu, Dock or launcher — its own name, its own icon, its own window",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("local", { type: "boolean", default: false, describe: "open the copy served on this computer (iris pages serve) instead of IRIS Cloud" })
+      .option("origin", { type: "string", describe: "where the page is published (default: the published host)" })
+      .option("remove", { type: "boolean", default: false, describe: "remove the shortcut" })
+      .option("json", { type: "boolean", default: false })
+      .example("iris pages install my-dashboard", "Start menu (Windows), ~/Applications (Mac) or your launcher (Linux)")
+      .example("iris pages install my-dashboard --local", "…opening the copy running on this computer"),
+  async handler(args) {
+    const json = Boolean(args.json)
+    const slug = safeSlug(String(args.slug))
+    const fail = (msg: string, reason: string) => {
+      if (json) writeJson({ ok: false, reason, detail: msg })
+      else UI.error(msg)
+      process.exitCode = 1
+    }
+    if (!slug) return fail(`"${args.slug}" is not a page slug.`, "slug")
+    const home = homedir()
+    const appDir = join(home, ".iris", "apps", slug)
+    const record = join(appDir, "install.json")
+
+    if (args.remove) {
+      let removed: string[] = []
+      try {
+        removed = (JSON.parse(readFileSync(record, "utf8")).paths ?? []) as string[]
+      } catch {}
+      for (const p of removed) rmSync(p, { recursive: true, force: true })
+      rmSync(appDir, { recursive: true, force: true })
+      if (json) return writeJson({ ok: true, removed })
+      return UI.println(removed.length ? `Removed ${slug} from this computer.` : `${slug} was not installed here.`)
+    }
+
+    const origin = originFor(args.origin as string | undefined).replace(/\/$/, "")
+    let url = `${origin}/p/${slug}?source=pwa`
+    if (args.local) {
+      const st = readState(slug)
+      if (!st) return fail(`${slug} is not served on this computer. Serve it first: iris pages serve ${slug}`, "not_served")
+      url = `http://localhost:${st.port}/p/${slug}?source=pwa`
+    }
+
+    // The app's own name and icon come from IRIS — the same ones a browser install would use.
+    const man = await fetch(`${origin}/p/${slug}/manifest.webmanifest`, { signal: AbortSignal.timeout(10000) }).catch(() => null)
+    if (!man?.ok) return fail(`${slug} does not install as an app (it is private, turned off, or not found).`, "not_installable")
+    const m = (await man.json().catch(() => ({}))) as { name?: string; short_name?: string }
+    const name = safeName(String(m.name || m.short_name || slug))
+    const icon = async (size: number): Promise<IconPng | null> => {
+      const r = await fetch(`${origin}/p/${slug}/app-icon-${size}.png`, { signal: AbortSignal.timeout(15000) }).catch(() => null)
+      return r?.ok ? { size, data: Buffer.from(await r.arrayBuffer()) as Buffer } : null
+    }
+    const got = async (sizes: number[], fallback: number): Promise<IconPng[]> => {
+      const imgs: IconPng[] = []
+      for (const x of await Promise.all(sizes.map(icon))) if (x) imgs.push(x)
+      // An older IRIS draws only 180/192/512: use the closest it has rather than no icon.
+      if (!imgs.length) {
+        const f = await icon(fallback)
+        if (f) imgs.push(f)
+      }
+      return imgs
+    }
+
+    const plat = process.platform
+    const where = shortcutPaths(plat, home, name, slug, process.env.APPDATA)
+    mkdirSync(appDir, { recursive: true })
+    const paths: string[] = []
+    try {
+      if (plat === "win32") {
+        const imgs = await got([16, 32, 48, 256], 192)
+        if (!imgs.length) return fail("Could not fetch the app's icon from IRIS.", "icon")
+        writeFileSync(where.icon, buildIco(imgs))
+        const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", windowsShortcutScript({ lnk: where.shortcut, ico: where.icon, url, name })], {
+          encoding: "utf8",
+          windowsHide: true,
+        })
+        if (r.status !== 0) return fail(`Windows refused the shortcut: ${(r.stderr || r.stdout || "").trim().split("\n")[0]}`, "shortcut")
+        paths.push(where.shortcut)
+      } else if (plat === "darwin") {
+        const imgs = await got([16, 32, 256, 512], 512)
+        rmSync(where.shortcut, { recursive: true, force: true })
+        for (const [rel, f] of Object.entries(macAppFiles({ name, url, slug }))) {
+          const p = join(where.shortcut, rel)
+          mkdirSync(dirname(p), { recursive: true })
+          writeFileSync(p, f.data)
+          if (f.mode) chmodSync(p, f.mode)
+        }
+        mkdirSync(join(where.shortcut, "Contents", "Resources"), { recursive: true })
+        if (imgs.length) writeFileSync(join(where.shortcut, "Contents", "Resources", "app.icns"), buildIcns(imgs))
+        // Finder caches icons by bundle; touching it makes the new one show without a log-out.
+        spawnSync("touch", [where.shortcut])
+        paths.push(where.shortcut)
+      } else {
+        const imgs = await got([256], 512)
+        if (imgs[0]) writeFileSync(where.icon, imgs[0].data)
+        mkdirSync(dirname(where.shortcut), { recursive: true })
+        writeFileSync(where.shortcut, linuxDesktopEntry({ name, url, icon: where.icon, slug }))
+        chmodSync(where.shortcut, 0o755)
+        paths.push(where.shortcut)
+      }
+    } catch (e: any) {
+      return fail(`Could not install ${slug}: ${String(e?.message ?? e).split("\n")[0]}`, "write")
+    }
+    writeFileSync(record, JSON.stringify({ slug, name, url, paths, installed_at: new Date().toISOString() }, null, 2))
+
+    if (json) return writeJson({ ok: true, slug, name, url, paths })
+    const place = plat === "win32" ? "the Start menu (IRIS Apps)" : plat === "darwin" ? "~/Applications/IRIS Apps — drag it to the Dock to keep it there" : "your app launcher"
+    UI.println(`Installed ${name} in ${place}.`)
+    UI.println(dim(`  opens ${args.local ? "the copy on this computer" : "from IRIS Cloud"} in its own window · remove: iris pages install ${slug} --remove`))
   },
 })
 
