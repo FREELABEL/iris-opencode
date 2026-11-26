@@ -39,6 +39,8 @@ export type ImportSummary = {
   stopped?: string
   columns: Record<string, string>
   unused_columns: string[]
+  /** Rows whose status was not a CRM status: imported, as Prospected (#194368). */
+  status_dropped: { row: number; line?: number; error: string }[]
 }
 
 function errText(e: unknown): string {
@@ -122,7 +124,9 @@ export const LeadsImportCommand = cmd({
       ids: [],
       columns: { ...plan.columns, ...(plan.apolloName ? { "first_name + last_name_hint": "name" } : {}) },
       unused_columns: plan.unused,
+      status_dropped: built.statusDropped,
     }
+    const sendsStatus = built.leads.some((l) => l.status !== undefined)
 
     if (!isJson) {
       console.log(`  ${bold("Parsed")}     ${read.rows.length} row(s) from ${path.basename(file)}`)
@@ -136,6 +140,14 @@ export const LeadsImportCommand = cmd({
       const unverified = built.leads.filter((l) => l.name_verified === false).length
       if (unverified) console.log(`  ${dim(`${unverified} name(s) are partly hidden and will be saved as NOT verified`)}`)
       if (built.errors.length) console.log(`  ${dim(`${built.errors.length} row(s) refused before sending (listed below)`)}`)
+      if (sendsStatus) console.log(`  ${dim("status values are matched to the CRM's statuses, ignoring case")}`)
+      if (built.statusDropped.length) {
+        prompts.log.warn(
+          `${built.statusDropped.length} row(s) have a status the CRM does not have — they will be imported as Prospected:`,
+        )
+        for (const f of built.statusDropped.slice(0, 20)) console.log(`    row ${f.row}${f.line ? ` (line ${f.line})` : ""}: ${f.error}`)
+        if (built.statusDropped.length > 20) console.log(`    ${dim(`… ${built.statusDropped.length - 20} more (--json lists every one)`)}`)
+      }
     }
 
     if (built.leads.length > 0) {
@@ -225,6 +237,9 @@ export const LeadsImportCommand = cmd({
     }
     if (summary.failed.length > 20) console.log(`    ${dim(`… ${summary.failed.length - 20} more (--json lists every one)`)}`)
     if (notSent > 0) console.log(`  ${bold("Not sent")}     ${notSent} ${dim("(after the stop below)")}`)
+    if (summary.status_dropped.length) console.log(`  ${bold("Status kept")}  ${dim(`no — ${summary.status_dropped.length} row(s) imported as Prospected (listed above)`)}`)
+    // The server keeps a merged lead's status: a re-import must not send a lead who replied back to the start.
+    if (sendsStatus && summary.merged > 0) console.log(`  ${dim(`status is not changed on the ${summary.merged} merged lead(s) — change one with: iris leads update <id> --status <Status>`)}`)
     printDivider()
 
     if (summary.stopped) prompts.log.error(`Stopped at ${summary.stopped}`)
