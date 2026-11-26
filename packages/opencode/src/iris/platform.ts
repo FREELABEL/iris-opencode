@@ -2105,6 +2105,54 @@ export interface Lead {
   createdAt?: string
   repliedAt?: boolean
   keywords?: string
+  /** The deal value in money (fl-api `price_bid`), when the lead has one (#194358). */
+  bid?: number
+  /** How many notes the lead has, the system's own lines included. */
+  noteCount?: number
+  /** The newest note a PERSON wrote — what someone opening the lead needs first (#194358). */
+  latestNote?: { text: string; createdAt?: string }
+}
+
+/** A note fl-api wrote about itself ("Lead status changed to …"), not a follow-up someone wrote. */
+const SYSTEM_NOTE = /^(lead status changed|attached to board|detached from board|lead created|lead imported|status changed)\b/i
+const LATEST_NOTE_MAX = 280
+
+/**
+ * One fl-api lead row as the panel's lead (#194358).
+ *
+ * The panel's lead detail had no deal value and no notes: this mapper dropped `price_bid`, and the
+ * list was read without `include_notes`, so a $40,000 lead with three notes read as "score 0, hot
+ * no". Value and the newest person-written note are what someone opening a lead needs first.
+ */
+export function toLead(l: any): Lead {
+  const bidNum = l?.price_bid == null || l.price_bid === "" ? NaN : Number(l.price_bid)
+  const notes: any[] = Array.isArray(l?.notes) ? l.notes : []
+  const people = notes
+    .filter((n) => n && typeof n === "object" && str(n.content ?? n.message) && !n.is_system_generated && n.type !== "system" && !SYSTEM_NOTE.test(String(n.content ?? n.message).trim()))
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+  const newest = people[0]
+  const text = newest ? str(newest.content ?? newest.message)!.replace(/\\n/g, "\n").trim() : undefined
+  const count = typeof l?.notes_count === "number" ? l.notes_count : typeof l?.note_count === "number" ? l.note_count : notes.length || undefined
+  return {
+    id: Number(l.id),
+    name: String(l.name ?? l.full_name ?? "unnamed"),
+    status: str(l.status),
+    company: str(l.company),
+    email: str(l.email),
+    hot: Number(l.lead_score ?? l.leadScore ?? 0) >= 70,
+    score: typeof l.lead_score === "number" ? l.lead_score : undefined,
+    type: str(l.lead_type),
+    city: str(l.city),
+    country: str(l.country),
+    createdAt: str(l.created_at),
+    repliedAt: typeof l.has_replied === "boolean" ? l.has_replied : undefined,
+    keywords: str(l.keywords),
+    bid: Number.isFinite(bidNum) && bidNum > 0 ? bidNum : undefined,
+    noteCount: count,
+    latestNote: text
+      ? { text: text.length > LATEST_NOTE_MAX ? text.slice(0, LATEST_NOTE_MAX - 1) + "…" : text, createdAt: str(newest.created_at) }
+      : undefined,
+  }
 }
 
 /**
@@ -2156,26 +2204,13 @@ export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads
   if (unknown) return { measured: false, reason: unknown, data: { leads: [] } }
 
   try {
-    const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`)
+    // include_notes: the detail shows the newest note first (#194358); fl-api eager-loads them in one query.
+    const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50&include_notes=1`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { leads: [] } }
     const j = (await res.json()) as any
     const d = j?.data ?? j
     const rows = Array.isArray(d) ? d : (d?.data ?? [])
-    const leads: Lead[] = rows.map((l: any) => ({
-      id: Number(l.id),
-      name: String(l.name ?? l.full_name ?? "unnamed"),
-      status: str(l.status),
-      company: str(l.company),
-      email: str(l.email),
-      hot: Number(l.lead_score ?? l.leadScore ?? 0) >= 70,
-      score: typeof l.lead_score === "number" ? l.lead_score : undefined,
-      type: str(l.lead_type),
-      city: str(l.city),
-      country: str(l.country),
-      createdAt: str(l.created_at),
-      repliedAt: typeof l.has_replied === "boolean" ? l.has_replied : undefined,
-      keywords: str(l.keywords),
-    }))
+    const leads: Lead[] = rows.map(toLead)
     return { measured: true, data: { leads } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { leads: [] } }

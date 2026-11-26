@@ -8,6 +8,7 @@ import {
   humanDate,
   initials,
   isDone,
+  leadSummary,
   peopleNotes,
   statusColor,
   systemNotes,
@@ -104,6 +105,34 @@ export function LeadDetail(props: {
           </select>
         </div>
       </div>
+      {/* Value and the latest note first (#194358): what someone opening a lead needs before its address. */}
+      <Show when={leadSummary(current()).value || leadSummary(current()).note}>
+        <div class="iris-ld-body" data-slot="iris-lead-summary" style={{ flex: "none" }}>
+          <dl class="iris-ld-fields">
+            <Show when={leadSummary(current()).value}>
+              {(v) => (
+                <>
+                  <dt>Value</dt>
+                  <dd data-slot="iris-lead-value">{v()}</dd>
+                </>
+              )}
+            </Show>
+            <Show when={leadSummary(current()).note}>
+              {(n) => (
+                <>
+                  <dt>Latest note</dt>
+                  <dd data-slot="iris-lead-latest-note">
+                    {n().text}
+                    <Show when={n().at}>
+                      <time> · {agoLine(n().at)}</time>
+                    </Show>
+                  </dd>
+                </>
+              )}
+            </Show>
+          </dl>
+        </div>
+      </Show>
       <div class="iris-ld-tabs" role="tablist">
         <For each={TABS}>
           {(t) => (

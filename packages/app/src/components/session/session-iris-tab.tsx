@@ -45,6 +45,7 @@ import { settled } from "@/utils/settled"
 import { IrisArtifacts } from "./iris-artifacts"
 import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
+import { irisWritesKey } from "./iris-agent-writes"
 import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
   ACCOUNT_SURFACES,
@@ -352,11 +353,15 @@ function describeFields(
   if (surface === "leads")
     return {
       title: r.name,
+      // Value and the latest note first (#194358) — they were not in the payload at all.
       fields: fieldsOf([
-        ["id", r.id],
+        ["value", typeof r.bid === "number" ? `$${r.bid.toLocaleString()}` : undefined],
+        ["latest note", r.latestNote ? `${r.latestNote.text}${r.latestNote.createdAt ? ` (${relativeAge(r.latestNote.createdAt)})` : ""}` : undefined],
+        ["notes", r.noteCount || undefined],
         ["status", r.status],
         ["company", r.company],
         ["email", r.email],
+        ["id", r.id],
         ["score", r.score],
         ["hot", r.hot],
         ["type", r.type],
@@ -2586,6 +2591,33 @@ export function SessionIrisTab() {
     ),
   )
 
+  /*
+   * THE AGENT CHANGED IRIS (#194361). It ran `iris bloqs create-list` in this chat and the board on
+   * screen stayed as it was until you clicked away and back. When a tool call that writes to IRIS
+   * finishes, re-read whatever the panel shows. Only NEW finished writes count — opening a chat
+   * with history, or switching chats, is not news (the key is a different list, not a longer one).
+   */
+  /** Panes that read their own data (Leads) re-read when this moves. */
+  const [agentWriteTick, setAgentWriteTick] = createSignal(0)
+  const agentWrites = createMemo(() => {
+    const id = navParams.id
+    if (!id || !dirSync) return ""
+    try {
+      const data = dirSync().data
+      return irisWritesKey((data.message[id] ?? []).flatMap((m: any) => (data.part[m.id] ?? []) as any[]))
+    } catch {
+      return ""
+    }
+  })
+  createEffect(
+    on(agentWrites, (key, prev) => {
+      if (prev === undefined || !key || key === prev) return
+      if (prev && !key.startsWith(prev + ",")) return
+      liveRefresh()
+      setAgentWriteTick((n) => n + 1)
+    }),
+  )
+
   createEffect(
     on(docVisible, (visible, was) => {
       if (visible && was === false && pane() === "atlas") liveRefresh()
@@ -4618,6 +4650,7 @@ export function SessionIrisTab() {
             <Match when={pane() === "leads-crm"}>
               <IrisLeadsTab
                 doFetch={doFetch}
+                refreshKey={agentWriteTick}
                 bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
                 onNeedsApproval={() => chooseSub("review", "leads")}
               />
