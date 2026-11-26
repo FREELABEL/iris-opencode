@@ -13,7 +13,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, writeJson } from "./iris-api"
+import { dim, writeJson, irisFetch, resolveToken } from "./iris-api"
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { dirname, join, resolve } from "path"
@@ -24,6 +24,9 @@ import { harvest } from "./edge/harvest"
 import { verifyExport } from "./edge/verify"
 import { startStaticServer, HOST_CONFIG } from "./edge/serve"
 import { buildIco, buildIcns, linuxDesktopEntry, macAppFiles, safeName, shortcutPaths, windowsShortcutScript, type IconPng } from "./edge/shortcut"
+import { LivePage, liveHooks } from "./edge/live"
+import { LocalActions, parseDecl, execRunner, dialogApprover, appVersion, describe as describePowers, type LocalDecl } from "./edge/local-actions"
+import { selfCommand } from "./hive-relay-ssh"
 import {
   answering,
   keepRunning,
@@ -217,6 +220,10 @@ export const EdgeServeCmd = cmd({
       .option("public-name", {
         type: "string",
         describe: "also publish it at https://<name>.t.heyiris.io through the Hive relay (used by `pages serve --public`)",
+      })
+      .option("live", {
+        type: "string",
+        describe: "page slug: serve it with LIVE data, signed in as you, on this computer only (used by `pages serve`)",
       }),
   async handler(args) {
     const dir = resolve(String(args.dir))
@@ -225,8 +232,34 @@ export const EdgeServeCmd = cmd({
       process.exitCode = 1
       return
     }
-    const srv = await startStaticServer(dir, Number(args.port))
-    UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)`)
+    let hooks = {}
+    const liveSlug = args.live && !args["public-name"] ? safeSlug(String(args.live)) : null
+    if (liveSlug) {
+      // state.json sits beside site/; it carries where the page is published and its bindings.
+      const st = readState(liveSlug)
+      const live = new LivePage({
+        slug: liveSlug,
+        origin: st?.origin ?? originFor(undefined),
+        bindings: st?.live_bindings ?? [],
+        // Read at run time from the CLI's own sign-in, never written into a plist, task or unit.
+        token: () => resolveToken(),
+        cacheDir: join(dirname(dir), "live"),
+      })
+      const srvPort = Number(args.port)
+      // Local actions (#194354): the page's `local` block, read fresh (30 s) so a publish that
+      // changes what it asks for takes effect — and, through the version hash, asks again.
+      let declCache: { at: number; decl: LocalDecl | null } = { at: 0, decl: null }
+      const decl = async () => {
+        if (Date.now() - declCache.at < 30000) return declCache.decl
+        const c = await pageContent(liveSlug)
+        declCache = { at: Date.now(), decl: c ? parseDecl(c.local) : declCache.decl }
+        return declCache.decl
+      }
+      const local = new LocalActions(liveSlug, servedDir(liveSlug), decl, () => live.document(), execRunner, dialogApprover, selfCommand())
+      hooks = liveHooks(live, liveSlug, () => srvPort, local)
+    }
+    const srv = await startStaticServer(dir, Number(args.port), hooks)
+    UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)${liveSlug ? " · live data, signed in as you" : ""}`)
     const name = args["public-name"] ? String(args["public-name"]) : ""
     if (name) {
       // The relay runner is a CHILD of this server, so the two live and die together, and the OS
@@ -268,6 +301,27 @@ export const EdgeServeCmd = cmd({
   },
 })
 
+/** A page's json_content, read with this CLI's sign-in. Null when it cannot be read. */
+async function pageContent(slug: string): Promise<any | null> {
+  try {
+    const res = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?include_json=1`)
+    if (!res.ok) return null
+    const j = (await res.json()) as any
+    const page = j?.data ?? j
+    let c = page?.json_content
+    if (typeof c === "string") c = JSON.parse(c)
+    return c && typeof c === "object" ? c : null
+  } catch {
+    return null
+  }
+}
+
+/** The binding names a page declares (json_content.bindings). [] when it has none or cannot be read. */
+async function pageBindings(slug: string): Promise<string[]> {
+  const b = (await pageContent(slug))?.bindings
+  return b && typeof b === "object" && !Array.isArray(b) ? Object.keys(b).filter((k) => /^[A-Za-z0-9_.-]{1,64}$/.test(k)) : []
+}
+
 // ── pages serve: a page running on this computer (#194212) ──────────────────────────────────────
 
 /**
@@ -294,6 +348,11 @@ export const PagesServeCmd = cmd({
         describe: "also give it a public https address (Hive relay), the same one every time — so a phone can install it",
       })
       .option("name", { type: "string", describe: "with --public: the name in https://<name>.t.heyiris.io (default: from the slug)" })
+      .option("live", {
+        type: "boolean",
+        default: true,
+        describe: "live data, signed in as you: your rows, your saves and buttons work, and a publish shows on the next load (--no-live: a frozen copy)",
+      })
       .option("json", { type: "boolean", default: false })
       .example("iris pages serve my-page", "running at http://localhost:<port>/p/my-page, starts with the computer")
       .example("iris pages serve my-page --public", "…and at https://my-page.t.heyiris.io/p/my-page, for phones")
@@ -410,15 +469,28 @@ export const PagesServeCmd = cmd({
     rmSync(stage, { recursive: true, force: true })
     const site = join(dir, "site")
 
+    // Live (#194353): on by default when this CLI is signed in, never with --public. The binding
+    // names come from the page itself, so the server knows what to fetch fresh on every load.
+    let liveBindings: string[] | undefined
+    let liveNote = ""
+    if (args.live && !publicName) {
+      if (!(await resolveToken().catch(() => ""))) liveNote = "not signed in — serving a frozen copy (iris auth login, then run this again)"
+      else liveBindings = await pageBindings(slug)
+    } else if (args.live && publicName) {
+      liveNote = "a public copy is a frozen copy: live data is for this computer only"
+    }
+
     // Re-serving: a server already answering on this port reads the swapped folder per request, so
     // it needs nothing. Otherwise (first serve, a changed port, or it died) start it and keep it.
     // Public or not is part of the command the keeper runs, so changing it means a restart.
-    const already = !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName && (await answering(port, slug))
+    const already =
+      !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName &&
+      !!prev.live_bindings === !!liveBindings && (await answering(port, slug))
     let kept: ReturnType<typeof keepRunning> | null = null
     if (!already) {
       if (prev) stopKeeping(prev)
       sp?.message("Starting it…")
-      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName })
+      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName, liveSlug: liveBindings ? slug : undefined })
     }
     const state = {
       slug,
@@ -428,6 +500,7 @@ export const PagesServeCmd = cmd({
       keeper: kept?.keeper ?? prev!.keeper,
       ...(kept?.pid ? { pid: kept.pid } : already && prev?.pid ? { pid: prev.pid } : {}),
       ...(publicName ? { public_name: publicName, public_url: publicUrl } : {}),
+      ...(liveBindings ? { live_bindings: liveBindings } : {}),
     }
     writeState(state)
 
@@ -446,10 +519,12 @@ export const PagesServeCmd = cmd({
       sp?.stop(publicUp ? "Public" : "Public address not answering yet")
     }
 
-    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
+    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, live: !!liveBindings, ...(liveNote ? { live_note: liveNote } : {}), public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
 
     UI.println(`  ${up ? "●" : "○"} ${url}`)
     if (publicUrl) UI.println(`  ${publicUp ? "●" : "○"} ${publicUrl}  ${dim("anyone with this address can open it · on a phone: Share → Add to Home Screen")}`)
+    if (liveBindings) UI.println(dim("  live: your data, signed in as you · changes you publish show on the next load · offline it shows the last data it had"))
+    else if (liveNote) UI.println(`  ${liveNote}`)
     if (already) UI.println(dim("  re-synced from IRIS Cloud; the running server picked it up"))
     if (survivesRestart) UI.println(dim(`  starts with this computer${kept ? ` (${kept.detail})` : ""}`))
     else if (!args["no-autostart"]) UI.println(`  ⚠ will NOT start after a restart${kept ? ` — ${kept.detail}` : ""}. Run this again after rebooting.`)
@@ -578,6 +653,70 @@ export const PagesInstallCmd = cmd({
     const place = plat === "win32" ? "the Start menu (IRIS Apps)" : plat === "darwin" ? "~/Applications/IRIS Apps — drag it to the Dock to keep it there" : "your app launcher"
     UI.println(`Installed ${name} in ${place}.`)
     UI.println(dim(`  opens ${args.local ? "the copy on this computer" : "from IRIS Cloud"} in its own window · remove: iris pages install ${slug} --remove`))
+  },
+})
+
+// ── pages allow: approve what an app may do on this computer (#194354) ─────────────────────────
+
+/**
+ * `iris pages allow <slug>` — the approval for local actions, from the terminal. Shows exactly what
+ * the app asks for (every file, every command, verbatim) and records the approval for THIS version;
+ * a publish that changes the app asks again. `--revoke` removes every approval for the page.
+ */
+export const PagesAllowCmd = cmd({
+  command: "allow <slug>",
+  describe: "allow an app served on this computer to do what it asks for here (notifications, your agents, listed files and commands)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("yes", { type: "boolean", default: false, describe: "allow without asking (you have read the list)" })
+      .option("revoke", { type: "boolean", default: false, describe: "remove every approval for this app" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const slug = safeSlug(String(args.slug))
+    const st = slug ? readState(slug) : null
+    if (!slug || !st) {
+      UI.error(`"${args.slug}" is not served on this computer. Serve it first: iris pages serve ${args.slug ?? "<slug>"}`)
+      process.exitCode = 1
+      return
+    }
+    const dir = servedDir(slug)
+    if (args.revoke) {
+      rmSync(join(dir, "approvals.json"), { force: true })
+      if (args.json) return writeJson({ ok: true, revoked: slug })
+      return UI.println(`Removed every approval for ${slug}. It will ask again.`)
+    }
+    const decl = parseDecl((await pageContent(slug))?.local)
+    if (!decl) {
+      if (args.json) return writeJson({ ok: true, slug, asks_for: [] })
+      return UI.println(`${slug} asks for nothing on this computer.`)
+    }
+    const live = new LivePage({ slug, origin: st.origin, bindings: [], token: () => resolveToken(), cacheDir: join(dir, "live") })
+    const doc = await live.document()
+    if (doc === null) {
+      UI.error("Could not read the app from IRIS, and there is no saved copy. Try again when online.")
+      process.exitCode = 1
+      return
+    }
+    const version = appVersion(decl, doc)
+    const powers = describePowers(decl)
+    const actions = new LocalActions(slug, dir, async () => decl, async () => doc, execRunner, async () => false)
+    if (!args.json) {
+      UI.println(`${slug} wants to:`)
+      for (const p of powers) UI.println(`  • ${p}`)
+    }
+    let ok = Boolean(args.yes)
+    if (!ok && !args.json) {
+      const answer = await prompts.confirm({ message: "Allow this version of it?", initialValue: false })
+      ok = answer === true
+    }
+    if (!ok) {
+      if (args.json) return writeJson({ ok: false, slug, version, asks_for: powers, reason: "not_confirmed" })
+      return UI.println("Not allowed.")
+    }
+    actions.grant(version, powers)
+    if (args.json) return writeJson({ ok: true, slug, version, allowed: powers })
+    UI.println(dim(`Allowed for this version. If the app changes, it will ask again. Undo: iris pages allow ${slug} --revoke`))
   },
 })
 
