@@ -1871,9 +1871,38 @@ const PreviewCmd = cmd({
   },
 })
 
+/**
+ * What `pages create` sends (#194367). It sent `auto_publish: true` beside `status: "draft"`, and
+ * the server publishes on auto_publish — so every created page was world-readable at once, and the
+ * help said nothing. A new page is a DRAFT unless --publish is passed; --draft says so explicitly.
+ */
+export function createPagePayload(args: {
+  slug: string
+  title: string
+  seoTitle?: string
+  seoDescription?: string
+  ownerType: string
+  ownerId: number
+  publish?: boolean
+  jsonContent: unknown
+}): Record<string, unknown> {
+  return {
+    slug: args.slug,
+    title: args.title,
+    seo_title: args.seoTitle ?? args.title,
+    seo_description: args.seoDescription,
+    owner_type: args.ownerType,
+    owner_id: args.ownerId,
+    status: "draft",
+    json_content: args.jsonContent,
+    auto_publish: args.publish === true,
+  }
+}
+
 const CreateCmd = cmd({
   command: "create",
-  describe: "create a COMPOSABLE (component JSON) page — for a page a person reads, use `publish-html` instead (the default lane)",
+  describe:
+    "create a COMPOSABLE (component JSON) page as a DRAFT (pass --publish to make it world-readable now) — for a page a person reads, use `publish-html` instead (the default lane)",
   builder: (y) =>
     y
       .option("slug", { describe: "page slug", type: "string", demandOption: true })
@@ -1885,7 +1914,15 @@ const CreateCmd = cmd({
         type: "string",
       })
       .option("owner-type", { describe: "owner type", type: "string", default: "bloq" })
-      .option("owner-id", { describe: "owner ID", type: "number", default: 38 }),
+      // No default (#194367): it was 38, someone else's board, so a page with no --owner-id was filed there.
+      .option("owner-id", { describe: "owner ID — the board (bloq) the page belongs to; see `iris bloqs list`", type: "number", demandOption: true })
+      .option("publish", {
+        describe: "publish now — the page is WORLD-READABLE at its URL (default: created as a draft)",
+        type: "boolean",
+        default: false,
+      })
+      .option("draft", { describe: "create as a draft (the default; kept so a script can say so)", type: "boolean" })
+      .conflicts("publish", "draft"),
   async handler(args) {
     // `--template html` used to "work": it set json_content.type = "html" and then scaffolded the
     // same component page as every other template. An author asking for a hand-written HTML page
@@ -1917,17 +1954,16 @@ const CreateCmd = cmd({
         }),
       }
 
-      const payload: Record<string, unknown> = {
+      const payload = createPagePayload({
         slug: args.slug,
         title: args.title,
-        seo_title: args["seo-title"] ?? args.title,
-        seo_description: args["seo-description"],
-        owner_type: args["owner-type"],
-        owner_id: args["owner-id"],
-        status: "draft",
-        json_content: jsonContent,
-        auto_publish: true,
-      }
+        seoTitle: args["seo-title"],
+        seoDescription: args["seo-description"],
+        ownerType: args["owner-type"],
+        ownerId: args["owner-id"],
+        publish: args.publish === true,
+        jsonContent,
+      })
       const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
       if (!(await handleApiError(res, "Create page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
@@ -1943,7 +1979,13 @@ const CreateCmd = cmd({
       printDesignStandardHint(p.slug)
       console.log(dim("  This is a composable page. For a page a person reads, hand-written HTML is the default lane:"))
       console.log(dim(`  iris genesis publish-html ${p.slug} --file ./${p.slug}.html`))
-      prompts.outro(dim(`iris pages publish ${p.slug}`))
+      if (p.status === "published") {
+        prompts.log.warn(`Published — WORLD-READABLE at ${publicUrl(p)}. Take it down: iris pages unpublish ${p.slug}`)
+        prompts.outro("Done")
+      } else {
+        prompts.log.info("A draft — not public until you publish it.")
+        prompts.outro(dim(`iris pages publish ${p.slug}`))
+      }
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
