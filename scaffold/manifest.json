@@ -21,6 +21,12 @@
       "purpose": "Put a Genesis page on a phone or computer home screen as an app, and serve it from your own machine."
     },
     {
+      "src": "how-to/shared-workspaces.md",
+      "dest": "how-to/shared-workspaces.md",
+      "managed": true,
+      "purpose": "Share live AI chats with your team: an Atlas project is the workspace, each shared chat is a room teammates can watch, type into and stop."
+    },
+    {
       "src": "how-to/agentic-loops.md",
       "dest": "how-to/agentic-loops.md",
       "managed": true,
