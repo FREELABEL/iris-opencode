@@ -142,10 +142,10 @@ export function SessionFileListV2(props: {
                     <span class="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
                       <Show when={directory()}>
                         {(value) => (
-                          <span class="text-12-medium text-text-muted truncate min-w-0 shrink">{value()}</span>
+                          <span class="text-13-medium text-text-muted truncate min-w-0 shrink">{value()}</span>
                         )}
                       </Show>
-                      <span class="text-12-medium text-text-base truncate min-w-0 shrink-0">{filename()}</span>
+                      <span class="text-13-medium text-text-base truncate min-w-0 shrink-0">{filename()}</span>
                     </span>
                     <Show when={kind()}>
                       {(value) => (

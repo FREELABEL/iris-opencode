@@ -72,7 +72,7 @@ export const SidebarContent = (props: {
                   <div class="flex items-center gap-2">
                     <span>{props.openProjectLabel}</span>
                     <Show when={!props.mobile && !!props.openProjectKeybind()}>
-                      <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
+                      <span class="text-icon-base text-13-medium">{props.openProjectKeybind()}</span>
                     </Show>
                   </div>
                 }

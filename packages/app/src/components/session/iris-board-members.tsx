@@ -71,7 +71,7 @@ export function IrisBoardMembers(props: { bloqId: number; boardName?: string; do
     <Dialog title="Members" description={props.boardName}>
       <div class="iris-members">
         <Show when={data.latest && !data.latest.measured}>
-          <p class="text-12-regular text-text-weak">Could not read members — {data.latest!.reason}.</p>
+          <p class="text-13-regular text-text-weak">Could not read members — {data.latest!.reason}.</p>
         </Show>
         <Show when={data.latest?.measured}>
           <ul class="iris-members__list">
@@ -135,7 +135,7 @@ export function IrisBoardMembers(props: { bloqId: number; boardName?: string; do
             </For>
           </ul>
           <Show when={data.latest!.members.length === 0}>
-            <p class="text-12-regular text-text-weak">Only you, so far.</p>
+            <p class="text-13-regular text-text-weak">Only you, so far.</p>
           </Show>
 
           <Show

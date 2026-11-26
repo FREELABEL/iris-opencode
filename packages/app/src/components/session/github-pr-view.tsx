@@ -137,7 +137,7 @@ function PrBody(props: { pr: Pr; onOpen: () => void }) {
 
       <Show when={props.pr.body.trim()}>
         <section class="gh-pr__section gh-pr__desc" data-slot="pr-description">
-          <Markdown text={props.pr.body} class="text-12-regular" />
+          <Markdown text={props.pr.body} class="text-13-regular" />
         </section>
       </Show>
 
@@ -187,7 +187,7 @@ function PrBody(props: { pr: Pr; onOpen: () => void }) {
                   <span class="gh-pr__when">{ago(c.at)}</span>
                 </div>
                 <Show when={c.body.trim()}>
-                  <Markdown text={c.body} class="text-12-regular" />
+                  <Markdown text={c.body} class="text-13-regular" />
                 </Show>
               </div>
             )}

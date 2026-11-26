@@ -57,7 +57,7 @@ export function DialogUsageExceeded(props: DialogGoUpsellProps) {
             {props.actionLabel}
           </Button>
         </div>
-        {props.guarantee && <p class="text-right text-12-regular text-text-weak">{props.guarantee}</p>}
+        {props.guarantee && <p class="text-right text-13-regular text-text-weak">{props.guarantee}</p>}
       </div>
     </Dialog>
   )

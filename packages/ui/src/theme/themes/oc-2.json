@@ -17,8 +17,8 @@
     },
     "overrides": {
       "text-strong": "#171717",
-      "text-base": "#6F6F6F",
-      "text-weak": "#8F8F8F",
+      "text-base": "#555555",
+      "text-weak": "#6B6B6B",
       "text-weaker": "#C7C7C7",
       "text-diff-add-base": "var(--v2-state-fg-success)",
       "text-diff-delete-base": "var(--v2-state-fg-danger)",
@@ -253,8 +253,8 @@
     },
     "overrides": {
       "text-strong": "#EDEDED",
-      "text-base": "#A0A0A0",
-      "text-weak": "#707070",
+      "text-base": "#B4B4B4",
+      "text-weak": "#999999",
       "text-weaker": "#505050",
       "text-diff-add-base": "var(--v2-state-fg-success)",
       "text-diff-delete-base": "var(--v2-state-fg-danger)",

@@ -382,7 +382,7 @@ export function SitePagesEditor(props: {
           <div class="iris-ui-empty"><Spinner class="iris-ui-spin" /></div>
         </Match>
         <Match when={site.latest && !site.latest.measured}>
-          <p class="text-12-regular text-text-weak py-2" role="alert">Couldn't read this site's pages — {site.latest!.reason}.</p>
+          <p class="text-13-regular text-text-weak py-2" role="alert">Couldn't read this site's pages — {site.latest!.reason}.</p>
         </Match>
         <Match when={detail()}>
           {(d) => (
@@ -526,7 +526,7 @@ export function SitePagesEditor(props: {
                       rel="noreferrer"
                       class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 hover:bg-background-element"
                     >
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{n.label}</span>
+                      <span class="text-13-regular text-text-base min-w-0 flex-1">{n.label}</span>
                       <span class="shrink-0 font-mono text-11-regular text-text-weaker">{n.url}</span>
                     </a>
                   )}

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
+import { irisTheme } from "@opencode-ai/ui/theme/default-themes"
+import { themeGround } from "@opencode-ai/ui/theme/ground"
 
 const src = await Bun.file(new URL("../public/oc-theme-preload.js", import.meta.url)).text()
 
@@ -43,4 +45,30 @@ describe("theme preload", () => {
     expect(document.documentElement.dataset.theme).toBe("nightowl")
     expect(document.getElementById("oc-theme-preload")?.textContent).toContain("--background-base:#fff;")
   })
+
+  test("defaults to IRIS and paints the IRIS ground before any theme is cached", () => {
+    run()
+
+    expect(document.documentElement.dataset.theme).toBe("iris")
+    expect(document.documentElement.style.backgroundColor).toBe(themeGround(irisTheme.light, false))
+    expect(document.getElementById("oc-theme-preload")).toBeNull()
+  })
+
+  test("the built-in grounds match the IRIS theme (one launch colour, no flash)", () => {
+    expect(src).toContain(`light: "${themeGround(irisTheme.light, false)}"`)
+    expect(src).toContain(`dark: "${themeGround(irisTheme.dark, true)}"`)
+  })
+
+  test("uses the cached ground and css of the active theme", () => {
+    localStorage.setItem("opencode-theme-id", "oc-2")
+    localStorage.setItem("opencode-theme-ground-light", "#fafafa")
+    localStorage.setItem("opencode-theme-css-light", "--background-base:#f8f8f8;")
+
+    run()
+
+    expect(document.documentElement.dataset.theme).toBe("oc-2")
+    expect(document.documentElement.style.backgroundColor).toBe("#fafafa")
+    expect(document.getElementById("oc-theme-preload")?.textContent).toContain("--background-base:#f8f8f8;")
+  })
 })
+

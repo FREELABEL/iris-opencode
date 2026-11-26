@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" style="background-color: var(--background-base)">
+<html lang="en" style="background-color: var(--v2-background-bg-deep, #efede8)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,45 +9,18 @@
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#F8F7F7" />
-    <meta name="theme-color" content="#131010" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#efede8" />
+    <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)" />
     <meta property="og:image" content="/social-share.png" />
     <meta property="twitter:image" content="/social-share.png" />
-    <script id="oc-theme-preload-script">
-      ;(function () {
-        var themeId = localStorage.getItem("opencode-theme-id")
-        if (!themeId) return
-
-        var scheme = localStorage.getItem("opencode-color-scheme") || "system"
-        var isDark = scheme === "dark" || (scheme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
-        var mode = isDark ? "dark" : "light"
-
-        document.documentElement.dataset.theme = themeId
-        document.documentElement.dataset.colorScheme = mode
-
-        if (themeId === "oc-1") return
-
-        var css = localStorage.getItem("opencode-theme-css-" + themeId + "-" + mode)
-        if (css) {
-          var style = document.createElement("style")
-          style.id = "oc-theme-preload"
-          style.textContent =
-            ":root{color-scheme:" +
-            mode +
-            ";--text-mix-blend-mode:" +
-            (isDark ? "plus-lighter" : "multiply") +
-            ";" +
-            css +
-            "}"
-          document.head.appendChild(style)
-        }
-      })()
-    </script>
+    <link rel="preload" href="/assets/InterVariable-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Inlined at build time from packages/app/public/oc-theme-preload.js (one preload for web and desktop). -->
+    <script id="oc-theme-preload-script" src="/oc-theme-preload.js"></script>
     <style id="iris-boot-style">
       /* Boot splash (#192535): until the app's first render the window was a blank ground. */
       #iris-boot { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center;
-        background: var(--v2-background-bg-deep, #131312); pointer-events: none; transition: opacity .2s ease, visibility 0s linear .2s; }
-      html[data-color-scheme="light"] #iris-boot { background: var(--v2-background-bg-deep, #f6f5f1); }
+        background: var(--v2-background-bg-deep, #16140f); pointer-events: none; transition: opacity .2s ease, visibility 0s linear .2s; }
+      html[data-color-scheme="light"] #iris-boot { background: var(--v2-background-bg-deep, #efede8); }
       #iris-boot img { width: 40px; height: 40px; display: block; margin: 0 auto; opacity: .92; }
       #iris-boot i { display: block; width: 72px; height: 2px; margin: 18px auto 0; border-radius: 2px;
         background: linear-gradient(90deg, transparent, rgba(156,156,146,.55), transparent) 0 0 / 200% 100%;
@@ -57,7 +30,7 @@
       #root:not(:empty) ~ #iris-boot { opacity: 0; visibility: hidden; }
     </style>
   </head>
-  <body class="antialiased overscroll-none text-12-regular overflow-hidden">
+  <body class="antialiased overscroll-none text-13-regular overflow-hidden">
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root" class="flex flex-col h-screen"></div>
     <div id="iris-boot" aria-hidden="true"><div><img src="/favicon.svg" alt="" /><i></i></div></div>

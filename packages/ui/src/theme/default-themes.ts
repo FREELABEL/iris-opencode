@@ -79,6 +79,7 @@ export const vercelTheme = vercelThemeJson as DesktopTheme
 export const vesperTheme = vesperThemeJson as DesktopTheme
 export const zenburnTheme = zenburnThemeJson as DesktopTheme
 
+// New installs get "iris" (DEFAULT_THEME_ID); a stored choice is never rewritten.
 export { DEFAULT_THEME_ID } from "./default-id"
 
 export const DEFAULT_THEMES: Record<string, DesktopTheme> = {

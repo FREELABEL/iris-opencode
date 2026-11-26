@@ -145,7 +145,7 @@ export default function () {
           <div class="min-h-screen w-full bg-background-base text-text-base flex flex-col items-center justify-center gap-4 p-6 text-center">
             <p class="text-16-medium">Unable to render this share.</p>
             <p class="text-14-regular text-text-weaker">Check the console for more details.</p>
-            <pre class="text-12-mono text-left whitespace-pre-wrap break-words w-full max-w-200 bg-background-stronger rounded-md p-4">
+            <pre class="text-13-mono text-left whitespace-pre-wrap break-words w-full max-w-200 bg-background-stronger rounded-md p-4">
               {details}
             </pre>
           </div>
@@ -226,16 +226,16 @@ export default function () {
                           <div class="flex flex-col gap-2 sm:flex-row sm:gap-4 sm:items-center sm:h-8 justify-start self-stretch">
                             <div class="pl-[2.5px] pr-2 flex items-center gap-1.75 bg-surface-strong shadow-xs-border-base w-fit">
                               <Mark class="shrink-0 w-3 my-0.5" />
-                              <div class="text-12-mono text-text-base">v{info().version}</div>
+                              <div class="text-13-mono text-text-base">v{info().version}</div>
                             </div>
                             <div class="flex gap-4 items-center">
                               <div class="flex gap-2 items-center">
                                 <Show when={provider()}>
                                   <ProviderIcon id={provider()!} class="size-3.5 shrink-0 text-icon-strong-base" />
                                 </Show>
-                                <div class="text-12-regular text-text-base">{model()?.name ?? modelID()}</div>
+                                <div class="text-13-regular text-text-base">{model()?.name ?? modelID()}</div>
                               </div>
-                              <div class="text-12-regular text-text-weaker">
+                              <div class="text-13-regular text-text-weaker">
                                 {DateTime.fromMillis(info().time.created).toFormat("dd MMM yyyy, HH:mm")}
                               </div>
                             </div>

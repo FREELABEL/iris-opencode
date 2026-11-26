@@ -182,7 +182,7 @@ function ServerStatusPopoverView(props: { state: ServerStatusState }) {
         variant="alt"
       >
         <Tabs.List data-slot="tablist" class="bg-transparent border-b-0 px-4 pt-2 pb-0 gap-4 h-10">
-          <Tabs.Trigger value="servers" data-slot="tab" class="text-12-regular">
+          <Tabs.Trigger value="servers" data-slot="tab" class="text-13-regular">
             {props.state.servers().length > 0 ? `${props.state.servers().length} ` : ""}
             {props.state.serversLabel}
           </Tabs.Trigger>
@@ -222,7 +222,7 @@ function ServerStatusList(props: { state: ServerStatusState }) {
                   status={item.health}
                   class="flex items-center gap-2 w-full min-w-0"
                   nameClass="text-14-regular text-text-base truncate"
-                  versionClass="text-12-regular text-text-weak truncate"
+                  versionClass="text-13-regular text-text-weak truncate"
                   badge={
                     <Show when={item.key === props.state.defaultKey()}>
                       <span class="text-11-regular text-text-base bg-surface-base px-1.5 py-0.5 rounded-md">
@@ -309,21 +309,21 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
       >
         <Tabs.List data-slot="tablist" class="bg-transparent border-b-0 px-4 pt-2 pb-0 gap-4 h-10">
           {!settings.general.newLayoutDesigns() && (
-            <Tabs.Trigger value="servers" data-slot="tab" class="text-12-regular">
+            <Tabs.Trigger value="servers" data-slot="tab" class="text-13-regular">
               {sortedServers().length > 0 ? `${sortedServers().length} ` : ""}
               {language.t("status.popover.tab.servers")}
             </Tabs.Trigger>
           )}
-          <Tabs.Trigger value="mcp" data-slot="tab" class="text-12-regular">
+          <Tabs.Trigger value="mcp" data-slot="tab" class="text-13-regular">
             {mcpConnected() > 0 ? `${mcpConnected()} ` : ""}
             {language.t("status.popover.tab.mcp")}
           </Tabs.Trigger>
-          <Tabs.Trigger value="lsp" data-slot="tab" class="text-12-regular">
+          <Tabs.Trigger value="lsp" data-slot="tab" class="text-13-regular">
             {lspCount() > 0 ? `${lspCount()} ` : ""}
             {language.t("status.popover.tab.lsp")}
           </Tabs.Trigger>
           <Show when={protocol() === "v1"}>
-            <Tabs.Trigger value="plugins" data-slot="tab" class="text-12-regular">
+            <Tabs.Trigger value="plugins" data-slot="tab" class="text-13-regular">
               {pluginCount() > 0 ? `${pluginCount()} ` : ""}
               {language.t("status.popover.tab.plugins")}
             </Tabs.Trigger>
@@ -360,7 +360,7 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                           status={global.servers.health[key]}
                           class="flex items-center gap-2 w-full min-w-0"
                           nameClass="text-14-regular text-text-base truncate"
-                          versionClass="text-12-regular text-text-weak truncate"
+                          versionClass="text-13-regular text-text-weak truncate"
                           badge={
                             <Show when={key === defaultServer.key()}>
                               <span class="text-11-regular text-text-base bg-surface-base px-1.5 py-0.5 rounded-md">

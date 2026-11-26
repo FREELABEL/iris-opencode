@@ -48,7 +48,7 @@ export function IrisLocalCopySettings(props: {
     <Dialog title="Offline copy" description="Boards you open, kept on this machine">
       <div class="iris-notify" data-slot="iris-local-copy">
         <Show when={data.error}>
-          <p class="text-12-regular text-text-weak">Could not read the setting — {String(data.error?.message ?? data.error)}.</p>
+          <p class="text-13-regular text-text-weak">Could not read the setting — {String(data.error?.message ?? data.error)}.</p>
         </Show>
         <Show when={data.latest}>
           <label class="iris-notify__row">

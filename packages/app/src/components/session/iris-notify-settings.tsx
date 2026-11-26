@@ -47,7 +47,7 @@ export function IrisNotifySettings(props: { doFetch: (path: string, init?: Reque
     <Dialog title="Notifications" description="What Atlas tells you about your cards">
       <div class="iris-notify">
         <Show when={data.latest && !data.latest.measured}>
-          <p class="text-12-regular text-text-weak">Could not read your settings — {data.latest!.reason}.</p>
+          <p class="text-13-regular text-text-weak">Could not read your settings — {data.latest!.reason}.</p>
         </Show>
         <Show when={data.latest?.measured}>
           <For each={ROWS}>

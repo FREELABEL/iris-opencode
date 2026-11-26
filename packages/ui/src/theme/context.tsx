@@ -9,6 +9,7 @@ import { resolveThemeVariant, themeToCss } from "./resolve"
 import { resolveThemeVariantV2, themeV2ToCss } from "./v2/resolve"
 import type { DesktopTheme } from "./types"
 import { DEFAULT_THEME_ID } from "./default-id"
+import { themeGround } from "./ground"
 
 export { DEFAULT_THEME_ID }
 
@@ -167,14 +168,6 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   if (meta) meta.setAttribute("content", ground)
 }
 
-/** The window ground (`--v2-background-bg-deep`) of a theme variant, as a hex colour. */
-export function themeGround(variant: DesktopTheme["light"], isDark: boolean) {
-  const tokens = resolveThemeVariantV2(variant, isDark) as Record<string, string>
-  let value = tokens["v2-background-bg-deep"] ?? ""
-  for (let i = 0; i < 8 && value.startsWith("var(--"); i++) value = tokens[value.slice(6, -1)] ?? ""
-  if (!value.startsWith("#")) return isDark ? "#16140f" : "#efede8"
-  return value.length === 9 ? value.slice(0, 7) : value
-}
 
 function cacheThemeVariants(theme: DesktopTheme) {
   for (const mode of ["light", "dark"] as const) {

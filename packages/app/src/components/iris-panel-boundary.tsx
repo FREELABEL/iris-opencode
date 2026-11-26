@@ -22,7 +22,7 @@ export function IrisPanelBoundary(props: ParentProps<{ label?: string }>) {
         return (
           <div
             data-slot="iris-panel-error"
-            class="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-12-regular text-text-weak"
+            class="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-13-regular text-text-weak"
           >
             <div class="text-text-base">{props.label ?? "This panel"} couldn't reach the local IRIS server.</div>
             <div class="max-w-72 break-words">{error instanceof Error ? error.message : String(error)}</div>
@@ -42,7 +42,7 @@ export function IrisPanelBoundary(props: ParentProps<{ label?: string }>) {
         fallback={
           <div
             data-slot="iris-panel-loading"
-            class="flex h-full items-center justify-center text-12-regular text-text-weak"
+            class="flex h-full items-center justify-center text-13-regular text-text-weak"
           >
             Loading…
           </div>

@@ -14,7 +14,7 @@
  * avatars) are OC-2's hand-tuned ramps, copied so the two themes agree on what "danger" looks like.
  */
 
-import type { DesktopTheme } from "../src/theme/types"
+import type { ColorValue, DesktopTheme } from "../src/theme/types"
 
 const dir = import.meta.dir + "/../src/theme/themes"
 const oc2 = (await Bun.file(dir + "/oc-2.json").json()) as DesktopTheme
@@ -87,7 +87,7 @@ const keepRest = (mode: "light" | "dark") =>
     ),
   )
 
-const syntax = (dark: boolean) => ({
+const syntax = (dark: boolean): Record<string, ColorValue> => ({
   "syntax-comment": "var(--v2-text-text-muted)",
   "syntax-keyword": dark ? "var(--v2-purple-400)" : "var(--v2-purple-800)",
   "syntax-string": dark ? "var(--v2-green-400)" : "var(--v2-green-800)",
