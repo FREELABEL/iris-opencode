@@ -7,17 +7,17 @@
  * (light-dark), never the OS.
  */
 .iae {
-  --iae-surface: light-dark(#f6f5f1, #131312);
-  --iae-card: light-dark(#ebeae4, #1b1b19);
-  --iae-elev: light-dark(#e1e0d8, #24241f);
-  --iae-rule: light-dark(#d8d7cf, #34342e);
-  --iae-ink: light-dark(#1d1c19, #e8e8e0);
-  --iae-ink2: light-dark(#5c5b54, #9c9c92);
-  --iae-faint: light-dark(#8a897f, #6e6e66);
-  --iae-jade: light-dark(#0f7a5c, #4fd1a5);
-  --iae-amber: light-dark(#b45309, #f59e0b);
-  --iae-sage: light-dark(#4d7a45, #9cbf8f);
-  --iae-coral: light-dark(#b8402f, #f0806f);
+  --iae-surface: var(--v2-background-bg-base);
+  --iae-card: var(--v2-background-bg-layer-01);
+  --iae-elev: var(--v2-background-bg-layer-02);
+  --iae-rule: var(--v2-border-border-base);
+  --iae-ink: var(--v2-text-text-base);
+  --iae-ink2: var(--v2-text-text-muted);
+  --iae-faint: var(--v2-text-text-faint);
+  --iae-jade: var(--v2-state-fg-success);
+  --iae-amber: var(--v2-state-fg-warning);
+  --iae-sage: var(--v2-state-fg-success);
+  --iae-coral: var(--v2-state-fg-danger);
   --iae-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   display: flex;
   flex-direction: column;
@@ -59,8 +59,8 @@
 }
 .iae-btn:hover:not(:disabled) { background: var(--iae-elev); }
 .iae-btn:disabled { opacity: 0.45; cursor: default; }
-.iae-btn--primary { background: var(--iae-jade); border-color: var(--iae-jade); color: var(--iae-surface); font-weight: var(--font-weight-semibold); }
-.iae-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--iae-jade) 85%, var(--iae-ink)); }
+.iae-btn--primary { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); font-weight: var(--font-weight-semibold); }
+.iae-btn--primary:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
 .iae-btn--ghost { background: transparent; border-color: transparent; color: var(--iae-ink2); }
 .iae-btn:focus-visible, .iae-step:focus-visible, .iae-x:focus-visible { outline: 2px solid var(--iae-jade); outline-offset: 2px; }
 .iae-link { all: unset; cursor: pointer; font-size: var(--font-size-x-small); color: var(--iae-jade); }
@@ -122,7 +122,7 @@
 .iae-model { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--iae-rule); cursor: pointer; }
 .iae-model:last-child { border-bottom: 0; }
 .iae-model:hover { background: var(--iae-card); }
-.iae-model[data-on] { background: var(--iae-card); box-shadow: inset 2px 0 0 var(--iae-jade); }
+.iae-model[data-on] { background: color-mix(in srgb, var(--text-interactive-base) 10%, transparent); }
 .iae-model__name { font-weight: var(--font-weight-medium); }
 .iae-model__id { color: var(--iae-faint); font-size: var(--font-size-x-small); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iae-model__ctx { color: var(--iae-ink2); font-size: var(--font-size-x-small); }
@@ -170,7 +170,7 @@
   all: unset; cursor: pointer; padding: 4px 9px; border-radius: var(--radius-md); font-size: var(--font-size-caption); text-transform: capitalize;
   border: 1px solid var(--iae-rule); color: var(--iae-ink2);
 }
-.iae-days > button[aria-pressed="true"] { background: var(--iae-jade); border-color: var(--iae-jade); color: var(--iae-surface); }
+.iae-days > button[aria-pressed="true"] { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); }
 .iae-days .iae-link { margin-left: 6px; }
 
 /* rules */
@@ -199,8 +199,8 @@
 .iae-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px; }
 .iae-new {
   all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-lg);
-  font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: light-dark(#ffffff, #131312); background: light-dark(#0f7a5c, #4fd1a5);
+  font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: var(--text-on-brand-base); background: var(--surface-brand-base);
 }
-.iae-new:hover { filter: brightness(1.06); }
-.iae-new:focus-visible { outline: 2px solid light-dark(#0f7a5c, #4fd1a5); outline-offset: 2px; }
+.iae-new:hover { background: var(--surface-brand-hover); }
+.iae-new:focus-visible { outline: 2px solid var(--border-interactive-focus); outline-offset: 2px; }
 .iae-bar__hint { font-size: var(--font-size-x-small); color: var(--text-weak); }

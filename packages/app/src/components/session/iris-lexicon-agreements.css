@@ -7,16 +7,17 @@
 .iris-lex-spin { width: 14px; }
 .iris-lex-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: wrap; }
 .iris-lex-search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 2px 4px 2px 8px; color: var(--text-weak); min-width: 0; flex: 0 1 240px; }
+.iris-lex-search:focus-within { border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
 .iris-lex-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-small); padding: 3px 0; }
 .iris-lex-meta { color: var(--text-weak); font-size: var(--font-size-caption); }
 .iris-lex-spacer { flex: 1; }
 .iris-lex-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: var(--radius-md); padding: 4px 10px; font-size: var(--font-size-caption); cursor: pointer; white-space: nowrap; }
 .iris-lex-btn:not([data-primary]):hover:not(:disabled) { background: var(--surface-raised-base); }
-.iris-lex-btn[data-primary]:hover:not(:disabled) { opacity: 0.88; }
+.iris-lex-btn[data-primary]:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
 .iris-lex-btn:disabled { opacity: 0.45; cursor: default; }
-.iris-lex-btn[data-primary] { background: var(--text-strong); border-color: var(--text-strong); color: var(--background-base); font-weight: var(--font-weight-medium); }
+.iris-lex-btn[data-primary] { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); font-weight: var(--font-weight-medium); }
 .iris-lex .iris-lex-btn[data-tone="bad"]:not([data-primary]) { color: var(--v2-state-fg-danger); }
-.iris-lex .iris-lex-btn[data-primary][data-tone="bad"] { background: var(--v2-state-fg-danger); border-color: var(--v2-state-fg-danger); color: #fff; }
+.iris-lex .iris-lex-btn[data-primary][data-tone="bad"] { background: var(--v2-state-fg-danger); border-color: var(--v2-state-fg-danger); color: var(--v2-text-text-inverse); }
 .iris-lex-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-weak); cursor: pointer; }
 .iris-lex-icon-btn:hover:not(:disabled) { background: var(--surface-raised-base); color: var(--text-strong); }
 .iris-lex-callout { display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-size-caption); padding: 7px 10px; border-radius: var(--radius-md); margin: 8px 12px 0; background: var(--surface-raised-base); }

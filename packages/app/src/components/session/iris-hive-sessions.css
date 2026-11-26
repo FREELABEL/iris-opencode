@@ -60,7 +60,7 @@
   width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-lg); background: none; cursor: pointer; text-align: left;
 }
 .hss-row:hover { background: var(--hsc-elev); }
-.hss-row[aria-pressed="true"] { background: var(--hsc-elev); box-shadow: inset 2px 0 0 var(--hsc-jade); }
+.hss-row[aria-pressed="true"] { background: color-mix(in srgb, var(--text-interactive-base) 8%, var(--hsc-elev)); }
 .hss-sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--hsc-faint); }
 .hss-sdot[data-status="active"] { background: var(--hsc-sage); }
 .hss-sdot[data-status="needs_you"] { background: var(--hsc-amber); }

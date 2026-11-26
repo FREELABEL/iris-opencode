@@ -184,7 +184,7 @@
 
 /* rows: selection, needs-you, done, sent */
 .hib-li--sel { background: var(--hsc-card); }
-.hib-row--sel { box-shadow: inset 2px 0 0 var(--hsc-jade); }
+.hib-row--sel { background: color-mix(in srgb, var(--text-interactive-base) 8%, transparent); }
 .hib-row--done .hib-subj, .hib-row--done .hib-from { color: var(--hsc-faint); }
 .hib-need {
   flex: none; font-size: var(--font-size-x-small); padding: 1px 6px; border-radius: var(--radius-md); color: var(--hsc-amber);

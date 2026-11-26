@@ -387,3 +387,23 @@
 @media (prefers-reduced-motion: reduce) {
   .iris-loading-bar { animation: none; }
 }
+
+/* Keyboard focus is always visible on IRIS controls (#194375). Many IRIS buttons reset with
+   `all: unset`, which drops the browser's ring; this puts one ring back, in the theme's focus colour.
+   :is() keeps it above a component's own `:focus-visible { outline: none }`. */
+:is(
+    [class*="iris-"],
+    [class*="hsc"],
+    [class*="hib"],
+    [class*="pls"],
+    [class*="iae"],
+    [class*="iag"],
+    [class*="iar"],
+    [class*="itm"],
+    [class*="pbf"],
+    [class*="ihd"],
+    [data-component="first-run"] *
+  ):is(button, a[href], summary, [role="tab"], [role="button"], [role="option"], [tabindex]):not(.hib):focus-visible {
+  outline: 2px solid var(--border-interactive-focus);
+  outline-offset: 2px;
+}

@@ -112,8 +112,8 @@
 }
 .hmc-btn:hover:not(:disabled) { color: var(--hsc-ink); }
 .hmc-btn:disabled { opacity: 0.45; cursor: default; }
-.hmc-btn--go { background: var(--hsc-jade); border-color: var(--hsc-jade); color: var(--hsc-surface); font-weight: var(--font-weight-semibold); }
-.hmc-btn--go:hover:not(:disabled) { color: var(--hsc-surface); filter: brightness(1.08); }
+.hmc-btn--go { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); font-weight: var(--font-weight-semibold); }
+.hmc-btn--go:hover:not(:disabled) { color: var(--text-on-brand-base); background: var(--surface-brand-hover); }
 .hmc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 2px 0 0; }
 .hmc-stats div { padding: 7px 9px; border-radius: var(--radius-lg); background: var(--hsc-card); }
 .hmc-stats dt { font-size: var(--font-size-x-small); color: var(--hsc-faint); }
@@ -123,10 +123,10 @@
 .hmc-att-list, .hmc-can { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .hmc-att-list li {
   display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: var(--radius-lg);
-  border-left: 2px solid var(--hsc-amber); background: color-mix(in srgb, var(--hsc-amber) 8%, transparent);
+  background: color-mix(in srgb, var(--hsc-amber) 10%, transparent);
 }
-.hmc-att-list li[data-level="crit"] { border-left-color: var(--hsc-coral); background: color-mix(in srgb, var(--hsc-coral) 8%, transparent); }
-.hmc-att-list li[data-level="info"] { border-left-color: var(--hsc-rule); background: var(--hsc-card); }
+.hmc-att-list li[data-level="crit"] { background: color-mix(in srgb, var(--hsc-coral) 8%, transparent); }
+.hmc-att-list li[data-level="info"] { background: var(--hsc-card); }
 .hmc-att-list b { font-weight: var(--font-weight-semibold); font-size: var(--font-size-caption); }
 .hmc-att-list span { font-size: var(--font-size-x-small); color: var(--hsc-ink2); line-height: 1.4; }
 .hmc-can li { display: flex; align-items: center; gap: 8px; color: var(--hsc-ink2); }

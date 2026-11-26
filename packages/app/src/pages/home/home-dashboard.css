@@ -1,10 +1,11 @@
-/* Home (#192222). Neutrals come from the app theme so it works light or dark; meaning comes from
-   the IRIS brand palette (heyiris.io): the site gradient, emerald, indigo, amber, fuchsia, cyan. */
+/* Home (#192222). Everything comes from the app theme, so it works light or dark (#194375): ink text,
+   one accent (the theme's brand colour) for what is live and for the one primary action, and the
+   state colours only where something needs you. The tiles are neutral. */
 .ihd {
-  --ihd-em: var(--v2-state-fg-success); --ihd-in: var(--text-interactive-base); --ihd-am: var(--v2-state-fg-warning); --ihd-fu: var(--text-interactive-base); --ihd-bl: var(--text-interactive-base); --ihd-cy: var(--text-interactive-base);
+  --ihd-em: var(--text-interactive-base); --ihd-am: var(--v2-state-fg-warning);
+  --ihd-in: var(--v2-text-text-muted); --ihd-fu: var(--v2-text-text-muted); --ihd-bl: var(--v2-text-text-muted); --ihd-cy: var(--v2-text-text-muted);
   --ihd-bad: var(--v2-state-fg-danger);
-  --ihd-grad: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base), var(--text-interactive-base));
-  --ihd-btn: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
+  --ihd-btn: var(--surface-brand-base);
   --ihd-line: var(--v2-border-border-base);
   --ihd-card: transparent;
   --ihd-ink: var(--v2-text-text-base);
@@ -16,7 +17,7 @@
 .ihd-label { font: var(--font-weight-medium) var(--font-size-x-small)/1 var(--ihd-mono); letter-spacing: .08em; text-transform: uppercase; }
 .ihd-hello { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .ihd-h1 { font-size: var(--font-size-2x-large); line-height: 1.15; font-weight: var(--font-weight-semibold); letter-spacing: -.02em; margin: 6px 0 0; }
-.ihd-grad { background: var(--ihd-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ihd-grad { color: var(--ihd-ink); }
 .ihd-status { display: flex; gap: 14px; margin-top: 6px; }
 .ihd-i { display: inline-flex; align-items: center; gap: 5px; color: var(--ihd-mute); font-size: var(--font-size-caption); white-space: nowrap; }
 .ihd-i svg { width: 14px; height: 14px; flex: none; }
@@ -24,18 +25,19 @@
 .ihd-chip { border: 1px solid var(--ihd-line); border-radius: var(--radius-full); padding: 4px 11px; font-size: var(--font-size-caption); color: var(--ihd-mute); background: var(--ihd-card); }
 .ihd-chip:hover { color: var(--ihd-ink); background: color-mix(in oklab, var(--ihd-card), var(--ihd-ink) 6%); border-color: color-mix(in oklab, var(--ihd-line), var(--ihd-ink) 12%); }
 .ihd-chip, .ihd-go { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, filter 120ms ease; }
-.ihd-go:hover { filter: brightness(1.1); }
+.ihd-go:hover { background: var(--surface-brand-hover); }
 .ihd-chip:active, .ihd-go:active { filter: brightness(0.96); }
-.ihd-go { background: var(--ihd-btn); color: #fff; border-radius: var(--radius-lg); padding: 6px 12px; font-size: var(--font-size-caption); font-weight: var(--font-weight-medium); }
+.ihd-go { background: var(--ihd-btn); color: var(--text-on-brand-base); border-radius: var(--radius-lg); padding: 6px 12px; font-size: var(--font-size-caption); font-weight: var(--font-weight-medium); }
 .ihd-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
 @container (max-width: 720px) { .ihd-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .ihd-stat { border: 1px solid var(--ihd-line); border-radius: var(--radius-2xl); padding: 12px; background: var(--ihd-card); position: relative; min-width: 0; }
 .ihd-mk { width: 24px; height: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-bottom: 10px; }
-.ihd-mk i { border-radius: 50%; display: block; }
+.ihd-mk i { border-radius: 50%; display: block; background: var(--v2-border-border-strong); }
+.ihd-mk i:first-child { background: var(--ihd-em); }
 .ihd-n { font-size: var(--font-size-x-large); font-weight: var(--font-weight-semibold); font-variant-numeric: tabular-nums; line-height: 1.1; }
 .ihd-stat .ihd-label { margin-top: 4px; }
 .ihd-stat[data-link] { cursor: pointer; }
-.ihd-stat[data-link]:hover { border-color: color-mix(in srgb, var(--ihd-cy) 45%, var(--ihd-line)); }
+.ihd-stat[data-link]:hover { border-color: var(--v2-border-border-strong); }
 .ihd-meta { display: flex; gap: 10px; margin-top: 3px; }
 .ihd-flag { position: absolute; top: 10px; right: 10px; }
 .ihd-card { margin-top: 16px; border: 1px solid var(--ihd-line); border-radius: var(--radius-2xl); background: var(--ihd-card); padding: 12px 12px 8px; }
@@ -77,7 +79,7 @@
 .ihd-pager { display: flex; align-items: center; gap: 5px; justify-content: flex-end; padding-top: 8px; }
 .ihd-pager .ihd-range { margin-right: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
 .ihd-pg { min-width: 26px; height: 26px; border: 1px solid var(--ihd-line); border-radius: var(--radius-lg); display: grid; place-items: center; color: var(--ihd-mute); font-size: var(--font-size-caption); }
-.ihd-pg[aria-current="page"] { color: #fff; border-color: transparent; background: var(--ihd-btn); }
+.ihd-pg[aria-current="page"] { color: var(--ihd-ink); background: var(--v2-background-bg-layer-02); }
 .ihd-pg:disabled { opacity: .35; }
 .ihd-legend { display: flex; gap: 14px; color: var(--ihd-faint); font-size: var(--font-size-x-small); padding-top: 8px; flex-wrap: wrap; }
 .ihd-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -130,6 +132,6 @@
   background: var(--v2-background-bg-base); box-shadow: var(--v2-elevation-raised); color: var(--ihd-mute); font-size: var(--font-size-small); text-align: left;
   transition: border-color 120ms ease, color 120ms ease; }
 .ihd-ask:hover { color: var(--ihd-ink); border-color: color-mix(in oklab, var(--ihd-line), var(--ihd-ink) 14%); }
-.ihd-ask-plus { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ihd-btn); color: #fff; flex: none; }
+.ihd-ask-plus { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ihd-btn); color: var(--text-on-brand-base); flex: none; }
 .ihd-ask-plus svg { width: 14px; height: 14px; }
 .ihd-ask kbd { margin-left: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }

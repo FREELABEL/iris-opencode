@@ -9,12 +9,10 @@
   --fr-surface-strong: color-mix(in srgb, var(--v2-text-text-base) 7%, transparent);
   --fr-line: color-mix(in srgb, var(--v2-text-text-base) 11%, transparent);
 
-  /* The IRIS signature glow — same values as heyiris.io/download (.dl --glow / --grad). */
-  --fr-g1: #a855f7;
-  --fr-g2: var(--text-interactive-base);
-  --fr-g3: var(--text-interactive-base);
-  --fr-grad: linear-gradient(90deg, var(--fr-g1), var(--fr-g2) 55%, var(--fr-g3));
-  --fr-glow: linear-gradient(90deg, color-mix(in srgb, var(--text-interactive-base) 50%, transparent), color-mix(in srgb, var(--text-interactive-base) 50%, transparent), color-mix(in srgb, var(--text-interactive-base) 50%, transparent));
+  /* One accent, from the theme (#194375): the brand fill for the one primary action and for progress,
+     and a faint wash of the same colour behind the hero. No multi-colour gradient, no coloured glows. */
+  --fr-grad: var(--surface-brand-base);
+  --fr-glow: color-mix(in srgb, var(--text-interactive-base) 35%, transparent);
 
   .fr-hero {
     position: relative;
@@ -161,8 +159,7 @@
     transform: translateY(-2px);
     border-color: color-mix(in srgb, var(--text-interactive-base) 55%, transparent);
     box-shadow:
-      0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 22px 60px -16px color-mix(in srgb, var(--text-interactive-base) 70%, transparent);
+      0 0 0 1px rgba(255, 255, 255, 0.06);
   }
   .fr-tile:active:not(:disabled) {
     transform: translateY(0) scale(0.99);
@@ -256,9 +253,9 @@
     /* Many stops on an eased curve, not two: a straight two-stop fade this faint is drawn in
        visible rings on a dark ground (8-bit banding). */
     background:
-      radial-gradient(60% 50% at 18% 78%, rgba(168, 85, 247, 0.2) 0%, rgba(168, 85, 247, 0.164) 18%, rgba(168, 85, 247, 0.12) 34%, rgba(168, 85, 247, 0.08) 48%, rgba(168, 85, 247, 0.048) 60%, rgba(168, 85, 247, 0.024) 71%, rgba(168, 85, 247, 0.01) 80%, rgba(168, 85, 247, 0.0) 88%),
-      radial-gradient(50% 45% at 50% 55%, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0.098) 18%, rgba(59, 130, 246, 0.072) 34%, rgba(59, 130, 246, 0.048) 48%, rgba(59, 130, 246, 0.029) 60%, rgba(59, 130, 246, 0.014) 71%, rgba(59, 130, 246, 0.006) 80%, rgba(59, 130, 246, 0.0) 88%),
-      radial-gradient(55% 50% at 88% 30%, rgba(6, 182, 212, 0.14) 0%, rgba(6, 182, 212, 0.115) 18%, rgba(6, 182, 212, 0.084) 34%, rgba(6, 182, 212, 0.056) 48%, rgba(6, 182, 212, 0.034) 60%, rgba(6, 182, 212, 0.017) 71%, rgba(6, 182, 212, 0.007) 80%, rgba(6, 182, 212, 0.0) 88%);
+      radial-gradient(60% 50% at 18% 78%, color-mix(in srgb, var(--text-interactive-base) 20%, transparent) 0%, color-mix(in srgb, var(--text-interactive-base) 16.4%, transparent) 18%, color-mix(in srgb, var(--text-interactive-base) 12%, transparent) 34%, color-mix(in srgb, var(--text-interactive-base) 8%, transparent) 48%, color-mix(in srgb, var(--text-interactive-base) 4.8%, transparent) 60%, color-mix(in srgb, var(--text-interactive-base) 2.4%, transparent) 71%, color-mix(in srgb, var(--text-interactive-base) 1%, transparent) 80%, color-mix(in srgb, var(--text-interactive-base) 0%, transparent) 88%),
+      radial-gradient(50% 45% at 50% 55%, color-mix(in srgb, var(--text-interactive-base) 12%, transparent) 0%, color-mix(in srgb, var(--text-interactive-base) 9.8%, transparent) 18%, color-mix(in srgb, var(--text-interactive-base) 7.2%, transparent) 34%, color-mix(in srgb, var(--text-interactive-base) 4.8%, transparent) 48%, color-mix(in srgb, var(--text-interactive-base) 2.9%, transparent) 60%, color-mix(in srgb, var(--text-interactive-base) 1.4%, transparent) 71%, color-mix(in srgb, var(--text-interactive-base) 0.6%, transparent) 80%, color-mix(in srgb, var(--text-interactive-base) 0%, transparent) 88%),
+      radial-gradient(55% 50% at 88% 30%, color-mix(in srgb, var(--text-interactive-base) 14%, transparent) 0%, color-mix(in srgb, var(--text-interactive-base) 11.5%, transparent) 18%, color-mix(in srgb, var(--text-interactive-base) 8.4%, transparent) 34%, color-mix(in srgb, var(--text-interactive-base) 5.6%, transparent) 48%, color-mix(in srgb, var(--text-interactive-base) 3.4%, transparent) 60%, color-mix(in srgb, var(--text-interactive-base) 1.7%, transparent) 71%, color-mix(in srgb, var(--text-interactive-base) 0.7%, transparent) 80%, color-mix(in srgb, var(--text-interactive-base) 0%, transparent) 88%);
     transform: translateZ(0);
   }
   /* Grain: dithers what banding is left. ~3% noise is invisible as texture, visible as smoothness. */
@@ -351,13 +348,13 @@
     border-radius: var(--radius-2xl);
     font-size: var(--font-size-base);
     font-weight: var(--font-weight-semibold);
-    color: #fff;
-    background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
+    color: var(--text-on-brand-base);
+    background: var(--surface-brand-base);
     transition: background 160ms ease, box-shadow 160ms ease;
   }
   .fr-primary:hover:not(:disabled) {
-    background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
-    box-shadow: 0 14px 40px -14px color-mix(in srgb, var(--text-interactive-base) 70%, transparent);
+    background: var(--surface-brand-base);
+    box-shadow: none;
   }
   .fr-link {
     width: fit-content;
@@ -392,7 +389,6 @@
     background: var(--fr-surface);
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.02),
-      0 24px 60px -30px color-mix(in srgb, var(--text-interactive-base) 45%, transparent),
       0 0 90px -40px color-mix(in srgb, var(--text-interactive-base) 35%, transparent);
     overflow: hidden;
   }
@@ -437,7 +433,7 @@
     gap: 10px;
     padding: 11px 14px;
     border-bottom: 1px solid color-mix(in srgb, var(--text-interactive-base) 35%, transparent);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--text-interactive-base) 12%, transparent), color-mix(in srgb, var(--text-interactive-base) 8%, transparent) 60%, color-mix(in srgb, var(--text-interactive-base) 6%, transparent));
+    background: color-mix(in srgb, var(--text-interactive-base) 8%, transparent);
   }
   .fr-plan-mark svg {
     width: 16px;
@@ -446,7 +442,7 @@
     color: var(--v2-text-text-base);
   }
   .fr-row.is-focus:not(.is-picked) {
-    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--text-interactive-base) 60%, transparent);
+    background: color-mix(in srgb, var(--text-interactive-base) 5%, transparent);
   }
   /* ── Goal list (Linktree-style): one column, one material, the action at the edge ── */
   .fr-links {
@@ -496,7 +492,7 @@
   .fr-link-row:focus-within {
     background: var(--fr-surface-hover);
     transform: translateY(-1px);
-    box-shadow: 0 18px 44px -22px color-mix(in srgb, var(--text-interactive-base) 70%, transparent);
+    box-shadow: none;
     outline: none;
   }
   .fr-link-row:hover::before,
@@ -511,9 +507,8 @@
     border-radius: var(--radius-2xl);
     display: grid;
     place-items: center;
-    color: #fff;
-    background: var(--g, var(--fr-grad));
-    box-shadow: 0 8px 22px -10px var(--gs, color-mix(in srgb, var(--text-interactive-base) 80%, transparent));
+    color: var(--text-interactive-base);
+    background: var(--fr-surface-strong);
   }
   .fr-link-icon svg {
     width: 20px;
@@ -571,7 +566,6 @@
     border: 1px solid var(--fr-line);
     background: var(--fr-surface);
     box-shadow:
-      0 24px 60px -30px color-mix(in srgb, var(--text-interactive-base) 45%, transparent),
       0 0 90px -40px color-mix(in srgb, var(--text-interactive-base) 35%, transparent);
   }
   .fr-q {
@@ -589,8 +583,8 @@
     place-items: center;
     font-size: var(--font-size-x-small);
     font-weight: var(--font-weight-semibold);
-    color: #fff;
-    background: linear-gradient(135deg, var(--text-interactive-base), var(--text-interactive-base));
+    color: var(--text-on-brand-base);
+    background: var(--surface-brand-base);
   }
   .fr-q-options {
     display: flex;
@@ -630,7 +624,7 @@
     border: 1.5px solid var(--v2-border-border-base);
     display: grid;
     place-items: center;
-    color: #fff;
+    color: var(--text-on-brand-base);
     transition: background 120ms ease, border-color 120ms ease;
   }
   .fr-box {
@@ -644,7 +638,7 @@
     height: 12px;
   }
   .fr-opt.is-on .fr-box {
-    background: linear-gradient(135deg, var(--text-interactive-base), var(--text-interactive-base));
+    background: var(--surface-brand-base);
     border-color: transparent;
   }
   .fr-opt.is-on .fr-radio {
@@ -697,7 +691,6 @@
   }
   .fr-row.is-picked {
     background: color-mix(in srgb, var(--text-interactive-base) 8%, transparent);
-    box-shadow: inset 3px 0 0 var(--text-interactive-base);
   }
   .fr-row-main {
     display: flex;
@@ -737,9 +730,9 @@
   }
   .fr-row.is-picked .fr-check {
     opacity: 1;
-    color: #fff;
-    background: var(--text-interactive-base);
-    border-color: var(--text-interactive-base);
+    color: var(--text-on-brand-base);
+    background: var(--surface-brand-base);
+    border-color: var(--surface-brand-base);
   }
   .fr-avatar {
     flex-shrink: 0;
@@ -800,12 +793,12 @@
     border-color: color-mix(in srgb, var(--text-interactive-base) 55%, transparent);
   }
   .fr-act-primary {
-    color: #fff;
+    color: var(--text-on-brand-base);
     border-color: transparent;
-    background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
+    background: var(--surface-brand-base);
   }
   .fr-act-primary:hover {
-    box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--text-interactive-base) 80%, transparent);
+    box-shadow: none;
   }
   .fr-act:focus-visible,
   .fr-row-body:focus-visible,
@@ -1154,8 +1147,8 @@
     content: "";
     width: 9px;
     height: 5px;
-    border-left: 2px solid var(--v2-background-bg-base);
-    border-bottom: 2px solid var(--v2-background-bg-base);
+    border: solid var(--v2-background-bg-base);
+    border-width: 0 0 2px 2px;
     transform: rotate(-45deg) translate(1px, -1px);
   }
   .fr-qown {

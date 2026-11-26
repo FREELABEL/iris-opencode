@@ -16,6 +16,7 @@
 
 .iris-drv-searchwrap { padding: 8px 12px 0; flex: 0 0 auto; }
 .iris-drv-search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 3px 8px; color: var(--text-weak); }
+.iris-drv-search:focus-within { border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
 .iris-drv-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-small); padding: 2px 0; }
 
 .iris-drv-chips { display: flex; gap: 6px; padding: 8px 12px; overflow-x: auto; flex: 0 0 auto; scrollbar-width: none; }

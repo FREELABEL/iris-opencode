@@ -1617,11 +1617,12 @@
   border: 0;
   border-bottom: 1px solid transparent;
   background: transparent;
-  padding: 2px 0;
-  font-size: var(--font-size-large);
+  /* One title rule (#194375): this used to be 16/560 here and 20/700 further down. */
+  padding: 6px 0 2px;
+  font-size: var(--font-size-x-large);
   font-weight: var(--font-weight-semibold);
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  line-height: var(--font-size-x-large--line-height);
+  letter-spacing: -0.015em;
   color: var(--text-strong);
 }
 .iris-card__title:hover { border-bottom-color: var(--border-weaker-base); }
@@ -1661,7 +1662,9 @@
   resize: none;
 }
 .iris-card__side {
-  width: 300px;
+  /* Gives way in a narrow panel instead of clipping the body (#194375). */
+  width: min(300px, 42%);
+  min-width: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1747,9 +1750,9 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
 .iris-card__save {
   appearance: none;
   cursor: pointer;
-  border: 1px solid var(--surface-success-strong);
-  background: var(--surface-success-strong);
-  color: var(--text-on-success-strong);
+  border: 1px solid var(--surface-brand-base);
+  background: var(--surface-brand-base);
+  color: var(--text-on-brand-base);
   border-radius: var(--radius-sm);
   font: inherit;
   font-size: var(--font-size-x-small);
@@ -1757,8 +1760,8 @@ input[type="date"].iris-field__input { color-scheme: dark light; }
   line-height: 1.5;
   padding: 3px 12px;
 }
-.iris-card__save:hover:not(:disabled) { filter: brightness(1.08); }
-.iris-card__save:focus-visible { outline: 2px solid var(--border-success-hover); outline-offset: 1px; }
+.iris-card__save:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
+.iris-card__save:focus-visible { outline: 2px solid var(--border-interactive-focus); outline-offset: 1px; }
 .iris-card__save:disabled {
   cursor: default;
   background: transparent;
@@ -2305,8 +2308,8 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 .iris-live { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px 8px; gap: 6px; overflow-y: auto; }
 .iris-live__bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; flex-shrink: 0; }
 .iris-live__verdict { font-size: var(--font-size-small); padding: 6px 8px; border-radius: var(--radius-md); background: var(--surface-raised-base); color: var(--text-strong); }
-.iris-live__verdict--warn { border-inline-start: 3px solid var(--border-warning-base); }
-.iris-live__verdict--paused { border-inline-start: 3px solid var(--border-interactive-base); }
+.iris-live__verdict--warn { background: var(--v2-state-bg-warning); color: var(--v2-state-fg-warning); }
+.iris-live__verdict--paused { background: var(--surface-interactive-weak); }
 .iris-live__verdict--idle { color: var(--text-weak); }
 .iris-live__meta { display: flex; gap: 12px; font-size: var(--font-size-x-small); color: var(--text-weak); }
 .iris-live__handback { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
@@ -2326,44 +2329,30 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
  * chose 2026-10-09: the house paper neutrals, jade for "IRIS thinks", a quiet graphite for "Runs on
  * its own", IRIS amber for "Needs you".
  *
- * ALL COLOUR LIVES IN THIS ONE BLOCK. Each token is written twice: a dark value first (what an old
- * engine without light-dark() keeps) and then light-dark(light, dark). light-dark() follows the
- * root `color-scheme`, which the theme loader sets from the app's own light/dark setting — so the
- * panel follows the app, not the OS. Light values are derived from the same roles (jade #0f7a5c and
- * amber #b45309 on paper #f6f5f1, ink #1d1c19).
+ * ALL COLOUR LIVES IN THIS ONE BLOCK, and every value is a theme token (#194375): the roles stay
+ * (jade = the theme's success colour, amber = its warning colour, paper and ink = its grounds and
+ * text), so the panel follows the app's theme in light and dark with nothing written twice.
  *
  * Two rules the palette exists to keep: jade is a step type and is NEVER a button (Run it is warm
  * ink), and "Fully automatic" is neutral — only "Needs you" is allowed to shout.
  * Numbers are mono. The strip fills left-to-right once, on the panel's first render only.
  */
 .pbf-list, .pbf-filters, .pbf-detail, .pbf-row, .pbf-legend, .pbf-title, .pbf-segctl {
-  --pbf-surface: #131312;
-  --pbf-surface: light-dark(#f6f5f1, #131312);
-  --pbf-card: #1b1b19;
-  --pbf-card: light-dark(#ebeae4, #1b1b19);
-  --pbf-rule: #34342e;
-  --pbf-rule: light-dark(#d8d7cf, #34342e);
-  --pbf-ink: #e8e8e0;
-  --pbf-ink: light-dark(#1d1c19, #e8e8e0);
-  --pbf-ink2: #9c9c92;
-  --pbf-ink2: light-dark(#5c5b54, #9c9c92);
-  --pbf-faint: #6e6e66;
-  --pbf-faint: light-dark(#8a897f, #6e6e66);
+  --pbf-surface: var(--v2-background-bg-base);
+  --pbf-card: var(--v2-background-bg-layer-01);
+  --pbf-rule: var(--v2-border-border-base);
+  --pbf-ink: var(--v2-text-text-base);
+  --pbf-ink2: var(--v2-text-text-muted);
+  --pbf-faint: var(--v2-text-text-faint);
   /* who does the step */
-  --pbf-think: #4fd1a5;
-  --pbf-think: light-dark(#0f7a5c, #4fd1a5);
-  --pbf-auto: #4a4a44;
-  --pbf-auto: light-dark(#b3b2a8, #4a4a44);
+  --pbf-think: var(--v2-state-fg-success);
+  --pbf-auto: var(--v2-border-border-strong);
   --pbf-you: var(--v2-state-fg-warning);
-  --pbf-you: light-dark(#b45309, #f59e0b);
   --pbf-none: var(--pbf-rule);
   /* text on each numbered dot */
-  --pbf-on-think: #131312;
-  --pbf-on-think: light-dark(#f6f5f1, #131312);
-  --pbf-on-auto: #e8e8e0;
-  --pbf-on-auto: light-dark(#1d1c19, #e8e8e0);
-  --pbf-on-you: #131312;
-  --pbf-on-you: light-dark(#f6f5f1, #131312);
+  --pbf-on-think: var(--v2-text-text-inverse);
+  --pbf-on-auto: var(--v2-text-text-base);
+  --pbf-on-you: var(--v2-text-text-inverse);
   --pbf-mono: var(--font-mono, ui-monospace, monospace);
 }
 .pbf-num { font-family: var(--pbf-mono); font-variant-numeric: tabular-nums; }
@@ -2611,8 +2600,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   scroll-snap-type: x proximity;
 }
 .iris-board__col {
-  flex: 0 0 248px;
-  max-width: 248px;
+  /* Never wider than the board itself in a narrow side panel (#194375). */
+  flex: 0 0 min(248px, 85%);
+  max-width: min(248px, 85%);
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 220px);
@@ -3174,26 +3164,11 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 
 /* ── The card's facts, at the top (#190269) ─────────────────────────────── */
-/* The IRIS hairline: the brand's gradient, once, across the top of the card. */
+/* No coloured strip across the top (house rule: tint, text colour or icon, never an edge bar). */
 .iris-card__head {
   position: relative;
   gap: 10px;
   padding: 4px 18px 14px;
-}
-.iris-card__head::before {
-  content: "";
-  position: absolute;
-  inset: -2px 18px auto;
-  height: 2px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base), var(--text-interactive-base));
-  opacity: 0.85;
-}
-.iris-card__title {
-  font-size: var(--font-size-x-large);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.015em;
-  padding: 6px 0 2px;
 }
 
 .iris-facts {
@@ -3288,9 +3263,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   padding: 0 9px;
   border-radius: var(--radius-md);
   font-size: var(--font-size-x-small);
-  font-weight: var(--font-weight-semibold);
-  color: #fff;
-  background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
+  font-weight: var(--font-weight-medium);
+  color: var(--text-strong);
+  background: var(--surface-raised-strong);
 }
 .iris-label--add {
   color: var(--text-weak);
@@ -3518,18 +3493,18 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-avatar2__spark {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 12px;
-  height: 12px;
+  right: -4px;
+  bottom: -4px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
   font-size: var(--font-size-x-small);
   line-height: 1;
-  color: #fff;
-  background: var(--text-interactive-base);
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
   box-shadow: 0 0 0 2px var(--background-base);
 }
 
@@ -3576,7 +3551,7 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   background: var(--surface-raised-base);
 }
 .iris-card__read:focus-visible {
-  outline: 1px solid var(--text-interactive-base);
+  outline: 2px solid var(--border-interactive-focus);
 }
 .iris-card__editbtn {
   opacity: 0.6;
@@ -3609,11 +3584,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
   cursor: pointer;
 }
 .iris-seg__item[aria-selected="true"] {
-  color: #fff;
-  background: linear-gradient(90deg, var(--text-interactive-base), var(--text-interactive-base));
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
 }
 .iris-seg__item[aria-selected="true"] .iris-card__count {
-  color: rgb(255 255 255 / 0.8);
+  color: var(--text-on-brand-base);
+  opacity: 0.8;
 }
 .iris-card__sidebar-head {
   display: flex;
@@ -3803,12 +3779,12 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 
 /* Sidebar: 440 / 400 / 360, like Elon's 460 / 400 / 360. */
 .iris-card--elon .iris-card__side {
-  width: 440px;
+  width: min(440px, 42%);
   padding-top: 0;
   background: var(--surface-raised-base, transparent);
 }
-@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: 400px; } }
-@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: 360px; } }
+@media (max-width: 1200px) { .iris-card--elon .iris-card__side { width: min(400px, 42%); } }
+@media (max-width: 1024px) { .iris-card--elon .iris-card__side { width: min(360px, 42%); } }
 .iris-card--elon .iris-card__sidebody { padding: 4px 16px 16px; }
 
 .iris-tabs {
@@ -4192,8 +4168,8 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 .iris-share__allow { margin-top: 10px; }
 .iris-share__confirm { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; font-size: var(--font-size-caption); }
 .iris-share__confirmacts { display: flex; justify-content: flex-end; gap: 6px; }
-.iris-card__act--danger:not(:disabled) { color: #fff; background: var(--v2-state-fg-danger); }
-.iris-card__act--danger:hover:not(:disabled) { background: var(--v2-state-fg-danger); }
+.iris-card__act--danger:not(:disabled) { color: var(--v2-text-text-inverse); background: var(--v2-state-fg-danger); }
+.iris-card__act--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--v2-state-fg-danger) 88%, var(--text-strong)); }
 
 /* ── Task rows (#191794) ─────────────────────────────────────────────────────────────────────────
    A row card per task: a 3px bar for state, always with its word on the second line, so colour is
@@ -4222,14 +4198,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   background: var(--surface-raised-base-hover);
   overflow: hidden;
 }
-.iris-task::before {
-  content: "";
-  position: absolute;
-  inset: 8px auto 8px 0;
-  width: 3px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--bar);
-}
+/* A task's state is its coloured word (.iris-task__word), not a bar on its edge. */
 .iris-task[data-sub] { padding-block: 7px; }
 .iris-task[data-state="agent"] { --bar: var(--text-interactive-base); }
 .iris-task[data-state="soon"] { --bar: var(--v2-state-fg-warning); }
@@ -4326,7 +4295,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   background: var(--surface-raised-strong, var(--background-strong));
 }
 .iris-bubble__text.iris-markdown { white-space: normal; }
-.iris-bubble--me .iris-bubble__text { color: #fff; background: var(--text-interactive-base); }
+.iris-bubble--me .iris-bubble__text { color: var(--text-on-brand-base); background: var(--surface-brand-base); }
 .iris-event {
   display: flex;
   align-items: baseline;
@@ -4360,12 +4329,12 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: var(--text-interactive-base);
+  color: var(--text-on-brand-base);
+  background: var(--surface-brand-base);
   cursor: pointer;
 }
 .iris-send:disabled { cursor: default; opacity: 0.4; }
-.iris-send:hover:not(:disabled) { background: var(--text-interactive-base); }
+.iris-send:hover:not(:disabled) { background: var(--surface-brand-hover); }
 .iris-quick[data-only] section[data-quick]:not([data-active]) { display: none; }
 .iris-quick[data-only] { min-width: 240px; }
 
@@ -4381,7 +4350,7 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   padding: 24px 28px;
 }
 .iris-card--elon .iris-card__body .iris-card__read:hover { background: transparent; }
-.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: none; }
+.iris-card--elon .iris-card__body .iris-card__read:focus-visible { outline: 2px solid var(--border-interactive-focus); outline-offset: -2px; }
 .iris-card--elon .iris-card__body .iris-card__textarea {
   flex: 1 1 auto;
   min-height: 0;

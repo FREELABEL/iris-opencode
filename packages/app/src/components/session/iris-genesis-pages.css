@@ -116,7 +116,7 @@
 .iris-gp-edit { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 12px; gap: 8px; }
 .iris-gp-editbar { display: flex; align-items: center; gap: 8px; }
 .iris-gp-editor, .iris-gp-json { flex: 1; min-height: 240px; margin: 0; box-sizing: border-box; width: 100%; resize: none; overflow: auto; background: var(--surface-raised-base); color: var(--text-base); border: 1px solid var(--border-weaker-base); border-radius: var(--radius-md); padding: 10px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); line-height: 1.5; white-space: pre; }
-.iris-gp-editor:focus { outline: none; border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-gp-editor:focus { outline: none; border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
 
 /* A narrow panel: the side card goes under the preview; the toolbar wraps. */
 @container (max-width: 640px) {

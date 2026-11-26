@@ -3,25 +3,25 @@
  *
  * Same palette ROLES as the Hive panes (.hsc): jade = working (the only thing that moves),
  * sage = done, amber = retrying, coral = failed. Lines between boxes say who started whom; they
- * draw in when a sub-agent appears. Written dark first, then light-dark(light, dark), so the pane
+ * draw in when a sub-agent appears. Every colour names a theme token (#194375), so the pane
  * follows the app's theme. Numbers are mono.
  */
 .iar-wrap { container-type: inline-size; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: 100%; }
 .iar {
-  --iar-surface: #131312; --iar-surface: light-dark(#f6f5f1, #131312);
-  --iar-card: #1b1b19; --iar-card: light-dark(#ffffff, #1b1b19);
-  --iar-elev: #24241f; --iar-elev: light-dark(#efeee8, #24241f);
-  --iar-rule: #34342e; --iar-rule: light-dark(#dcdbd3, #34342e);
-  --iar-ink: #e8e8e0; --iar-ink: light-dark(#1d1c19, #e8e8e0);
-  --iar-ink2: #9c9c92; --iar-ink2: light-dark(#5c5b54, #9c9c92);
-  --iar-faint: #6e6e66; --iar-faint: light-dark(#8a897f, #6e6e66);
-  --iar-jade: var(--v2-state-fg-success); --iar-jade: light-dark(#0f7a5c, #4fd1a5);
-  --iar-sage: var(--v2-state-fg-success); --iar-sage: light-dark(#4d7a45, #9cbf8f);
-  --iar-amber: var(--v2-state-fg-warning); --iar-amber: light-dark(#b45309, #f59e0b);
-  --iar-coral: var(--v2-state-fg-danger); --iar-coral: light-dark(#b8402f, #f0806f);
-  --iar-line: var(--text-interactive-base); --iar-line: light-dark(#8fb0ee, #4f7fd6);
-  --iar-track: #2a2a26; --iar-track: light-dark(#ecebe5, #2a2a26);
-  --iar-bar: #4a4a43; --iar-bar: light-dark(#c9cfd8, #4a4a43);
+  --iar-surface: var(--v2-background-bg-base);
+  --iar-card: var(--v2-background-bg-layer-01);
+  --iar-elev: var(--v2-background-bg-layer-02);
+  --iar-rule: var(--v2-border-border-base);
+  --iar-ink: var(--v2-text-text-base);
+  --iar-ink2: var(--v2-text-text-muted);
+  --iar-faint: var(--v2-text-text-faint);
+  --iar-jade: var(--v2-state-fg-success);
+  --iar-sage: var(--v2-state-fg-success);
+  --iar-amber: var(--v2-state-fg-warning);
+  --iar-coral: var(--v2-state-fg-danger);
+  --iar-line: var(--text-interactive-base);
+  --iar-track: var(--v2-background-bg-layer-02);
+  --iar-bar: var(--v2-border-border-strong);
   --iar-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   --iar-ease: cubic-bezier(.45, 0, .15, 1);
   flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 14px 20px;

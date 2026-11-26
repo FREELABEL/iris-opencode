@@ -4,23 +4,23 @@
  * Theme follows the app (light-dark), never the OS. Numbers are mono.
  */
 .itm {
-  --itm-stage: light-dark(#f7f7f8, #141416);
-  --itm-card: light-dark(#ffffff, #1d1d20);
-  --itm-rule: light-dark(#e7e7ea, #2c2c31);
-  --itm-ink: light-dark(#18181b, #ececf0);
-  --itm-ink2: light-dark(#71717a, #9a9aa3);
-  --itm-faint: light-dark(#a1a1aa, #63636b);
-  --itm-chip: light-dark(#ececef, #24242a);
-  --itm-edge: light-dark(#93c0f2, #3f78c4);
-  --itm-edge-none: light-dark(#d4d4d8, #34343a);
-  --itm-blue: light-dark(#2f6fd6, #8cbcff);
-  --itm-blue-bg: light-dark(#e8f1fd, #16304f);
-  --itm-red: light-dark(#d9443f, #ff8a80);
-  --itm-red-bg: light-dark(#fdecec, #3a1c1c);
-  --itm-amber: light-dark(#b45309, #f5b14a);
-  --itm-amber-bg: light-dark(#fdf3e6, #3a2a12);
-  --itm-green: light-dark(#2f7a46, #8fd19e);
-  --itm-green-bg: light-dark(#e9f6ec, #16301d);
+  --itm-stage: var(--v2-background-bg-base);
+  --itm-card: var(--v2-background-bg-layer-01);
+  --itm-rule: var(--v2-border-border-base);
+  --itm-ink: var(--v2-text-text-base);
+  --itm-ink2: var(--v2-text-text-muted);
+  --itm-faint: var(--v2-text-text-faint);
+  --itm-chip: var(--v2-background-bg-layer-02);
+  --itm-edge: var(--border-interactive-base);
+  --itm-edge-none: var(--v2-border-border-base);
+  --itm-blue: var(--text-interactive-base);
+  --itm-blue-bg: var(--surface-interactive-weak);
+  --itm-red: var(--v2-state-fg-danger);
+  --itm-red-bg: var(--v2-state-bg-danger);
+  --itm-amber: var(--v2-state-fg-warning);
+  --itm-amber-bg: var(--v2-state-bg-warning);
+  --itm-green: var(--v2-state-fg-success);
+  --itm-green-bg: var(--v2-state-bg-success);
   --itm-shadow: 0 1px 2px light-dark(rgba(16, 24, 40, 0.06), rgba(0, 0, 0, 0.4));
   --itm-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   display: flex;

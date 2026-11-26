@@ -51,7 +51,7 @@
 .iris-bk-input { width: 100%; box-sizing: border-box; font-size: var(--font-size-caption); padding: 5px 8px; border-radius: var(--radius-md); min-width: 0; color: var(--text-strong);
   background: transparent; border: 1px solid var(--border-weak-base); font-family: inherit; }
 .iris-bk-input.iris-bk-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); }
-.iris-bk-input:focus { outline: none; border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-bk-input:focus { outline: none; border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
 .iris-bk-input[aria-invalid] { border-color: var(--ui-bad); }
 textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

@@ -2,37 +2,25 @@
  * Hive › Scripts (#188817) — heyiris.io/p/hive-scripts-directions#pick.
  *
  * Same palette ROLES as the Playbooks redesign (1.18.103): jade = IRIS / active, amber = needs you
- * or blocked, sage = online / done, coral = critical. Every colour is a token on .hsc, written dark
- * first and then light-dark(light, dark) so the pane follows the app's theme, not the OS.
+ * or blocked, sage = online / done, coral = critical. Every colour is a token on .hsc that names a
+ * theme token (#194375), so the pane follows the app's theme, light or dark.
  * Numbers are mono. Words live in tooltips; icons carry the meaning.
  */
 /* Tokens are shared with Hive › Machines (.hmc), Hive › Inbox (.hib), Hive › Sessions (.hss) and
    Agents › Agents (.iag, #192913) — the IRIS Desktop brand kit (#190058), defined once here. */
 .hsc, .hmc, .hib, .hss, .iag {
-  --hsc-surface: #131312;
-  --hsc-surface: light-dark(#f6f5f1, #131312);
-  --hsc-card: #1b1b19;
-  --hsc-card: light-dark(#ebeae4, #1b1b19);
-  --hsc-elev: #24241f;
-  --hsc-elev: light-dark(#e1e0d8, #24241f);
-  --hsc-rule: #34342e;
-  --hsc-rule: light-dark(#d8d7cf, #34342e);
-  --hsc-ink: #e8e8e0;
-  --hsc-ink: light-dark(#1d1c19, #e8e8e0);
-  --hsc-ink2: #9c9c92;
-  --hsc-ink2: light-dark(#5c5b54, #9c9c92);
-  --hsc-faint: #6e6e66;
-  --hsc-faint: light-dark(#8a897f, #6e6e66);
+  --hsc-surface: var(--v2-background-bg-base);
+  --hsc-card: var(--v2-background-bg-layer-01);
+  --hsc-elev: var(--v2-background-bg-layer-02);
+  --hsc-rule: var(--v2-border-border-base);
+  --hsc-ink: var(--v2-text-text-base);
+  --hsc-ink2: var(--v2-text-text-muted);
+  --hsc-faint: var(--v2-text-text-faint);
   --hsc-jade: var(--v2-state-fg-success);
-  --hsc-jade: light-dark(#0f7a5c, #4fd1a5);
   --hsc-amber: var(--v2-state-fg-warning);
-  --hsc-amber: light-dark(#b45309, #f59e0b);
   --hsc-sage: var(--v2-state-fg-success);
-  --hsc-sage: light-dark(#4d7a45, #9cbf8f);
   --hsc-coral: var(--v2-state-fg-danger);
-  --hsc-coral: light-dark(#b8402f, #f0806f);
-  --hsc-term: #0e0e0d;
-  --hsc-term: light-dark(#f1f0ea, #0e0e0d);
+  --hsc-term: var(--v2-background-bg-deep);
   --hsc-mono-font: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
 }
 .hsc {
@@ -100,7 +88,7 @@
   background: color-mix(in srgb, var(--hsc-jade) 16%, transparent);
   animation: hsc-due 1.6s ease-in-out infinite;
 }
-.hsc-save--due:hover:not(:disabled) { color: var(--hsc-surface); background: var(--hsc-jade); }
+.hsc-save--due:hover:not(:disabled) { color: var(--text-on-brand-base); background: var(--surface-brand-base); }
 @keyframes hsc-due {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
   50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hsc-jade) 0%, transparent); }
@@ -116,7 +104,7 @@
 .hsc-views button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
 .hsc-jade { color: var(--hsc-jade); }
 .hsc-ib--on { color: var(--hsc-jade); border-color: color-mix(in srgb, var(--hsc-jade) 60%, transparent); }
-.hsc-run.hsc-run--add { background: var(--hsc-jade); color: var(--hsc-surface); }
+.hsc-run.hsc-run--add { background: var(--surface-brand-base); color: var(--text-on-brand-base); }
 .hsc-mdesc { margin: 0; font-size: var(--font-size-caption); line-height: 1.5; color: var(--hsc-ink2); white-space: pre-line; max-height: 7.5em; overflow-y: auto; }
 .hsc-acct { font-size: var(--font-size-x-small); color: var(--hsc-faint); font-weight: var(--font-weight-regular); }
 .hsc--closed .hsc-acct { display: none; }
@@ -192,8 +180,9 @@
 .hsc-run {
   all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; flex: none;
   padding: 6px 13px; border-radius: var(--radius-lg); font-weight: var(--font-weight-semibold); font-size: var(--font-size-caption);
-  background: var(--hsc-ink); color: var(--hsc-surface);
+  background: var(--surface-brand-base); color: var(--text-on-brand-base);
 }
+.hsc-run:hover:not(:disabled) { background: var(--surface-brand-hover); }
 .hsc-run .hsc-ic, .hsc-run .hsc-ic svg { width: 11px; height: 11px; }
 .hsc-run:disabled { opacity: 0.4; cursor: default; }
 

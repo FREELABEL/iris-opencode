@@ -29,12 +29,12 @@
 .iag-seg button[aria-selected="true"] { background: var(--hsc-surface); color: var(--hsc-ink); box-shadow: 0 0 0 1px var(--hsc-rule); }
 .iag-seg button:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 1px; }
 .iag-count { font-size: var(--font-size-x-small); color: var(--hsc-faint); }
-/* the editor's New agent (.iae-new): jade, the one accent */
+/* the editor's New agent (.iae-new): the one primary look, from the theme's brand pair */
 .iag-new {
   all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-lg);
-  font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: light-dark(#ffffff, #131312); background: var(--hsc-jade);
+  font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: var(--text-on-brand-base); background: var(--surface-brand-base);
 }
-.iag-new:hover { filter: brightness(1.08); }
+.iag-new:hover { background: var(--surface-brand-hover); }
 .iag-new:disabled { opacity: 0.45; cursor: default; }
 .iag-new:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 2px; }
 

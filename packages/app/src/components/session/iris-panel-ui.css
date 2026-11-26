@@ -53,7 +53,7 @@
 .iris-ui-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); min-width: 0; }
 .iris-ui-spacer { flex: 1 1 0; }
 .iris-ui-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 120px; max-width: 320px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 0 6px 0 8px; color: var(--text-weak); }
-.iris-ui-search:focus-within { border-color: var(--border-strong-base, var(--text-weak)); }
+.iris-ui-search:focus-within { border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
 .iris-ui-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-caption); padding: 5px 0; }
 .iris-ui-search kbd { font: inherit; font-size: var(--font-size-x-small); color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: var(--radius-sm); padding: 0 4px; line-height: 14px; pointer-events: none; }
 .iris-ui-search:focus-within kbd { display: none; }
