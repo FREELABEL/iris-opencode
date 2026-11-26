@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
-import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd, PagesServeCmd } from "./platform-pages-edge"
+import { EdgeExportCmd, EdgeDeployCmd, EdgeServeCmd, PagesServeCmd, PagesInstallCmd } from "./platform-pages-edge"
 import { AccessLinkCmd, AccessLinkListCmd, AccessLinkRevokeCmd } from "./platform-pages-access-link"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 import { firstArray } from "../../util/array"
@@ -5997,6 +5997,7 @@ export const PlatformPagesCommand = productCommand({
       .command(PushCmd)
       .command(DevCmd)
       .command(PagesServeCmd)
+      .command(PagesInstallCmd)
       .command(DiffCmd)
       .command(MergeCmd)
       .command(withAccessFooter(PublishCmd))
