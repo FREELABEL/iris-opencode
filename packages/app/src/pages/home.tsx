@@ -54,6 +54,12 @@ export function NewHome() {
   const sessions = createHomeSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
+  const newChat = () => {
+    const conn = home.server.focused()
+    const project = home.project.newSession()
+    if (conn && project) home.project.openProjectNewSession(conn, project.worktree)
+  }
+
   return (
     <div class="flex min-h-0 min-w-0 flex-1 self-stretch">
       <div
@@ -77,11 +83,7 @@ export function NewHome() {
             <HomeDashboard
               class="mx-auto w-full max-w-[1080px] px-3 pt-5 pb-2 lg:px-6"
               onSettings={projects.utility.settings}
-              onNewChat={() => {
-                const conn = home.server.focused()
-                const project = home.project.newSession()
-                if (conn && project) home.project.openProjectNewSession(conn, project.worktree)
-              }}
+              onNewChat={newChat}
             />
           </Show>
           <div
@@ -100,6 +102,19 @@ export function NewHome() {
               language={projects.copy.language}
             />
           </div>
+          {/* #194315: the ask bar stays at the bottom while Home scrolls. */}
+          <Show when={!showFirstRun()}>
+            <div class="ihd ihd-ask-wrap mx-auto w-full max-w-[1080px] px-3 lg:px-6">
+              <button type="button" class="ihd-ask" onClick={newChat}>
+                <span class="ihd-ask-plus" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M8 3v10M3 8h10" />
+                  </svg>
+                </span>
+                Ask IRIS anything…
+              </button>
+            </div>
+          </Show>
         </ScrollView>
       </div>
     </div>
