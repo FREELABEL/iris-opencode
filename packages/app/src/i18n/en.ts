@@ -1337,4 +1337,5 @@ export const dict = {
   "iris.lead.stage": "Stage",
   "iris.lead.email": "Email",
   "iris.lead.addNote": "Add note",
+  "iris.lead.editValue": "Change the deal value",
 }
