@@ -1,0 +1,196 @@
+/* The Leads list and its pipeline strip (#194364). Tokens only; no edge bars. */
+
+/* ── Pipeline ── */
+.iris-pipe {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 8px;
+}
+.iris-pipe__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.iris-pipe__title {
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+  font-weight: var(--font-weight-semibold);
+}
+.iris-pipe__total {
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+  font-variant-numeric: tabular-nums;
+}
+.iris-pipe__cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px;
+}
+.iris-pipe__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+
+  &:hover {
+    background: color-mix(in srgb, var(--text-base) 5%, transparent);
+  }
+  &[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--text-base) 8%, transparent);
+    border-color: var(--border-weak-base);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--border-interactive-focus);
+    outline-offset: 1px;
+  }
+}
+.iris-pipe__count {
+  color: var(--text-strong);
+  font-size: var(--font-size-x-large);
+  line-height: var(--font-size-x-large--line-height);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.iris-pipe__value {
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Rows ── */
+.iris-llist {
+  display: flex;
+  flex-direction: column;
+}
+.iris-llist__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-lrow {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-weaker-base);
+
+  &:hover,
+  &[aria-current="true"] {
+    background: color-mix(in srgb, var(--text-base) 5%, transparent);
+  }
+}
+.iris-lrow__cb {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  padding-left: 4px;
+}
+.iris-lrow__open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(88px, max-content) 80px;
+  align-items: center;
+  column-gap: 12px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+
+  .iris-lrow__cb + & {
+    padding-left: 4px;
+  }
+  &:focus-visible {
+    outline: 2px solid var(--border-interactive-focus);
+    outline-offset: -2px;
+  }
+}
+.iris-lrow__av {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-base) 10%, transparent);
+  color: var(--text-base);
+  font-size: var(--font-size-x-small);
+  line-height: 1;
+  font-weight: var(--font-weight-semibold);
+}
+.iris-lrow__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.iris-lrow__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-size: var(--font-size-base);
+  line-height: var(--font-size-base--line-height);
+  font-weight: var(--font-weight-medium);
+}
+.iris-lrow__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}
+.iris-lrow__stage {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+.iris-lrow__value {
+  text-align: end;
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The Leads tab at side-panel width (#194364): the stats column gives way to the pipeline strip,
+   which carries the same stage counts. Wider panels keep both. */
+.iris-lt {
+  container-type: inline-size;
+  container-name: iris-leads;
+}
+@container iris-leads (max-width: 820px) {
+  .iris-lt .iris-lt-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .iris-lt .iris-lt-stats {
+    display: none;
+  }
+}
+@container iris-leads (max-width: 460px) {
+  .iris-lrow__open {
+    grid-template-columns: 28px minmax(0, 1fr) 72px;
+  }
+  .iris-lrow__stage {
+    display: none;
+  }
+}

@@ -1,0 +1,8 @@
+/* The cards under a commands row in chat (#194362). */
+[data-slot="context-tool-group-actions"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+  max-width: 640px;
+}
