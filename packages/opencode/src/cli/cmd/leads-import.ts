@@ -277,7 +277,48 @@ export function planMapping(columns: string[], map: Record<string, ImportField>,
 export type RowError = { row: number; line?: number; error: string }
 
 /** Build one lead from one source row. */
-export function buildLead(src: SourceRow, plan: MappingPlan, set: Partial<Record<ImportField, string>> = {}): { ok: true; lead: ImportLead } | { ok: false; error: string } {
+/**
+ * The CRM's statuses, exactly as fl-api checks them (SOMLeads::STATUSES). The server's import
+ * matches CASE-SENSITIVELY and files anything else as "Prospected" without a word (#194368): a CSV
+ * saying qualified / contacted / won landed all 12 leads as Prospected. So the CLI maps the value
+ * here, and says out loud which rows it could not map.
+ */
+export const LEAD_IMPORT_STATUSES = [
+  "New",
+  "Prospected",
+  "Contacted",
+  "Qualified",
+  "Proposal",
+  "In Negotiation",
+  "Follow-Up",
+  "On Hold",
+  "Active",
+  "Partner",
+  "Won",
+  "Lost",
+  "Archived",
+] as const
+
+const statusKey = (v: string) => v.toLowerCase().replace(/[\s_-]+/g, "")
+/** Spellings people put in a spreadsheet that mean one of the statuses above. */
+const STATUS_ALIASES: Record<string, (typeof LEAD_IMPORT_STATUSES)[number]> = {
+  negotiation: "In Negotiation",
+  negotiating: "In Negotiation",
+  followup: "Follow-Up",
+  prospect: "Prospected",
+  closedwon: "Won",
+  closedlost: "Lost",
+  onhold: "On Hold",
+}
+
+/** A status cell as the CRM spells it, or null when it is not one (case, spaces, - and _ ignored). */
+export function normalizeStatus(raw: unknown): (typeof LEAD_IMPORT_STATUSES)[number] | null {
+  const key = statusKey(String(raw ?? ""))
+  if (!key) return null
+  return LEAD_IMPORT_STATUSES.find((st) => statusKey(st) === key) ?? STATUS_ALIASES[key] ?? null
+}
+
+export function buildLead(src: SourceRow, plan: MappingPlan, set: Partial<Record<ImportField, string>> = {}): { ok: true; lead: ImportLead; warning?: string } | { ok: false; error: string } {
   const v: Partial<Record<ImportField, unknown>> = {}
   for (const [field, value] of Object.entries(set)) v[field as ImportField] = value
   for (const [col, field] of Object.entries(plan.columns)) {
@@ -306,6 +347,16 @@ export function buildLead(src: SourceRow, plan: MappingPlan, set: Partial<Record
       if (s) lead[f] = s
     }
   }
+  // Status (#194368): mapped to the CRM's spelling, or dropped WITH a warning — never silently.
+  let warning: string | undefined
+  if (lead.status !== undefined) {
+    const st = normalizeStatus(lead.status)
+    if (st) lead.status = st
+    else {
+      warning = `status ${JSON.stringify(lead.status)} is not a CRM status — imported as Prospected (use one of: ${LEAD_IMPORT_STATUSES.join(", ")})`
+      delete lead.status
+    }
+  }
   if (v.external_id !== undefined) {
     let id = String(v.external_id).trim()
     if (id && plan.externalIdPrefix && !id.includes(":")) id = plan.externalIdPrefix + id
@@ -323,7 +374,7 @@ export function buildLead(src: SourceRow, plan: MappingPlan, set: Partial<Record
   }
   // A masked name is never verified, whatever a column says.
   if (nameVerifiedAuto === false || name.includes("*")) lead.name_verified = false
-  return { ok: true, lead }
+  return warning ? { ok: true, lead, warning } : { ok: true, lead }
 }
 
 /** Every row of the file -> the leads to send (with their source row numbers) and the rows refused here. */
@@ -332,6 +383,8 @@ export function buildLeads(rows: SourceRow[], plan: MappingPlan, set: Partial<Re
   const rowOf: number[] = []
   const lineOf: (number | undefined)[] = []
   const errors: RowError[] = []
+  /** Rows imported WITHOUT the status their file gave (#194368). */
+  const statusDropped: RowError[] = []
   const seenIds = new Map<string, number>()
   for (const r of rows) {
     const built = buildLead(r, plan, set)
@@ -348,11 +401,12 @@ export function buildLeads(rows: SourceRow[], plan: MappingPlan, set: Partial<Re
       }
       seenIds.set(id, r.row)
     }
+    if (built.warning) statusDropped.push({ row: r.row, line: r.line, error: built.warning })
     leads.push(built.lead)
     rowOf.push(r.row)
     lineOf.push(r.line)
   }
-  return { leads, rowOf, lineOf, errors }
+  return { leads, rowOf, lineOf, errors, statusDropped }
 }
 
 export function chunk<T>(list: T[], size = IMPORT_MAX_ROWS): T[][] {

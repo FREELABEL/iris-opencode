@@ -8,6 +8,7 @@ import {
   buildLeads,
   leadFieldsFromFlags,
   normalizeProduct,
+  normalizeStatus,
   parseCsv,
   parseMapArgs,
   planMapping,
@@ -322,5 +323,48 @@ describe("iris leads create/update/list with the new fields (TYPED fake server)"
     expect(out).toContain("did not apply --product")
     const env = JSON.parse(out.slice(out.indexOf("{")))
     expect((env.data ?? env.rows ?? env.items).map((r: any) => r.id)).toEqual([1])
+  })
+})
+
+// #194368 — a CSV's status column (qualified, contacted, won) landed every lead as Prospected,
+// silently: fl-api matches the CRM spelling case-sensitively and files anything else as Prospected.
+describe("status column (#194368)", () => {
+  test("statuses are matched to the CRM's spelling, ignoring case, spaces, - and _", () => {
+    expect(normalizeStatus("qualified")).toBe("Qualified")
+    expect(normalizeStatus("CONTACTED")).toBe("Contacted")
+    expect(normalizeStatus("won")).toBe("Won")
+    expect(normalizeStatus("in negotiation")).toBe("In Negotiation")
+    expect(normalizeStatus("follow_up")).toBe("Follow-Up")
+    expect(normalizeStatus("Closed Won")).toBe("Won")
+    expect(normalizeStatus("hot lead")).toBeNull()
+    expect(normalizeStatus("")).toBeNull()
+  })
+
+  test("an unknown status is dropped from the row WITH a warning; the lead is still imported", () => {
+    const plan = planMapping(["name", "status"], {})
+    const ok = buildLead({ row: 1, cells: { name: "A", status: "qualified" } }, plan)
+    expect(ok).toEqual({ ok: true, lead: { name: "A", status: "Qualified" } })
+    const odd = buildLead({ row: 2, cells: { name: "B", status: "hot lead" } }, plan)
+    expect(odd.ok).toBe(true)
+    if (odd.ok) {
+      expect(odd.lead.status).toBeUndefined()
+      expect(odd.warning).toContain("imported as Prospected")
+    }
+  })
+
+  test("the command sends the mapped statuses and names the rows it could not map", async () => {
+    const f = path.join(dir, "status.csv")
+    fs.writeFileSync(f, "name,status\nA,qualified\nB,contacted\nC,won\nD,hot lead\n")
+    contractServer()
+    await parse(["leads", "import", f, "--board", "746"])
+    expect(requests[0].body.leads.map((l: any) => l.status)).toEqual(["Qualified", "Contacted", "Won", undefined])
+    expect(out).toContain("1 row(s) have a status the CRM does not have")
+    expect(out).toContain('row 4 (line 5): status "hot lead" is not a CRM status')
+    out = ""
+    contractServer()
+    await parse(["leads", "import", f, "--board", "746", "--json"])
+    const j = JSON.parse(out.slice(out.indexOf("{")))
+    expect(j.status_dropped).toHaveLength(1)
+    expect(j.status_dropped[0].row).toBe(4)
   })
 })
