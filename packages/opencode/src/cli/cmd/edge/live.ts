@@ -26,6 +26,7 @@
 import fs from "fs"
 import http from "http"
 import path from "path"
+import type { LocalActions } from "./local-actions"
 
 export interface LiveConfig {
   slug: string
@@ -202,7 +203,7 @@ export class LivePage {
  * turns the page's document into the live one. Both refuse to do anything live for a request that
  * is not from this computer and this page.
  */
-export function liveHooks(live: LivePage, slug: string, portOf: () => number) {
+export function liveHooks(live: LivePage, slug: string, portOf: () => number, local?: LocalActions) {
   const readBody = (req: http.IncomingMessage) =>
     new Promise<Buffer>((resolve) => {
       const chunks: Buffer[] = []
@@ -223,6 +224,25 @@ export function liveHooks(live: LivePage, slug: string, portOf: () => number) {
 
   return {
     async intercept(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): Promise<boolean> {
+      // Local actions (#194354): the same two checks as /api/*, then the bridge's own rules.
+      if (urlPath === "/__iris/local/status" || urlPath === "/__iris/local/run") {
+        const port = portOf()
+        const json = (code: number, body: unknown) => {
+          res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+          res.end(JSON.stringify(body))
+        }
+        if (!local) return json(404, { ok: false, reason: "no_local_actions" }), true
+        if (!isLocalHost(req.headers.host, port) || !fromThePage(req.headers, port))
+          return json(403, { ok: false, reason: "not_local", error: "Only the app itself, on this computer." }), true
+        if (urlPath === "/__iris/local/status") return json(200, await local.status()), true
+        if (req.method !== "POST") return json(405, { ok: false, reason: "method" }), true
+        let body: any = {}
+        try {
+          body = JSON.parse((await readBody(req)).toString("utf8") || "{}")
+        } catch {}
+        const r = await local.call(String(body.action ?? ""), body.args && typeof body.args === "object" ? body.args : {})
+        return json(r.status, r.body), true
+      }
       if (!urlPath.startsWith("/api/")) return false
       const port = portOf()
       if (!isLocalHost(req.headers.host, port) || !fromThePage(req.headers, port)) {
