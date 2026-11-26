@@ -11,6 +11,7 @@ import {
   success,
   highlight, writeJson } from "./iris-api"
 import { firstArray } from "../../util/array"
+import { WORKSPACE_ROOM_COMMANDS } from "./platform-workspace-rooms"
 
 // ============================================================================
 // iris workspace — Workspace (team) ↔ Google Workspace identity sync, from the CLI
@@ -286,9 +287,9 @@ const PlaceCommand = cmd({
 export const PlatformWorkspaceCommand = cmd({
   command: "workspace",
   aliases: ["workspaces", "ws"],
-  describe: "Workspace (team) ↔ Google Workspace identity sync (show, bind, sync, org, place)",
+  describe: "shared workspaces — your team's live AI chats in one place (rooms, open, say, watch, stop, invite) + Google Workspace sync",
   builder: (yargs) =>
-    yargs
+    WORKSPACE_ROOM_COMMANDS.reduce((y: any, c) => y.command(c), yargs)
       .command(ShowCommand)
       .command(BindCommand)
       .command(SyncCommand)

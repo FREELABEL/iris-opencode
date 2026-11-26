@@ -84,6 +84,32 @@ describe("acp holder — a kept session reachable from Hive", () => {
     await session.close()
   }, 20000)
 
+  test("POST /cancel stops a turn waiting on permission (#194307 — a shared room's Stop); nothing is written", async () => {
+    const { cwd, session, holder, call, until } = await setup()
+    await call("/message", { method: "POST", body: JSON.stringify({ message: "make it loud", from: "Flo" }) })
+    await until(() => session.status === "waiting")
+    const res = await call("/cancel", { method: "POST", body: "{}" })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ session_id: "s1", cancelled: true, was_running: true })
+    await until(() => session.status === "idle")
+    expect(await fs.readFile(path.join(cwd, "a.txt"), "utf8")).toBe("one\ntwo\n")
+    // the session is still alive and takes the next message
+    expect((await call("/message", { method: "POST", body: JSON.stringify({ message: "again" }) })).status).toBe(202)
+    holder.stop()
+    await session.close()
+  }, 20000)
+
+  test("POST /cancel on an idle session is a harmless 200 that says nothing was running; GET is 404; no token 401", async () => {
+    const { session, holder, call } = await setup()
+    const res = await call("/cancel", { method: "POST", body: "{}" })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ cancelled: true, was_running: false })
+    expect((await call("/cancel")).status).toBe(404)
+    expect((await call("/cancel", { method: "POST", body: "{}" }, "")).status).toBe(401)
+    holder.stop()
+    await session.close()
+  }, 20000)
+
   test("a reject answer leaves the file alone", async () => {
     const { cwd, session, holder, call, until } = await setup()
     await call("/message", { method: "POST", body: JSON.stringify({ message: "x" }) })

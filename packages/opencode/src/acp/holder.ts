@@ -111,6 +111,14 @@ export function holderHandler(session: AcpSession, token: string) {
       return json(200, { session_id: sid, status: "delivered", delivered: "acp", answers: { Permission: r.chose } })
     }
 
+    // A shared room's Stop (#194307): ACP session/cancel, plus releasing any permission prompt the
+    // turn is waiting on (AcpSession.cancel does both). The session stays alive for the next message.
+    if (req.method === "POST" && url.pathname === "/cancel") {
+      const wasRunning = session.busy || session.waiting !== null
+      session.cancel()
+      return json(200, { session_id: sid, cancelled: true, was_running: wasRunning })
+    }
+
     return json(404, { error: "not found" })
   }
 }

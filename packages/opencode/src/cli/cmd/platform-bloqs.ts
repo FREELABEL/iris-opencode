@@ -127,13 +127,13 @@ function formatListChoices(lists: Array<{ id: number; name: string }>): string {
 
 // Passwordless tokenized auth link — anyone with this URL can claim access and
 // is logged straight into the board. Consumed by pages/invite/_token.vue.
-function inviteWebUrl(token: string): string {
+export function inviteWebUrl(token: string): string {
   return `${frontendBase()}/invite/${token}`
 }
 
 // Mint a share-link token for a bloq (POST /api/v1/user/bloqs/:id/share-link).
 // Mirrors CoreService.createBloqShareLink — the atomic source of this flow.
-async function mintShareLink(
+export async function mintShareLink(
   bloqId: number,
   userId: number,
   opts: {
