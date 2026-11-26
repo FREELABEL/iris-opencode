@@ -2769,8 +2769,16 @@ const PublishCommand = cmd({
     // The address is the same whatever the scope — /playbooks/{name} resolves by name and
     // inherits the API's visibility. Scope decides who can OPEN it, not whether it exists,
     // so that is said on its own line rather than by withholding the link.
-    const url = String(pb.public_url || playbookUrl(String(args.name)))
-    console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    // #194379 — this fell back to playbookUrl(), which is built from IRIS_API (the API host,
+    // freelabel.net), and printed it even at private scope: a link that 404s for everyone,
+    // on the wrong host. `share` already got this right by printing only the address the API
+    // returns. Do the same; when there is none, say why instead of inventing one.
+    const scopeNow = String(pb.scope ?? args.scope)
+    const url = pb.public_url ? String(pb.public_url) : ""
+    if (url) console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    else if (scopeNow === "private" || scopeNow === "local")
+      console.log(`  ${bold("URL")}         ${dim(`none — ${scopeNow} has no web link. Widen it: iris playbook publish ${args.name} --scope project --bloq <id> (or unlisted)`)}`)
+    else console.log(`  ${bold("URL")}         ${dim(`not returned yet — iris playbook share ${args.name}`)}`)
     // For an unlisted playbook the two addresses differ and both matter: the uuid is the
     // unguessable one you send, the slug is the stable one you cite in a doc. Printing only
     // one of them means somebody pastes the wrong kind into the wrong place.
