@@ -48,7 +48,19 @@ export interface StaticServer {
  * this as a child, which meant every caller paid a process launch and a fixed sleep waiting for it
  * to be ready. Here `listen` tells us exactly when it is up.
  */
-export function startStaticServer(dir: string, port = 0): Promise<StaticServer> {
+/**
+ * Optional hooks (live mode, #194353). Without them this is exactly the static reference host.
+ *   intercept  answer a request before the file lookup (live: /api/*)
+ *   missing    answer a request the snapshot has no file for, before the 404 / SPA fallback
+ *   html       transform a document before it is sent (live: the fresh page with the owner's data)
+ */
+export interface ServerHooks {
+  intercept?(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): Promise<boolean>
+  missing?(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): Promise<boolean>
+  html?(req: http.IncomingMessage, urlPath: string, snapshot: string): Promise<string>
+}
+
+export function startStaticServer(dir: string, port = 0, hooks: ServerHooks = {}): Promise<StaticServer> {
   const root = path.resolve(dir)
 
   const send = (res: http.ServerResponse, code: number, body: Buffer, type: string) => {
@@ -56,12 +68,26 @@ export function startStaticServer(dir: string, port = 0): Promise<StaticServer> 
     res.end(body)
   }
 
-  const server = http.createServer((req, res) => {
+  const sendHtml = async (req: http.IncomingMessage, res: http.ServerResponse, urlPath: string, html: Buffer) => {
+    if (!hooks.html) return send(res, 200, html, TYPES[".html"]!)
+    const out = await hooks.html(req, urlPath, html.toString("utf8")).catch(() => html.toString("utf8"))
+    // A live document is never cached by the browser: the next load must ask again.
+    res.setHeader("Cache-Control", "no-store")
+    send(res, 200, Buffer.from(out), TYPES[".html"]!)
+  }
+
+  const server = http.createServer(async (req, res) => {
     let urlPath: string
     try {
       urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]!)
     } catch {
       return send(res, 400, Buffer.from("bad request"), "text/plain")
+    }
+    try {
+      if (hooks.intercept && (await hooks.intercept(req, res, urlPath))) return
+    } catch {
+      if (!res.headersSent) return send(res, 502, Buffer.from("upstream error"), "text/plain")
+      return
     }
     // Keep the response inside the served directory: a request for ../../etc/passwd resolves out.
     // This must handle a path written by hand on the wire — a URL parser normalises `..` (and
@@ -71,21 +97,35 @@ export function startStaticServer(dir: string, port = 0): Promise<StaticServer> 
       return send(res, 403, Buffer.from("forbidden"), "text/plain")
     }
 
-    fs.readFile(target, (err, data) => {
-      if (!err && fs.statSync(target).isFile()) {
-        return send(res, 200, data, TYPES[path.extname(target)] ?? "application/octet-stream")
+    const isFile = (() => {
+      try {
+        return fs.statSync(target).isFile()
+      } catch {
+        return false
       }
-      // SPA fallback, but NOT for asset-shaped requests. Falling back on those returns index.html
-      // for a missing .js, and the parser reports "Unexpected token '<'" — which reads like a
-      // corrupt bundle and is actually a 404 wearing a disguise. Assets must 404 honestly.
-      const looksLikeAsset = path.extname(urlPath) !== "" || urlPath.startsWith("/build/")
-      if (looksLikeAsset) return send(res, 404, Buffer.from("not found"), "text/plain")
-
-      fs.readFile(path.join(root, "index.html"), (e2, html) => {
-        if (e2) return send(res, 404, Buffer.from("not found"), "text/plain")
-        send(res, 200, html, TYPES[".html"]!)
-      })
-    })
+    })()
+    if (isFile) {
+      const data = fs.readFileSync(target)
+      if (path.extname(target) === ".html") return sendHtml(req, res, urlPath, data)
+      return send(res, 200, data, TYPES[path.extname(target)] ?? "application/octet-stream")
+    }
+    // SPA fallback, but NOT for asset-shaped requests. Falling back on those returns index.html
+    // for a missing .js, and the parser reports "Unexpected token '<'" — which reads like a
+    // corrupt bundle and is actually a 404 wearing a disguise. Assets must 404 honestly.
+    const looksLikeAsset = path.extname(urlPath) !== "" || urlPath.startsWith("/build/")
+    if (looksLikeAsset) {
+      try {
+        if (hooks.missing && (await hooks.missing(req, res, urlPath))) return
+      } catch {}
+      return send(res, 404, Buffer.from("not found"), "text/plain")
+    }
+    let index: Buffer
+    try {
+      index = fs.readFileSync(path.join(root, "index.html"))
+    } catch {
+      return send(res, 404, Buffer.from("not found"), "text/plain")
+    }
+    return sendHtml(req, res, urlPath, index)
   })
 
   return new Promise((resolve, reject) => {

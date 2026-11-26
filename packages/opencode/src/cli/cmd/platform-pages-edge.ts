@@ -13,15 +13,16 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, writeJson } from "./iris-api"
+import { dim, writeJson, irisFetch, resolveToken } from "./iris-api"
 import { existsSync, mkdirSync, rmSync } from "fs"
-import { join, resolve } from "path"
+import { dirname, join, resolve } from "path"
 import { publicUrl } from "./page-ref"
 import { exportPage, writeProvenance, readProvenance, discard } from "./edge/export"
 import { exportPageData } from "./edge/export-data"
 import { harvest } from "./edge/harvest"
 import { verifyExport } from "./edge/verify"
 import { startStaticServer, HOST_CONFIG } from "./edge/serve"
+import { LivePage, liveHooks } from "./edge/live"
 import {
   answering,
   keepRunning,
@@ -215,6 +216,10 @@ export const EdgeServeCmd = cmd({
       .option("public-name", {
         type: "string",
         describe: "also publish it at https://<name>.t.heyiris.io through the Hive relay (used by `pages serve --public`)",
+      })
+      .option("live", {
+        type: "string",
+        describe: "page slug: serve it with LIVE data, signed in as you, on this computer only (used by `pages serve`)",
       }),
   async handler(args) {
     const dir = resolve(String(args.dir))
@@ -223,8 +228,24 @@ export const EdgeServeCmd = cmd({
       process.exitCode = 1
       return
     }
-    const srv = await startStaticServer(dir, Number(args.port))
-    UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)`)
+    let hooks = {}
+    const liveSlug = args.live && !args["public-name"] ? safeSlug(String(args.live)) : null
+    if (liveSlug) {
+      // state.json sits beside site/; it carries where the page is published and its bindings.
+      const st = readState(liveSlug)
+      const live = new LivePage({
+        slug: liveSlug,
+        origin: st?.origin ?? originFor(undefined),
+        bindings: st?.live_bindings ?? [],
+        // Read at run time from the CLI's own sign-in, never written into a plist, task or unit.
+        token: () => resolveToken(),
+        cacheDir: join(dirname(dir), "live"),
+      })
+      const srvPort = Number(args.port)
+      hooks = liveHooks(live, liveSlug, () => srvPort)
+    }
+    const srv = await startStaticServer(dir, Number(args.port), hooks)
+    UI.println(`serving ${dir} on ${srv.url}  (SPA fallback on, assets 404 honestly)${liveSlug ? " · live data, signed in as you" : ""}`)
     const name = args["public-name"] ? String(args["public-name"]) : ""
     if (name) {
       // The relay runner is a CHILD of this server, so the two live and die together, and the OS
@@ -266,6 +287,22 @@ export const EdgeServeCmd = cmd({
   },
 })
 
+/** The binding names a page declares (json_content.bindings). [] when it has none or cannot be read. */
+async function pageBindings(slug: string): Promise<string[]> {
+  try {
+    const res = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?include_json=1`)
+    if (!res.ok) return []
+    const j = (await res.json()) as any
+    const page = j?.data ?? j
+    let c = page?.json_content
+    if (typeof c === "string") c = JSON.parse(c)
+    const b = c?.bindings
+    return b && typeof b === "object" && !Array.isArray(b) ? Object.keys(b).filter((k) => /^[A-Za-z0-9_.-]{1,64}$/.test(k)) : []
+  } catch {
+    return []
+  }
+}
+
 // ── pages serve: a page running on this computer (#194212) ──────────────────────────────────────
 
 /**
@@ -292,6 +329,11 @@ export const PagesServeCmd = cmd({
         describe: "also give it a public https address (Hive relay), the same one every time — so a phone can install it",
       })
       .option("name", { type: "string", describe: "with --public: the name in https://<name>.t.heyiris.io (default: from the slug)" })
+      .option("live", {
+        type: "boolean",
+        default: true,
+        describe: "live data, signed in as you: your rows, your saves and buttons work, and a publish shows on the next load (--no-live: a frozen copy)",
+      })
       .option("json", { type: "boolean", default: false })
       .example("iris pages serve my-page", "running at http://localhost:<port>/p/my-page, starts with the computer")
       .example("iris pages serve my-page --public", "…and at https://my-page.t.heyiris.io/p/my-page, for phones")
@@ -408,15 +450,28 @@ export const PagesServeCmd = cmd({
     rmSync(stage, { recursive: true, force: true })
     const site = join(dir, "site")
 
+    // Live (#194353): on by default when this CLI is signed in, never with --public. The binding
+    // names come from the page itself, so the server knows what to fetch fresh on every load.
+    let liveBindings: string[] | undefined
+    let liveNote = ""
+    if (args.live && !publicName) {
+      if (!(await resolveToken().catch(() => ""))) liveNote = "not signed in — serving a frozen copy (iris auth login, then run this again)"
+      else liveBindings = await pageBindings(slug)
+    } else if (args.live && publicName) {
+      liveNote = "a public copy is a frozen copy: live data is for this computer only"
+    }
+
     // Re-serving: a server already answering on this port reads the swapped folder per request, so
     // it needs nothing. Otherwise (first serve, a changed port, or it died) start it and keep it.
     // Public or not is part of the command the keeper runs, so changing it means a restart.
-    const already = !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName && (await answering(port, slug))
+    const already =
+      !!prev && prev.port === port && (prev.public_name ?? undefined) === publicName &&
+      !!prev.live_bindings === !!liveBindings && (await answering(port, slug))
     let kept: ReturnType<typeof keepRunning> | null = null
     if (!already) {
       if (prev) stopKeeping(prev)
       sp?.message("Starting it…")
-      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName })
+      kept = keepRunning(slug, site, port, { autostart: !args["no-autostart"], publicName, liveSlug: liveBindings ? slug : undefined })
     }
     const state = {
       slug,
@@ -426,6 +481,7 @@ export const PagesServeCmd = cmd({
       keeper: kept?.keeper ?? prev!.keeper,
       ...(kept?.pid ? { pid: kept.pid } : already && prev?.pid ? { pid: prev.pid } : {}),
       ...(publicName ? { public_name: publicName, public_url: publicUrl } : {}),
+      ...(liveBindings ? { live_bindings: liveBindings } : {}),
     }
     writeState(state)
 
@@ -444,10 +500,12 @@ export const PagesServeCmd = cmd({
       sp?.stop(publicUp ? "Public" : "Public address not answering yet")
     }
 
-    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
+    if (json) return writeJson({ ok: up && (!publicUrl || publicUp), url, ...state, live: !!liveBindings, ...(liveNote ? { live_note: liveNote } : {}), public_up: publicUrl ? publicUp : undefined, starts_with_computer: survivesRestart, harvest: harvestNote || "ok" })
 
     UI.println(`  ${up ? "●" : "○"} ${url}`)
     if (publicUrl) UI.println(`  ${publicUp ? "●" : "○"} ${publicUrl}  ${dim("anyone with this address can open it · on a phone: Share → Add to Home Screen")}`)
+    if (liveBindings) UI.println(dim("  live: your data, signed in as you · changes you publish show on the next load · offline it shows the last data it had"))
+    else if (liveNote) UI.println(`  ${liveNote}`)
     if (already) UI.println(dim("  re-synced from IRIS Cloud; the running server picked it up"))
     if (survivesRestart) UI.println(dim(`  starts with this computer${kept ? ` (${kept.detail})` : ""}`))
     else if (!args["no-autostart"]) UI.println(`  ⚠ will NOT start after a restart${kept ? ` — ${kept.detail}` : ""}. Run this again after rebooting.`)
