@@ -50,7 +50,7 @@ const NewLayout = () => {
   onMount(() => {
     document.body.toggleAttribute("data-new-layout", true)
     document.body.classList.add("font-(family-name:--font-family-text)", "text-[13px]", "font-[440]")
-    document.body.classList.remove("text-12-regular")
+    document.body.classList.remove("text-13-regular")
   })
   return null
 }

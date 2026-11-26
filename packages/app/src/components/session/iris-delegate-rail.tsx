@@ -227,7 +227,7 @@ export function IrisDelegateRail(props: {
       data-prevent-autofocus
     >
       <header class="iris-delegate__head">
-        <h3 class="text-12-medium text-text-base">{language.t("iris.delegate.title")}</h3>
+        <h3 class="text-13-medium text-text-base">{language.t("iris.delegate.title")}</h3>
         <p class="text-11-regular text-text-weak">{language.t("iris.delegate.hint")}</p>
       </header>
 
@@ -262,7 +262,7 @@ export function IrisDelegateRail(props: {
               >
                 <span class="iris-delegate__dot" aria-hidden="true" />
                 <div class="min-w-0 flex-1">
-                  <p class="text-12-regular text-text-base truncate">{agent.name}</p>
+                  <p class="text-13-regular text-text-base truncate">{agent.name}</p>
                   <p class="text-11-regular text-text-weak truncate">
                     {agent.model ? `${agent.model} · ${toneText(agent)}` : toneText(agent)}
                   </p>
@@ -301,7 +301,7 @@ export function IrisDelegateRail(props: {
                 >
                   <span class="iris-delegate__dot" aria-hidden="true" />
                   <div class="min-w-0 flex-1">
-                    <p class="text-12-regular text-text-base truncate">
+                    <p class="text-13-regular text-text-base truncate">
                       {s.title || language.t("iris.delegate.session.untitled")}
                     </p>
                     <p class="text-11-regular text-text-weak truncate">

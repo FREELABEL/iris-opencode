@@ -102,7 +102,7 @@ function PromptInputExample() {
       <div>
         <button
           type="button"
-          class="rounded-md border border-border-weak-base bg-background-base px-2.5 py-1.5 text-12-medium text-text-base hover:bg-background-stronger"
+          class="rounded-md border border-border-weak-base bg-background-base px-2.5 py-1.5 text-13-medium text-text-base hover:bg-background-stronger"
           onClick={addReviewComment}
         >
           Add review comment

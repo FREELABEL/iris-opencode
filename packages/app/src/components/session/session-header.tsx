@@ -307,7 +307,7 @@ export function SessionHeader() {
               aria-label={language.t("session.header.searchFiles")}
             >
               <div class="flex min-w-0 flex-1 items-center overflow-visible">
-                <span class="flex-1 min-w-0 text-12-regular text-text-weak truncate text-left">
+                <span class="flex-1 min-w-0 text-13-regular text-text-weak truncate text-left">
                   {language.t("session.header.search.placeholder", {
                     project: name(),
                   })}
@@ -345,7 +345,7 @@ export function SessionHeader() {
                               aria-label={language.t("session.header.open.copyPath")}
                             >
                               <Icon name="copy" size="small" class="text-icon-base" />
-                              <span class="text-12-regular text-text-strong">
+                              <span class="text-13-regular text-text-strong">
                                 {language.t("session.header.open.copyPath")}
                               </span>
                             </Button>

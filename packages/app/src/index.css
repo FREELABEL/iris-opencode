@@ -3,18 +3,36 @@
 @import "@opencode-ai/ui/v2/styles/tailwind.css";
 @import "tw-animate-css";
 
+/* Fonts (#194375). One UI face: Inter, variable 100-900, subset to Latin + Latin Extended + Greek and the
+   punctuation, arrows and symbols the UI draws (130 KB woff2, was an 874 KB TTF); preloaded in index.html.
+   The terminal face is split by unicode-range: letters, box drawing and blocks (76 KB) load with the
+   terminal; the Nerd Font icons (Private Use Area, 896 KB) load only when a glyph from that range is drawn.
+   Mono bold is synthesised by the browser (no bold file ships). */
 @font-face {
-  font-family: "JetBrainsMono Nerd Font Mono";
-  src: url("/assets/JetBrainsMonoNerdFontMono-Regular.woff2") format("woff2");
-  font-weight: normal;
+  font-family: "Inter";
+  src: url("/assets/InterVariable-latin.woff2") format("woff2");
+  font-weight: 100 900;
   font-style: normal;
+  font-display: swap;
 }
 
 @font-face {
-  font-family: "Inter";
-  src: url("/assets/Inter.ttf") format("truetype");
-  font-weight: 100 900;
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/assets/JetBrainsMonoNerdFontMono-Regular-text.woff2") format("woff2");
+  font-weight: normal;
   font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0259, U+0300-036F, U+0370-03FF, U+0400-04FF, U+1E00-1EFF, U+2000-2BFF, U+FB00-FB06,
+    U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("/assets/JetBrainsMonoNerdFontMono-Regular-symbols.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
 }
 
 @media (display-mode: standalone) {

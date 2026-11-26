@@ -278,7 +278,7 @@ export function SessionReviewFilePreviewV2(props: SessionReviewFilePreviewV2Prop
           when={diffCanRender() || mediaKind()}
           fallback={
             <div data-slot="session-review-v2-empty">
-              <span class="text-12-regular text-text-weak">{i18n.t("ui.fileMedia.binary.title")}</span>
+              <span class="text-13-regular text-text-weak">{i18n.t("ui.fileMedia.binary.title")}</span>
             </div>
           }
         >

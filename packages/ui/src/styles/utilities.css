@@ -43,31 +43,31 @@
   text-align: left;
 }
 
-.text-12-regular {
+.text-13-regular {
   font-family: var(--font-family-sans);
   font-size: var(--font-size-small);
   font-style: normal;
   font-weight: var(--font-weight-regular);
-  line-height: var(--line-height-large); /* 166.667% */
+  line-height: var(--line-height-large); 
   letter-spacing: var(--letter-spacing-normal);
 }
 
-.text-12-medium {
+.text-13-medium {
   font-family: var(--font-family-sans);
   font-size: var(--font-size-small);
   font-style: normal;
   font-weight: var(--font-weight-medium);
-  line-height: var(--line-height-large); /* 166.667% */
+  line-height: var(--line-height-large); 
   letter-spacing: var(--letter-spacing-normal);
 }
 
-.text-12-mono {
+.text-13-mono {
   font-family: var(--font-family-mono);
   font-feature-settings: var(--font-feature-settings-mono);
   font-size: var(--font-size-small);
   font-style: normal;
   font-weight: var(--font-weight-regular);
-  line-height: var(--line-height-large); /* 166.667% */
+  line-height: var(--line-height-large); 
   letter-spacing: var(--letter-spacing-normal);
 }
 
@@ -115,4 +115,104 @@
   font-weight: var(--font-weight-medium);
   line-height: var(--line-height-x-large); /* 120% */
   letter-spacing: var(--letter-spacing-tightest);
+}
+
+/* Type scale utilities (#194375): size + its paired line-height + weight. The older .text-13/14/16/20
+   classes above keep their looser line-heights so existing screens do not move. */
+.text-11-regular {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-x-small);
+  font-style: normal;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--font-size-x-small--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-11-medium {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-x-small);
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  line-height: var(--font-size-x-small--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-12-regular {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  font-style: normal;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--font-size-caption--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-12-medium {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  line-height: var(--font-size-caption--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-12-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-caption--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-12-mono {
+  font-family: var(--font-family-mono);
+  font-feature-settings: var(--font-feature-settings-mono);
+  font-size: var(--font-size-caption);
+  font-style: normal;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--font-size-caption--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-13-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-small);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-small--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-14-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-base);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-base--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-16-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-large);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-large--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-20-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-x-large);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-x-large--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-24-medium {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-2x-large);
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  line-height: var(--font-size-2x-large--line-height);
+  letter-spacing: var(--letter-spacing-normal);
+}
+.text-24-semibold {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-2x-large);
+  font-style: normal;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-2x-large--line-height);
+  letter-spacing: var(--letter-spacing-normal);
 }

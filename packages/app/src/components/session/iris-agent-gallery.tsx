@@ -263,7 +263,7 @@ export function IrisAgentGallery(props: {
           onSelect={(o) => o && setWorkspace(o.value)}
           variant="ghost"
           size="small"
-          valueClass="text-12-regular"
+          valueClass="text-13-regular"
         />
         <Select
           data-action="agents-sort"
@@ -274,7 +274,7 @@ export function IrisAgentGallery(props: {
           onSelect={(o) => o && setSort(o.value)}
           variant="ghost"
           size="small"
-          valueClass="text-12-regular"
+          valueClass="text-13-regular"
         />
         {/* Not in ELON, where the switch existed and nothing could reach it: this project, or the account. */}
         <div class="iag-seg" role="tablist" aria-label="Which agents">
