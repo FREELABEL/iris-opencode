@@ -13,7 +13,7 @@ shows offline, or before that endpoint exists. Nothing in it is invented:
   - `iris` results are IRIS's own grounding test, Round 06 (2026-11-13, ticket #194083),
     published at https://heyiris.io/p/agent-model-benchmark.
 
-Usage:  python3 -I build.py <artificialanalysis leaderboard .html> src/components/model-details/snapshot.ts
+Usage:  python3 -I build.py <artificialanalysis leaderboard .html> src/components/model-details/snapshot.ts [--rows rows.json]
 Fetch:  curl -s -A "Mozilla/5.0" https://artificialanalysis.ai/leaderboards/models -o aa.html
 """
 import datetime
@@ -175,7 +175,7 @@ def leaderboard(path: str) -> list[dict]:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 5):
         sys.exit(__doc__)
     rows, scored = leaderboard(sys.argv[1])
     if scored < 50:
@@ -204,6 +204,20 @@ def main() -> None:
         json.dump(out, fh, indent=1, ensure_ascii=False)
         fh.write("\n")
     print(f"wrote {sys.argv[2]}: {len(CURATED)} described, {scored} ranked publicly, {len(IRIS_BENCH)} measured by IRIS")
+    if len(sys.argv) == 5 and sys.argv[3] == "--rows":
+        # The same document as rows for the live `model-cards` dataset fl-iris-api serves
+        # (GET /api/v6/openai/models/details): {kind, key, payload}. Import with
+        #   iris datasets import model-cards <file> (upsert on kind+key)
+        rows = [{"kind": "source", "key": k, "payload": json.dumps(v)} for k, v in out["sources"].items()]
+        rows += [{"kind": "alias", "key": k, "payload": v} for k, v in out["aliases"].items()]
+        rows += [{"kind": "card", "key": k, "payload": json.dumps(v, ensure_ascii=False)} for k, v in out["models"].items()]
+        rows += [{"kind": "iris", "key": k, "payload": json.dumps(v)} for k, v in out["iris_bench"].items()]
+        rows += [{"kind": "public", "key": k, "payload": json.dumps(v, ensure_ascii=False)} for k, v in out["public"].items()]
+        for row in rows:
+            row["external_id"] = f"{row['kind']}:{row['key']}"
+        with open(sys.argv[4], "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, indent=1, ensure_ascii=False)
+        print(f"wrote {sys.argv[4]}: {len(rows)} dataset rows")
 
 
 if __name__ == "__main__":
