@@ -56,7 +56,7 @@ const HARNESS: Record<string, string> = {
 
 function span(fromIso: string | null, now: Date): string | null {
   if (!fromIso) return null
-  const mins = Math.round((now.getTime() - new Date(fromIso).getTime()) / 60000)
+  const mins = Math.floor((now.getTime() - new Date(fromIso).getTime()) / 60000)
   if (!Number.isFinite(mins) || mins < 0) return null
   if (mins < 60) return `${mins} min`
   const h = Math.floor(mins / 60)
@@ -70,6 +70,7 @@ export function sessionLine(s: SessionState, now: Date = new Date()): { tone: "l
   const text = `${what} on ${s.machine}`
   if (s.online) return { tone: "live", text, detail: "online" }
   const d = span(s.lastSeen, now)
+  if (d === "0 min") return { tone: "away", text, detail: "just went to sleep — messages wait for it" }
   return { tone: "away", text, detail: `asleep${d ? ` for ${d}` : ""} — messages wait for it` }
 }
 
@@ -94,10 +95,15 @@ export function ago(at: string, now: Date = new Date()): string {
   return `${MONTHS[t.getUTCMonth()]} ${t.getUTCDate()}`
 }
 
-const whose = (r: { ownerName: string | null }) => `${r.ownerName || "their"}'s`
+/** "Alex Mayo" → "Alex": how a teammate is named in passing. */
+export function firstName(name: string | null): string {
+  return String(name ?? "").trim().split(/\s+/)[0] || "Someone"
+}
+
+const whose = (r: { ownerName: string | null }) => `${firstName(r.ownerName)}'s`
 
 export function sayNote(r: SayResult, ownerName: string | null): string {
-  const owner = ownerName || "Their"
+  const owner = firstName(ownerName)
   switch (r.outcome) {
     case "delivered":
       return `Sent to ${owner}'s chat.`
@@ -123,7 +129,7 @@ export function canStopNow(room: SharedRoom, messages: SharedMessage[], myId: nu
 }
 
 export function composerHint(room: SharedRoom): string {
-  if (!room.you.canPost) return `You can watch this chat. Ask ${room.ownerName || "its owner"} for editor access to type in it.`
+  if (!room.you.canPost) return `You can watch this chat. Ask ${firstName(room.ownerName)} for editor access to type in it.`
   return room.you.isOwner ? "Type to your chat…" : `Type to ${whose(room)} chat…`
 }
 
@@ -201,4 +207,16 @@ export function mergeTimeline(transcript: TranscriptEntry[], room: SharedMessage
     .map((it, i) => ({ it, i }))
     .sort((a, b) => (a.it.at && b.it.at && a.it.at !== b.it.at ? (a.it.at < b.it.at ? -1 : 1) : a.i - b.i))
     .map((x) => x.it)
+}
+
+/** Why the chat itself cannot be shown, in words — never a node id, a task count or "BRIDGE". */
+export function chatTrouble(reason: string | null, ownerName: string | null): string {
+  const r = String(reason ?? "").toLowerCase()
+  const who = `${firstName(ownerName)}'s computer`
+  if (r.includes("not signed in")) return "You're not signed in to IRIS."
+  if (r.includes("busy") || r.includes("capacity")) return `${who} is busy right now.`
+  if (r.includes("did not answer") || r.includes("timed out") || r.includes("timeout")) return `${who} isn't answering.`
+  if (r.includes("checked in") || r.includes("unreachable") || r.includes("offline") || r.includes("no machine")) return `${who} is off or offline.`
+  if (r.includes("not found")) return `That chat isn't open on ${who} anymore.`
+  return `${who} couldn't share the chat right now.`
 }

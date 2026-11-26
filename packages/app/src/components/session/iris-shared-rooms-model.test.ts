@@ -45,6 +45,9 @@ describe("shared rooms — what the Desktop panel draws (#194307)", () => {
       detail: "asleep for 1 h 40 min — messages wait for it",
     })
     expect(sessionLine({ sessionId: "s", provider: null, machine: null, online: false, lastSeen: null }, NOW).tone).toBe("gone")
+    expect(sessionLine({ sessionId: "s", provider: "claude-code", machine: "m", online: false, lastSeen: "2026-11-26T19:59:30Z" }, NOW).detail).toBe(
+      "just went to sleep — messages wait for it",
+    )
   })
 
   test("initials for a person, never more than two letters, never empty", () => {
@@ -127,5 +130,17 @@ describe("the live chat — the agent's side, with every person named", () => {
       ["note", "Sam", "too busy, held"],
       ["event", "IRIS", "Stopped by Alex."],
     ])
+  })
+})
+
+import { chatTrouble } from "./iris-shared-rooms-model"
+describe("why the chat cannot be shown — in words, never node ids", () => {
+  test("translates what the machine said", () => {
+    expect(chatTrouble("Could not read session x on alex-mbp: Pinned to node 01a2…, which is busy (at capacity 2/2 tasks).", "Alex Mayo")).toBe("Alex's computer is busy right now.")
+    expect(chatTrouble("the machine did not answer within 45s", "Alex")).toBe("Alex's computer isn't answering.")
+    expect(chatTrouble("No machine of this account has checked in recently", "Alex")).toBe("Alex's computer is off or offline.")
+    expect(chatTrouble("Session abc not found", "Alex")).toBe("That chat isn't open on Alex's computer anymore.")
+    expect(chatTrouble("not signed in to IRIS — run `iris auth login`", "Alex")).toBe("You're not signed in to IRIS.")
+    expect(chatTrouble("something odd 01a21990-1e67-71f3-ac8c-1d03a3db0cfd", "Alex")).toBe("Alex's computer couldn't share the chat right now.")
   })
 })

@@ -4,7 +4,9 @@ import "./iris-shared-rooms.css"
 import {
   ago,
   canStopNow,
+  chatTrouble,
   composerHint,
+  firstName,
   groupByProject,
   initials,
   mergeTimeline,
@@ -34,7 +36,9 @@ type ActionPayload = { ok: boolean; reason?: string; message?: string }
 type TranscriptPayload = { measured: boolean; reason?: string; entries: TranscriptEntry[]; offset: number | null; incremental: boolean; reset: boolean; ranOn: string | null }
 
 const OPEN_KEY = "iris.shared.open"
-const FOLLOW_MS = 3000
+// Matches the server's shared-read window (ROOM_TRANSCRIPT_SHARE_SECONDS): a faster poll would only
+// re-read the same shared answer.
+const FOLLOW_MS = 4000
 const ACTIVE_MS = 10 * 60 * 1000
 
 /** A stable, gentle hue per name, so a person is the same colour everywhere in the pane. */
@@ -147,11 +151,8 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
                           <span class="sr-row-main">
                             <span class="sr-row-name">{r.name}</span>
                             <span class="sr-row-sub">
-                              {r.you.isOwner ? "Your chat" : `${r.ownerName ?? "Someone"}'s chat`}
-                              <Show when={typeof r.messageCount === "number"}>
-                                {" · "}
-                                {r.messageCount} {r.messageCount === 1 ? "message" : "messages"}
-                              </Show>
+                              {r.you.isOwner ? "Your chat" : `${firstName(r.ownerName)}'s chat`}
+                              {r.sessionIds.length > 1 ? ` · ${r.sessionIds.length} chats` : ""}
                             </span>
                           </span>
                           <span class="sr-row-side">
@@ -305,8 +306,8 @@ function Room(props: {
           <Icon name="arrow-left" size="small" />
         </button>
         <div class="sr-room-title">
-          <h2>{room()?.name ?? "…"}</h2>
-          <div class="sr-room-meta">
+          <h2>{room()?.name ?? ""}</h2>
+          <div class="sr-room-meta" style={{ visibility: room() ? "visible" : "hidden" }}>
             <Show when={room()?.project}>
               {(p) => (
                 <span class="sr-chip">
@@ -315,7 +316,7 @@ function Room(props: {
                 </span>
               )}
             </Show>
-            <span class="sr-room-owner">{room()?.you.isOwner ? "Your chat" : `${room()?.ownerName ?? "Someone"}'s chat`}</span>
+            <span class="sr-room-owner">{room()?.you.isOwner ? "Your chat" : `${firstName(room()?.ownerName ?? null)}'s chat`}</span>
             <Show when={room() && !room()!.you.canPost}>
               <span class="sr-chip" data-tone="info">
                 <Icon name="eye" size="small" /> watching
@@ -332,7 +333,16 @@ function Room(props: {
       </header>
 
       <div class="sr-sessions">
-        <Show when={(data()?.sessions ?? []).length} fallback={<div class="sr-session" data-tone="gone"><span class="sr-dot" /> No live chat is connected to this room</div>}>
+        {/* Only say "no live chat" once the room has answered — a loading room is not an empty one. */}
+        <Show
+          when={(data()?.sessions ?? []).length}
+          fallback={
+            <div class="sr-session" data-tone="gone">
+              <span class="sr-dot" />
+              {data() ? "No live chat is connected to this room" : "Connecting…"}
+            </div>
+          }
+        >
           <For each={data()?.sessions ?? []}>
             {(s) => {
               const l = () => sessionLine(s, now())
@@ -353,7 +363,7 @@ function Room(props: {
           <div class="sr-chat-note">
             <Icon name="warning" size="small" />
             <span>
-              Can't show the chat itself right now — {chatReason()} Showing what people typed in the room.
+              {chatTrouble(chatReason(), room()?.ownerName ?? null)} Showing what people typed in the room until it is back.
             </span>
           </div>
         </Show>
