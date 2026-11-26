@@ -18,6 +18,8 @@ import { sayingFor } from "./home-sayings"
 import {
   agoOf,
   fetchHomeDashboard,
+  fetchHomeRecap,
+  type HomeRecap,
   homeDashboard,
   homeDashboardKey,
   sliceOf,
@@ -142,6 +144,14 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   // Beside Home, like Heartbeats (#192535): no chat is needed for the panel any more.
   const openComputers = () => openIrisPanel({ surface: "hive", sub: "machines" })
   const [now, setNow] = createSignal(Date.now())
+  // The written "Today" paragraph (#194315): read on its own — it is a model call — and again every
+  // 5 minutes; the engine caches it and writes a new one at most every 15.
+  const [written, setWritten] = createSignal<HomeRecap | null>(null)
+  const readWritten = () =>
+    void fetchHomeRecap(serverSDK().url, platform.fetch ?? globalThis.fetch).then((r) => r && setWritten(r))
+  readWritten()
+  const writtenTimer = setInterval(readWritten, 5 * 60_000)
+  onCleanup(() => clearInterval(writtenTimer))
   const timer = setInterval(() => {
     setNow(Date.now())
     void homeDashboard.load(key(), fetcher).catch(() => {})
@@ -382,13 +392,16 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
         </div>
 
-        <Show when={data()?.recent?.measured}>
+        <Show when={data()?.recent?.measured || written()?.text}>
           <section class="ihd-recap" aria-label="Today across your projects">
             <div class="ihd-recap-h">
               <span class="ihd-label">
                 Today · across your projects
               </span>
             </div>
+            <Show
+              when={written()?.text}
+              fallback={
             <Show
               when={(() => {
                 const r = recap()
@@ -413,6 +426,17 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                     Your agents wrote <b>{plural(r().agents, "diary or work log", "diaries and work logs")}</b> across{" "}
                     <b>{plural(r().agentProjects, "project")}</b>.
                   </Show>
+                </p>
+              )}
+            </Show>
+              }
+            >
+              {(text) => (
+                <p
+                  class="ihd-recap-p"
+                  title={`Written by ${written()?.model ?? "a model"} from ${written()?.items ?? 0} board items and ${written()?.sessions ?? 0} sessions${written()?.agents?.length ? ` (${written()!.agents.join(", ")})` : ""}`}
+                >
+                  {text()}
                 </p>
               )}
             </Show>
