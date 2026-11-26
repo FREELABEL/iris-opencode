@@ -64,7 +64,13 @@ const FILTER = "M3 5h18M6 12h12M10 19h4"
 const COLUMNS = "M3 4h18v16H3zM9 4v16"
 const CLOSE = "M18 6 6 18M6 6l12 12"
 
-export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsApproval: () => void }) {
+export function IrisLeadsTab(props: {
+  doFetch: Fetch
+  bloqId?: number
+  onNeedsApproval: () => void
+  /** Moves when the agent in this chat changed IRIS data (#194361): the list and stats re-read. */
+  refreshKey?: () => unknown
+}) {
   const call = leadsCall(props.doFetch)
   const [filters, setFilters] = createSignal<LeadsFilters>({ ...NO_FILTERS })
   const patch = (p: Partial<LeadsFilters>) => setFilters({ ...filters(), ...p })
@@ -172,6 +178,7 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
     void readStats()
     void load(1)
   }
+  createEffect(on(() => props.refreshKey?.(), () => refresh(), { defer: true }))
 
   // ── Selection: one lead open in the side panel; any number checked for bulk actions ──
   const [open, setOpen] = createSignal<LeadRow>()
