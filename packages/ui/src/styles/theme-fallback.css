@@ -256,8 +256,8 @@ html:root {
   --v2-grey-100: #f6f5f1ff;
   --v2-grey-200: #efede8ff;
   --v2-grey-300: #e8e6e1ff;
-  --v2-grey-400: #d8d5ceff;
-  --v2-grey-500: #b0aca3ff;
+  --v2-grey-400: #dfdcd5ff;
+  --v2-grey-500: #c4c0b7ff;
   --v2-grey-600: #85817aff;
   --v2-grey-700: #5c5953ff;
   --v2-grey-800: #3d3b37ff;
@@ -365,8 +365,8 @@ html:root {
   --v2-background-bg-deep: var(--v2-grey-200);
   --v2-background-bg-layer-01: var(--v2-grey-300);
   --v2-background-bg-layer-02: var(--v2-grey-400);
-  --v2-background-bg-layer-03: var(--v2-grey-500);
-  --v2-background-bg-layer-04: var(--v2-grey-600);
+  --v2-background-bg-layer-03: var(--v2-grey-400);
+  --v2-background-bg-layer-04: var(--v2-grey-500);
   --v2-background-bg-inverse: var(--v2-grey-1100);
   --v2-background-bg-contrast: var(--v2-grey-1000);
   --v2-background-bg-button-neutral: var(--v2-grey-50);

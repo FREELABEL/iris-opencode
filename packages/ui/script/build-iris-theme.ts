@@ -27,8 +27,8 @@ const greyLight = [
   "#f6f5f1", // 100  paper — panels, the chat
   "#efede8", // 200  ground — the window
   "#e8e6e1", // 300  raised / inset paper
-  "#d8d5ce", // 400  hairlines on paper
-  "#b0aca3", // 500
+  "#dfdcd5", // 400  selected / hover fill on raised paper
+  "#c4c0b7", // 500
   "#85817a", // 600  faint text (disabled / placeholder only)
   "#5c5953", // 700  muted text
   "#3d3b37", // 800
@@ -167,10 +167,11 @@ const light: DesktopTheme["light"] = {
     ...ramp("green", green),
     "v2-background-bg-base": "var(--v2-grey-100)",
     "v2-background-bg-deep": "var(--v2-grey-200)",
+    // Gentle steps, as OC-2 does: layer-03 is the selected/hover fill on layer-01, so it stays light.
     "v2-background-bg-layer-01": "var(--v2-grey-300)",
     "v2-background-bg-layer-02": "var(--v2-grey-400)",
-    "v2-background-bg-layer-03": "var(--v2-grey-500)",
-    "v2-background-bg-layer-04": "var(--v2-grey-600)",
+    "v2-background-bg-layer-03": "var(--v2-grey-400)",
+    "v2-background-bg-layer-04": "var(--v2-grey-500)",
     "v2-background-bg-inverse": "var(--v2-grey-1100)",
     "v2-background-bg-contrast": "var(--v2-grey-1000)",
     "v2-background-bg-button-neutral": "var(--v2-grey-50)",
