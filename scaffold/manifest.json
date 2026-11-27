@@ -15,6 +15,12 @@
       "purpose": "Index of all how-to recipes. The agent lists this directory and reads README.md to find the right recipe."
     },
     {
+      "src": "how-to/build-your-own-app.md",
+      "dest": "how-to/build-your-own-app.md",
+      "managed": true,
+      "purpose": "Build your own app over your own IRIS data: buttons that act, its own icon in the Dock or Start menu, run from IRIS Cloud or your computer."
+    },
+    {
       "src": "how-to/page-as-app.md",
       "dest": "how-to/page-as-app.md",
       "managed": true,
