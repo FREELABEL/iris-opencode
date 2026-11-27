@@ -16,7 +16,12 @@ export type SharedRoom = {
   sessionIds: string[]
   messageCount?: number
   updatedAt?: string
+  activity?: RoomActivity
 }
+export type LastLine =
+  | { kind: "person" | "event"; name: string; isYou: boolean; text: string; at: string }
+  | { kind: "agent"; hostUserId: number | null; hostName: string | null; provider: string | null; isYou: boolean; text: string; tool: string | null; detail: string | null; at: string }
+export type RoomActivity = { present: Presence[]; last: LastLine | null; unread: number; working: boolean }
 export type SharedMessage = {
   id: string
   kind: "person" | "agent" | "event"
@@ -26,7 +31,18 @@ export type SharedMessage = {
   at: string
   deliveredTo: string[]
 }
-export type SessionState = { sessionId: string; provider: string | null; machine: string | null; online: boolean; lastSeen: string | null }
+export type SessionState = {
+  sessionId: string
+  provider: string | null
+  machine: string | null
+  online: boolean
+  lastSeen: string | null
+  /** Whose computer runs it (#194466). Absent from a server that predates it: the room owner's. */
+  hostUserId?: number | null
+  hostName?: string | null
+}
+/** Someone in the room right now (#194465). */
+export type Presence = { userId: number; name: string; state: "active" | "background"; typing: boolean }
 export type SayResult = { outcome: "delivered" | "parked" | "held" | "saved"; delivered: number; note: string | null; agentsNote: string | null }
 
 export type ProjectGroup = { project: { id: number; name: string }; rooms: SharedRoom[]; latest: string }
@@ -143,6 +159,8 @@ export type TimelineItem = {
   text: string
   at: string
   viaRoom?: boolean
+  /** Which agent said it, when more than one runs in the room (#194466). */
+  lane?: string
 }
 
 /**
@@ -257,4 +275,170 @@ export type HomeScope = "all" | "local" | "shared"
 /** Shared chats in the order Home shows them: the one that moved last first. */
 export function homeSharedRows(rooms: SharedRoom[]): SharedRoom[] {
   return [...rooms].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+}
+
+// ── multiplayer (#194465, #194466) ───────────────────────────────────────────
+
+const SHORT_HARNESS: Record<string, string> = {
+  "claude-code": "Claude Code",
+  claude_code: "Claude Code",
+  opencode: "IRIS",
+  acp: "Codex",
+}
+
+/** "Flo's Codex", "Your Claude Code", "Alex's agent" — whose agent it is, then what it is. */
+export function agentLabel(s: Pick<SessionState, "provider" | "hostUserId" | "hostName">, ownerName: string | null, myId: number | null): string {
+  const what = SHORT_HARNESS[String(s.provider ?? "")] ?? "agent"
+  if (myId !== null && s.hostUserId === myId) return `Your ${what}`
+  return `${firstName(s.hostName ?? ownerName)}'s ${what}`
+}
+
+/** One agent's transcript. `host` is the person whose chat it is: what they type straight into it is theirs. */
+export type Lane = { sessionId: string; label: string; host: string | null; entries: TranscriptEntry[] }
+
+const DUP_MS = 2 * 60 * 1000
+
+/**
+ * Every agent in the room on one timeline (#194466). A line typed in the room reaches EVERY agent,
+ * so each transcript holds its own copy of it: shown once (same person, same words, within two
+ * minutes). What each agent says and does is labelled with whose agent it is.
+ */
+export function mergeRoomTimeline(lanes: Lane[], room: SharedMessage[], ownerName: string | null): TimelineItem[] {
+  const items: TimelineItem[] = []
+  const seen: { key: string; at: number }[] = []
+  const many = lanes.length > 1
+  for (const lane of lanes) {
+    lane.entries.forEach((e, i) => {
+      const key = `${lane.sessionId}:${i}`
+      if (e.kind === "tool") {
+        items.push({ key, kind: "tool", speaker: lane.label, text: many ? `${lane.label} · ${toolLine(e)}` : toolLine(e), at: e.at, lane: lane.sessionId })
+        return
+      }
+      if (e.role === "assistant") {
+        items.push({ key, kind: "agent", speaker: lane.label, text: e.text, at: e.at, lane: lane.sessionId })
+        return
+      }
+      const who = speakerOf(e.text, lane.host ?? ownerName)
+      const speaker = who.speaker
+      const t = Date.parse(e.at)
+      const sig = `${speaker}\n${who.text}`
+      if (who.viaRoom && seen.some((x) => x.key === sig && (Number.isNaN(t) || Number.isNaN(x.at) || Math.abs(x.at - t) < DUP_MS))) return
+      if (who.viaRoom) seen.push({ key: sig, at: t })
+      items.push({ key, kind: "person", speaker, text: who.text, at: e.at, viaRoom: who.viaRoom, lane: lane.sessionId })
+    })
+  }
+  for (const m of room) {
+    if (m.kind === "event") items.push({ key: `r${m.id}`, kind: "event", speaker: "IRIS", text: m.text, at: m.at })
+    else if (m.kind === "person" && m.deliveredTo.length === 0) items.push({ key: `r${m.id}`, kind: "note", speaker: m.senderName, text: m.text, at: m.at })
+  }
+  return items
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => (a.it.at && b.it.at && a.it.at !== b.it.at ? (a.it.at < b.it.at ? -1 : 1) : a.i - b.i))
+    .map((x) => x.it)
+}
+
+/** "Flo is typing…", "Flo and Maya are typing…", "3 people are typing…" — never you. */
+export function typingLine(present: Presence[], myId: number | null): string | null {
+  const names = present.filter((p) => p.typing && p.userId !== myId).map((p) => firstName(p.name))
+  if (!names.length) return null
+  if (names.length === 1) return `${names[0]} is typing…`
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`
+  return `${names.length} people are typing…`
+}
+
+/** The facepile: looking first, then open in the background; at most `max`, the rest as "+N". */
+export function facepile(present: Presence[], max = 5): { shown: Presence[]; more: number } {
+  const sorted = [...present].sort((a, b) => (a.state === b.state ? a.name.localeCompare(b.name) : a.state === "active" ? -1 : 1))
+  return { shown: sorted.slice(0, max), more: Math.max(0, sorted.length - max) }
+}
+
+// ── Home, option B (#194490): one list, shared rooms mixed in ────────────────
+
+const oneLine = (t: string) => t.replace(/\s+/g, " ").trim()
+
+/** The row's second voice: "Flo's Codex: Edited launch.md", "Maya: Can you…", "You: …". */
+export function previewLine(room: SharedRoom, myId: number | null): string {
+  const l = room.activity?.last
+  if (!l) return room.you.isOwner ? "Your shared chat" : `${firstName(room.ownerName)}'s shared chat`
+  if (l.kind === "agent") {
+    const who = agentLabel({ provider: l.provider, hostUserId: l.isYou ? myId : l.hostUserId, hostName: l.hostName }, room.ownerName, l.isYou ? myId : null)
+    const what = l.tool ? toolLine({ role: "assistant", kind: "tool", text: "", tool: l.tool, detail: l.detail, at: l.at }) : oneLine(l.text)
+    return `${who}: ${what}`
+  }
+  if (l.kind === "event") return oneLine(l.text)
+  return `${l.isYou ? "You" : firstName(l.name)}: ${oneLine(l.text)}`
+}
+
+/** When the room last moved — its latest line, else the room itself. */
+export function roomWhen(room: SharedRoom): string {
+  return room.activity?.last?.at || room.updatedAt || ""
+}
+
+/** Faces for the row: who else is here now, else whose room it is. */
+export function roomFaces(room: SharedRoom, max = 2, myId: number | null = null): { names: string[]; more: number } {
+  // The other people — your own face on your own list says nothing.
+  const here = (room.activity?.present ?? []).filter((p) => p.userId !== myId).map((p) => p.name)
+  const names = here.length ? here : [room.ownerName ?? room.name]
+  return { names: names.slice(0, max), more: Math.max(0, names.length - max) }
+}
+
+export type HomeItem<R> = { kind: "local"; at: number; record: R } | { kind: "shared"; at: number; room: SharedRoom }
+export type HomeBucket<R> = { id: "today" | "yesterday" | "older"; title: string; items: HomeItem<R>[] }
+
+/**
+ * One timeline (#194490): this computer's chats and your team's shared rooms, newest first, in
+ * Today / Yesterday / Older. `scope` narrows it — the same list, never a different screen.
+ */
+export function mixHome<R>(
+  local: R[],
+  localAt: (r: R) => number,
+  rooms: SharedRoom[],
+  scope: HomeScope,
+  titles: { today: string; yesterday: string; older: string; recent: string },
+  now: Date = new Date(),
+): HomeBucket<R>[] {
+  const items: HomeItem<R>[] = []
+  if (scope !== "shared") for (const r of local) items.push({ kind: "local", at: localAt(r), record: r })
+  if (scope !== "local") for (const room of rooms) items.push({ kind: "shared", at: Date.parse(roomWhen(room)) || 0, room })
+  items.sort((a, b) => b.at - a.at)
+  const day = (t: number) => {
+    const d = new Date(t)
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  }
+  const today = day(now.getTime())
+  const yesterday = day(now.getTime() - 86_400_000)
+  const buckets: HomeBucket<R>[] = [
+    { id: "today", title: titles.today, items: [] },
+    { id: "yesterday", title: titles.yesterday, items: [] },
+    { id: "older", title: titles.older, items: [] },
+  ]
+  for (const it of items) {
+    const d = day(it.at)
+    buckets[d === today ? 0 : d === yesterday ? 1 : 2].items.push(it)
+  }
+  if (!buckets[0].items.length && !buckets[1].items.length) buckets[2].title = titles.recent
+  return buckets.filter((b) => b.items.length > 0)
+}
+
+/**
+ * The live strip on Home (#194490, option C's cards): rooms where something is happening — an agent
+ * working, lines you have not seen, someone else in it, or a move in the last 10 minutes. Working
+ * first, then unread, then most recent. At most `max`.
+ */
+export function liveRooms(rooms: SharedRoom[], myId: number | null, now: Date = new Date(), max = 3): SharedRoom[] {
+  const score = (r: SharedRoom) => {
+    const a = r.activity
+    const others = (a?.present ?? []).some((p) => p.userId !== myId)
+    const recent = now.getTime() - (Date.parse(roomWhen(r)) || 0) < 10 * 60 * 1000
+    if (a?.working) return 3
+    if ((a?.unread ?? 0) > 0) return 2
+    if (others || recent) return 1
+    return 0
+  }
+  return rooms
+    .map((r) => ({ r, s: score(r), at: Date.parse(roomWhen(r)) || 0 }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s || b.at - a.at)
+    .slice(0, max)
+    .map((x) => x.r)
 }

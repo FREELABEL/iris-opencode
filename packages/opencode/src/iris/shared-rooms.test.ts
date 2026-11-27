@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared, parseInviteToken, inviteTrouble } from "./shared-rooms"
+import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared, parseInviteToken, inviteTrouble, readPresence, readActivity } from "./shared-rooms"
 
 // Shared workspaces (#194307): what Desktop draws for a room filed under an Atlas project.
 
@@ -71,8 +71,10 @@ describe("readSessionState", () => {
       machine: "alex-mbp",
       online: false,
       lastSeen: "2026-11-26T18:00:00Z",
+      hostUserId: null,
+      hostName: null,
     })
-    expect(readSessionState({ session_id: "s" })).toEqual({ sessionId: "s", provider: null, machine: null, online: false, lastSeen: null })
+    expect(readSessionState({ session_id: "s" })).toEqual({ sessionId: "s", provider: null, machine: null, online: false, lastSeen: null, hostUserId: null, hostName: null })
   })
 })
 
@@ -124,5 +126,45 @@ describe("joining from an invite link", () => {
     expect(inviteTrouble(403, {})).toMatch(/different email/)
     expect(inviteTrouble(404, {})).toMatch(/not valid/)
     expect(inviteTrouble(400, { error: "You cannot redeem your own share link" })).toMatch(/already in it/)
+  })
+})
+
+describe("multiplayer rooms", () => {
+  test("a session says whose computer runs it, and an older server reads as unknown", () => {
+    const s = readSessionState({ session_id: "ses_flo", provider: "acp", machine: "flo-laptop", online: true, host_user_id: 2, host_name: "Flo Rivera" })
+    expect(s.hostUserId).toBe(2)
+    expect(s.hostName).toBe("Flo Rivera")
+    const old = readSessionState({ session_id: "ses_a", machine: "alex-mbp", online: true })
+    expect(old.hostUserId).toBeNull()
+    expect(old.hostName).toBeNull()
+  })
+  test("presence: active unless it says background, typing only when it says so", () => {
+    expect(readPresence({ user_id: 2, name: "Flo", state: "active", typing: true })).toEqual({ userId: 2, name: "Flo", state: "active", typing: true })
+    expect(readPresence({ user_id: 3, name: "Maya", state: "background" })).toEqual({ userId: 3, name: "Maya", state: "background", typing: false })
+    expect(readPresence({}).name).toBe("Someone")
+  })
+})
+
+describe("a room's row (#194490)", () => {
+  test("reads who is here, the latest agent step, unread and working", () => {
+    const a = readActivity({
+      present: [{ user_id: 2, name: "Flo", state: "active", typing: false }],
+      last: { kind: "agent", host_user_id: 2, host_name: "Flo Rivera", provider: "acp", is_you: false, text: "", tool: "Edit", detail: "emails/launch.md", at: "2026-11-27T12:00:00Z" },
+      unread: 3,
+      working: true,
+    })
+    expect(a.present[0].name).toBe("Flo")
+    expect(a.last?.kind).toBe("agent")
+    expect(a.unread).toBe(3)
+    expect(a.working).toBeTrue()
+  })
+  test("an older server reads as no activity, and junk as nothing", () => {
+    expect(readSharedRoom({ id: "r", name: "x" }).activity).toBeUndefined()
+    expect(readActivity({ unread: -4, last: { kind: "person", text: "hi", at: "t" } })).toEqual({
+      present: [],
+      last: { kind: "person", name: "Someone", isYou: false, text: "hi", at: "t" },
+      unread: 0,
+      working: false,
+    })
   })
 })

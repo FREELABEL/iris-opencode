@@ -11,18 +11,23 @@ type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 
 const [rooms, setRooms] = createSignal<SharedRoom[]>([])
 const [openRequest, setOpenRequest] = createSignal<{ id: string; nonce: number } | null>(null)
-let fetcher: Fetch | null = null
+const [fetcherSig, setFetcher] = createSignal<Fetch | null>(null)
+const [me, setMe] = createSignal<number | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 export const sharedRooms = rooms
 export const sharedOpenRequest = openRequest
-export const sharedFetch = () => fetcher
+/** Reactive: null until the titlebar (always mounted) has handed over how to reach the engine. */
+export const sharedFetch = () => fetcherSig()
+/** Who is signed in here — "You" on your agent, Stop for the turn you sent. */
+export const sharedMe = me
 
 export function setSharedRooms(next: SharedRoom[]) {
   setRooms(next)
 }
 
 export async function refreshSharedRooms(): Promise<void> {
+  const fetcher = fetcherSig()
   if (!fetcher) return
   try {
     const res = await fetcher("/iris/shared-rooms")
@@ -33,16 +38,38 @@ export async function refreshSharedRooms(): Promise<void> {
   }
 }
 
-/** Start the once-a-minute read. Idempotent: the first caller's fetch is the one used. */
+/** Start the regular read. Idempotent: the first caller's fetch is the one used. */
 export function watchSharedRooms(doFetch: Fetch) {
-  if (!fetcher) fetcher = doFetch
+  if (!fetcherSig()) setFetcher(() => doFetch)
   if (timer) return
   void refreshSharedRooms()
-  timer = setInterval(() => void refreshSharedRooms(), 60_000)
+  void doFetch("/iris/me")
+    .then((r) => r.json())
+    .then((j: { id?: number | null }) => setMe(typeof j?.id === "number" ? j.id : null))
+    .catch(() => {})
+  // Home's rows carry unread and "working" (#194490): 20 s, and at once when the window comes back.
+  timer = setInterval(() => void refreshSharedRooms(), 20_000)
+  if (typeof window !== "undefined") window.addEventListener("focus", () => void refreshSharedRooms())
 }
 
-/** Open the panel on Agents › Shared, on this room. */
-export function openSharedRoom(id: string | null) {
+let roomOpener: ((roomId: string, title?: string) => void) | null = null
+
+/** The titlebar registers how to open a room as a tab (#194463); without it, the side panel. */
+export function setSharedRoomOpener(fn: ((roomId: string, title?: string) => void) | null) {
+  roomOpener = fn
+}
+export const canOpenRoomTab = () => roomOpener !== null
+
+/**
+ * Open a shared room. With a room: its own tab in the main pane, like any chat — the side panel
+ * keeps the list and the settings. Without one (or with no tab strip): the panel's Shared list.
+ */
+export function openSharedRoom(id: string | null, title?: string) {
+  if (id && roomOpener) {
+    const name = title ?? rooms().find((r) => r.id === id)?.name
+    roomOpener(id, name)
+    return
+  }
   if (id) setOpenRequest({ id, nonce: Date.now() })
   openIrisPanel({ surface: "agents", sub: "shared" })
 }

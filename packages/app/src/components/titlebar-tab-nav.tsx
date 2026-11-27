@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, type Ref } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, Show, type JSX, type Ref } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { createMutation } from "@tanstack/solid-query"
@@ -328,6 +328,8 @@ export function DraftTabItem(props: {
   dragging?: boolean
   pressed?: boolean
   hidden?: boolean
+  /** Replaces the pencil — a shared room's tab shows two people (#194463). */
+  icon?: JSX.Element
 }) {
   const language = useLanguage()
   const closeTab = (event: MouseEvent) => {
@@ -380,7 +382,7 @@ export function DraftTabItem(props: {
         class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-faint group-data-[active='true']:text-v2-text-text-base [-webkit-user-drag:none]"
       >
         <span class="flex size-4 shrink-0 items-center justify-center">
-          <IconV2 name="edit" />
+          {props.icon ?? <IconV2 name="edit" />}
         </span>
         <span
           data-titlebar-tab-title

@@ -24,6 +24,18 @@ export type SharedRoom = {
   sessionIds: string[]
   messageCount?: number
   updatedAt?: string
+  /** What a list row shows (#194490): absent from a server that predates it. */
+  activity?: RoomActivity
+}
+/** The latest line in a room: a person (or IRIS) in the room, or what an agent just said or did. */
+export type LastLine =
+  | { kind: "person" | "event"; name: string; isYou: boolean; text: string; at: string }
+  | { kind: "agent"; hostUserId: number | null; hostName: string | null; provider: string | null; isYou: boolean; text: string; tool: string | null; detail: string | null; at: string }
+export type RoomActivity = {
+  present: { userId: number; name: string; state: "active" | "background"; typing: boolean }[]
+  last: LastLine | null
+  unread: number
+  working: boolean
 }
 export type SharedMessage = {
   id: string
@@ -34,7 +46,18 @@ export type SharedMessage = {
   at: string
   deliveredTo: string[]
 }
-export type SessionState = { sessionId: string; provider: string | null; machine: string | null; online: boolean; lastSeen: string | null }
+export type SessionState = {
+  sessionId: string
+  provider: string | null
+  machine: string | null
+  online: boolean
+  lastSeen: string | null
+  /** Whose computer runs it (#194466) — "Flo's Codex". Null from a server that predates it. */
+  hostUserId: number | null
+  hostName: string | null
+}
+/** Someone in the room right now (#194465). */
+export type Presence = { userId: number; name: string; state: "active" | "background"; typing: boolean }
 export type TranscriptEntry = { role: "user" | "assistant"; kind: "text" | "tool"; text: string; tool: string | null; detail: string | null; at: string }
 export type SayResult = { outcome: "delivered" | "parked" | "held" | "saved"; delivered: number; note: string | null; agentsNote: string | null }
 
@@ -62,6 +85,36 @@ export function readSharedRoom(t: any): SharedRoom {
       .map((a: string) => a.slice(SESSION.length)),
     ...(typeof t?.messages_count === "number" ? { messageCount: t.messages_count } : {}),
     ...(t?.updated_at ? { updatedAt: str(t.updated_at) } : {}),
+    ...(t?.activity && typeof t.activity === "object" ? { activity: readActivity(t.activity) } : {}),
+  }
+}
+
+export function readActivity(a: any): RoomActivity {
+  const l = a?.last && typeof a.last === "object" ? a.last : null
+  let last: LastLine | null = null
+  if (l && l.kind === "agent")
+    last = {
+      kind: "agent",
+      hostUserId: typeof l.host_user_id === "number" ? l.host_user_id : null,
+      hostName: l.host_name ? str(l.host_name) : null,
+      provider: l.provider ? str(l.provider) : null,
+      isYou: l.is_you === true,
+      text: str(l.text),
+      tool: l.tool ? str(l.tool) : null,
+      detail: l.detail ? str(l.detail) : null,
+      at: str(l.at),
+    }
+  else if (l) last = { kind: l.kind === "event" ? "event" : "person", name: str(l.name) || "Someone", isYou: l.is_you === true, text: str(l.text), at: str(l.at) }
+  return {
+    present: (Array.isArray(a?.present) ? a.present : []).map((p: any) => ({
+      userId: Number(p?.user_id) || 0,
+      name: str(p?.name) || "Someone",
+      state: p?.state === "background" ? ("background" as const) : ("active" as const),
+      typing: p?.typing === true,
+    })),
+    last,
+    unread: Math.max(0, Number(a?.unread) || 0),
+    working: a?.working === true,
   }
 }
 
@@ -89,6 +142,17 @@ export function readSessionState(s: any): SessionState {
     machine: s?.machine ? str(s.machine) : null,
     online: s?.online === true,
     lastSeen: s?.last_seen ? str(s.last_seen) : null,
+    hostUserId: typeof s?.host_user_id === "number" ? s.host_user_id : null,
+    hostName: s?.host_name ? str(s.host_name) : null,
+  }
+}
+
+export function readPresence(p: any): Presence {
+  return {
+    userId: Number(p?.user_id) || 0,
+    name: str(p?.name) || "Someone",
+    state: p?.state === "background" ? "background" : "active",
+    typing: p?.typing === true,
   }
 }
 
@@ -130,8 +194,8 @@ export async function fetchSharedRooms(): Promise<Read<{ rooms: SharedRoom[] }>>
 
 export async function fetchSharedRoom(
   id: string,
-): Promise<Read<{ room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[] }>> {
-  const empty = { room: null, messages: [], sessions: [] }
+): Promise<Read<{ room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[]; present: Presence[] }>> {
+  const empty = { room: null, messages: [], sessions: [], present: [] }
   try {
     const r = await call(`/api/threads/${encodeURIComponent(id)}`)
     if (!r.ok) return { measured: false, reason: failure(r.j, r.status), data: empty }
@@ -141,7 +205,8 @@ export async function fetchSharedRoom(
       .map(readSharedMessage)
       .sort((a: SharedMessage, b: SharedMessage) => (a.at === b.at ? (a.id < b.id ? -1 : 1) : a.at < b.at ? -1 : 1))
     const sessions = (Array.isArray(r.j?.sessions) ? r.j.sessions : []).map(readSessionState)
-    return { measured: true, data: { room, messages, sessions } }
+    const present = (Array.isArray(r.j?.present) ? r.j.present : []).map(readPresence)
+    return { measured: true, data: { room, messages, sessions, present } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
   }
@@ -344,6 +409,47 @@ export async function joinInvite(token: string): Promise<JoinResult> {
       if (res.ok) return { ok: true, outcome: "joined", ...project }
     }
     return { ok: false, reason: inviteTrouble(res.status, j) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multiplayer (#194465, #194466): who is here, and bringing your own agent in
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "I am here" — and who else is. A server that predates presence answers 404/405: no one shown. */
+export async function checkInToRoom(
+  id: string,
+  state: "active" | "background",
+  typing: boolean,
+): Promise<Read<Presence[]>> {
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/presence`, { method: "POST", body: JSON.stringify({ state, typing }) })
+    if (!r.ok) return { measured: false, reason: failure(r.j, r.status), data: [] }
+    return { measured: true, data: (Array.isArray(r.j?.present) ? r.j.present : []).map(readPresence) }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: [] }
+  }
+}
+
+/** Bring a chat from one of YOUR computers into the room, next to everyone else's agents. */
+export async function addSessionToRoom(id: string, sessionId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return { ok: false, reason: "That chat cannot be added." }
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/sessions`, { method: "POST", body: JSON.stringify({ session_id: sessionId }) })
+    return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Take an agent out of the room. Its chat keeps running on its computer. */
+export async function removeSessionFromRoom(id: string, sessionId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return { ok: false, reason: "Not a chat." }
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/sessions/${sessionId}`, { method: "DELETE" })
+    return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }
   }
