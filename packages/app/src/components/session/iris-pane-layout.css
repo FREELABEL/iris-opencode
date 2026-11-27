@@ -1,0 +1,44 @@
+/*
+ * IRIS PANE LAYOUT (#192632, slimmed in #194375 W5) — what the side panel's panes share that is
+ * layout, not a control. Buttons, icon buttons, filter tabs, segmented toggles, badges, notices,
+ * empty states, dialogs and menus are the ui library's (Button, IconButton, Tabs size="small",
+ * RadioGroup, StatusBadge, Notice, EmptyState, PaneDialog → Dialog, DropdownMenu, Spinner); this
+ * file used to draw private copies of them as iris-panel-ui.css.
+ *
+ *   .iris-ui         the pane frame: a column that fills the panel, a container for @container rules,
+ *                    and the pane colours as aliases of theme tokens (--ui-hover/-sel/-good/-warn/-bad/-info).
+ *   .iris-ui-bar     one toolbar line: search · scope · spacer · toggles · refresh, hairline below.
+ *   .iris-ui-search  the search box's frame (an input with a `/` hint).
+ *   .iris-ui-svg     a 14px stroked glyph, for the few marks the icon set lacks.
+ *   Never            a coloured bar down one edge of a card, row or callout — tint, text colour or an icon.
+ */
+.iris-ui {
+  --ui-hover: color-mix(in srgb, var(--text-strong) 5%, transparent);
+  --ui-sel: var(--surface-raised-base);
+  --ui-good: color-mix(in srgb, var(--v2-state-fg-success) 72%, var(--text-strong));
+  --ui-warn: color-mix(in srgb, var(--v2-state-fg-warning) 70%, var(--text-strong));
+  --ui-bad: color-mix(in srgb, var(--v2-state-fg-danger) 72%, var(--text-strong));
+  --ui-info: color-mix(in srgb, var(--text-interactive-base) 70%, var(--text-strong));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-base);
+  container-type: inline-size;
+}
+.iris-ui-ic { display: inline-flex; flex-shrink: 0; }
+.iris-ui-svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.iris-ui-spin { width: 14px; height: 14px; flex: none; }
+
+/* ── toolbar ── */
+.iris-ui-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-weaker-base); min-width: 0; }
+.iris-ui-spacer { flex: 1 1 0; }
+.iris-ui-search { position: relative; display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 120px; max-width: 320px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 0 6px 0 8px; color: var(--text-weak); }
+.iris-ui-search:focus-within { border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
+.iris-ui-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-caption); padding: 5px 0; }
+.iris-ui-search kbd { font: inherit; font-size: var(--font-size-x-small); color: var(--text-weak); border: 1px solid var(--border-weaker-base); border-radius: var(--radius-sm); padding: 0 4px; line-height: 14px; pointer-events: none; }
+.iris-ui-search:focus-within kbd { display: none; }
+/* A pane's empty / loading / error state sits in the middle of the space it has. */
+.iris-ui-center { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; padding: 24px 16px; color: var(--text-weak); }
+@media (prefers-reduced-motion: reduce) { .iris-ui * { transition: none !important; } }

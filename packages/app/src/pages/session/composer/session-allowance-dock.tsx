@@ -133,8 +133,7 @@ export function SessionAllowanceDock() {
               <button
                 type="button"
                 data-action="session-allowance-upgrade"
-                class="h-7 shrink-0 rounded-md px-3 text-[12px] font-semibold text-white transition-opacity hover:opacity-90"
-                style={{ background: "linear-gradient(90deg, #9333ea, #2563eb)" }}
+                class="h-7 shrink-0 rounded-md bg-surface-brand-base px-3 text-[12px] font-semibold text-text-on-brand-base transition-colors hover:bg-surface-brand-hover"
                 onClick={upgrade}
               >
                 Upgrade
@@ -162,8 +161,8 @@ export function SessionAllowanceDock() {
                   aria-valuenow={s().percent}
                 >
                   <div
-                    class="h-full rounded-full"
-                    style={{ width: `${s().percent}%`, "background-image": "linear-gradient(90deg, #f59e0b, #facc15)" }}
+                    class="h-full rounded-full bg-v2-state-fg-warning"
+                    style={{ width: `${s().percent}%` }}
                   />
                 </div>
                 <div class="flex flex-wrap items-center justify-between gap-2 text-[12px] text-v2-text-text-weak">

@@ -15,6 +15,11 @@ import {
   untrack,
 } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { Spinner } from "@opencode-ai/ui/spinner"
+import { Tabs } from "@opencode-ai/ui/tabs"
+import { useLanguage } from "@/context/language"
+import "./iris-pane-layout.css"
 import "./iris-hive-scripts.css"
 import {
   focusHiveNode,
@@ -193,6 +198,7 @@ export function IrisHiveScripts(props: {
   /** The boards I am on — the same list the Iris tab's board picker reads. Sharing picks from it. */
   boards?: Board[]
 }) {
+  const language = useLanguage()
   const now = () => props.now?.() ?? Date.now()
   const getJson = async <T,>(path: string, fallback: T, init?: RequestInit): Promise<T> => {
     try {
@@ -1106,26 +1112,27 @@ export function IrisHiveScripts(props: {
           </button>
         </div>
         <Show when={!listClosed()}>
-        <div class="hsc-views" role="tablist" aria-label="Which scripts">
-          <For each={["all", "project", "market"] as ScriptView[]}>
-            {(v) => (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={view() === v}
-                title={
-                  v === "all"
-                    ? "Every script on your account"
-                    : v === "project"
-                      ? `The scripts ${boardName()} uses`
-                      : "Public scripts anyone can add"
-                }
-                onClick={() => setView(v)}
-              >
-                {VIEW_WORD[v]}
-              </button>
-            )}
-          </For>
+        <div class="hsc-views">
+          <Tabs variant="pill" size="small" value={view()} onChange={(v: string) => setView(v as ScriptView)}>
+            <Tabs.List aria-label={language.t("iris.hiveScripts.views.label")}>
+              <For each={["all", "project", "market"] as ScriptView[]}>
+                {(v) => (
+                  <Tabs.Trigger
+                    value={v}
+                    title={
+                      v === "all"
+                        ? language.t("iris.hiveScripts.views.all.title")
+                        : v === "project"
+                          ? language.t("iris.hiveScripts.views.project.title", { board: boardName() })
+                          : language.t("iris.hiveScripts.views.market.title")
+                    }
+                  >
+                    {VIEW_WORD[v]}
+                  </Tabs.Trigger>
+                )}
+              </For>
+            </Tabs.List>
+          </Tabs>
         </div>
         <div class="hsc-find">
           <Ic name="magnifying-glass" />
@@ -1174,7 +1181,7 @@ export function IrisHiveScripts(props: {
             onBlur={(e) => startNew(e.currentTarget.value)}
           />
         </Show>
-        <Suspense fallback={<p class="hsc-muted hsc-pad">Reading…</p>}>
+        <Suspense fallback={<SkeletonRows rows={6} label={language.t("iris.hiveScripts.loading.scripts")} />}>
           <Show when={list() && !list()!.measured}>
             <p class="hsc-warn hsc-pad" title={list()!.reason ?? undefined}>
               Could not read your scripts{list()!.reason ? ` — ${list()!.reason}` : ""}
@@ -1372,7 +1379,13 @@ export function IrisHiveScripts(props: {
         </Show>
 
         <Show when={view() === "market"}>
-          <Suspense fallback={<p class="hsc-muted hsc-pad">Reading…</p>}>
+          <Suspense
+            fallback={
+              <div class="iris-ui-center" role="status" aria-label={language.t("iris.hiveScripts.loading.script")}>
+                <Spinner class="iris-ui-spin" />
+              </div>
+            }
+          >
             <Show when={mslug()} fallback={<p class="hsc-muted hsc-pad">Pick a public script to read it.</p>}>
               <Show
                 when={msrc()?.script}
@@ -1727,7 +1740,7 @@ export function IrisHiveScripts(props: {
             {(route() as { label: string }).label}. It picks its own computer — nothing to choose.
           </p>
         </Show>
-        <Suspense fallback={<p class="hsc-muted">Reading…</p>}>
+        <Suspense fallback={<SkeletonRows rows={3} label={language.t("iris.hiveScripts.loading.computers")} />}>
           <Show when={hive() && !hive()!.measured}>
             <p class="hsc-warn" title={hive()!.reason ?? undefined}>
               Could not see your computers

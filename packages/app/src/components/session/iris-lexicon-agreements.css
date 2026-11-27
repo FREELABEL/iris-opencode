@@ -1,50 +1,36 @@
-/* Lexicon › Agreements (#192484). The Reachr Review layout; state is text colour and tint, never an edge bar. */
-.iris-lex { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text-base); container-type: inline-size; }
-.iris-lex [data-tone="good"] { color: var(--text-success-base); }
-.iris-lex [data-tone="warn"] { color: var(--text-warning-base); }
-.iris-lex [data-tone="bad"] { color: var(--v2-state-fg-danger); }
-.iris-lex-ic { display: inline-flex; flex-shrink: 0; }
-.iris-lex-spin { width: 14px; }
-.iris-lex-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-weaker-base); flex-wrap: wrap; }
-.iris-lex-search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 2px 4px 2px 8px; color: var(--text-weak); min-width: 0; flex: 0 1 240px; }
-.iris-lex-search:focus-within { border-color: var(--border-interactive-focus); box-shadow: 0 0 0 1px var(--border-interactive-focus); }
-.iris-lex-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text-strong); font-size: var(--font-size-small); padding: 3px 0; }
+/*
+ * Lexicon › Agreements (#192484) — layout only. The controls are the ui library's (Button, IconButton,
+ * Tabs, StatusBadge, Notice, EmptyState, TextField, Select, PaneDialog); the frame, toolbar and search
+ * are iris-pane-layout.css. State is text colour and tint, never an edge bar.
+ */
+.iris-lex [data-tone="good"] { color: var(--ui-good); }
+.iris-lex [data-tone="warn"] { color: var(--ui-warn); }
+.iris-lex [data-tone="bad"] { color: var(--ui-bad); }
+.iris-lex-head { flex-wrap: wrap; }
+.iris-lex-search { flex: 0 1 240px; }
 .iris-lex-meta { color: var(--text-weak); font-size: var(--font-size-caption); }
-.iris-lex-spacer { flex: 1; }
-.iris-lex-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border-weak-base); background: transparent; color: var(--text-base); border-radius: var(--radius-md); padding: 4px 10px; font-size: var(--font-size-caption); cursor: pointer; white-space: nowrap; }
-.iris-lex-btn:not([data-primary]):hover:not(:disabled) { background: var(--surface-raised-base); }
-.iris-lex-btn[data-primary]:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
-.iris-lex-btn:disabled { opacity: 0.45; cursor: default; }
-.iris-lex-btn[data-primary] { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); font-weight: var(--font-weight-medium); }
-.iris-lex .iris-lex-btn[data-tone="bad"]:not([data-primary]) { color: var(--v2-state-fg-danger); }
-.iris-lex .iris-lex-btn[data-primary][data-tone="bad"] { background: var(--v2-state-fg-danger); border-color: var(--v2-state-fg-danger); color: var(--v2-text-text-inverse); }
-.iris-lex-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-weak); cursor: pointer; }
-.iris-lex-icon-btn:hover:not(:disabled) { background: var(--surface-raised-base); color: var(--text-strong); }
-.iris-lex-callout { display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-size-caption); padding: 7px 10px; border-radius: var(--radius-md); margin: 8px 12px 0; background: var(--surface-raised-base); }
-.iris-lex-detail .iris-lex-callout, .iris-lex-dialog .iris-lex-callout { margin: 0 0 10px; }
-.iris-lex-callout[data-tone="good"] { background: color-mix(in srgb, var(--text-success-base) 10%, transparent); }
-.iris-lex-callout[data-tone="warn"] { background: color-mix(in srgb, var(--text-warning-base) 10%, transparent); }
-.iris-lex-callout[data-tone="bad"] { background: color-mix(in srgb, var(--v2-state-fg-danger) 10%, transparent); }
-.iris-lex-filters { display: flex; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; }
-.iris-lex-filter { background: none; border: 0; color: var(--text-weak); font-size: var(--font-size-caption); padding: 3px 8px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; }
-.iris-lex-filter[aria-pressed="true"] { background: var(--surface-raised-base); color: var(--text-strong); }
-.iris-lex-filter span { font-variant-numeric: tabular-nums; opacity: 0.65; margin-left: 4px; }
+.iris-lex-iconbtn { padding: 0 4px; }
+.iris-lex-notice { margin: 8px 12px 0; }
+.iris-lex-detail .iris-lex-notice { margin: 0 0 10px; }
+.iris-lex-filters { display: flex; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; }
+.iris-lex-filters .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
+
+/* ── the list ── */
 .iris-lex-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 36%) 1fr; }
 .iris-lex-list { overflow-y: auto; border-right: 1px solid var(--border-weaker-base); }
 .iris-lex-row { display: block; width: 100%; text-align: start; background: none; border: 0; border-bottom: 1px solid var(--border-weaker-base); padding: 8px 12px; cursor: pointer; color: inherit; }
-.iris-lex-row:hover, .iris-lex-row[aria-selected="true"] { background: var(--surface-raised-base); }
-.iris-lex-row-top { display: flex; align-items: baseline; gap: 6px; }
+.iris-lex-row:hover, .iris-lex-row[aria-selected="true"] { background: var(--ui-sel); }
+.iris-lex-row-top { display: flex; align-items: center; gap: 6px; }
+.iris-lex-row-top > [data-component="status-badge"] { flex: none; }
 .iris-lex-row-name { flex: 1; min-width: 0; font-size: var(--font-size-small); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-lex-row-sub { font-size: var(--font-size-caption); color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.iris-lex-state { font-size: var(--font-size-x-small); color: var(--text-weak); white-space: nowrap; }
+
+/* ── the detail ── */
 .iris-lex-detail { overflow-y: auto; padding: 14px 16px 20px; min-width: 0; }
 .iris-lex-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.iris-lex-title > [data-component="status-badge"] { flex: none; }
 .iris-lex-name { font-size: var(--font-size-base); font-weight: var(--font-weight-medium); color: var(--text-strong); }
 .iris-lex-sub { font-size: var(--font-size-caption); color: var(--text-weak); margin-top: 2px; }
-.iris-lex-pill { font-size: var(--font-size-x-small); padding: 2px 8px; border-radius: var(--radius-full); background: var(--surface-raised-base); color: var(--text-weak); white-space: nowrap; }
-.iris-lex-pill[data-tone="good"] { background: color-mix(in srgb, var(--text-success-base) 12%, transparent); }
-.iris-lex-pill[data-tone="warn"] { background: color-mix(in srgb, var(--text-warning-base) 12%, transparent); }
-.iris-lex-pill[data-tone="bad"] { background: color-mix(in srgb, var(--v2-state-fg-danger) 12%, transparent); }
 .iris-lex-fields { display: grid; grid-template-columns: 64px 1fr; gap: 4px 10px; font-size: var(--font-size-caption); margin: 0 0 12px; }
 .iris-lex-fields dt { color: var(--text-weak); }
 .iris-lex-fields dd { margin: 0; color: var(--text-base); overflow-wrap: anywhere; }
@@ -59,21 +45,19 @@
 .iris-lex-doc ol { padding-left: 18px; line-height: 1.55; }
 .iris-lex-doc-pre { color: var(--text-weak); }
 .iris-lex-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 16px; padding: 12px 0 14px; border-top: 1px solid var(--border-weaker-base); position: sticky; bottom: -20px; background: var(--background-stronger, var(--background-base)); }
-.iris-lex-empty { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px; color: var(--text-weak); font-size: var(--font-size-small); text-align: center; }
-.iris-lex-form .iris-lex-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
-.iris-lex-grid label, .iris-lex-reason { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-caption); color: var(--text-weak); }
-.iris-lex-wide { grid-column: 1 / -1; }
-.iris-lex-grid input, .iris-lex-grid select, .iris-lex-grid textarea, .iris-lex-reason textarea { background: var(--surface-raised-base); color: var(--text-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); padding: 6px 8px; font: inherit; font-size: var(--font-size-small); }
-.iris-lex-grid textarea { min-height: 140px; resize: vertical; line-height: 1.5; }
-.iris-lex-reason textarea { min-height: 64px; resize: vertical; margin-bottom: 4px; }
-.iris-lex-scrim { position: absolute; inset: 0; z-index: calc(var(--z-raised) + 4); display: flex; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--background-base) 70%, transparent); backdrop-filter: blur(2px); }
-.iris-lex-dialog { width: min(420px, 100%); background: var(--background-base); border: 1px solid var(--border-weak-base); border-radius: var(--radius-2xl); padding: 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
-.iris-lex-dialog-icon { display: inline-flex; padding: 8px; border-radius: var(--radius-full); background: var(--surface-raised-base); color: var(--text-strong); margin-bottom: 10px; }
-.iris-lex-dialog-icon[data-tone="bad"] { background: color-mix(in srgb, var(--v2-state-fg-danger) 12%, transparent); }
-.iris-lex-dialog .iris-lex-recipients { margin: 10px 0 12px; padding: 6px 10px; border-radius: var(--radius-md); background: var(--surface-raised-base); }
-.iris-lex-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+
+/* ── raise ── */
+.iris-lex-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.iris-lex-wide { grid-column: 1 / -1; display: flex; flex-direction: column; }
+.iris-lex-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: var(--font-size-caption); color: var(--text-weak); }
+.iris-lex-wording textarea { min-height: 140px; }
+
+/* ── the confirm (PaneDialog) ── */
+.iris-lex-dialog .iris-lex-recipients { padding: 6px 10px; border-radius: var(--radius-md); background: var(--surface-raised-base); }
+.iris-lex-dialog .iris-lex-reason { min-height: 64px; }
+
 @container (max-width: 560px) {
   .iris-lex-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 38%) 1fr; }
   .iris-lex-list { border-right: 0; border-bottom: 1px solid var(--border-weak-base); }
-  .iris-lex-form .iris-lex-grid { grid-template-columns: 1fr; }
+  .iris-lex-grid { grid-template-columns: 1fr; }
 }

@@ -1,0 +1,20 @@
+/* PaneDialog (#194375 W5): layout only — the frame, title and close are the ui Dialog's. */
+.iris-pane-dialog [data-slot="iris-pane-dialog-body"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 20px 20px;
+  color: var(--text-base);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+  overflow-wrap: anywhere;
+}
+.iris-pane-dialog [data-slot="iris-pane-dialog-body"] p {
+  margin: 0;
+}
+.iris-pane-dialog [data-slot="iris-pane-dialog-actions"] {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}

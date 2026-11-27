@@ -1,7 +1,30 @@
 import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
+// IRIS panes (#194375 W5): each pane's English lives beside the others in its own file.
+import { IRIS_GENESIS_SITES_ENGLISH } from "./iris-genesis-sites"
+import { IRIS_GENESIS_PAGES_ENGLISH } from "./iris-genesis-pages"
+import { IRIS_ARTIFACT_PUBLISH_ENGLISH } from "./iris-artifact-publish"
+import { IRIS_INBOX_ENGLISH } from "./iris-inbox"
+import { IRIS_OUTREACH_ENGLISH } from "./iris-outreach"
+import { IRIS_AUDIENCES_ENGLISH } from "./iris-audiences"
+import { IRIS_BRAND_KITS_ENGLISH } from "./iris-brand-kits"
+import { IRIS_LEXICON_AGREEMENTS_ENGLISH } from "./iris-lexicon-agreements"
+import { IRIS_QUICK_EDIT_ENGLISH } from "./iris-quick-edit"
+import { IRIS_HIVE_SCRIPTS_ENGLISH } from "./iris-hive-scripts"
+import { IRIS_AGENT_EDITOR_ENGLISH } from "./iris-agent-editor"
 
 export const dict = {
   ...DESKTOP_NATIVE_ENGLISH,
+  ...IRIS_GENESIS_SITES_ENGLISH,
+  ...IRIS_GENESIS_PAGES_ENGLISH,
+  ...IRIS_ARTIFACT_PUBLISH_ENGLISH,
+  ...IRIS_INBOX_ENGLISH,
+  ...IRIS_OUTREACH_ENGLISH,
+  ...IRIS_AUDIENCES_ENGLISH,
+  ...IRIS_BRAND_KITS_ENGLISH,
+  ...IRIS_LEXICON_AGREEMENTS_ENGLISH,
+  ...IRIS_QUICK_EDIT_ENGLISH,
+  ...IRIS_HIVE_SCRIPTS_ENGLISH,
+  ...IRIS_AGENT_EDITOR_ENGLISH,
   "command.category.suggested": "Suggested",
   "command.category.view": "View",
   "command.category.project": "Project",
