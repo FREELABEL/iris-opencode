@@ -2,8 +2,11 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { IconButton } from "@opencode-ai/ui/icon-button"
+import { RadioGroup } from "@opencode-ai/ui/radio-group"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { useLanguage } from "@/context/language"
 import "./iris-artifact-publish.css"
-import "./iris-panel-ui.css"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { renderMarkdown } from "./iris-item"
 import {
@@ -36,18 +39,18 @@ import {
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type Board = { id: number; name: string }
 
-const SCOPES: { id: Visibility; label: string; short: string; icon: IconProps["name"] }[] = [
-  { id: "public", label: "Public", short: "Anyone on the web", icon: "globe" },
-  { id: "unlisted", label: "Unlisted", short: "Anyone with the link", icon: "link" },
-  { id: "private", label: "Private", short: "Only you, not on the web", icon: "lock" },
-]
+const SCOPES = [
+  { id: "public", label: "iris.publish.scope.public", short: "iris.publish.scope.public.short", icon: "globe" },
+  { id: "unlisted", label: "iris.publish.scope.unlisted", short: "iris.publish.scope.unlisted.short", icon: "link" },
+  { id: "private", label: "iris.publish.scope.private", short: "iris.publish.scope.private.short", icon: "lock" },
+] as const satisfies readonly { id: Visibility; label: string; short: string; icon: IconProps["name"] }[]
 
 /** What the primary button says it will do — never a bare "Submit". */
-const ACTION: Record<Visibility, string> = {
-  public: "Publish publicly",
-  unlisted: "Publish unlisted",
-  private: "Save to Genesis",
-}
+const ACTION = {
+  public: "iris.publish.action.public",
+  unlisted: "iris.publish.action.unlisted",
+  private: "iris.publish.action.private",
+} as const satisfies Record<Visibility, string>
 
 export function IrisArtifactPublish(props: {
   meta: ArtifactMeta
@@ -68,6 +71,7 @@ export function IrisArtifactPublish(props: {
   live?: boolean
 }) {
   const dialog = useDialog()
+  const language = useLanguage()
   const [slug, setSlug] = createSignal("")
   const [scope, setScope] = createSignal<Visibility | undefined>()
   const [auth, setAuth] = createSignal(false)
@@ -101,7 +105,7 @@ export function IrisArtifactPublish(props: {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
-      setNote({ ok: false, text: `copy failed — the address is ${url}` })
+      setNote({ ok: false, text: language.t("iris.publish.copyFailed", { url }) })
     }
   }
 
@@ -121,11 +125,11 @@ export function IrisArtifactPublish(props: {
   })
 
   function submitLabel() {
-    if (busy()) return "Publishing…"
-    if (!board()) return "Choose a project"
+    if (busy()) return language.t("iris.publish.publishing")
+    if (!board()) return language.t("iris.publish.chooseProject")
     const s = scope()
-    if (!s) return "Choose who can see it"
-    return ACTION[s]
+    if (!s) return language.t("iris.publish.chooseScope")
+    return language.t(ACTION[s])
   }
 
   async function submit() {
@@ -161,11 +165,11 @@ export function IrisArtifactPublish(props: {
           ok: true,
           text:
             chosen === "private"
-              ? `Saved to Genesis (private) in ${boardName()} — only you can open it.`
-              : `Live at ${out.published.url.replace(/^https?:\/\//, "")}, saved to ${boardName()} — what you see below is what's there.`,
+              ? language.t("iris.publish.note.private", { board: boardName() ?? "" })
+              : language.t("iris.publish.note.live", { url: out.published.url.replace(/^https?:\/\//, ""), board: boardName() ?? "" }),
         })
         props.onPublished()
-      } else setError(out.reason ?? `could not publish (HTTP ${res.status})`)
+      } else setError(out.reason ?? language.t("iris.publish.error.http", { status: res.status }))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -218,7 +222,7 @@ export function IrisArtifactPublish(props: {
       })
       return (
         <Dialog
-          title={props.meta.published ? "Update the page" : "Publish"}
+          title={props.meta.published ? language.t("iris.publish.title.update") : language.t("iris.publish.title")}
           description={props.meta.title}
           class="iris-pubm"
         >
@@ -234,7 +238,7 @@ export function IrisArtifactPublish(props: {
               {/* 1 · WHERE, before who. The destination is the decision; visibility qualifies it. */}
               <section class="iris-pubm__sec" aria-labelledby="pubm-where">
                 <h3 class="iris-pubm__lbl" id="pubm-where">
-                  <span class="iris-pubm__n">1</span>Where it lives
+                  <span class="iris-pubm__n">1</span>{language.t("iris.publish.where")}
                 </h3>
                 <Show
                   when={!picking()}
@@ -243,7 +247,7 @@ export function IrisArtifactPublish(props: {
                       <div class="iris-pubm__search">
                         <Icon name="magnifying-glass" size="small" />
                         <input
-                          placeholder="Search projects or #id"
+                          placeholder={language.t("iris.publish.search.placeholder")}
                           value={filter()}
                           onInput={(e) => setFilter(e.currentTarget.value)}
                           onKeyDown={(e) => {
@@ -257,12 +261,12 @@ export function IrisArtifactPublish(props: {
                               }
                             }
                           }}
-                          aria-label="Search projects"
+                          aria-label={language.t("iris.publish.search.label")}
                           autofocus
                         />
                       </div>
-                      <ul class="iris-publish__boards iris-pubm__boards" aria-label="Projects">
-                        <For each={matches()} fallback={<li class="iris-pubm__empty">No projects match.</li>}>
+                      <ul class="iris-publish__boards iris-pubm__boards" aria-label={language.t("iris.publish.projects")}>
+                        <For each={matches()} fallback={<li class="iris-pubm__empty">{language.t("iris.publish.noMatch")}</li>}>
                           {(b) => (
                             <li>
                               <button
@@ -297,13 +301,13 @@ export function IrisArtifactPublish(props: {
                       touched = true
                       setPicking(true)
                     }}
-                    title={boards().length > 1 ? "Choose another project" : undefined}
+                    title={boards().length > 1 ? language.t("iris.publish.changeProject") : undefined}
                   >
                     <Icon name="folder" size="small" />
                     <strong class="iris-publish__destname">{boardName()}</strong>
                     <span class="iris-pubm__id">#{board()}</span>
                     <Show when={boards().length > 1}>
-                      <span class="iris-pubm__change">Change</span>
+                      <span class="iris-pubm__change">{language.t("iris.publish.change")}</span>
                     </Show>
                   </button>
                 </Show>
@@ -312,14 +316,14 @@ export function IrisArtifactPublish(props: {
               {/* 2 · the address, with the part you cannot change shown as part of it */}
               <section class="iris-pubm__sec" aria-labelledby="pubm-addr">
                 <h3 class="iris-pubm__lbl" id="pubm-addr">
-                  <span class="iris-pubm__n">2</span>Address
+                  <span class="iris-pubm__n">2</span>{language.t("iris.publish.address")}
                 </h3>
                 <label class="iris-pubm__addr">
                   <span class="iris-pubm__prefix">heyiris.io/p/</span>
                   <input
                     value={slug()}
                     onInput={(e) => setSlug(e.currentTarget.value.toLowerCase())}
-                    aria-label="Page address"
+                    aria-label={language.t("iris.publish.address.label")}
                     spellcheck={false}
                   />
                 </label>
@@ -328,7 +332,7 @@ export function IrisArtifactPublish(props: {
               {/* 3 · who. Nothing pre-selected — a default would make "public" the answer to not reading. */}
               <section class="iris-pubm__sec" aria-labelledby="pubm-who">
                 <h3 class="iris-pubm__lbl" id="pubm-who">
-                  <span class="iris-pubm__n">3</span>Who can see it
+                  <span class="iris-pubm__n">3</span>{language.t("iris.publish.who")}
                 </h3>
                 <div class="iris-pubm__scopes" role="radiogroup" aria-labelledby="pubm-who">
                   <For each={SCOPES}>
@@ -336,8 +340,8 @@ export function IrisArtifactPublish(props: {
                       <label class="iris-pubm__scope" data-on={scope() === sc.id ? "1" : undefined}>
                         <input type="radio" name="scope" checked={scope() === sc.id} onChange={() => setScope(sc.id)} />
                         <Icon name={sc.icon} size="small" />
-                        <span class="iris-pubm__scopename">{sc.label}</span>
-                        <span class="iris-pubm__scopehint">{sc.short}</span>
+                        <span class="iris-pubm__scopename">{language.t(sc.label)}</span>
+                        <span class="iris-pubm__scopehint">{language.t(sc.short)}</span>
                       </label>
                     )}
                   </For>
@@ -351,8 +355,8 @@ export function IrisArtifactPublish(props: {
                   />
                   <span class="iris-pubm__track" aria-hidden="true" />
                   <span>
-                    Require sign-in
-                    <span class="iris-pubm__scopehint"> — visitors get an email code</span>
+                    {language.t("iris.publish.requireSignIn")}
+                    <span class="iris-pubm__scopehint">{language.t("iris.publish.requireSignIn.hint")}</span>
                   </span>
                 </label>
                 {/* Who can sign in (#193846). Without this, "Require sign-in" turned on a door
@@ -365,26 +369,27 @@ export function IrisArtifactPublish(props: {
                       <span class="iris-pubm__tone" data-tone="info">
                         <Icon name="shield" size="small" />
                       </span>
-                      Who can sign in
+                      {language.t("iris.publish.whoSignIn")}
                     </span>
                     <Show when={allow().length > 0}>
                       <div class="iris-pubm__chips">
                         <For each={allow()}>
                           {(entry) => (
-                            <span class="iris-ui-chip" data-tone="info">
-                              <Icon name={entry.startsWith("@") ? "globe" : "at"} size="small" />
-                              {entry}
-                              <button
-                                type="button"
+                            <span class="iris-pubm__chip">
+                              <StatusBadge size="small" tone="info" mark={<Icon name={entry.startsWith("@") ? "globe" : "at"} size="small" />}>
+                                {entry}
+                              </StatusBadge>
+                              <IconButton
+                                icon="close-small"
+                                variant="ghost"
+                                size="small"
                                 class="iris-pubm__chipx"
-                                aria-label={`Remove ${entry}`}
+                                aria-label={language.t("iris.publish.remove", { entry })}
                                 onClick={() => {
                                   setAllow((cur) => cur.filter((x) => x !== entry))
                                   setAllowDirty(true)
                                 }}
-                              >
-                                <Icon name="close-small" size="small" />
-                              </button>
+                              />
                             </span>
                           )}
                         </For>
@@ -393,8 +398,8 @@ export function IrisArtifactPublish(props: {
                     <div class="iris-pubm__whoadd">
                       <input
                         type="text"
-                        placeholder="name@firm.com or @firm.com"
-                        aria-label="Add an email or @domain"
+                        placeholder={language.t("iris.publish.allow.placeholder")}
+                        aria-label={language.t("iris.publish.allow.label")}
                         value={allowText()}
                         onInput={(e) => setAllowText(e.currentTarget.value)}
                         onKeyDown={(e) => {
@@ -403,13 +408,13 @@ export function IrisArtifactPublish(props: {
                           addAllowed()
                         }}
                       />
-                      <button type="button" class="iris-ui-btn" disabled={!allowText().trim()} onClick={addAllowed}>
-                        Add
-                      </button>
+                      <Button type="button" size="small" disabled={!allowText().trim()} onClick={addAllowed}>
+                        {language.t("iris.publish.allow.add")}
+                      </Button>
                     </div>
                     <Show when={allowBad().length > 0}>
                       <p class="iris-pubm__error" role="alert">
-                        Not an email or a domain: {allowBad().join(", ")}
+                        {language.t("iris.publish.allow.bad", { entries: allowBad().join(", ") })}
                       </p>
                     </Show>
                     <p class="iris-pubm__whosum" data-tone={signInTone(allow(), allowState())}>
@@ -435,7 +440,7 @@ export function IrisArtifactPublish(props: {
                 </Show>
                 <span>
                   {publishSummary(scope(), slug(), boardName())}
-                  {props.meta.published ? " · updates the same page" : ""}
+                  {props.meta.published ? language.t("iris.publish.updatesSame") : ""}
                 </span>
               </p>
               <Show when={error()}>
@@ -445,7 +450,7 @@ export function IrisArtifactPublish(props: {
               </Show>
               <div class="iris-pubm__actions">
                 <Button type="button" variant="ghost" onClick={() => dialog.close()}>
-                  Cancel
+                  {language.t("common.cancel")}
                 </Button>
                 <Button type="submit" variant="primary" disabled={!board() || !scope() || !slug().trim() || busy()}>
                   {submitLabel()}
@@ -471,61 +476,65 @@ export function IrisArtifactPublish(props: {
                   lives behind Copy (its tooltip names it) and Open in browser. The text fought
                   the title for width and pushed the bar onto three lines. */}
               <Show when={p().visibility === "private"}>
-                <span class="iris-publish__muted">Private in Genesis</span>
+                <span class="iris-publish__muted">{language.t("iris.publish.privateIn")}</span>
               </Show>
-              {/* The Genesis Pages toolbar's controls (#193844): iris-panel-ui icon buttons and a
-                  Draft | Live segment, not a row of text links that wrapped onto three lines in a
-                  narrow window. Each icon keeps its name as tooltip and accessible label. */}
-              <button
-                type="button"
-                class="iris-ui-icon"
-                title={copied() ? "Copied" : `Copy link · ${p().url.replace(/^https?:\/\//, "")}`}
-                aria-label={copied() ? "Copied" : "Copy link"}
+              {/* The Genesis Pages toolbar's controls (#193844), from the ui library (#194375 W5): icon
+                  buttons and a Draft | Live segment, not a row of text links that wrapped onto three
+                  lines in a narrow window. Each icon keeps its name as tooltip and accessible label. */}
+              <IconButton
+                icon={copied() ? "check" : "copy"}
+                variant="ghost"
+                size="small"
+                title={copied() ? language.t("iris.publish.copied") : language.t("iris.publish.copyLink.title", { url: p().url.replace(/^https?:\/\//, "") })}
+                aria-label={copied() ? language.t("iris.publish.copied") : language.t("iris.publish.copyLink")}
                 onClick={() => void copy(p().url)}
-              >
-                <Icon name={copied() ? "check" : "copy"} size="small" />
-              </button>
+              />
+              {/* A real link (the browser opens it), drawn as the library's ghost icon button. */}
               <a
-                class="iris-ui-icon"
+                class="iris-publish__open"
+                data-component="icon-button"
+                data-variant="ghost"
+                data-size="small"
                 href={p().url}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="Open in browser"
-                aria-label="Open in browser"
+                title={language.t("iris.publish.openBrowser")}
+                aria-label={language.t("iris.publish.openBrowser")}
               >
                 <Icon name="square-arrow-top-right" size="small" />
               </a>
               <Show when={props.onToggleLive}>
-                <span class="iris-ui-seg" role="group" aria-label="Show">
-                  <button type="button" aria-pressed={!props.live} onClick={() => props.live && props.onToggleLive?.()}>
-                    Draft
-                  </button>
-                  <button type="button" aria-pressed={!!props.live} onClick={() => !props.live && props.onToggleLive?.()}>
-                    Live
-                  </button>
-                </span>
+                <RadioGroup
+                  size="small"
+                  class="iris-publish__live"
+                  aria-label={language.t("iris.publish.show")}
+                  options={["draft", "live"]}
+                  current={props.live ? "live" : "draft"}
+                  label={(v) => (v === "live" ? language.t("iris.publish.live") : language.t("iris.publish.draft"))}
+                  onSelect={(v) => v && (v === "live") !== !!props.live && props.onToggleLive?.()}
+                />
               </Show>
             </span>
           )}
         </Show>
         <Show when={state().behind}>
           <span class="iris-publish__behind">
-            page is rev {props.meta.published?.revision}, this is rev {props.meta.revision}
+            {language.t("iris.publish.behind", { page: props.meta.published?.revision ?? "", rev: props.meta.revision })}
           </span>
         </Show>
         <span class="iris-publish__spacer" />
         <Show
           when={publishable()}
-          fallback={<span class="iris-publish__muted">{props.meta.kind} can't be published yet</span>}
+          fallback={<span class="iris-publish__muted">{language.t("iris.publish.cantPublish", { kind: props.meta.kind })}</span>}
         >
           <Show when={!props.meta.published}>
-            <button type="button" class="iris-ui-btn" onClick={() => openModal("private")}>
-              Save to Genesis
-            </button>
+            <Button size="small" onClick={() => openModal("private")}>
+              {language.t("iris.publish.action.private")}
+            </Button>
           </Show>
-          <button type="button" class="iris-ui-btn" data-primary onClick={() => openModal()}>
+          <Button size="small" variant="primary" onClick={() => openModal()}>
             {state().label}
-          </button>
+          </Button>
         </Show>
       </div>
 

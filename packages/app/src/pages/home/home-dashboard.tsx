@@ -32,6 +32,7 @@ import { focusHiveSession } from "@/components/session/iris-nav"
 import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
 import { AgentMark } from "@/components/session/agent-mark"
 import { plural, recapOf } from "./home-recap-model"
+import { Spinner } from "@opencode-ai/ui/spinner"
 import "./home-dashboard.css"
 
 /**
@@ -82,7 +83,7 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
     case "ok":
       return <i class="ihd-live" />
     case "running":
-      return <i class="ihd-spin" />
+      return <Spinner class="ihd-spin" />
     case "resting":
       return <Icon name="moon" color="var(--ihd-in)" />
     case "stopped":
@@ -642,7 +643,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                       healthy
                     </span>
                     <span>
-                      <i class="ihd-spin" style={{ width: "10px", height: "10px" }} />
+                      <Spinner class="ihd-spin ihd-spin--sm" />
                       running
                     </span>
                     <span>
@@ -785,7 +786,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                           <Icon name="warn" color={AMBER} />
                         </Match>
                         <Match when={r.working}>
-                          <i class="ihd-spin" />
+                          <Spinner class="ihd-spin" />
                         </Match>
                         <Match when={r.status === "active"}>
                           <i class="ihd-live" />

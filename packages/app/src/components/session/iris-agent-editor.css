@@ -62,19 +62,16 @@
 .iae-btn--primary { background: var(--surface-brand-base); border-color: var(--surface-brand-base); color: var(--text-on-brand-base); font-weight: var(--font-weight-semibold); }
 .iae-btn--primary:hover:not(:disabled) { background: var(--surface-brand-hover); border-color: var(--surface-brand-hover); }
 .iae-btn--ghost { background: transparent; border-color: transparent; color: var(--iae-ink2); }
-.iae-btn:focus-visible, .iae-step:focus-visible, .iae-x:focus-visible { outline: 2px solid var(--iae-jade); outline-offset: 2px; }
+.iae-btn:focus-visible, .iae-x:focus-visible { outline: 2px solid var(--iae-jade); outline-offset: 2px; }
 .iae-link { all: unset; cursor: pointer; font-size: var(--font-size-x-small); color: var(--iae-jade); }
 .iae-link:hover { text-decoration: underline; }
 
 /* step pills */
 .iae-steps { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--iae-rule); }
-.iae-step {
-  all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 9px; border-radius: var(--radius-full); font-size: var(--font-size-caption); color: var(--iae-ink2); border: 1px solid transparent;
-}
-.iae-step:hover { background: var(--iae-card); color: var(--iae-ink); }
-.iae-step[aria-selected="true"] { background: var(--iae-card); color: var(--iae-ink); border-color: var(--iae-rule); box-shadow: inset 0 -2px 0 var(--iae-jade); }
-.iae-step[data-phase="2"] { color: var(--iae-faint); }
+/* the pills are a ui Tabs row (#194375 W5); here only how it wraps, and the later-phase steps' quieter text */
+.iae-steps > [data-component="tabs"] { flex: 1 1 auto; min-width: 0; }
+.iae-steps [data-slot="tabs-list"] { flex-wrap: wrap; }
+.iae-steps [data-slot="tabs-trigger"][data-phase="2"] { color: var(--iae-faint); }
 .iae-tick { color: var(--iae-sage); font-size: var(--font-size-x-small); }
 .iae-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--iae-amber); display: inline-block; }
 .iae-count { font-family: var(--iae-mono); font-size: var(--font-size-x-small); padding: 0 5px; border-radius: var(--radius-md); background: var(--iae-elev); color: var(--iae-ink2); }

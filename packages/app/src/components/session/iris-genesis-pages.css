@@ -1,5 +1,6 @@
 /*
- * Genesis › Pages (#192632). Built on iris-panel-ui.css; only what is particular to pages is here —
+ * Genesis › Pages (#192632). Built on the ui library and iris-pane-layout.css (#194375 W5); only what
+ * is particular to pages is here, and it is layout — the controls are the library's —
  * the card with its live look, the device stage and the side card. Brand colours appear only as a
  * brand's own swatches and logo; the chrome stays on the panel's tokens. No edge bars: a chosen card
  * is tinted and ringed all round.
@@ -10,8 +11,23 @@
 .iris-gp-muted { font-size: var(--font-size-x-small); color: var(--text-weak); }
 .iris-gp-muted code { font-size: var(--font-size-x-small); }
 .iris-gp-banner { margin: 8px 10px 0; }
-.iris-gp-x { width: 20px; height: 20px; margin: -2px -4px -2px 0; }
-.iris-gp-filters .iris-ui-tab { gap: 5px; }
+
+/* ── the filter row and the detail's view row: ui Tabs (pill, small) then the pickers ── */
+.iris-gp-filters, .iris-gp-tabrow { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; min-width: 0; }
+.iris-gp [data-component="tabs"] [data-slot="tabs-trigger"] .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
+.iris-gp-pick { flex: none; gap: 6px; max-width: 220px; }
+.iris-gp-scope { flex: none; }
+/* Icon-only toggles drawn with a glyph the icon set lacks: a square ghost Button. The ui Button has
+   no pressed look, so the toggle's state is the pane's (as the old segmented control drew it). */
+.iris-gp-seg { display: inline-flex; flex: none; gap: 1px; }
+.iris-gp-iconbtn { flex: none; width: 24px; padding: 0; justify-content: center; }
+.iris-gp-iconbtn[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); }
+/* The menus are portalled out of the pane: sized here, drawn by the ui DropdownMenu. */
+.iris-gp-menu { width: 260px; max-height: 320px; overflow-y: auto; }
+.iris-gp-menu.iris-gp-vismenu { width: 280px; }
+.iris-gp-menu .iris-gp-grow { display: flex; flex-direction: column; min-width: 0; }
+.iris-gp-menunote { margin: 0; padding: 6px 8px; font-size: var(--font-size-x-small); color: var(--text-weak); }
+.iris-gp-skeleton { padding: 12px; }
 
 /* ── brand marks and swatches ── */
 .iris-gp-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-raised-base); color: var(--text-base); font-size: var(--font-size-x-small); font-weight: var(--font-weight-semibold); }
@@ -23,9 +39,6 @@
 .iris-gp-swatches { display: inline-flex; flex: none; }
 .iris-gp-swatches > span { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--background-base), inset 0 0 0 1px color-mix(in srgb, var(--text-strong) 18%, transparent); }
 .iris-gp-swatches > span + span { margin-left: -3px; }
-.iris-gp-brandpick { position: relative; flex: none; }
-.iris-gp-brandpick > .iris-ui-tab { gap: 6px; }
-.iris-gp-brandmenu { right: 0; top: calc(100% + 4px); width: 260px; }
 
 /* ── the list: cards or rows ── */
 .iris-gp-scroll { flex: 1; min-height: 0; overflow-y: auto; }
@@ -43,12 +56,11 @@
 .iris-gp-ph .iris-ui-svg { width: 26px; height: 26px; stroke-width: 1.4; }
 .iris-gp-quick { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; padding: 2px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--background-base) 88%, transparent); box-shadow: 0 2px 8px rgb(0 0 0 / 0.18); opacity: 0; transform: translateY(-2px); transition: opacity 0.12s, transform 0.12s; }
 .iris-gp-card:hover .iris-gp-quick, .iris-gp-card:focus-within .iris-gp-quick { opacity: 1; transform: none; }
-.iris-gp-quick .iris-ui-icon { width: 24px; height: 24px; }
 .iris-gp-meta { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
 .iris-gp-name { font-size: var(--font-size-small); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-gp-slug { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); color: var(--text-weak); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iris-gp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; min-width: 0; }
-.iris-gp-chips > .iris-ui-chip { flex: none; }
+.iris-gp-chips > [data-component="status-badge"] { flex: none; }
 .iris-gp-when { margin-left: auto; font-size: var(--font-size-x-small); color: var(--text-weak); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .iris-gp-brand { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-weaker-base); font-size: var(--font-size-x-small); color: var(--text-base); min-width: 0; }
 .iris-gp-brandname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -79,12 +91,11 @@
 .iris-gp-dhead { gap: 6px; }
 .iris-gp-dtitle { display: flex; flex-direction: column; min-width: 0; flex: 0 1 auto; }
 .iris-gp-dtitle h3 { margin: 0; font-size: var(--font-size-small); font-weight: var(--font-weight-medium); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iris-gp-vis { position: relative; flex: none; }
-.iris-gp-vismenu { right: 0; top: calc(100% + 4px); width: 280px; }
 .iris-gp-dbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 264px; }
 .iris-gp-dbody[data-tab="edit"], .iris-gp-dbody[data-tab="json"] { grid-template-columns: minmax(0, 1fr); }
 .iris-gp-stage { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--text-strong) 3%, var(--background-base)); }
-.iris-gp-stage > .iris-ui-empty { flex: 1; }
+.iris-gp-stage > [data-component="empty-state"], .iris-gp-stage > .iris-ui-center { flex: 1; }
+.iris-gp-side > [data-component="empty-state"] { padding-block: 24px; }
 .iris-gp-room { flex: 1; min-height: 0; display: flex; justify-content: center; padding: 12px; overflow: hidden; }
 .iris-gp-device { position: relative; flex: none; overflow: hidden; border-radius: var(--radius-lg); background: #fff; box-shadow: 0 0 0 1px var(--border-weak-base), 0 8px 24px -12px rgb(0 0 0 / 0.35); }
 .iris-gp-room[data-device="phone"] .iris-gp-device, .iris-gp-room[data-device="tablet"] .iris-gp-device { border-radius: var(--radius-2xl); }
@@ -131,4 +142,6 @@
   .iris-gp-cards { grid-template-columns: minmax(0, 1fr); }
   .iris-ui-bar { flex-wrap: wrap; }
 }
-.iris-gp-dhead > .iris-ui-chip { flex: none; }
+.iris-gp-dhead > [data-component="status-badge"] { flex: none; }
+.iris-gp-confirm { display: flex; flex-direction: column; gap: 8px; }
+.iris-gp-confirm p { margin: 0; }

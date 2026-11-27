@@ -1,5 +1,5 @@
 /*
- * Genesis › Sites controls (#192672). Built on iris-panel-ui.css; only what is particular to "which
+ * Genesis › Sites controls (#192672). Built on the ui library and iris-pane-layout.css; only what is particular to "which
  * site is this page in" is here — the site chip on a card, the site groups, the choose-a-site dialog
  * and a site's ordered pages. Same tokens, radii and type sizes as the Pages pane around it.
  */
@@ -8,13 +8,12 @@
 .iris-gs-optname { display: block; font-size: var(--font-size-caption); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
 .iris-gs-pad { padding: 8px 2px 4px; }
 
-/* ── the chip on a page card: a button, so it says it can be changed ── */
-.iris-gs-chip { border: 0; cursor: pointer; font: inherit; font-size: var(--font-size-x-small); max-width: 160px; }
-.iris-gs-chip:not([data-in]) { background: transparent; box-shadow: inset 0 0 0 1px var(--border-weaker-base); }
-.iris-gs-chip[data-in] { color: var(--text-base); }
-.iris-gs-chip:hover { color: var(--text-strong); background: var(--ui-hover); }
-.iris-gs-chip .iris-ui-ic { width: 12px; height: 12px; opacity: 0.7; }
+/* ── the chip on a page card: a ghost Button, so it says it can be changed ── */
+.iris-gs-chip { max-width: 180px; min-width: 0; gap: 4px; height: 22px; font-size: var(--font-size-caption); font-weight: var(--font-weight-regular); }
+.iris-gs-chip:not([data-in]) { color: var(--text-weak); }
+.iris-gs-chip .iris-ui-svg { width: 12px; height: 12px; opacity: 0.7; }
 .iris-gs-chipname { overflow: hidden; text-overflow: ellipsis; }
+.iris-gs-move { padding: 0 4px; color: var(--text-weak); }
 
 /* ── pages grouped under their site (Elon's layout): a header row, then that site's cards ── */
 .iris-gs-groups { display: flex; flex-direction: column; padding: 4px 0 12px; }
@@ -26,18 +25,17 @@
 .iris-gs-head .iris-gs-hname { color: var(--text-strong); font-weight: var(--font-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .iris-gs-head .iris-gs-hslug { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--font-size-x-small); color: var(--text-weak); white-space: nowrap; }
 .iris-gs-head .iris-gs-hcount { margin-left: auto; font-size: var(--font-size-x-small); color: var(--text-weak); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.iris-gs-head > .iris-ui-chip { flex: none; }
+.iris-gs-head > [data-component="status-badge"] { flex: none; }
 .iris-gs-group > .iris-gp-cards { padding-top: 2px; }
 .iris-gp[data-view="list"] .iris-gs-group > .iris-gp-cards { padding-top: 0; }
 
 /* ── the choose-a-site dialog ── */
-.iris-gs-dialog { width: min(440px, 100%); max-height: calc(100% - 8px); display: flex; flex-direction: column; }
 .iris-gs-intro { color: var(--text-weak) !important; }
 .iris-gs-opts { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; margin: 4px 0 8px; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-lg); padding: 4px; }
 .iris-gs-opt { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; color: var(--text-base); text-align: start; padding: 7px 8px; border-radius: var(--radius-md); cursor: pointer; font: inherit; }
 .iris-gs-opt:hover:not(:disabled) { background: var(--ui-hover); }
 .iris-gs-opt[aria-checked="true"] { background: var(--ui-sel); }
-.iris-gs-opt > .iris-ui-chip { flex: none; }
+.iris-gs-opt > [data-component="status-badge"] { flex: none; }
 .iris-gs-radio { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-weak-base); }
 .iris-gs-opt[aria-checked="true"] .iris-gs-radio { box-shadow: inset 0 0 0 4px var(--text-strong); }
 .iris-gs-new { align-self: flex-start; }
@@ -56,12 +54,12 @@
 .iris-gs-checks { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
 .iris-gs-check { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: var(--radius-md); cursor: pointer; }
 .iris-gs-check:hover { background: var(--ui-hover); }
-.iris-gs-check > .iris-ui-chip { flex: none; }
+.iris-gs-check > [data-component="status-badge"] { flex: none; }
 .iris-gs-picker .iris-gs-line { margin: 0 !important; }
 .iris-gs-order { list-style: none; margin: 0; padding: 0; }
 .iris-gs-row { display: flex; align-items: center; gap: 6px; padding: 5px 2px; border-bottom: 1px solid var(--border-weaker-base); }
 .iris-gs-row:last-child { border-bottom: 0; }
-.iris-gs-row > .iris-ui-chip { flex: none; }
+.iris-gs-row > [data-component="status-badge"] { flex: none; }
 .iris-gs-n { flex: none; width: 18px; text-align: end; font-size: var(--font-size-x-small); color: var(--text-weak); font-variant-numeric: tabular-nums; font-family: var(--font-mono, ui-monospace, monospace); }
 .iris-gs-check input { accent-color: var(--text-strong); }
 .iris-gs-head .iris-gs-caret { display: inline-flex; }

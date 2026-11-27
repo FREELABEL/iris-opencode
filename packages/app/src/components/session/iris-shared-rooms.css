@@ -754,7 +754,7 @@
 .sr-join-card {
   margin-top: 12px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--ui-good, #059669) 8%, transparent);
 }
 .sr-join-name {

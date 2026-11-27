@@ -34,6 +34,9 @@ type PluralKey =
   | "session.followupDock.summary"
   | "session.revertDock.summary"
   | "iris.delegate.agent.open"
+  | AutoPluralKey
+/** Any key whose English has `.one` and `.other` forms can be used with plural() (#194375 W5). */
+type AutoPluralKey = { [K in keyof typeof en]: K extends `${infer P}.other` ? P : never }[keyof typeof en]
 type Source = { dict: Record<string, string> }
 
 function cookie(locale: Locale) {

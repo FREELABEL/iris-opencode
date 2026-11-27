@@ -1,7 +1,14 @@
 import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
+import { Button } from "@opencode-ai/ui/button"
 import { Icon } from "@opencode-ai/ui/icon"
+import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Notice } from "@opencode-ai/ui/notice"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { Spinner } from "@opencode-ai/ui/spinner"
-import "./iris-panel-ui.css"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { useLanguage } from "@/context/language"
+import { PaneDialog, PaneDialogActions, statusTone } from "./iris-pane-dialog"
+import "./iris-pane-layout.css"
 import "./iris-genesis-sites.css"
 import {
   addablePages,
@@ -17,7 +24,7 @@ import {
 /**
  * GENESIS › SITES, the controls (#192672): put a page in a site and see which site it is in.
  * Ported from Elon's BloqPagesSection (attach = POST /sites/{site}/pages/{page}, detach = DELETE),
- * through the engine's /iris/site routes, drawn with the panel's shared pieces (iris-panel-ui.css).
+ * through the engine's /iris/site routes, drawn with the ui library (Button, Dialog, StatusBadge, Notice).
  *
  * Two pieces: SiteDialog — one page, choose its site (or none), with the one plain line of what
  * changes — and SitePagesEditor — one site, its pages in order, add / remove / reorder.
@@ -65,22 +72,27 @@ export async function loadBoardSites(doFetch: Fetch, board: number): Promise<Sit
 }
 
 export function SiteChip(props: { name?: string; onClick: (e: MouseEvent) => void; title?: string }) {
+  const language = useLanguage()
   return (
-    <button
-      type="button"
-      class="iris-ui-chip iris-gs-chip"
+    <Button
+      variant="ghost"
+      size="small"
+      class="iris-gs-chip"
       data-slot="gp-site-chip"
       data-in={props.name ? "" : undefined}
-      title={props.title ?? (props.name ? `In ${props.name} — change site` : "Not in a site — add it to one")}
-      onClick={(e) => {
+      title={
+        props.title ??
+        (props.name ? language.t("iris.sites.chip.in", { name: props.name }) : language.t("iris.sites.chip.none"))
+      }
+      onClick={(e: MouseEvent) => {
         e.stopPropagation()
         props.onClick(e)
       }}
     >
       <Svg d={SITE_GLYPH} />
-      <span class="iris-gs-chipname">{props.name ?? "No site"}</span>
+      <span class="iris-gs-chipname">{props.name ?? language.t("iris.sites.noSite")}</span>
       <Icon name="chevron-down" size="small" />
-    </button>
+    </Button>
   )
 }
 
@@ -96,6 +108,7 @@ export function SiteDialog(props: {
   /** The page's new site (undefined = none), the site read back, and what to tell the person. */
   onChanged: (siteId: number | undefined, site: SiteDetail | undefined, note: string) => void
 }) {
+  const language = useLanguage()
   const [sites, { refetch }] = createResource(
     () => props.board,
     (b) => loadBoardSites(props.doFetch, b),
@@ -110,7 +123,7 @@ export function SiteDialog(props: {
   const from = () => (props.page.siteId == null ? undefined : { id: props.page.siteId, name: siteNameOf(props.page, list())! })
   const to = () => {
     const id = pick()
-    return id == null ? undefined : { id, name: list().find((s) => s.id === id)?.name ?? `Site #${id}` }
+    return id == null ? undefined : { id, name: list().find((s) => s.id === id)?.name ?? language.t("iris.sites.numbered", { id }) }
   }
   const change = createMemo(() => siteChange(from(), to()))
 
@@ -121,7 +134,7 @@ export function SiteDialog(props: {
     setError(undefined)
     try {
       const r = await send<SiteResult>(props.doFetch, `/iris/site`, "POST", { name: n, bloqId: props.board })
-      if (!r.ok || !r.site) return setError(`The site wasn't made — ${r.reason ?? "the platform refused"}`)
+      if (!r.ok || !r.site) return setError(language.t("iris.sites.error.notMade", { reason: r.reason ?? language.t("iris.sites.refused") }))
       await refetch()
       setPick(r.site.id)
       setNaming(false)
@@ -144,8 +157,14 @@ export function SiteDialog(props: {
       const r = t
         ? await send<SiteResult>(props.doFetch, `/iris/site/${t.id}/pages/${props.page.id}`, "POST", f ? { fromSiteId: f.id } : {})
         : await send<SiteResult>(props.doFetch, `/iris/site/${f!.id}/pages/${props.page.id}`, "DELETE")
-      if (!r.ok) return setError(`${siteChangeLabel(c)} didn't happen — ${r.reason ?? "the platform refused"}`)
-      props.onChanged(t?.id, r.site, t ? `In ${t.name}. ${siteChangeLine(c)}` : `Out of ${f!.name}. It keeps its own sidebar and sign-in now.`)
+      if (!r.ok) return setError(language.t("iris.sites.error.didntHappen", { what: siteChangeLabel(c), reason: r.reason ?? language.t("iris.sites.refused") }))
+      props.onChanged(
+        t?.id,
+        r.site,
+        t
+          ? language.t("iris.sites.note.in", { name: t.name, line: siteChangeLine(c) ?? "" })
+          : language.t("iris.sites.note.out", { name: f!.name }),
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -163,52 +182,60 @@ export function SiteDialog(props: {
         </Show>
       </span>
       <Show when={o.site?.requiresAuth}>
-        <span class="iris-ui-chip" title="Visitors sign in once for the whole site">
-          <Icon name="shield" size="small" />
-          sign-in
-        </span>
+        <StatusBadge size="small" title={language.t("iris.sites.signIn.title")} mark={<Icon name="shield" size="small" />}>
+          {language.t("iris.sites.signIn")}
+        </StatusBadge>
       </Show>
       <Show when={props.page.siteId != null && props.page.siteId === o.id}>
-        <span class="iris-ui-chip">now</span>
+        <StatusBadge size="small">{language.t("iris.sites.now")}</StatusBadge>
       </Show>
     </button>
   )
 
   return (
-    <div class="iris-ui-scrim" onClick={(e) => e.target === e.currentTarget && !busy() && props.onClose()}>
-      <div class="iris-ui-dialog iris-gs-dialog" role="dialog" aria-modal="true" aria-labelledby="iris-gs-title" data-slot="gp-site-dialog">
-        <div class="iris-ui-dialog-icon">
-          <Svg d={SITE_GLYPH} />
-        </div>
-        <h3 id="iris-gs-title">Site for “{props.page.title}”</h3>
-        <p class="iris-gs-intro">Pages in a site share its sidebar and sign-in rules, so people sign in once for all of them.</p>
+    <PaneDialog
+      when={true}
+      onClose={props.onClose}
+      title={() => language.t("iris.sites.dialog.title", { title: props.page.title })}
+      class="iris-gs-dialog"
+      id="gp-site-dialog"
+    >
+      {() => (
+        <>
+        <p class="iris-gs-intro">{language.t("iris.sites.dialog.intro")}</p>
         <Switch>
           <Match when={props.board == null}>
-            <p class="iris-gs-sub">Open the page's board to see its sites.</p>
+            <p class="iris-gs-sub">{language.t("iris.sites.dialog.noBoard")}</p>
           </Match>
           <Match when={sites.loading && !sites.latest}>
-            <div class="iris-ui-empty"><Spinner class="iris-ui-spin" /></div>
+            <SkeletonRows rows={3} label={language.t("iris.sites.loading")} />
           </Match>
           <Match when={sites.latest && !sites.latest.measured}>
-            <p class="iris-gs-sub" role="alert">Couldn't read this board's sites — {sites.latest!.reason}.</p>
+            <p class="iris-gs-sub" role="alert">{language.t("iris.sites.error.unreadBoard", { reason: sites.latest!.reason ?? "" })}</p>
           </Match>
           <Match when={sites.latest}>
-            <div class="iris-gs-opts" role="radiogroup" aria-label="Site">
+            <div class="iris-gs-opts" role="radiogroup" aria-label={language.t("iris.sites.site")}>
               <For each={list()}>
-                {(s) => <Option id={s.id} label={s.name} sub={`/s/${s.slug} · ${s.pagesCount} page${s.pagesCount === 1 ? "" : "s"}${s.status === "published" ? "" : ` · ${s.status}`}`} site={s} />}
+                {(s) => (
+                  <Option
+                    id={s.id}
+                    label={s.name}
+                    sub={`/s/${s.slug} · ${language.plural("iris.sites.pageCount", s.pagesCount)}${s.status === "published" ? "" : ` · ${s.status}`}`}
+                    site={s}
+                  />
+                )}
               </For>
               <Show when={props.page.siteId != null && !list().some((s) => s.id === props.page.siteId)}>
-                <Option id={props.page.siteId} label={`Site #${props.page.siteId}`} sub="not one of this board's sites" />
+                <Option id={props.page.siteId} label={language.t("iris.sites.numbered", { id: props.page.siteId! })} sub={language.t("iris.sites.notThisBoard")} />
               </Show>
-              <Option id={undefined} label="No site" sub="Its own sidebar and sign-in list" />
+              <Option id={undefined} label={language.t("iris.sites.noSite")} sub={language.t("iris.sites.noSite.sub")} />
             </div>
             <Show
               when={naming()}
               fallback={
-                <button type="button" class="iris-ui-btn iris-gs-new" disabled={busy()} onClick={() => setNaming(true)}>
-                  <Icon name="plus-small" size="small" />
-                  New site
-                </button>
+                <Button size="small" icon="plus-small" class="iris-gs-new" disabled={busy()} onClick={() => setNaming(true)}>
+                  {language.t("iris.sites.new")}
+                </Button>
               }
             >
               <form
@@ -218,10 +245,18 @@ export function SiteDialog(props: {
                   void create()
                 }}
               >
-                <input class="iris-gs-input" type="text" placeholder="Site name" aria-label="New site name" value={name()} onInput={(e) => setName(e.currentTarget.value)} autofocus />
-                <button type="submit" class="iris-ui-btn" disabled={busy() || !name().trim()}>
-                  Create
-                </button>
+                <input
+                  class="iris-gs-input"
+                  type="text"
+                  placeholder={language.t("iris.sites.new.placeholder")}
+                  aria-label={language.t("iris.sites.new.label")}
+                  value={name()}
+                  onInput={(e) => setName(e.currentTarget.value)}
+                  autofocus
+                />
+                <Button type="submit" size="small" disabled={busy() || !name().trim()}>
+                  {language.t("iris.sites.new.create")}
+                </Button>
               </form>
             </Show>
           </Match>
@@ -236,19 +271,20 @@ export function SiteDialog(props: {
         <Show when={error()}>
           <p class="iris-gs-error" role="alert">{error()}</p>
         </Show>
-        <div class="iris-ui-dialog-actions">
-          <button type="button" class="iris-ui-btn" disabled={busy()} onClick={props.onClose}>
-            Cancel
-          </button>
-          <button type="button" class="iris-ui-btn" data-primary disabled={busy() || change().kind === "same"} onClick={() => void apply()}>
+        <PaneDialogActions>
+          <Button size="small" disabled={busy()} onClick={props.onClose}>
+            {language.t("common.cancel")}
+          </Button>
+          <Button size="small" variant="primary" disabled={busy() || change().kind === "same"} onClick={() => void apply()}>
             <Show when={busy()}>
               <Spinner class="iris-ui-spin" />
             </Show>
             {siteChangeLabel(change())}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </PaneDialogActions>
+        </>
+      )}
+    </PaneDialog>
   )
 }
 
@@ -266,6 +302,7 @@ export function SitePagesEditor(props: {
   openExternal?: (url: string) => void
   onChanged?: () => void
 }) {
+  const language = useLanguage()
   const [site, { mutate, refetch }] = createResource(
     () => props.siteId,
     async (id) => {
@@ -282,7 +319,7 @@ export function SitePagesEditor(props: {
   const [removing, setRemoving] = createSignal<{ id: number; title: string }>()
 
   const landed = (r: SiteResult, text: string) => {
-    if (!r.ok) return setNote({ tone: "bad", text: `${text} didn't happen — ${r.reason ?? "the platform refused"}` })
+    if (!r.ok) return setNote({ tone: "bad", text: language.t("iris.sites.error.didntHappen", { what: text, reason: r.reason ?? language.t("iris.sites.refused") }) })
     if (r.site) mutate({ measured: true, site: r.site })
     else void refetch()
     props.onChanged?.()
@@ -296,7 +333,7 @@ export function SitePagesEditor(props: {
     setBusy(`move-${id}`)
     setNote(undefined)
     try {
-      landed(await send<SiteResult>(props.doFetch, `/iris/site/${d.id}/reorder`, "POST", { pageIds: ids }), "The new order")
+      landed(await send<SiteResult>(props.doFetch, `/iris/site/${d.id}/reorder`, "POST", { pageIds: ids }), language.t("iris.sites.newOrder"))
     } catch (e) {
       setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -310,8 +347,8 @@ export function SitePagesEditor(props: {
     if (!d || !p) return
     setBusy(`remove-${p.id}`)
     try {
-      if (landed(await send<SiteResult>(props.doFetch, `/iris/site/${d.id}/pages/${p.id}`, "DELETE"), "Removing it"))
-        setNote({ tone: "good", text: `“${p.title}” is out of ${d.name}. It keeps its own sidebar and sign-in now.` })
+      if (landed(await send<SiteResult>(props.doFetch, `/iris/site/${d.id}/pages/${p.id}`, "DELETE"), language.t("iris.sites.removingIt")))
+        setNote({ tone: "good", text: language.t("iris.sites.note.removed", { title: p.title, name: d.name }) })
       setRemoving(undefined)
     } catch (e) {
       setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) })
@@ -356,9 +393,9 @@ export function SitePagesEditor(props: {
       try {
         const r = await send<SiteResult>(props.doFetch, `/iris/site/${d.id}/pages/${id}`, "POST", {})
         if (r.ok) last = r.site ?? last
-        else failed.push(`${candidates().find((p) => p.id === id)?.title ?? `page ${id}`}: ${r.reason ?? "refused"}`)
+        else failed.push(`${candidates().find((p) => p.id === id)?.title ?? language.t("iris.sites.pageN", { id })}: ${r.reason ?? language.t("iris.sites.refusedShort")}`)
       } catch (e) {
-        failed.push(`page ${id}: ${e instanceof Error ? e.message : String(e)}`)
+        failed.push(`${language.t("iris.sites.pageN", { id })}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     if (last) mutate({ measured: true, site: last })
@@ -367,8 +404,8 @@ export function SitePagesEditor(props: {
     const added = ids.length - failed.length
     setNote(
       failed.length
-        ? { tone: "bad", text: `${added} of ${ids.length} added. Not added — ${failed.join("; ")}` }
-        : { tone: "good", text: `${added} page${added === 1 ? "" : "s"} added to ${d.name}.` },
+        ? { tone: "bad", text: language.t("iris.sites.note.partial", { added, total: ids.length, failed: failed.join("; ") }) }
+        : { tone: "good", text: language.plural("iris.sites.note.added", added, { name: d.name }) },
     )
     setChosen(new Set<number>())
     setAdding(false)
@@ -379,33 +416,32 @@ export function SitePagesEditor(props: {
     <div class="iris-ui iris-gs-editor" data-slot="iris-site-pages">
       <Switch>
         <Match when={site.loading && !site.latest}>
-          <div class="iris-ui-empty"><Spinner class="iris-ui-spin" /></div>
+          <SkeletonRows rows={4} label={language.t("iris.sites.loading")} />
         </Match>
         <Match when={site.latest && !site.latest.measured}>
-          <p class="text-13-regular text-text-weak py-2" role="alert">Couldn't read this site's pages — {site.latest!.reason}.</p>
+          <p class="text-13-regular text-text-weak py-2" role="alert">{language.t("iris.sites.error.unreadSite", { reason: site.latest!.reason ?? "" })}</p>
         </Match>
         <Match when={detail()}>
           {(d) => (
             <>
               <div class="iris-gs-bar">
-                <span class="iris-gs-sub">
-                  {d().pages.length} page{d().pages.length === 1 ? "" : "s"}, in the order the sidebar lists them
-                </span>
+                <span class="iris-gs-sub">{language.plural("iris.sites.inOrder", d().pages.length)}</span>
                 <span class="iris-ui-spacer" />
-                <button type="button" class="iris-ui-btn" data-slot="site-add-pages" aria-expanded={adding()} disabled={!!busy()} onClick={() => setAdding(!adding())}>
-                  <Icon name="plus-small" size="small" />
-                  Add pages
-                </button>
+                <Button size="small" icon="plus-small" data-slot="site-add-pages" aria-expanded={adding()} disabled={!!busy()} onClick={() => setAdding(!adding())}>
+                  {language.t("iris.sites.addPages")}
+                </Button>
               </div>
 
               <Show when={note()}>
                 {(n) => (
-                  <div class="iris-ui-callout iris-gs-note" data-tone={n().tone} role={n().tone === "bad" ? "alert" : "status"}>
-                    <span class="iris-gs-grow">{n().text}</span>
-                    <button type="button" class="iris-ui-icon" aria-label="Dismiss" onClick={() => setNote(undefined)}>
-                      <Icon name="close-small" size="small" />
-                    </button>
-                  </div>
+                  <Notice
+                    class="iris-gs-note"
+                    tone={statusTone(n().tone)}
+                    role={n().tone === "bad" ? "alert" : "status"}
+                    action={<IconButton icon="close-small" variant="ghost" size="small" aria-label={language.t("iris.sites.dismiss")} onClick={() => setNote(undefined)} />}
+                  >
+                    {n().text}
+                  </Notice>
                 )}
               </Show>
 
@@ -413,19 +449,19 @@ export function SitePagesEditor(props: {
                 <div class="iris-gs-picker" data-slot="site-add-picker">
                   <Switch>
                     <Match when={props.board == null}>
-                      <p class="iris-gs-sub">This site is not on a board, so there are no board pages to add here. Add pages from Genesis › Pages instead.</p>
+                      <p class="iris-gs-sub">{language.t("iris.sites.add.noBoard")}</p>
                     </Match>
                     <Match when={board.loading && !board.latest}>
-                      <div class="iris-ui-empty"><Spinner class="iris-ui-spin" /></div>
+                      <SkeletonRows rows={3} label={language.t("iris.sites.loading")} />
                     </Match>
                     <Match when={board.latest && !board.latest.measured}>
-                      <p class="iris-gs-sub" role="alert">Couldn't read the board's pages — {board.latest!.reason}.</p>
+                      <p class="iris-gs-sub" role="alert">{language.t("iris.sites.error.unreadBoardPages", { reason: board.latest!.reason ?? "" })}</p>
                     </Match>
                     <Match when={candidates().length === 0}>
-                      <p class="iris-gs-sub">Every page on this board is already in a site. To move one, open it in Genesis › Pages.</p>
+                      <p class="iris-gs-sub">{language.t("iris.sites.add.allInSites")}</p>
                     </Match>
                     <Match when={candidates().length > 0}>
-                      <p class="iris-gs-sub">Pages on this board that are in no site:</p>
+                      <p class="iris-gs-sub">{language.t("iris.sites.add.candidates")}</p>
                       <div class="iris-gs-checks">
                         <For each={candidates()}>
                           {(p) => (
@@ -435,28 +471,28 @@ export function SitePagesEditor(props: {
                                 <span class="iris-gs-optname">{p.title}</span>
                                 <span class="iris-gs-sub">/{p.slug ?? p.id}</span>
                               </span>
-                              <span class="iris-ui-chip">{p.status === "published" ? "Published" : "Draft"}</span>
+                              <StatusBadge size="small">{p.status === "published" ? language.t("iris.sites.published") : language.t("iris.sites.draft")}</StatusBadge>
                             </label>
                           )}
                         </For>
                       </div>
                       <Show when={board.latest?.hasMore}>
-                        <p class="iris-gs-sub">Showing the first 100 of the board's pages.</p>
+                        <p class="iris-gs-sub">{language.t("iris.sites.add.first100")}</p>
                       </Show>
                       <Show when={chosen().size > 0}>
                         <p class="iris-gs-line" data-slot="site-add-line">{siteChangeLine({ kind: "add", to: d().name }, chosen().size)}</p>
                       </Show>
                       <div class="iris-gs-bar">
                         <span class="iris-ui-spacer" />
-                        <button type="button" class="iris-ui-btn" disabled={busy() === "add"} onClick={() => (setAdding(false), setChosen(new Set<number>()))}>
-                          Cancel
-                        </button>
-                        <button type="button" class="iris-ui-btn" data-primary disabled={chosen().size === 0 || !!busy()} onClick={() => void addChosen()}>
+                        <Button size="small" disabled={busy() === "add"} onClick={() => (setAdding(false), setChosen(new Set<number>()))}>
+                          {language.t("common.cancel")}
+                        </Button>
+                        <Button size="small" variant="primary" disabled={chosen().size === 0 || !!busy()} onClick={() => void addChosen()}>
                           <Show when={busy() === "add"}>
                             <Spinner class="iris-ui-spin" />
                           </Show>
-                          {chosen().size ? `Add ${chosen().size} page${chosen().size === 1 ? "" : "s"}` : "Add pages"}
-                        </button>
+                          {chosen().size ? language.plural("iris.sites.addN", chosen().size) : language.t("iris.sites.addPages")}
+                        </Button>
                       </div>
                     </Match>
                   </Switch>
@@ -467,25 +503,33 @@ export function SitePagesEditor(props: {
                 detail this short would clip its own dialog. */}
               <Show when={removing()}>
                 {(r) => (
-                  <div class="iris-ui-callout iris-gs-confirm" data-tone="warn" role="alertdialog" aria-labelledby="iris-gs-remove-title" data-slot="site-remove-confirm">
-                    <div class="iris-gs-grow">
-                      <p class="iris-gs-optname" id="iris-gs-remove-title">Take “{r().title}” out of {d().name}?</p>
-                      <p class="iris-gs-sub">{siteChangeLine({ kind: "remove", from: d().name })} The page itself is not changed.</p>
-                    </div>
-                    <button type="button" class="iris-ui-btn" disabled={!!busy()} onClick={() => setRemoving(undefined)}>
-                      Cancel
-                    </button>
-                    <button type="button" class="iris-ui-btn" data-primary data-tone="warn" disabled={!!busy()} onClick={() => void remove()}>
-                      <Show when={busy()}>
-                        <Spinner class="iris-ui-spin" />
-                      </Show>
-                      Remove from site
-                    </button>
-                  </div>
+                  <Notice
+                    class="iris-gs-confirm"
+                    tone="warning"
+                    role="alertdialog"
+                    aria-labelledby="iris-gs-remove-title"
+                    data-slot="site-remove-confirm"
+                    action={
+                      <>
+                        <Button size="small" disabled={!!busy()} onClick={() => setRemoving(undefined)}>
+                          {language.t("common.cancel")}
+                        </Button>
+                        <Button size="small" variant="primary" disabled={!!busy()} onClick={() => void remove()}>
+                          <Show when={busy()}>
+                            <Spinner class="iris-ui-spin" />
+                          </Show>
+                          {language.t("iris.sites.remove")}
+                        </Button>
+                      </>
+                    }
+                  >
+                    <p class="iris-gs-optname" id="iris-gs-remove-title">{language.t("iris.sites.remove.title", { title: r().title, name: d().name })}</p>
+                    <p class="iris-gs-sub">{language.t("iris.sites.remove.body", { line: siteChangeLine({ kind: "remove", from: d().name }) ?? "" })}</p>
+                  </Notice>
                 )}
               </Show>
 
-              <Show when={d().pages.length > 0} fallback={<p class="iris-gs-sub iris-gs-pad">No pages in this site yet. Add some above.</p>}>
+              <Show when={d().pages.length > 0} fallback={<p class="iris-gs-sub iris-gs-pad">{language.t("iris.sites.empty")}</p>}>
                 <ol class="iris-gs-order">
                   <For each={d().pages}>
                     {(p, i) => (
@@ -496,20 +540,25 @@ export function SitePagesEditor(props: {
                           <span class="iris-gs-sub">/{p.slug ?? p.id}</span>
                         </span>
                         <Show when={d().homePageId === p.id}>
-                          <span class="iris-ui-chip" title="The page /s/{slug} opens on">home</span>
+                          <StatusBadge size="small" title={language.t("iris.sites.home.title")}>{language.t("iris.sites.home")}</StatusBadge>
                         </Show>
-                        <span class="iris-ui-chip" data-tone={p.status === "published" ? "good" : "warn"}>{p.status === "published" ? "Published" : "Draft"}</span>
-                        <button type="button" class="iris-ui-icon" title="Move up" aria-label={`Move ${p.title} up`} disabled={i() === 0 || !!busy()} onClick={() => void reorder(p.id, -1)}>
+                        <StatusBadge size="small" tone={p.status === "published" ? "success" : "warning"}>
+                          {p.status === "published" ? language.t("iris.sites.published") : language.t("iris.sites.draft")}
+                        </StatusBadge>
+                        <Button variant="ghost" size="small" class="iris-gs-move" title={language.t("iris.sites.moveUp")} aria-label={language.t("iris.sites.moveUp.label", { title: p.title })} disabled={i() === 0 || !!busy()} onClick={() => void reorder(p.id, -1)}>
                           <Svg d={UP} />
-                        </button>
-                        <button type="button" class="iris-ui-icon" title="Move down" aria-label={`Move ${p.title} down`} disabled={i() === d().pages.length - 1 || !!busy()} onClick={() => void reorder(p.id, 1)}>
+                        </Button>
+                        <Button variant="ghost" size="small" class="iris-gs-move" title={language.t("iris.sites.moveDown")} aria-label={language.t("iris.sites.moveDown.label", { title: p.title })} disabled={i() === d().pages.length - 1 || !!busy()} onClick={() => void reorder(p.id, 1)}>
                           <Svg d={DOWN} />
-                        </button>
-                        <button type="button" class="iris-ui-icon" title="Remove from site" aria-label={`Remove ${p.title} from the site`} disabled={!!busy()} onClick={() => setRemoving({ id: p.id, title: p.title })}>
-                          <Show when={busy() === `remove-${p.id}`} fallback={<Icon name="close-small" size="small" />}>
-                            <Spinner class="iris-ui-spin" />
-                          </Show>
-                        </button>
+                        </Button>
+                        <Show
+                          when={busy() === `remove-${p.id}`}
+                          fallback={
+                            <IconButton icon="close-small" variant="ghost" size="small" title={language.t("iris.sites.remove")} aria-label={language.t("iris.sites.remove.label", { title: p.title })} disabled={!!busy()} onClick={() => setRemoving({ id: p.id, title: p.title })} />
+                          }
+                        >
+                          <Spinner class="iris-ui-spin" />
+                        </Show>
                       </li>
                     )}
                   </For>
@@ -517,7 +566,7 @@ export function SitePagesEditor(props: {
               </Show>
 
               <Show when={(props.navItems?.length ?? 0) > 0}>
-                <p class="iris-gs-sub iris-gs-pad">Navigation</p>
+                <p class="iris-gs-sub iris-gs-pad">{language.t("iris.sites.navigation")}</p>
                 <For each={props.navItems}>
                   {(n) => (
                     <a

@@ -71,11 +71,12 @@
 .ihd-st { width: 22px; height: 22px; display: grid; place-items: center; }
 .ihd-st svg { width: 14px; height: 14px; }
 @keyframes ihd-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 55%, transparent); } 70% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent); } 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent); } }
-@keyframes ihd-spin { to { transform: rotate(360deg); } }
 .ihd-idle { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ihd-faint); display: inline-block; box-sizing: border-box; }
 .ihd-live { width: 8px; height: 8px; border-radius: 50%; background: var(--ihd-em); display: inline-block; animation: ihd-pulse 2s infinite; }
-.ihd-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--ihd-em) 25%, transparent); border-top-color: var(--ihd-em); animation: ihd-spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .ihd-live, .ihd-spin { animation: none; } }
+/* The ui Spinner (#194375 W5), sized and tinted for the dashboard rows. */
+.ihd-spin { width: 13px; height: 13px; flex: none; color: var(--ihd-em); }
+.ihd-spin--sm { width: 10px; height: 10px; }
+@media (prefers-reduced-motion: reduce) { .ihd-live { animation: none; } }
 .ihd-pager { display: flex; align-items: center; gap: 5px; justify-content: flex-end; padding-top: 8px; }
 .ihd-pager .ihd-range { margin-right: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
 .ihd-pg { min-width: 26px; height: 26px; border: 1px solid var(--ihd-line); border-radius: var(--radius-lg); display: grid; place-items: center; color: var(--ihd-mute); font-size: var(--font-size-caption); }
