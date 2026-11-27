@@ -3359,6 +3359,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-avatar2[data-kind="agent"] {
   border-radius: var(--radius-lg);
+  /* #194375: the brand pair, like every other primary mark; no violet-to-blue gradient. */
+  background: var(--surface-brand-base);
+  color: var(--text-on-brand-base);
 }
 
 /* The picker: tick as many as you like. */
