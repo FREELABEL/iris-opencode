@@ -136,3 +136,15 @@
 .ihd-ask-plus { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ihd-btn); color: var(--text-on-brand-base); flex: none; }
 .ihd-ask-plus svg { width: 14px; height: 14px; }
 .ihd-ask kbd { margin-left: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
+/* #194504: every tile is a button that opens its pane; its facts are words; a zero carries its next
+   step as a second, separate button. Hover and focus change the border and ring, never an edge. */
+.ihd-stat { display: flex; flex-direction: column; transition: border-color 120ms ease; }
+.ihd-stat:hover { border-color: var(--v2-border-border-strong); }
+.ihd-stat:has(> .ihd-stat-open:focus-visible) { box-shadow: var(--shadow-xs-border-focus); }
+.ihd-stat-open { all: unset; box-sizing: border-box; display: block; width: 100%; cursor: pointer; color: inherit; text-align: left; }
+.ihd-stat-open:focus-visible { outline: none; }
+.ihd-stat-open .ihd-n, .ihd-stat-open .ihd-label { display: block; }
+.ihd-stat-open .ihd-meta { display: block; margin-top: 6px; color: var(--ihd-mute); font-size: var(--font-size-caption); line-height: var(--font-size-caption--line-height); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ihd-stat[data-zero] .ihd-n { color: var(--ihd-faint); }
+.ihd-stat-next { margin-top: 10px; }
+.ihd-stat .ihd-flag { font-weight: var(--font-weight-medium); }

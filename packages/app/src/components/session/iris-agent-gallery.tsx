@@ -1,6 +1,13 @@
-import { createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import "./iris-agent-gallery.css"
 import { Select } from "@opencode-ai/ui/select"
+import { Button } from "@opencode-ai/ui/button"
+import { IconButton } from "@opencode-ai/ui/icon-button"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
+import { useLanguage } from "@/context/language"
+import { activityOf, beatsByAgent, relative, type AgentActivity } from "./iris-agent-activity-model"
+import type { HeartbeatRow } from "./iris-heartbeats-model"
 import { IrisAgentLive } from "./iris-agent-live"
 import {
   capabilities,
@@ -9,7 +16,6 @@ import {
   galleryAgents,
   iconTooltip,
   integrationChips,
-  lastActivity,
   markOpened,
   MAX_VISIBLE_CONFIG,
   model,
@@ -85,6 +91,8 @@ const initials = (name: string) =>
 
 function Card(props: {
   agent: GalleryAgent
+  activity: AgentActivity
+  now: number
   onChat: () => void
   onPage: () => void
   onTrain: () => void
@@ -97,6 +105,23 @@ function Card(props: {
   // ELON lists an integration twice (capabilities AND integrations); once is enough.
   const caps = createMemo(() => capabilities(a()).filter((c) => !chips().some((x) => x.name === c)))
   const human = () => a().isHuman === true
+  const language = useLanguage()
+  const act = () => props.activity
+  // #194505: what it did, in words — last run and how it went, runs this week, the next beat.
+  const last = () => {
+    const at = act().lastAt
+    if (!at) return language.t("iris.agentGallery.never")
+    const when = relative(at, props.now)
+    return act().lastKind === "run" ? language.t("iris.agentGallery.lastRun", { when }) : language.t("iris.agentGallery.lastUsed", { when })
+  }
+  const facts = () => {
+    const out: string[] = []
+    const w = act().week
+    if (w != null) out.push(w === 1 ? language.t("iris.agentGallery.weekOne") : language.t("iris.agentGallery.weekMany", { count: w }))
+    if (act().nextAt) out.push(language.t("iris.agentGallery.next", { when: relative(act().nextAt!, props.now) }))
+    if ((a().files ?? 0) > 0) out.push(`${a().files} file${a().files !== 1 ? "s" : ""}`)
+    return out
+  }
   return (
     <div class="iag-card" data-agent-id={a().id} data-testid="iris-agent-card">
       <div class="iag-card__head">
@@ -123,9 +148,15 @@ function Card(props: {
             </Show>
           </div>
         </div>
-        <button type="button" class="iag-ghost" title="Open public chat in new tab" onClick={props.onPage}>
-          <I n="external" />
-        </button>
+        <Tooltip value={language.t("iris.agentGallery.action.page")} placement="top">
+          <IconButton
+            icon="square-arrow-top-right"
+            variant="ghost"
+            size="small"
+            aria-label={language.t("iris.agentGallery.action.page")}
+            onClick={props.onPage}
+          />
+        </Tooltip>
       </div>
 
       <p class="iag-card__desc">{description(a())}</p>
@@ -154,27 +185,36 @@ function Card(props: {
         </div>
       </Show>
 
-      <div class="iag-card__foot">
-        <span class="iag-card__seen iag-num" title={a().lastUsedAt ? new Date(a().lastUsedAt!).toLocaleString() : "This agent has not been used yet"}>
-          {lastActivity(a().lastUsedAt)}
-          <Show when={(a().files ?? 0) > 0}>
-            {` · ${a().files} file${a().files !== 1 ? "s" : ""}`}
+      <div class="iag-card__activity" data-testid="iris-agent-activity">
+        <div class="iag-card__last" title={act().lastAt ? new Date(act().lastAt!).toLocaleString() : undefined}>
+          <Show when={act().result}>
+            {(r) => (
+              <StatusBadge size="small" mark="dot" tone={r() === "ok" ? "success" : r() === "fail" ? "critical" : "info"}>
+                {language.t(r() === "ok" ? "iris.agentGallery.result.ok" : r() === "fail" ? "iris.agentGallery.result.failed" : "iris.agentGallery.result.running")}
+              </StatusBadge>
+            )}
           </Show>
-        </span>
-        <button type="button" class="iag-btn" title="Talk to this agent in the chat box below" onClick={props.onChat}>
-          <I n="comment" />
-          Chat
-        </button>
+          <span data-never={act().lastAt ? undefined : ""}>{last()}</span>
+        </div>
+        <Show when={facts().length}>
+          <div class="iag-card__facts">{facts().join(" · ")}</div>
+        </Show>
+      </div>
+
+      <div class="iag-card__foot">
+        <Button size="small" variant="secondary" icon="speech-bubble" title={language.t("iris.agentGallery.action.chat.title")} onClick={props.onChat}>
+          {language.t("iris.agentGallery.action.chat")}
+        </Button>
         <Show when={!a().isVirtual}>
-          <button type="button" class="iag-ghost" title="Train Agent" onClick={props.onTrain}>
-            <I n="brain" />
-          </button>
-          <button type="button" class="iag-ghost iag-ghost--live" title="Live — what it is doing now, and its tool access" onClick={props.onLive}>
-            <I n="pulse" />
-          </button>
-          <button type="button" class="iag-ghost" title="Configure Agent" onClick={props.onConfigure}>
-            <I n="cog" />
-          </button>
+          <Button size="small" variant="ghost" icon="status" title={language.t("iris.agentGallery.action.activity.title")} onClick={props.onLive}>
+            {language.t("iris.agentGallery.action.activity")}
+          </Button>
+          <Button size="small" variant="ghost" icon="brain" title={language.t("iris.agentGallery.action.train.title")} onClick={props.onTrain}>
+            {language.t("iris.agentGallery.action.train")}
+          </Button>
+          <Button size="small" variant="ghost" icon="edit" title={language.t("iris.agentGallery.action.edit.title")} onClick={props.onConfigure}>
+            {language.t("iris.agentGallery.action.edit")}
+          </Button>
         </Show>
       </div>
     </div>
@@ -215,6 +255,22 @@ export function IrisAgentGallery(props: {
       loadAll(props.doFetch, b, s).catch((e) => ({ measured: false, reason: e instanceof Error ? e.message : String(e) })),
   )
   const agents = () => roster.latest?.agents ?? []
+  const language = useLanguage()
+  // The heartbeats the Agents panel already reads (Agents › Heartbeats): each card's runs and next beat.
+  const [beats] = createResource(
+    () => props.reload + 1,
+    (): Promise<HeartbeatRow[]> =>
+      props
+        .doFetch("/iris/heartbeats")
+        .then((r) => (r.ok ? r.json() : { heartbeats: [] }))
+        .then((j: { measured?: boolean; heartbeats?: HeartbeatRow[] }) => (j.measured === false ? [] : (j.heartbeats ?? [])))
+        .catch(() => []),
+  )
+  const byAgent = createMemo(() => beatsByAgent(beats.latest ?? []))
+  const [now, setNow] = createSignal(Date.now())
+  const tick = setInterval(() => setNow(Date.now()), 60_000)
+  onCleanup(() => clearInterval(tick))
+  const activity = (a: GalleryAgent) => activityOf(a, byAgent().get(a.id), now())
   const [live, setLive] = createSignal<GalleryAgent | null>(null)
   const [query, setQuery] = createSignal("")
   const [kind, setKind] = createSignal<KindFilter>("all")
@@ -288,8 +344,12 @@ export function IrisAgentGallery(props: {
         </div>
         <span class="iag-end">
         <Show when={roster.latest?.measured}>
-          <span class="iag-count iag-num">
-            {shown().length === agents().length ? agents().length : `${shown().length} of ${agents().length}`}
+          <span class="iag-count">
+            {shown().length === agents().length
+              ? agents().length === 1
+                ? language.t("iris.agentGallery.countOne")
+                : language.t("iris.agentGallery.count", { count: agents().length })
+              : language.t("iris.agentGallery.countOf", { shown: shown().length, total: agents().length })}
           </span>
         </Show>
         <button type="button" class="iag-new" data-testid="iris-agent-new" disabled={!props.bloqId} onClick={props.onNew}>
@@ -328,6 +388,8 @@ export function IrisAgentGallery(props: {
                 {(a) => (
                   <Card
                     agent={a}
+                    activity={activity(a)}
+                    now={now()}
                     onChat={() => {
                       open(a)
                       setNote(`Selecting ${a.name}…`)

@@ -6,6 +6,11 @@ import { useServerSync } from "@/context/server-sync"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { showToast } from "@/utils/toast"
 import "./iris-agent-runs.css"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { useLanguage } from "@/context/language"
+import { relative } from "./iris-agent-activity-model"
 import {
   bar,
   buildNode,
@@ -19,6 +24,7 @@ import {
   runStats,
   splitRuns,
   visibleCalls,
+  walk,
   type RunCall,
   type RunMessage,
   type RunNode,
@@ -58,7 +64,8 @@ const AGENT_MARK = "M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"
 
 const modelName = (id?: string) => id?.replace(/^claude-/, "").replace(/-\d{8}$/, "")
 
-export function IrisAgentRuns() {
+export function IrisAgentRuns(props: { onStart?: () => void } = {}) {
+  const language = useLanguage()
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
   const navigate = useNavigate()
@@ -307,32 +314,86 @@ export function IrisAgentRuns() {
     <div class="iar-wrap">
       <div class="iar">
         <Show when={error()}><p class="iar-warn">Could not read a run — {error()}</p></Show>
-        <div class="iar-group">Active <span class="iar-num">{split().active.length}</span></div>
         <Show
-          when={split().active.length}
-          fallback={<p class="iar-empty">Nothing is running. When a chat starts agents, they show up here: who started whom, and every call each one makes.</p>}
+          when={split().active.length || split().inactive.length}
+          fallback={
+            <EmptyState
+              title={language.t("iris.agentRuns.empty.title")}
+              description={language.t("iris.agentRuns.empty.description")}
+              action={
+                <Show when={props.onStart}>
+                  <Button variant="primary" size="small" onClick={() => props.onStart?.()}>
+                    {language.t("iris.agentRuns.empty.action")}
+                  </Button>
+                </Show>
+              }
+            />
+          }
         >
-          <For each={split().active}>{(run) => <Run run={run} />}</For>
-        </Show>
-        <Show when={split().inactive.length}>
-          <details class="iar-inactive" open>
-            <summary class="iar-group">
-              <svg class="iar-car" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
-              Inactive <span class="iar-num">{split().inactive.length}</span>
-            </summary>
-            <For each={split().inactive}>
-              {(run) => (
-                <details class="iar-past">
-                  <summary>
-                    <Pill state={run.state} />
-                    <span class="iar-past-t" title={run.task}>{run.task}</span>
-                    <span class="iar-num">{runStats(run).agents} agents · {money(runStats(run).cost)}</span>
-                  </summary>
-                  <Run run={run} />
-                </details>
-              )}
-            </For>
-          </details>
+          <div class="iar-group">
+            {language.t("iris.agentRuns.active")} <span class="iar-num">{split().active.length}</span>
+          </div>
+          <Show
+            when={split().active.length}
+            fallback={
+              <div class="iar-none-row">
+                <p class="iar-empty">{language.t("iris.agentRuns.empty.title")}</p>
+                <Show when={props.onStart}>
+                  <Button variant="secondary" size="small" onClick={() => props.onStart?.()}>
+                    {language.t("iris.agentRuns.empty.action")}
+                  </Button>
+                </Show>
+              </div>
+            }
+          >
+            <For each={split().active}>{(run) => <Run run={run} />}</For>
+          </Show>
+          {/* #194505: what finished lately — agent, when, how long, how it went — one row each; open one for its tree. */}
+          <Show when={split().inactive.length}>
+            <section class="iar-recent" aria-label={language.t("iris.agentRuns.recent")}>
+              <div class="iar-group">
+                {language.t("iris.agentRuns.recent")} <span class="iar-num">{split().inactive.length}</span>
+              </div>
+              <div class="iar-rt-head" aria-hidden="true">
+                <span>{language.t("iris.agentRuns.col.result")}</span>
+                <span>{language.t("iris.agentRuns.col.task")}</span>
+                <span>{language.t("iris.agentRuns.col.agent")}</span>
+                <span>{language.t("iris.agentRuns.col.when")}</span>
+                <span>{language.t("iris.agentRuns.col.duration")}</span>
+              </div>
+              <For each={split().inactive}>
+                {(run) => {
+                  const names = () => [...new Set(walk(run).map((n) => n.agent))]
+                  return (
+                    <details class="iar-past">
+                      <summary class="iar-rt">
+                        <span>
+                          <StatusBadge size="small" mark="dot" tone={run.state === "failed" ? "critical" : "success"}>
+                            {language.t(run.state === "failed" ? "iris.agentRuns.result.failed" : "iris.agentRuns.result.done")}
+                          </StatusBadge>
+                        </span>
+                        <span class="iar-past-t" title={run.task}>
+                          {run.task}
+                        </span>
+                        <span class="iar-rt-who" title={names().join(", ")}>
+                          {names().slice(0, 2).join(", ")}
+                          <Show when={names().length > 2}>
+                            {" "}
+                            {language.t("iris.agentRuns.agentsMore", { count: names().length - 2 })}
+                          </Show>
+                        </span>
+                        <span class="iar-num" title={run.end ? new Date(run.end).toLocaleString() : undefined}>
+                          {run.end ? relative(new Date(run.end).toISOString(), now()) : "—"}
+                        </span>
+                        <span class="iar-num">{elapsed(run.start, run.end, now()) || "—"}</span>
+                      </summary>
+                      <Run run={run} />
+                    </details>
+                  )
+                }}
+              </For>
+            </section>
+          </Show>
         </Show>
       </div>
     </div>
