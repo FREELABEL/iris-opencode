@@ -1,5 +1,5 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
-import { type Accessor, createMemo, For, Show, Suspense } from "solid-js"
+import { type Accessor, createMemo, createSignal, For, onCleanup, Show, Suspense } from "solid-js"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
@@ -18,7 +18,8 @@ import {
   type HomeSessionRecord,
   type OpenSessionOptions,
 } from "./home-sessions-controller"
-import { createHomeScope, HomeSharedChats } from "./home-shared-chats"
+import { createHomeScope, HomeSharedEmpty, HomeSharedRow } from "./home-shared-chats"
+import { mixHome, type HomeScope } from "@/components/session/iris-shared-rooms-model"
 import { sharedRooms } from "@/components/session/iris-shared-store"
 
 const SHOW_HOME_SESSION_ARCHIVE = false
@@ -124,10 +125,6 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
         // Fill the drawer; on Home the dashboard sits above, so the list is only as tall as it is.
         classList={{ "min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]": !!props.compact }}
       >
-        <Show when={scope() !== "local"}>
-          <HomeSharedChats scope={scope} />
-        </Show>
-        <Show when={scope() !== "shared"}>
         <Suspense
           fallback={
             <div class="pt-3">
@@ -135,41 +132,79 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
             </div>
           }
         >
-          <Show
-            when={props.groups().length > 0}
-            fallback={
-              <Show when={!(scope() === "all" && sharedRooms().length > 0)}>
-                <HomeSessionsEmpty
-                  onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
-                  language={props.language}
-                />
-              </Show>
-            }
-          >
-            <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
-              <For each={props.groups()}>
-                {(group, index) => (
-                  <>
-                    <HomeSessionGroupHeader
-                      title={group.title}
-                      titleOpacity={props.titleOpacity(group.id)}
-                      onSetRef={(element) => props.onSetHeader(group.id, element)}
-                      elevated={index() === 0}
-                    />
-                    <div
-                      class={`flex min-w-0 flex-col gap-px pt-4 ${index() === props.groups().length - 1 ? "" : "mb-6"}`}
-                    >
-                      <For each={group.sessions}>{(record) => <HomeSessionRow {...props} record={record} />}</For>
-                    </div>
-                  </>
-                )}
-              </For>
-            </div>
-          </Show>
+          <HomeTimeline {...props} scope={scope} />
         </Suspense>
-        </Show>
       </div>
     </section>
+  )
+}
+
+/**
+ * One timeline (#194490, option B): this computer's chats and your team's shared rooms together,
+ * newest first. The left column's filter narrows this same list.
+ */
+function HomeTimeline(props: HomeSessionsViewProps & { scope: () => HomeScope }) {
+  const [tick, setTick] = createSignal(Date.now())
+  const timer = setInterval(() => setTick(Date.now()), 60_000)
+  onCleanup(() => clearInterval(timer))
+  const buckets = createMemo(() =>
+    mixHome(
+      props.groups().flatMap((g) => g.sessions),
+      (r) => r.session.time.updated ?? r.session.time.created,
+      sharedRooms(),
+      props.scope(),
+      {
+        today: props.language.t("home.sessions.group.today"),
+        yesterday: props.language.t("home.sessions.group.yesterday"),
+        older: props.language.t("home.sessions.group.older"),
+        recent: props.language.t("sidebar.project.recentSessions"),
+      },
+      new Date(tick()),
+    ),
+  )
+  return (
+    <Show
+      when={buckets().length > 0}
+      fallback={
+        <Show
+          when={props.scope() === "shared"}
+          fallback={
+            <HomeSessionsEmpty
+              onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
+              language={props.language}
+            />
+          }
+        >
+          <HomeSharedEmpty />
+        </Show>
+      }
+    >
+      <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
+        <For each={buckets()}>
+          {(bucket, index) => (
+            <>
+              <HomeSessionGroupHeader
+                title={bucket.title}
+                titleOpacity={props.titleOpacity(bucket.id)}
+                onSetRef={(element) => props.onSetHeader(bucket.id, element)}
+                elevated={index() === 0}
+              />
+              <div class={`flex min-w-0 flex-col gap-px pt-4 ${index() === buckets().length - 1 ? "" : "mb-6"}`}>
+                <For each={bucket.items}>
+                  {(item) =>
+                    item.kind === "local" ? (
+                      <HomeSessionRow {...props} record={item.record} />
+                    ) : (
+                      <HomeSharedRow room={item.room} now={tick()} />
+                    )
+                  }
+                </For>
+              </div>
+            </>
+          )}
+        </For>
+      </div>
+    </Show>
   )
 }
 

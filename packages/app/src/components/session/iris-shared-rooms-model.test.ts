@@ -15,6 +15,9 @@ import {
   mergeRoomTimeline,
   typingLine,
   facepile,
+  previewLine,
+  roomFaces,
+  mixHome,
 } from "./iris-shared-rooms-model"
 
 const room = (over: Partial<SharedRoom>): SharedRoom => ({
@@ -227,5 +230,39 @@ describe("multiplayer", () => {
     const f = facepile([p(1, "Zed", "background"), p(2, "Amy", "active"), p(3, "Bo", "active")], 2)
     expect(f.shown.map((x) => x.name)).toEqual(["Amy", "Bo"])
     expect(f.more).toBe(1)
+  })
+})
+
+describe("Home option B (#194490)", () => {
+  const you = { role: "editor", canPost: true, canStop: false, isOwner: false }
+  const room = (id: string, at: string, last?: any, present: any[] = []) => ({
+    id, name: id, project: null, ownerName: "Alex Mayo", you, sessionIds: [], updatedAt: at,
+    activity: { present, last: last ?? null, unread: 0, working: false },
+  })
+  test("the preview names who said or did it", () => {
+    const t = "2026-11-27T12:00:00Z"
+    expect(previewLine(room("a", t, { kind: "agent", hostUserId: 2, hostName: "Flo Rivera", provider: "acp", isYou: false, text: "", tool: "Edit", detail: "emails/launch.md", at: t }), 1)).toBe("Flo's Codex: Edited launch.md")
+    expect(previewLine(room("a", t, { kind: "agent", hostUserId: 1, hostName: "Alex", provider: "claude-code", isYou: true, text: "All  tests\npass", tool: null, detail: null, at: t }), 1)).toBe("Your Claude Code: All tests pass")
+    expect(previewLine(room("a", t, { kind: "person", name: "Maya Chen", isYou: false, text: "Can you check?", at: t }), 1)).toBe("Maya: Can you check?")
+    expect(previewLine(room("a", t, { kind: "person", name: "Flo", isYou: true, text: "ok", at: t }), 1)).toBe("You: ok")
+    expect(previewLine(room("a", t), 1)).toBe("Alex's shared chat")
+  })
+  test("faces: who is here, else whose room", () => {
+    expect(roomFaces(room("a", "x", null, [{ userId: 2, name: "Flo", state: "active", typing: false }])).names).toEqual(["Flo"])
+    expect(roomFaces(room("a", "x")).names).toEqual(["Alex Mayo"])
+    expect(roomFaces(room("a", "x", null, [{ userId: 2, name: "Flo", state: "active", typing: false }]), 2, 2).names).toEqual(["Alex Mayo"])
+  })
+  test("one timeline, newest first, in days; the filter narrows the same list", () => {
+    const now = new Date(2026, 10, 27, 15, 0, 0)
+    const local = [{ id: "l1", t: new Date(2026, 10, 27, 14, 0).getTime() }, { id: "l2", t: new Date(2026, 10, 26, 9, 0).getTime() }]
+    const rooms = [room("s1", new Date(2026, 10, 27, 14, 30).toISOString())]
+    const titles = { today: "Today", yesterday: "Yesterday", older: "Older", recent: "Recent" }
+    const all = mixHome(local, (r) => r.t, rooms, "all", titles, now)
+    expect(all.map((b) => [b.id, b.items.map((i) => (i.kind === "local" ? i.record.id : i.room.id))])).toEqual([
+      ["today", ["s1", "l1"]],
+      ["yesterday", ["l2"]],
+    ])
+    expect(mixHome(local, (r) => r.t, rooms, "shared", titles, now).flatMap((b) => b.items.map((i) => i.kind))).toEqual(["shared"])
+    expect(mixHome(local, (r) => r.t, rooms, "local", titles, now).flatMap((b) => b.items.map((i) => i.kind))).toEqual(["local", "local"])
   })
 })

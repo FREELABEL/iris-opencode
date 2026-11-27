@@ -1,13 +1,13 @@
 import { createSignal, For, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogJoinTeam } from "@/components/session/dialog-join-team"
-import { openSharedRoom, sharedFetch, sharedRooms } from "@/components/session/iris-shared-store"
-import { ago, firstName, homeSharedRows, initials, type HomeScope } from "@/components/session/iris-shared-rooms-model"
+import { openSharedRoom, sharedFetch, sharedMe, sharedRooms } from "@/components/session/iris-shared-store"
+import { ago, initials, previewLine, roomFaces, roomWhen, type HomeScope, type SharedRoom } from "@/components/session/iris-shared-rooms-model"
 
 /**
  * Home, shared with your team (#194307): the chats your teammates share sit next to the ones on
  * this computer. One filter — All · This computer · Shared — and a way to join a team from an
- * invite link. Opening a shared chat opens it as its own tab, like any chat (#194463).
+ * invite link. Shared rooms sit in Home's one list, mixed in by time (#194490); opening one opens its tab (#194463).
  */
 const SCOPE_KEY = "iris.home.scope"
 const ACTIVE_MS = 10 * 60_000
@@ -40,79 +40,98 @@ export function joinTeam(dialog: ReturnType<typeof useDialog>) {
   dialog.show(() => <DialogJoinTeam doFetch={f} />)
 }
 
-export function HomeSharedChats(props: { scope: Accessor<HomeScope> }) {
-  const dialog = useDialog()
-  const [now, setNow] = createSignal(Date.now())
-  const tick = setInterval(() => setNow(Date.now()), 30_000)
-  onCleanup(() => clearInterval(tick))
-  const rows = () => homeSharedRows(sharedRooms())
-
+/** A shared room's row (#194490): faces, name, the latest line with whose it is, time, unread or working. */
+export function HomeSharedRow(props: { room: SharedRoom; now: number }) {
+  const faces = () => roomFaces(props.room, 2, sharedMe())
+  const a = () => props.room.activity
+  const when = () => {
+    const at = roomWhen(props.room)
+    return at && props.now - Date.parse(at) < 60_000 ? "now" : ago(at, new Date(props.now))
+  }
   return (
-    <Show
-      when={rows().length > 0}
-      fallback={
-        <Show when={props.scope() === "shared"}>
-          <div data-component="home-shared-empty" class="flex flex-col items-start gap-2 px-3 pt-6 pb-16">
-            <p class="text-v2-text-text-base [font-weight:530]">Nothing shared with you yet</p>
-            <p class="max-w-[46ch] text-[13px] leading-5 text-v2-text-text-muted">
-              When a teammate shares a chat with a project you are in, it shows up here — live, as they work. Got an
-              invite link? Join their team.
-            </p>
-            <Show when={sharedFetch()}>
-              <button
-                type="button"
-                class="mt-1 h-8 rounded-md bg-v2-overlay-simple-overlay-hover px-3 text-[13px] text-v2-text-text-base [font-weight:530]"
-                onClick={() => joinTeam(dialog)}
-              >
-                Join a team…
-              </button>
-            </Show>
-          </div>
-        </Show>
-      }
+    <button
+      type="button"
+      data-component="home-shared-row"
+      class={`
+        group/session flex h-10 min-w-0 w-full items-center gap-2 rounded-[6px] py-3 pl-3 pr-3 text-left
+        text-v2-text-text-muted [font-weight:530] transition-[background-color] duration-[120ms]
+        hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none
+      `}
+      onClick={() => openSharedRoom(props.room.id, props.room.name)}
     >
-      <div data-component="home-shared-chats" class="flex flex-col pt-3 pr-3" classList={{ "pb-16": props.scope() === "shared", "mb-3": props.scope() !== "shared" }}>
-        <div class="flex h-7 items-center pl-3 text-v2-text-text-muted [font-weight:440]">Shared with your team</div>
-        <div class="flex min-w-0 flex-col gap-px pt-4">
-          <For each={rows()}>
-            {(room) => {
-              const live = () => !!room.updatedAt && now() - new Date(room.updatedAt).getTime() < ACTIVE_MS
-              return (
-                <button
-                  type="button"
-                  data-component="home-shared-row"
-                  class={`
-                    flex h-10 min-w-0 w-full items-center gap-2 rounded-[6px] py-3 pl-3 pr-3 text-left
-                    text-v2-text-text-muted [font-weight:530] transition-[background-color] duration-[120ms]
-                    hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none
-                  `}
-                  onClick={() => openSharedRoom(room.id)}
-                >
-                  <span class="relative grid size-6 shrink-0 place-items-center rounded-full bg-v2-overlay-simple-overlay-hover font-mono text-[9.5px] leading-none tracking-[-0.02em] text-v2-text-text-base">
-                    {initials(room.ownerName ?? room.name)}
-                    <Show when={live()}>
-                      <span
-                        aria-label="active now"
-                        class="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-v2-state-fg-success ring-2 ring-v2-background-bg-base"
-                      />
-                    </Show>
-                  </span>
-                  <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base">{room.name}</span>
-                  <span class="min-w-0 shrink overflow-hidden text-ellipsis whitespace-nowrap text-[13px] [font-weight:440]">
-                    {room.project?.name ?? ""}
-                    <Show when={room.ownerName && !room.you.isOwner}> · {firstName(room.ownerName)}'s</Show>
-                  </span>
-                  <span class="ml-auto shrink-0 font-mono text-[12px] tabular-nums [font-weight:440]">
-                    {live() ? "live" : ago(room.updatedAt ?? "", new Date(now()))}
-                  </span>
-                </button>
-              )
-            }}
-          </For>
-        </div>
-      </div>
-    </Show>
+      <span class="relative flex h-5 w-7 shrink-0 items-center">
+        <For each={faces().names}>
+          {(name, i) => (
+            <span
+              class="absolute grid size-5 place-items-center rounded-full font-mono text-[8.5px] leading-none text-v2-text-text-base ring-2 ring-v2-background-bg-base"
+              style={{ left: `${i() * 9}px`, "z-index": String(5 - i()), background: `hsl(${hueOf(name)} 55% 86%)` }}
+            >
+              {initials(name)}
+            </span>
+          )}
+        </For>
+      </span>
+      <span class="min-w-0 max-w-[45%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base">{props.room.name}</span>
+      <span class="shrink-0 text-v2-text-text-faint" title="Shared with your team">
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-label="shared">
+          <circle cx="6" cy="5.5" r="2.25" />
+          <path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5" />
+          <circle cx="11.25" cy="6" r="1.75" />
+          <path d="M11 9.6c1.5.1 2.6 1.2 3 3" />
+        </svg>
+      </span>
+      <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] [font-weight:440]">
+        {previewLine(props.room, sharedMe())}
+      </span>
+      <span class="shrink-0 font-mono text-[12px] tabular-nums [font-weight:440]">{when()}</span>
+      <span class="flex w-5 shrink-0 justify-end">
+        <Show
+          when={a()?.unread}
+          fallback={
+            <Show when={a()?.working}>
+              <span class="size-2 rounded-full bg-v2-state-fg-success animate-pulse" aria-label="an agent is working" title="An agent is working" />
+            </Show>
+          }
+        >
+          <span
+            class="min-w-[18px] rounded-full bg-v2-state-fg-success px-1 text-center font-mono text-[11px] leading-[18px] tabular-nums"
+            style={{ color: "var(--v2-background-bg-base, #fff)" }}
+            aria-label={`${a()!.unread} new`}
+          >
+            {a()!.unread > 9 ? "9+" : a()!.unread}
+          </span>
+        </Show>
+      </span>
+    </button>
   )
+}
+
+/** The Shared filter with nothing shared yet: what it is, and how to get in. */
+export function HomeSharedEmpty() {
+  const dialog = useDialog()
+  return (
+    <div data-component="home-shared-empty" class="flex flex-col items-start gap-2 px-3 pt-6 pb-16">
+      <p class="text-v2-text-text-base [font-weight:530]">Nothing shared with you yet</p>
+      <p class="max-w-[46ch] text-[13px] leading-5 text-v2-text-text-muted">
+        When a teammate shares a chat with a project you are in, it shows up here — live, as they work. Got an invite link? Join their team.
+      </p>
+      <Show when={sharedFetch()}>
+        <button
+          type="button"
+          class="mt-1 h-8 rounded-md bg-v2-overlay-simple-overlay-hover px-3 text-[13px] text-v2-text-text-base [font-weight:530]"
+          onClick={() => joinTeam(dialog)}
+        >
+          Join a team…
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+function hueOf(name: string): number {
+  let h = 0
+  for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) % 360
+  return h
 }
 
 /**

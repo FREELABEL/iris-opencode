@@ -1434,6 +1434,27 @@ const SharedRightsSchema = Schema.Struct({
   canStop: Schema.Boolean,
   isOwner: Schema.Boolean,
 }).annotate({ identifier: "IrisSharedRights" })
+const SharedActivitySchema = Schema.Struct({
+  present: Schema.Array(
+    Schema.Struct({ userId: Schema.Finite, name: Schema.String, state: Schema.Literals(["active", "background"]), typing: Schema.Boolean }),
+  ),
+  last: Schema.NullOr(
+    Schema.Struct({
+      kind: Schema.Literals(["person", "event", "agent"]),
+      name: Schema.optional(Schema.String),
+      hostUserId: Schema.optional(Schema.NullOr(Schema.Finite)),
+      hostName: Schema.optional(Schema.NullOr(Schema.String)),
+      provider: Schema.optional(Schema.NullOr(Schema.String)),
+      isYou: Schema.Boolean,
+      text: Schema.String,
+      tool: Schema.optional(Schema.NullOr(Schema.String)),
+      detail: Schema.optional(Schema.NullOr(Schema.String)),
+      at: Schema.String,
+    }),
+  ),
+  unread: Schema.Finite,
+  working: Schema.Boolean,
+}).annotate({ identifier: "IrisSharedRoomActivity" })
 const SharedRoomSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -1443,6 +1464,7 @@ const SharedRoomSchema = Schema.Struct({
   sessionIds: Schema.Array(Schema.String),
   messageCount: Schema.optional(Schema.Finite),
   updatedAt: Schema.optional(Schema.String),
+  activity: Schema.optional(SharedActivitySchema),
 }).annotate({ identifier: "IrisSharedRoom" })
 const SharedMessageSchema = Schema.Struct({
   id: Schema.String,

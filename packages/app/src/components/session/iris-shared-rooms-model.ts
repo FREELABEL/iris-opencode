@@ -16,7 +16,12 @@ export type SharedRoom = {
   sessionIds: string[]
   messageCount?: number
   updatedAt?: string
+  activity?: RoomActivity
 }
+export type LastLine =
+  | { kind: "person" | "event"; name: string; isYou: boolean; text: string; at: string }
+  | { kind: "agent"; hostUserId: number | null; hostName: string | null; provider: string | null; isYou: boolean; text: string; tool: string | null; detail: string | null; at: string }
+export type RoomActivity = { present: Presence[]; last: LastLine | null; unread: number; working: boolean }
 export type SharedMessage = {
   id: string
   kind: "person" | "agent" | "event"
@@ -345,4 +350,72 @@ export function typingLine(present: Presence[], myId: number | null): string | n
 export function facepile(present: Presence[], max = 5): { shown: Presence[]; more: number } {
   const sorted = [...present].sort((a, b) => (a.state === b.state ? a.name.localeCompare(b.name) : a.state === "active" ? -1 : 1))
   return { shown: sorted.slice(0, max), more: Math.max(0, sorted.length - max) }
+}
+
+// ── Home, option B (#194490): one list, shared rooms mixed in ────────────────
+
+const oneLine = (t: string) => t.replace(/\s+/g, " ").trim()
+
+/** The row's second voice: "Flo's Codex: Edited launch.md", "Maya: Can you…", "You: …". */
+export function previewLine(room: SharedRoom, myId: number | null): string {
+  const l = room.activity?.last
+  if (!l) return room.you.isOwner ? "Your shared chat" : `${firstName(room.ownerName)}'s shared chat`
+  if (l.kind === "agent") {
+    const who = agentLabel({ provider: l.provider, hostUserId: l.isYou ? myId : l.hostUserId, hostName: l.hostName }, room.ownerName, l.isYou ? myId : null)
+    const what = l.tool ? toolLine({ role: "assistant", kind: "tool", text: "", tool: l.tool, detail: l.detail, at: l.at }) : oneLine(l.text)
+    return `${who}: ${what}`
+  }
+  if (l.kind === "event") return oneLine(l.text)
+  return `${l.isYou ? "You" : firstName(l.name)}: ${oneLine(l.text)}`
+}
+
+/** When the room last moved — its latest line, else the room itself. */
+export function roomWhen(room: SharedRoom): string {
+  return room.activity?.last?.at || room.updatedAt || ""
+}
+
+/** Faces for the row: who else is here now, else whose room it is. */
+export function roomFaces(room: SharedRoom, max = 2, myId: number | null = null): { names: string[]; more: number } {
+  // The other people — your own face on your own list says nothing.
+  const here = (room.activity?.present ?? []).filter((p) => p.userId !== myId).map((p) => p.name)
+  const names = here.length ? here : [room.ownerName ?? room.name]
+  return { names: names.slice(0, max), more: Math.max(0, names.length - max) }
+}
+
+export type HomeItem<R> = { kind: "local"; at: number; record: R } | { kind: "shared"; at: number; room: SharedRoom }
+export type HomeBucket<R> = { id: "today" | "yesterday" | "older"; title: string; items: HomeItem<R>[] }
+
+/**
+ * One timeline (#194490): this computer's chats and your team's shared rooms, newest first, in
+ * Today / Yesterday / Older. `scope` narrows it — the same list, never a different screen.
+ */
+export function mixHome<R>(
+  local: R[],
+  localAt: (r: R) => number,
+  rooms: SharedRoom[],
+  scope: HomeScope,
+  titles: { today: string; yesterday: string; older: string; recent: string },
+  now: Date = new Date(),
+): HomeBucket<R>[] {
+  const items: HomeItem<R>[] = []
+  if (scope !== "shared") for (const r of local) items.push({ kind: "local", at: localAt(r), record: r })
+  if (scope !== "local") for (const room of rooms) items.push({ kind: "shared", at: Date.parse(roomWhen(room)) || 0, room })
+  items.sort((a, b) => b.at - a.at)
+  const day = (t: number) => {
+    const d = new Date(t)
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  }
+  const today = day(now.getTime())
+  const yesterday = day(now.getTime() - 86_400_000)
+  const buckets: HomeBucket<R>[] = [
+    { id: "today", title: titles.today, items: [] },
+    { id: "yesterday", title: titles.yesterday, items: [] },
+    { id: "older", title: titles.older, items: [] },
+  ]
+  for (const it of items) {
+    const d = day(it.at)
+    buckets[d === today ? 0 : d === yesterday ? 1 : 2].items.push(it)
+  }
+  if (!buckets[0].items.length && !buckets[1].items.length) buckets[2].title = titles.recent
+  return buckets.filter((b) => b.items.length > 0)
 }

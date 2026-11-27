@@ -38,7 +38,7 @@ export async function refreshSharedRooms(): Promise<void> {
   }
 }
 
-/** Start the once-a-minute read. Idempotent: the first caller's fetch is the one used. */
+/** Start the regular read. Idempotent: the first caller's fetch is the one used. */
 export function watchSharedRooms(doFetch: Fetch) {
   if (!fetcherSig()) setFetcher(() => doFetch)
   if (timer) return
@@ -47,7 +47,9 @@ export function watchSharedRooms(doFetch: Fetch) {
     .then((r) => r.json())
     .then((j: { id?: number | null }) => setMe(typeof j?.id === "number" ? j.id : null))
     .catch(() => {})
-  timer = setInterval(() => void refreshSharedRooms(), 60_000)
+  // Home's rows carry unread and "working" (#194490): 20 s, and at once when the window comes back.
+  timer = setInterval(() => void refreshSharedRooms(), 20_000)
+  if (typeof window !== "undefined") window.addEventListener("focus", () => void refreshSharedRooms())
 }
 
 let roomOpener: ((roomId: string, title?: string) => void) | null = null
