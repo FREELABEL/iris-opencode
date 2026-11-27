@@ -12,6 +12,8 @@ import {
   agentLabel,
   facepile,
   mergeRoomTimeline,
+  chainLine,
+  type Chain,
   sayNote,
   typingLine,
   type Presence,
@@ -24,6 +26,8 @@ import {
 } from "./iris-shared-rooms-model"
 import { canOpenRoomTab, openSharedRoom, setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
 import { DialogAddAgent } from "./dialog-add-agent"
+import { RoomAgentsDrawer, type CloudAgent } from "./iris-room-agents"
+import { insertMention, mentionQuery, mentionSuggestions, recipientsLine } from "./iris-rooms-model"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogJoinTeam } from "./dialog-join-team"
 
@@ -38,7 +42,16 @@ import { DialogJoinTeam } from "./dialog-join-team"
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type ListPayload = { measured: boolean; reason?: string; rooms: SharedRoom[] }
-type RoomPayload = { measured: boolean; reason?: string; room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[]; present?: Presence[] }
+type RoomPayload = {
+  measured: boolean
+  reason?: string
+  room: SharedRoom | null
+  messages: SharedMessage[]
+  sessions: SessionState[]
+  present?: Presence[]
+  agents?: CloudAgent[]
+  chain?: Chain | null
+}
 type PresencePayload = { measured: boolean; reason?: string; present: Presence[] }
 type SayPayload = { ok: boolean; reason?: string; result?: SayResult }
 type ActionPayload = { ok: boolean; reason?: string; message?: string }
@@ -257,6 +270,9 @@ export function SharedRoomView(props: {
   const [troubles, setTroubles] = createSignal<Record<string, string>>({})
   const [chatLoaded, setChatLoaded] = createSignal(false)
   const [present, setPresent] = createSignal<Presence[]>([])
+  const [drawer, setDrawer] = createSignal(false)
+  const [caret, setCaret] = createSignal(0)
+  let composer: HTMLTextAreaElement | undefined
   let scroller: HTMLDivElement | undefined
   let lastCount = 0
   const cursors = new Map<string, number>()
@@ -345,6 +361,27 @@ export function SharedRoomView(props: {
   const room = () => data()?.room ?? null
   const messages = () => data()?.messages ?? []
   const sessions = () => data()?.sessions ?? []
+  /** The platform's cloud agents in the room (#194496), each on its own model. */
+  const cloud = () => data()?.agents ?? []
+  const chain = () => data()?.chain ?? null
+  const modelOf = (lane?: string) => (lane?.startsWith("cloud:") ? (cloud().find((a) => `cloud:${a.id}` === lane)?.model ?? null) : null)
+  // The @ picker (#194492): the cloud agents by the name they answer to.
+  const mentionables = () => cloud().map((a) => ({ id: a.id, name: a.name, role: a.role, autoRespond: a.autoRespond }))
+  const query = createMemo(() => mentionQuery(draft().slice(0, caret())))
+  const suggestions = createMemo(() => {
+    const q = query()
+    return q === undefined ? [] : mentionSuggestions(q, mentionables())
+  })
+  const pick = (name: string) => {
+    const next = insertMention(draft(), caret(), name)
+    setDraft(next.text)
+    setCaret(next.caret)
+    queueMicrotask(() => {
+      composer?.focus()
+      composer?.setSelectionRange(next.caret, next.caret)
+    })
+  }
+  const recipients = createMemo(() => (cloud().length && draft().trim() ? recipientsLine(draft(), mentionables()).text : null))
   const labelOf = (s: SessionState) => agentLabel(s, room()?.ownerName ?? null, props.myId)
   const lanes = createMemo(() =>
     sessions().map((s) => ({ sessionId: s.sessionId, label: labelOf(s), host: s.hostName ?? room()?.ownerName ?? null, entries: chats()[s.sessionId] ?? [] })),
@@ -354,7 +391,7 @@ export function SharedRoomView(props: {
   /** Every agent's chat when we can read them; what people typed in the room when we cannot. */
   const timeline = createMemo(() =>
     anyChat() || (chatLoaded() && !allTrouble())
-      ? mergeRoomTimeline(lanes(), messages(), room()?.ownerName ?? null)
+      ? mergeRoomTimeline(lanes(), messages(), room()?.ownerName ?? null, cloud().length > 0)
       : messages().map((m) => ({
           key: m.id,
           kind: (m.kind === "event" ? "event" : m.kind === "agent" ? "agent" : "person") as "event" | "agent" | "person",
@@ -424,6 +461,7 @@ export function SharedRoomView(props: {
     ))
 
   return (
+    <div class="sr-room-wrap" data-layout={props.layout}>
     <div class="sr-room" data-layout={props.layout}>
       <header class="sr-room-head">
         <Show when={props.onBack}>
@@ -469,7 +507,17 @@ export function SharedRoomView(props: {
             </Show>
           </div>
         </Show>
-        <Show when={stopVisible()}>
+        <Show when={props.layout === "pane"}>
+          <button
+            class="sr-btn sr-agents-toggle"
+            aria-pressed={drawer()}
+            onClick={() => setDrawer(!drawer())}
+            title="Set up the agents in this room"
+          >
+            Agents{cloud().length ? ` · ${cloud().length}` : ""}
+          </button>
+        </Show>
+        <Show when={stopVisible() || (chain() && (room()?.you.canStop || room()?.you.isOwner))}>
           <button class="sr-stop" disabled={busy() === "stop"} onClick={() => void stop()} title="Stop what the agents in this room are doing right now">
             <Icon name="stop" size="small" />
             {busy() === "stop" ? "Stopping…" : "Stop"}
@@ -510,6 +558,20 @@ export function SharedRoomView(props: {
             }}
           </For>
         </Show>
+        <For each={cloud()}>
+          {(a) => (
+            <div class="sr-session sr-agent" data-tone="live">
+              <span class="sr-dot" />
+              <span class="sr-agent-name" style={{ "--sr-hue": laneHue(`cloud:${a.id}`) }}>{a.name}</span>
+              <Show when={a.role === "lead"}>
+                <span class="sr-chip" data-tone="good">Lead</span>
+              </Show>
+              <span class="sr-session-detail">
+                {a.model ?? "cloud agent"} · {a.role === "lead" ? "gets every message" : a.autoRespond ? "answers everything" : "when @mentioned"}
+              </span>
+            </div>
+          )}
+        </For>
         <Show when={room()?.you.canPost}>
           <button class="sr-add-agent" onClick={addAgent} title="Bring a chat from your computer into this room">
             + Add my agent
@@ -581,6 +643,9 @@ export function SharedRoomView(props: {
                       <Show when={!grouped()}>
                         <div class="sr-msg-head">
                           <span class="sr-msg-name">{m.speaker}</span>
+                          <Show when={m.kind === "agent" && modelOf(m.lane)}>
+                            <span class="sr-model-tag">{modelOf(m.lane)}</span>
+                          </Show>
                           <Show when={m.kind === "person" && (m as { viaRoom?: boolean }).viaRoom}>
                             <span class="sr-delivered">in the room</span>
                           </Show>
@@ -598,6 +663,14 @@ export function SharedRoomView(props: {
       </div>
 
       <footer class="sr-compose-wrap">
+        <Show when={chainLine(chain())}>
+          {(line) => (
+            <div class="sr-chain" aria-live="polite">
+              <span class="sr-pulse" aria-hidden="true" />
+              {line()}
+            </div>
+          )}
+        </Show>
         <div class="sr-typing" aria-live="polite">
           {typing() ?? ""}
         </div>
@@ -617,14 +690,42 @@ export function SharedRoomView(props: {
             </div>
           }
         >
+          <Show when={suggestions().length}>
+            <div class="sr-mentions" role="listbox" aria-label="Agents to address">
+              <For each={suggestions()}>
+                {(a, i) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i() === 0}
+                    class="sr-mention"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      pick(a.name)
+                    }}
+                  >
+                    <span>@{a.name}</span>
+                    <span class="sr-mention-model">{cloud().find((c) => c.id === a.id)?.model ?? ""}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={recipients()}>
+            <div class="sr-recipients">{recipients()}</div>
+          </Show>
           <div class="sr-compose">
             <textarea
+              ref={composer}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+              onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
               rows="1"
               placeholder={sessions().length > 1 ? "Message everyone in the room — people and agents…" : room() ? composerHint(room()!) : ""}
               value={draft()}
               maxLength={16000}
               onInput={(e) => {
                 setDraft(e.currentTarget.value)
+                setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length)
                 e.currentTarget.style.height = "auto"
                 e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 160) + "px"
                 // Tell the room you are typing — at most every 4 s, so a long message is one signal.
@@ -634,6 +735,12 @@ export function SharedRoomView(props: {
                 }
               }}
               onKeyDown={(e) => {
+                // The @ picker takes Enter / Tab while it is open.
+                if ((e.key === "Enter" || e.key === "Tab") && suggestions().length) {
+                  e.preventDefault()
+                  pick(suggestions()[0].name)
+                  return
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
                   void send()
@@ -646,6 +753,18 @@ export function SharedRoomView(props: {
           </div>
         </Show>
       </footer>
+    </div>
+    <Show when={drawer() && props.layout === "pane"}>
+      <RoomAgentsDrawer
+        doFetch={props.doFetch}
+        roomId={props.id}
+        project={room()?.project ?? null}
+        agents={cloud()}
+        canManage={!!room()?.you.isOwner}
+        onChanged={() => void load()}
+        onClose={() => setDrawer(false)}
+      />
+    </Show>
     </div>
   )
 }
