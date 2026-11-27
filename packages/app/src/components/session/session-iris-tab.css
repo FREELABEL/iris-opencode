@@ -4909,3 +4909,8 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   width: auto;
   min-width: auto;
 }
+/* Folded lane: "N cards" reads down the lane with its name instead of wrapping in 44px. */
+.iris-board__col--folded .iris-atlas-list__count {
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+}
