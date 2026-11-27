@@ -85,8 +85,8 @@ jobs:
           SCHEME=$(xcodebuild -list -json -project "$PROJ" | jq -r '.project.schemes[] | select(endswith("_iOS"))' | head -1)
           echo "project=$PROJ scheme=$SCHEME"
           xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration debug \
-            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -arch arm64 \
-            -derivedDataPath "$RUNNER_TEMP/dd" CODE_SIGNING_ALLOWED=NO build | tail -40
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/dd" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build | tail -60
           APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name '*.app' -maxdepth 2 | head -1)
           echo "APP=$APP" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
@@ -114,6 +114,87 @@ jobs:
           path: |
             ${{ runner.temp }}/shots/
           if-no-files-found: warn
+
+  # Signed build → App Store Connect → TestFlight. Runs only when asked: a manual run, or a push
+  # whose commit message contains [testflight]. Needs, as repository secrets:
+  #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (an App Store Connect API key with the Admin role, so
+  #   Xcode can create the distribution certificate and profile itself), and APPLE_TEAM_ID.
+  # And an app record for io.heyiris.app in App Store Connect, which only a person can create.
+  testflight:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[testflight]')
+    needs: simulator
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Secrets present
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: ios-device
+          save-if: ${{ startsWith(github.ref, 'refs/heads/wt/194511-') }}
+      - run: command -v xcodegen || brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: packages/desktop
+        run: ./node_modules/.bin/tauri ios init --ci
+      - name: App icon
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          SET=$(find gen/apple -type d -name AppIcon.appiconset | head -1)
+          cp icons/prod/ios/*.png "$SET"/
+          for f in "$SET"/*.png; do
+            sips -s format jpeg "$f" --out "$RUNNER_TEMP/flat.jpg" >/dev/null
+            sips -s format png "$RUNNER_TEMP/flat.jpg" --out "$f" >/dev/null
+          done
+      - name: Build the interface
+        working-directory: packages/desktop
+        run: bun run build
+      - name: Archive and upload to TestFlight
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s' "$ASC_KEY_P8" > "$KEY"
+          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          PROJ=$(ls -d gen/apple/*.xcodeproj | head -1)
+          SCHEME=$(xcodebuild -list -json -project "$PROJ" | jq -r '.project.schemes[] | select(endswith("_iOS"))' | head -1)
+          # Every upload needs a new build number; the run number only goes up.
+          xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/IRIS.xcarchive" \
+            ARCHS=arm64 DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" "${AUTH[@]}" archive | tail -60
+          cat > "$RUNNER_TEMP/export.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/IRIS.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" -exportPath "$RUNNER_TEMP/export" "${AUTH[@]}" | tail -40
+          rm -f "$KEY"
+          echo "Uploaded build ${{ github.run_number }}. It appears in TestFlight after Apple finishes processing (usually 5–20 minutes)."
 
   # The desktop app must not notice: the same commit still compiles for macOS.
   desktop-still-compiles:
