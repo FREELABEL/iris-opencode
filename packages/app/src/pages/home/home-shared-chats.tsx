@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, Show, type Accessor, type JSX } from "sol
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogJoinTeam } from "@/components/session/dialog-join-team"
 import { openSharedRoom, sharedFetch, sharedMe, sharedRooms } from "@/components/session/iris-shared-store"
-import { ago, initials, previewLine, roomFaces, roomWhen, type HomeScope, type SharedRoom } from "@/components/session/iris-shared-rooms-model"
+import { ago, initials, liveRooms, previewLine, roomFaces, roomWhen, type HomeScope, type SharedRoom } from "@/components/session/iris-shared-rooms-model"
 
 /**
  * Home, shared with your team (#194307): the chats your teammates share sit next to the ones on
@@ -206,5 +206,89 @@ export function HomeChatScopeNav(props: { localCount?: number }) {
         </button>
       </Show>
     </nav>
+  )
+}
+
+/**
+ * "Live with your team" (#194490 — option C's cards over option B's list): the rooms where
+ * something is happening right now, as cards, above Home's one list. Nothing live, no strip.
+ */
+export function HomeLiveRooms(props: { now: number }) {
+  const live = () => liveRooms(sharedRooms(), sharedMe(), new Date(props.now))
+  return (
+    <Show when={live().length}>
+      <section data-component="home-live-rooms" aria-label="Live with your team" class="relative z-[6] mb-6 flex flex-col gap-2 pt-3 pr-3">
+        <div class="flex h-7 items-center justify-between pl-3">
+          <span class="text-v2-text-text-muted [font-weight:440]">Live with your team</span>
+          <Show when={sharedRooms().length > live().length}>
+            <button type="button" class="text-[13px] text-v2-text-text-muted hover:text-v2-text-text-base" onClick={() => setHomeScope("shared")}>
+              See all
+            </button>
+          </Show>
+        </div>
+        <div class="grid gap-2 pl-1.5" style={{ "grid-template-columns": "repeat(auto-fill, minmax(220px, 1fr))" }}>
+          <For each={live()}>{(room) => <HomeLiveCard room={room} now={props.now} />}</For>
+        </div>
+      </section>
+    </Show>
+  )
+}
+
+function HomeLiveCard(props: { room: SharedRoom; now: number }) {
+  const a = () => props.room.activity
+  const others = () => (a()?.present ?? []).filter((p) => p.userId !== sharedMe())
+  const faces = () => roomFaces(props.room, 3, sharedMe())
+  const status = () => {
+    if (a()?.working) return { tone: "live", text: "Agent working" }
+    if (a()?.unread) return { tone: "new", text: `${a()!.unread} new` }
+    if (others().length) return { tone: "here", text: `${others().length} here` }
+    return { tone: "quiet", text: ago(roomWhen(props.room), new Date(props.now)) }
+  }
+  return (
+    <button
+      type="button"
+      data-component="home-live-card"
+      class={`
+        group flex min-h-[118px] min-w-0 flex-col gap-2 rounded-[10px] border border-v2-border-border-base bg-v2-background-bg-base p-3 text-left
+        transition-[background-color,border-color,box-shadow] duration-[120ms]
+        hover:border-v2-border-border-muted hover:bg-v2-background-bg-layer-01 focus-visible:outline-none
+        focus-visible:[box-shadow:0_0_0_2px_var(--v2-border-border-muted)]
+      `}
+      onClick={() => openSharedRoom(props.room.id, props.room.name)}
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight:530]">{props.room.name}</span>
+        <span
+          class="flex shrink-0 items-center gap-1 text-[12px] [font-weight:530]"
+          classList={{
+            "text-v2-state-fg-success": status().tone === "live" || status().tone === "new" || status().tone === "here",
+            "text-v2-text-text-faint font-mono": status().tone === "quiet",
+          }}
+        >
+          <Show when={status().tone === "live"}>
+            <span class="size-1.5 rounded-full bg-v2-state-fg-success animate-pulse" aria-hidden="true" />
+          </Show>
+          {status().text}
+        </span>
+      </div>
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="relative flex h-6 shrink-0 items-center" style={{ width: `${18 + faces().names.length * 12}px` }}>
+          <For each={faces().names}>
+            {(name, i) => (
+              <span
+                class="absolute grid size-6 place-items-center rounded-full font-mono text-[9px] leading-none text-v2-text-text-base ring-2 ring-v2-background-bg-base"
+                style={{ left: `${i() * 12}px`, "z-index": String(5 - i()), background: `hsl(${hueOf(name)} 55% 86%)` }}
+              >
+                {initials(name)}
+              </span>
+            )}
+          </For>
+        </span>
+        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-v2-text-text-muted">
+          {props.room.project?.name ?? (props.room.you.isOwner ? "Your room" : `${props.room.ownerName ?? "Someone"}'s room`)}
+        </span>
+      </div>
+      <p class="line-clamp-2 min-w-0 text-[13px] leading-[18px] text-v2-text-text-muted [font-weight:440]">{previewLine(props.room, sharedMe())}</p>
+    </button>
   )
 }

@@ -18,7 +18,7 @@ import {
   type HomeSessionRecord,
   type OpenSessionOptions,
 } from "./home-sessions-controller"
-import { createHomeScope, HomeSharedEmpty, HomeSharedRow } from "./home-shared-chats"
+import { createHomeScope, HomeLiveRooms, HomeSharedEmpty, HomeSharedRow } from "./home-shared-chats"
 import { mixHome, type HomeScope } from "@/components/session/iris-shared-rooms-model"
 import { sharedRooms } from "@/components/session/iris-shared-store"
 
@@ -180,6 +180,9 @@ function HomeTimeline(props: HomeSessionsViewProps & { scope: () => HomeScope })
       }
     >
       <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
+        <Show when={props.scope() !== "local" && !props.compact}>
+          <HomeLiveRooms now={tick()} />
+        </Show>
         <For each={buckets()}>
           {(bucket, index) => (
             <>

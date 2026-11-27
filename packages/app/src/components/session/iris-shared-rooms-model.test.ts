@@ -18,6 +18,7 @@ import {
   previewLine,
   roomFaces,
   mixHome,
+  liveRooms,
 } from "./iris-shared-rooms-model"
 
 const room = (over: Partial<SharedRoom>): SharedRoom => ({
@@ -264,5 +265,21 @@ describe("Home option B (#194490)", () => {
     ])
     expect(mixHome(local, (r) => r.t, rooms, "shared", titles, now).flatMap((b) => b.items.map((i) => i.kind))).toEqual(["shared"])
     expect(mixHome(local, (r) => r.t, rooms, "local", titles, now).flatMap((b) => b.items.map((i) => i.kind))).toEqual(["local", "local"])
+  })
+})
+
+describe("Home live cards (#194490)", () => {
+  const you = { role: "editor", canPost: true, canStop: false, isOwner: false }
+  const now = new Date("2026-11-27T12:00:00Z")
+  const r = (id: string, minsAgo: number, a: Partial<{ working: boolean; unread: number; present: any[] }> = {}) => ({
+    id, name: id, project: null, ownerName: "Alex", you, sessionIds: [],
+    updatedAt: new Date(now.getTime() - minsAgo * 60000).toISOString(),
+    activity: { present: a.present ?? [], last: null, unread: a.unread ?? 0, working: a.working ?? false },
+  })
+  test("working first, then unread, then recent; quiet rooms stay out; you alone are not company", () => {
+    const rooms = [r("quiet", 120), r("recent", 3), r("unread", 60, { unread: 2 }), r("working", 90, { working: true }), r("onlyme", 200, { present: [{ userId: 1, name: "Me", state: "active", typing: false }] })]
+    expect(liveRooms(rooms, 1, now).map((x) => x.id)).toEqual(["working", "unread", "recent"])
+    expect(liveRooms(rooms, 1, now, 5).map((x) => x.id)).not.toContain("onlyme")
+    expect(liveRooms(rooms, 1, now, 5).map((x) => x.id)).not.toContain("quiet")
   })
 })

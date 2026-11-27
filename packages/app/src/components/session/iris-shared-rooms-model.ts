@@ -419,3 +419,26 @@ export function mixHome<R>(
   if (!buckets[0].items.length && !buckets[1].items.length) buckets[2].title = titles.recent
   return buckets.filter((b) => b.items.length > 0)
 }
+
+/**
+ * The live strip on Home (#194490, option C's cards): rooms where something is happening — an agent
+ * working, lines you have not seen, someone else in it, or a move in the last 10 minutes. Working
+ * first, then unread, then most recent. At most `max`.
+ */
+export function liveRooms(rooms: SharedRoom[], myId: number | null, now: Date = new Date(), max = 3): SharedRoom[] {
+  const score = (r: SharedRoom) => {
+    const a = r.activity
+    const others = (a?.present ?? []).some((p) => p.userId !== myId)
+    const recent = now.getTime() - (Date.parse(roomWhen(r)) || 0) < 10 * 60 * 1000
+    if (a?.working) return 3
+    if ((a?.unread ?? 0) > 0) return 2
+    if (others || recent) return 1
+    return 0
+  }
+  return rooms
+    .map((r) => ({ r, s: score(r), at: Date.parse(roomWhen(r)) || 0 }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s || b.at - a.at)
+    .slice(0, max)
+    .map((x) => x.r)
+}
