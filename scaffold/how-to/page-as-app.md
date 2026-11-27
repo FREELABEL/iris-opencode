@@ -49,8 +49,17 @@ iris pages cache-clear my-page
 | `theme_color` | the tile colour when the icon is a letter |
 | `installable` | `false` stops the page from being installed as its own app |
 
-Pages behind a sign-in are never offered as their own app: their name and icon stay private
-until someone has signed in.
+A page behind a sign-in installs as its own app **for the people who can open it**. Anyone else
+gets nothing: its name and icon stay private until someone has signed in.
+
+## Put it in the Start menu, Dock or launcher from the terminal
+
+```bash
+iris pages install my-page            # Windows Start menu · Mac ~/Applications · Linux launcher
+iris pages install my-page --remove
+```
+
+It opens in its own window with the page's icon, drawn at every size Windows needs.
 
 ## Run a page on your own computer
 
@@ -58,8 +67,9 @@ until someone has signed in.
 iris pages serve my-page
 ```
 
-That copies the published page to this computer, serves it at `http://localhost:<port>/p/my-page`,
-and opens it so you can install it. It **starts again by itself** when the computer restarts, and
+That serves the page from this computer at `http://localhost:<port>/p/my-page`, and opens it so
+you can install it. It is **live**: signed in as you, it shows your data, its buttons work, and a
+change you publish shows on the next load. It **starts again by itself** when the computer restarts, and
 if it ever stops it comes back within seconds.
 
 ```bash
@@ -74,23 +84,8 @@ iris pages serve stop my-page       # stop it and remove it from startup
 
 ### Good to know
 
-- **It shows the page as published.** Editing the page in IRIS does not change the copy on your
-  computer until you run `iris pages serve my-page` again.
-- **Data the page loads live** (lists, counts, feeds) may be empty in the copy. Pages whose
-  content is written into the page work fully.
-- **A Chrome-family browser** (Chrome, Edge or Chromium) lets the copy include everything the page
-  loads as it runs. Without one it still serves, and says what may be missing.
-- **`--public` needs this computer to be on your Hive** (`iris hive connect`).
-- Previewing **your own edits** before publishing is a different command: `iris pages dev my-page`.
-
-## If something is off
-
-| You see | Do this |
-|---|---|
-| The app opens in a browser with an address bar | Delete it from the home screen and add it again. Phones remember an install. |
-| The old icon after a change | Run `iris pages cache-clear my-page`, then delete and re-add the app |
-| "will NOT start after a restart" | This computer refused the startup entry. The page runs until you restart; run the command again after. |
-| "No public address: … taken" | Pick another name: `iris pages serve my-page --public --name my-other-name` |
-| "behind a sign-in" | Signed-in pages need IRIS Cloud to check who is visiting, so they can't be copied. Keep them on IRIS. |
-
-See also: `iris how-to view edge-publish` (put a page on your own web server, with releases you can undo).
+- **Live by default.** The copy on your computer fetches the page and your data from IRIS on every
+  load, and with no network it opens with the last data it had. `--no-live` gives a frozen copy.
+- **A `--public` copy is always frozen**, so your data is never put on the internet.
+- Building an app around your own data — with buttons, and things only your computer can do?
+  See **build-your-own-app**.
