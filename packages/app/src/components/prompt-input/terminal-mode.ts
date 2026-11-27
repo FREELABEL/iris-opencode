@@ -132,7 +132,8 @@ export function formatDuration(ms: number) {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
   const s = ms / 1000
   if (s < 60) return `${s.toFixed(1)}s`
-  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+  const t = Math.round(s)
+  return `${Math.floor(t / 60)}m ${t % 60}s`
 }
 
 export function statusText(entry: Pick<TerminalEntry, "status" | "exitCode" | "error">) {
