@@ -1,5 +1,12 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import "./iris-reachr-review.css"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { Notice } from "@opencode-ai/ui/notice"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { TextField } from "@opencode-ai/ui/text-field"
+import { useLanguage } from "@/context/language"
+import { PaneDialog, PaneDialogActions } from "./iris-pane-dialog"
 import { setSurfaceCount } from "./iris-surface-store"
 import {
   bucketOf,
@@ -14,6 +21,7 @@ import {
   matchesFilter,
   nextId,
   paceLine,
+  previewLine,
   stateWord,
   tally,
   toLocalInput,
@@ -37,7 +45,16 @@ const FILTER_WORD: Record<ReviewFilter, string> = { all: "All", review: "In revi
 // A batch that is going out is worth watching. One that isn't shouldn't poll.
 const LIVE_POLL_MS = 15_000
 
-export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch (Outreach › Today, #193487). */ batchId?: number }) {
+export function IrisReachrReview(props: {
+  doFetch: Fetch
+  /** Open on this batch (Outreach › Today, #193487). */
+  batchId?: number
+  /** Puts a sentence in the chat box for the agent to finish (#194508): "draft outreach for my leads". */
+  onAsk?: (text: string) => void
+  /** Leads › Leads, to pick who to write to. */
+  onSeeLeads?: () => void
+}) {
+  const language = useLanguage()
   const [batchId, setBatchId] = createSignal<number | undefined>(props.batchId)
   createEffect(() => {
     if (props.batchId !== undefined) setBatchId(props.batchId)
@@ -117,14 +134,22 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
   async function approve(m: ReviewMessage) {
     if (!canApprove(m)) return
     advance()
-    await act("approve", { batchId: batchId() }, { ids: [m.id] }, "Approved. Nothing has been sent.")
+    await act("approve", { batchId: batchId() }, { ids: [m.id] }, language.t("iris.review.approved"))
   }
-  async function hold(m: ReviewMessage) {
+  // Reject (#194508) is the platform's hold: the message stays here, never sent unless it is put back in review.
+  const [rejecting, setRejecting] = createSignal<ReviewMessage>()
+  const [rejectWhy, setRejectWhy] = createSignal("")
+  function hold(m: ReviewMessage) {
     if (!canHold(m)) return
-    const reason = window.prompt("Why hold this one?", "") ?? undefined
-    if (reason === undefined) return
+    setRejectWhy("")
+    setRejecting(m)
+  }
+  async function confirmReject() {
+    const m = rejecting()
+    if (!m) return
+    setRejecting(undefined)
     advance()
-    await act("hold", { messageId: m.id }, { reason: reason || undefined })
+    await act("hold", { messageId: m.id }, { reason: rejectWhy().trim() || undefined }, language.t("iris.review.rejected"))
   }
   async function saveEdit(m: ReviewMessage) {
     const draft = editing()
@@ -196,13 +221,44 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
       <Show
         when={(batches()?.data ?? []).length > 0}
         fallback={
-          <div class="iris-rr-empty">
-            <Show when={batches() && !batches()!.measured} fallback={batches.loading ? "Loading…" : "No batches yet. Agents and the CLI add them: iris reachr drafts create"}>
-              Couldn't read batches: {batches()!.reason}
+          <Show when={!batches.loading || batches.latest} fallback={<SkeletonRows rows={6} trailing label={language.t("iris.review.loading")} />}>
+            <Show
+              when={batches() && !batches()!.measured}
+              fallback={
+                <EmptyState
+                  data-slot="iris-rr-empty"
+                  title={language.t("iris.review.empty.title")}
+                  description={language.t("iris.review.empty.body")}
+                  action={
+                    <Show when={props.onAsk || props.onSeeLeads}>
+                      <div class="iris-rr-empty-actions">
+                        <Show when={props.onAsk}>
+                          <Button size="small" variant="primary" icon="edit" onClick={() => props.onAsk!(language.t("iris.review.empty.prompt"))}>
+                            {language.t("iris.review.empty.action")}
+                          </Button>
+                        </Show>
+                        <Show when={props.onSeeLeads}>
+                          <Button size="small" onClick={() => props.onSeeLeads!()}>
+                            {language.t("iris.review.empty.leads")}
+                          </Button>
+                        </Show>
+                      </div>
+                    </Show>
+                  }
+                />
+              }
+            >
+              <EmptyState
+                role="alert"
+                title={language.t("iris.review.error.title")}
+                description={batches()!.reason}
+                action={<Button size="small" onClick={() => void refetchBatches()}>{language.t("iris.review.retry")}</Button>}
+              />
             </Show>
-          </div>
+          </Show>
         }
       >
+        <p class="iris-rr-intro">{language.t("iris.review.intro")}</p>
         <div class="iris-rr-head">
           <select
             aria-label="Batch"
@@ -290,6 +346,9 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
                     <span class="iris-rr-state" data-bucket={bucketOf(m.status)}>{stateWord(m.status)}</span>
                   </div>
                   <div class="iris-rr-row-sub">{m.scheduled_for && m.status === "scheduled" ? `${whenLine(m.scheduled_for)} · ` : ""}{m.subject}</div>
+                  <Show when={previewLine(m.body)}>
+                    <div class="iris-rr-row-preview">{previewLine(m.body)}</div>
+                  </Show>
                 </button>
               )}
             </For>
@@ -307,7 +366,7 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
                     <dt>To</dt><dd>{m().to_name ? `${m().to_name} · ` : ""}{m().to_email}</dd>
                     <Show when={m().scheduled_for}><dt>Sends</dt><dd>{whenLine(m().scheduled_for)}</dd></Show>
                     <Show when={m().sent_at}><dt>Sent</dt><dd>{whenLine(m().sent_at)}</dd></Show>
-                    <dt>Lead</dt><dd>#{m().lead_id}{m().group ? ` · ${m().group}` : ""}</dd>
+                    <dt>{language.t("iris.review.lead")}</dt><dd>{m().lead_name ?? m().to_name ?? m().to_email}{m().group ? ` · ${m().group}` : ""}</dd>
                   </dl>
                   <Show
                     when={editing()}
@@ -316,8 +375,18 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
                         <div class="iris-rr-subject">{m().subject}</div>
                         <div class="iris-rr-text">{m().body}</div>
                         <div class="iris-rr-actions">
-                          <Show when={canApprove(m())}><button class="iris-rr-btn" data-primary disabled={busy()} onClick={() => approve(m())}>Approve<kbd>A</kbd></button></Show>
-                          <Show when={canHold(m())}><button class="iris-rr-btn" disabled={busy()} onClick={() => hold(m())}>Hold<kbd>H</kbd></button></Show>
+                          <Show when={canApprove(m())}>
+                            <Button size="small" variant="primary" icon="check" data-slot="iris-rr-approve" disabled={busy()} title={language.t("iris.review.approve.title")} onClick={() => approve(m())}>
+                              {language.t("iris.review.approve")}
+                              <kbd>A</kbd>
+                            </Button>
+                          </Show>
+                          <Show when={canHold(m())}>
+                            <Button size="small" variant="secondary" data-slot="iris-rr-reject" disabled={busy()} title={language.t("iris.review.reject.title")} onClick={() => hold(m())}>
+                              {language.t("iris.review.reject")}
+                              <kbd>H</kbd>
+                            </Button>
+                          </Show>
                           <Show when={canRelease(m())}><button class="iris-rr-btn" disabled={busy()} onClick={() => act("release", { messageId: m().id }, {}, "Back in review. It needs approving again.")}>Back to review</button></Show>
                           <Show when={canEdit(m())}><button class="iris-rr-btn" disabled={busy()} onClick={() => setEditing({ subject: m().subject ?? "", body: m().body ?? "" })}>Edit<kbd>E</kbd></button></Show>
                         </div>
@@ -344,6 +413,22 @@ export function IrisReachrReview(props: { doFetch: Fetch; /** Open on this batch
           </div>
         </div>
       </Show>
+      <PaneDialog when={rejecting()} onClose={() => setRejecting(undefined)} title={() => language.t("iris.review.reject.dialog")} id="iris-rr-reject">
+        {(m) => (
+          <>
+            <p>{language.t("iris.review.reject.body", { name: m().lead_name ?? m().to_name ?? m().to_email ?? "" })}</p>
+            <TextField label={language.t("iris.review.reject.reason")} value={rejectWhy()} onChange={setRejectWhy} />
+            <PaneDialogActions>
+              <Button size="small" onClick={() => setRejecting(undefined)}>
+                {language.t("common.cancel")}
+              </Button>
+              <Button size="small" variant="primary" onClick={() => void confirmReject()}>
+                {language.t("iris.review.reject")}
+              </Button>
+            </PaneDialogActions>
+          </>
+        )}
+      </PaneDialog>
     </div>
   )
 }

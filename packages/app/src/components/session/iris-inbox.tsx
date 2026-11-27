@@ -578,6 +578,8 @@ export function ThreadBody(props: {
   preferChannel?: string
   bloqId?: number
   onSent?: () => void
+  /** Moves (a counter) when the person asked to write: the reply box takes focus on the preferred channel. */
+  focusComposer?: number
 }) {
   const language = useLanguage()
   let scroller: HTMLDivElement | undefined
@@ -626,7 +628,16 @@ export function ThreadBody(props: {
         </Show>
       </div>
       <Show when={props.thread?.measured}>
-        <Reply doFetch={props.doFetch} leadId={props.leadId} name={props.name} thread={props.thread!} preferChannel={props.preferChannel} bloqId={props.bloqId} onSent={() => (props.refetch(), props.onSent?.())} />
+        <Reply
+          doFetch={props.doFetch}
+          leadId={props.leadId}
+          name={props.name}
+          thread={props.thread!}
+          preferChannel={props.preferChannel}
+          bloqId={props.bloqId}
+          focus={props.focusComposer}
+          onSent={() => (props.refetch(), props.onSent?.())}
+        />
       </Show>
     </>
   )
@@ -634,7 +645,7 @@ export function ThreadBody(props: {
 
 // ─── Reply, AI draft, and the gate ────────────────────────────────────────────
 
-function Reply(props: { doFetch: Fetch; leadId: number; name: string; thread: ThreadAnswer; preferChannel?: string; bloqId?: number; onSent: () => void }) {
+function Reply(props: { doFetch: Fetch; leadId: number; name: string; thread: ThreadAnswer; preferChannel?: string; bloqId?: number; focus?: number; onSent: () => void }) {
   const language = useLanguage()
   const available = () => (["email", "sms", "instagram"] as ReplyChannel[]).filter((ch) => !!props.thread.replyTo[ch === "sms" ? "sms" : ch])
   const startChannel = (): ReplyChannel => {
@@ -647,6 +658,21 @@ function Reply(props: { doFetch: Fetch; leadId: number; name: string; thread: Th
   const [confirming, setConfirming] = createSignal(false)
   const [sendState, setSendState] = createSignal<{ busy?: boolean; ok?: string; error?: string }>({})
   const block = () => sendBlock(c())
+  let box: HTMLDivElement | undefined
+  // Asked to write (Leads › Email, #194507): switch to the asked-for channel and put the cursor in it.
+  createEffect(
+    on(
+      () => props.focus,
+      (n) => {
+        if (!n) return
+        const want = props.preferChannel ? replyChannelFor(props.preferChannel) : undefined
+        if (want && want !== c().channel && available().includes(want)) setC(switchChannel(c(), want, props.thread))
+        requestAnimationFrame(() => {
+          box?.querySelector<HTMLElement>(c().channel === "email" && !c().subject ? ".iris-inb-subjin" : ".iris-inb-text")?.focus()
+        })
+      },
+    ),
+  )
   const remember = (fn: (all: Record<string, LocalDraft[]>) => Record<string, LocalDraft[]>) => store.write(DRAFTS_KEY, fn(parseDrafts(store.read(DRAFTS_KEY))))
 
   async function draft() {
@@ -675,7 +701,7 @@ function Reply(props: { doFetch: Fetch; leadId: number; name: string; thread: Th
   }
 
   return (
-    <div class="iris-inb-reply" data-slot="ib-reply">
+    <div class="iris-inb-reply" data-slot="ib-reply" ref={box}>
       <Show when={drafts().length}>
         <div class="iris-inb-drafts" data-slot="ib-drafts">
           <div class="iris-inb-drafthead">

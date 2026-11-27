@@ -3734,7 +3734,10 @@ export function SessionIrisTab() {
       setApplied("")
       return
     }
-    const text = language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt")
+    askInChat(language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt"))
+  }
+  /** A sentence in the chat box, focused, for the person to finish or send. */
+  function askInChat(text: string) {
     if (!prompt) return
     prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
     requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
@@ -5022,7 +5025,7 @@ export function SessionIrisTab() {
               />
             </Match>
             <Match when={pane() === "reachr"}>
-              <IrisReachrReview doFetch={doFetch} />
+              <IrisReachrReview doFetch={doFetch} onAsk={prompt ? askInChat : undefined} onSeeLeads={() => chooseSub("all", "leads")} />
             </Match>
             <Match when={pane() === "outreach-today" || pane() === "outreach-campaigns" || pane() === "outreach-scripts" || pane() === "outreach-audiences"}>
               <IrisOutreach

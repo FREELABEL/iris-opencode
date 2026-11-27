@@ -1,0 +1,160 @@
+/* New lead and Import (#194506). Layout only; the frame, buttons, fields and badges are the ui kit's. */
+.iris-la-form,
+.iris-la-import {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.iris-la-hint {
+  color: var(--text-weak);
+}
+.iris-la-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
+.iris-la-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-base);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+}
+.iris-la-select [data-component="select"],
+.iris-la-select button {
+  width: 100%;
+  justify-content: space-between;
+}
+.iris-la-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.iris-la-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  border: 1px dashed var(--border-weak-base);
+  border-radius: var(--radius-lg);
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}
+.iris-la-preview,
+.iris-la-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.iris-la-file-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.iris-la-file-line b {
+  color: var(--text-strong);
+  font-weight: var(--font-weight-semibold);
+}
+.iris-la-file-line span,
+.iris-la-more {
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}
+.iris-la-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.iris-la-col {
+  padding: 2px 8px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-full);
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}
+.iris-la-col b {
+  color: var(--text-strong);
+  font-weight: var(--font-weight-medium);
+}
+.iris-la-col[data-unused] b {
+  color: var(--text-weak);
+  font-weight: var(--font-weight-regular);
+}
+.iris-la-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-x-small);
+}
+.iris-la-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-weak-base);
+  color: var(--text-weak);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+}
+.iris-la-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-weaker-base);
+  color: var(--text-base);
+}
+.iris-la-table td.num {
+  color: var(--text-weak);
+  font-variant-numeric: tabular-nums;
+}
+.iris-la-table tr[data-tone="critical"] td:not(:last-child) {
+  color: var(--text-weak);
+}
+.iris-la-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.iris-la-reasons b {
+  color: var(--text-strong);
+  font-weight: var(--font-weight-semibold);
+}
+.iris-la-reasons ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 140px;
+  overflow: auto;
+}
+.iris-la-reasons li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.iris-la-rows {
+  flex: none;
+  color: var(--text-weak);
+  font-variant-numeric: tabular-nums;
+}
+.iris-la-tally {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.iris-la-tally div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-md);
+}
+.iris-la-tally b {
+  color: var(--text-strong);
+  font-size: var(--font-size-large);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.iris-la-tally span {
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}

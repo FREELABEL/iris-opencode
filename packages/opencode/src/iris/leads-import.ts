@@ -206,10 +206,11 @@ export function buildRow(src: { line: number; cells: Record<string, string> }, r
     if (built) v.name = built
   }
   const base = { row, line: src.line }
-  if (!v.name) return { ...base, error: "No name" }
-  if (v.email && !EMAIL.test(v.email)) return { ...base, error: `"${v.email}" is not an email address` }
-  const lead: ImportLead = { name: v.name }
+  const lead: ImportLead = { name: v.name ?? "" }
   for (const f of ["email", "phone", "company", "source", "notes", "title", "external_id", "segment"] as const) if (v[f]) lead[f] = v[f]
+  // A skipped row keeps what it said, so the preview can show which row it is; it is never sent.
+  if (!v.name) return { ...base, lead, error: "No name" }
+  if (v.email && !EMAIL.test(v.email)) return { ...base, lead, error: `"${v.email}" is not an email address` }
   if (v.status) {
     const st = normalizeStatus(v.status)
     if (st) lead.status = st

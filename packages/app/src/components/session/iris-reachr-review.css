@@ -52,3 +52,29 @@
   .iris-rr-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 38%) 1fr; }
   .iris-rr-list { border-right: 0; border-bottom: 1px solid var(--border-weak-base); }
 }
+
+/* #194508: the first words of each draft in the queue; what approving means, once, above it. */
+.iris-rr-row-preview {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-rr-intro {
+  margin: 0 0 8px;
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}
+.iris-rr-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.iris-rr-actions kbd {
+  margin-left: 6px;
+  opacity: 0.7;
+  font-size: var(--font-size-x-small);
+}
