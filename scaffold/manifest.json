@@ -17,8 +17,8 @@
     {
       "src": "how-to/build-your-own-app.md",
       "dest": "how-to/build-your-own-app.md",
-      "type": "how-to",
-      "category": "Pages & Design"
+      "managed": true,
+      "purpose": "Build your own app over your own IRIS data: buttons that act, its own icon in the Dock or Start menu, run from IRIS Cloud or your computer."
     },
     {
       "src": "how-to/page-as-app.md",
