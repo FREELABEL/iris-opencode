@@ -1,9 +1,17 @@
 /*
- * Outreach (#193487). FLAT: hairlines, type and spacing only — the panel's tokens (iris-panel-ui.css).
- * No card backgrounds, no shadows, no filled pills, no icons as decoration. A state is a text colour
- * (`.tone[data-tone]`); a chosen row is the panel's selection tint, as every list in the panel does.
+ * Outreach (#193487). FLAT: hairlines, type and spacing only — the panes' tokens (iris-pane-layout.css).
+ * No card backgrounds, no shadows, no icons as decoration. Controls are the ui library's (Button ghost
+ * for the text actions, Tabs for the All / Mine filter, Notice, EmptyState, SkeletonRows; #194375 W5).
+ * A state is a text colour (`.tone[data-tone]`); a chosen row is the panel's selection tint, as every
+ * list in the panel does.
  */
 .iris-or { font-size: var(--font-size-caption); }
+/* The text tones (were the retired kit's): good / warn / bad / info / idle. */
+.iris-or [data-tone="good"] { --tone: var(--ui-good); }
+.iris-or [data-tone="warn"] { --tone: var(--ui-warn); }
+.iris-or [data-tone="bad"] { --tone: var(--ui-bad); }
+.iris-or [data-tone="info"] { --tone: var(--ui-info); }
+.iris-or [data-tone="idle"] { --tone: var(--text-weak); }
 .iris-or .n, .iris-or .num { font-variant-numeric: tabular-nums; }
 .iris-or .num { font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--font-size-x-small); }
 .iris-or .m { color: var(--text-weak); }
@@ -15,10 +23,14 @@
 .iris-or-head > span:first-child { color: var(--text-strong); font-weight: var(--font-weight-medium); }
 .iris-or-head b { font-weight: var(--font-weight-medium); color: var(--text-weak); margin-inline-end: 4px; font-variant-numeric: tabular-nums; }
 .iris-or-head .n { color: var(--text-weak); font-weight: var(--font-weight-regular); margin-inline-start: 4px; }
-.iris-or-link { border: 0; background: none; padding: 0; font-size: var(--font-size-x-small); color: var(--text-weak); cursor: pointer; }
-.iris-or-link:hover:not(:disabled) { color: var(--text-strong); text-decoration: underline; }
-.iris-or-link:disabled { opacity: 0.45; cursor: default; }
-.iris-or-note { margin: 8px 12px; font-size: var(--font-size-caption); line-height: 1.45; color: var(--tone, var(--text-base)); }
+/* The head's text actions (Refresh, Rescan, Assign, the pager): ghost Buttons, sized to sit in a hairline row. */
+.iris-or-link { flex: none; gap: 4px; }
+.iris-or-head .iris-or-link { margin-block: -4px; }
+.iris-or-head { align-items: center; }
+.iris-or-notice { margin: 8px 12px; }
+.iris-or-empty { padding: 20px 12px; }
+.iris-or-skel { padding: 6px 12px; }
+.iris-or-scanning { gap: 6px; }
 .iris-or-absent { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--border-weaker-base); font-size: var(--font-size-x-small); color: var(--text-weak); display: grid; gap: 3px; }
 .iris-or-absent span { color: var(--text-base); }
 
@@ -85,8 +97,8 @@
   .iris-or-list { flex: 0 0 auto; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--border-weaker-base); }
 }
 .iris-or-none { padding: 4px 12px 10px; color: var(--text-weak); }
-.iris-or-filter { display: inline-flex; gap: 8px; margin-inline-start: auto; margin-inline-end: 12px; }
-.iris-or-link[aria-pressed="true"] { color: var(--text-strong); text-decoration: underline; text-underline-offset: 3px; }
+.iris-or-filter { flex: none; margin-inline-start: auto; margin-inline-end: 12px; }
+.iris-or-filter .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
 .iris-or-people { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-weaker-base); min-width: 0; }
 .iris-or-people .ell { flex: 1 1 auto; }
 
@@ -104,16 +116,16 @@
 .iris-or-input:focus-visible, .iris-or-select:focus-visible { outline: none; border-bottom-color: var(--border-interactive-focus); box-shadow: 0 1px 0 0 var(--border-interactive-focus); color: var(--text-strong); }
 .iris-or-head .iris-or-select { border-bottom: 0; color: var(--text-weak); font-size: var(--font-size-x-small); max-width: 60%; }
 .iris-or-board { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-weaker-base); }
-.iris-or-frow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 14px; gap: 2px 10px; align-items: baseline; padding: 6px 12px 7px; border-bottom: 1px solid var(--border-weaker-base); }
+.iris-or-frow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; padding: 6px 12px 7px; border-bottom: 1px solid var(--border-weaker-base); }
 .iris-or-count { grid-column: 1 / 3; grid-row: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iris-or-frow[data-pending] [data-slot="or-count"] { color: var(--text-weak); }
-.iris-or-x { font-size: var(--font-size-small); line-height: 1; }
-.iris-or-factions { display: flex; gap: 14px; padding: 8px 12px; }
+.iris-or-x { align-self: center; }
+.iris-or-factions { display: flex; gap: 6px; padding: 6px 8px; }
 .iris-or-find { display: grid; gap: 6px; padding: 8px 12px 10px; border-top: 1px solid var(--border-weaker-base); border-bottom: 1px solid var(--border-weaker-base); justify-items: start; }
 .iris-or-find .iris-or-input { width: 100%; }
 .iris-or-find p { margin: 0; font-size: var(--font-size-x-small); }
-.iris-or-find .iris-or-filter { margin: 0; }
-.iris-or-save { display: flex; gap: 8px; align-items: baseline; padding: 10px 12px; margin-top: auto; border-top: 1px solid var(--border-weaker-base); }
+.iris-or-find [data-component="radio-group"] { align-self: start; }
+.iris-or-save { display: flex; gap: 8px; align-items: center; padding: 10px 12px; margin-top: auto; border-top: 1px solid var(--border-weaker-base); }
 .iris-or-save .iris-or-input { flex: 1 1 auto; }
 .iris-or-members .iris-or-tr { grid-template-columns: minmax(90px, 1fr) minmax(80px, 1fr) 70px minmax(70px, 1fr) 70px 60px 60px 62px; cursor: default; }
 

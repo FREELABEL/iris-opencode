@@ -1,9 +1,20 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
+import type { IRIS_BRAND_KITS_ENGLISH } from "@/i18n/iris-brand-kits"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
 import { Icon } from "@opencode-ai/ui/icon"
+import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Notice } from "@opencode-ai/ui/notice"
+import { RadioGroup } from "@opencode-ai/ui/radio-group"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { Spinner } from "@opencode-ai/ui/spinner"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { Tabs } from "@opencode-ai/ui/tabs"
+import { useLanguage } from "@/context/language"
 import { usePrompt } from "@/context/prompt"
-import "./iris-panel-ui.css"
+import { PaneDialog, PaneDialogActions, statusTone } from "./iris-pane-dialog"
+import "./iris-pane-layout.css"
 import "./iris-brand-kits.css"
 import {
   bezierOf,
@@ -61,15 +72,29 @@ type BrandSummary = { id: number; name: string; slug: string; status: string; sw
 type Tab = "colours" | "type" | "logos" | "voice" | "motion" | "preview" | "export"
 type Probe = { state: "loading" } | { state: "err"; reason: string } | { state: "ok"; src: string; light: LogoSeen; dark: LogoSeen }
 
-const TABS: { id: Tab; label: string; part?: DiffLine["part"] }[] = [
-  { id: "colours", label: "Colours", part: "colours" },
-  { id: "type", label: "Type", part: "type" },
-  { id: "logos", label: "Logos", part: "logos" },
-  { id: "voice", label: "Voice", part: "voice" },
-  { id: "motion", label: "Motion", part: "motion" },
-  { id: "preview", label: "Preview" },
-  { id: "export", label: "Export" },
+const TABS: { id: Tab; label: BrandsKey; part?: DiffLine["part"] }[] = [
+  { id: "colours", label: "iris.brands.tab.colours", part: "colours" },
+  { id: "type", label: "iris.brands.tab.type", part: "type" },
+  { id: "logos", label: "iris.brands.tab.logos", part: "logos" },
+  { id: "voice", label: "iris.brands.tab.voice", part: "voice" },
+  { id: "motion", label: "iris.brands.tab.motion", part: "motion" },
+  { id: "preview", label: "iris.brands.tab.preview" },
+  { id: "export", label: "iris.brands.tab.export" },
 ]
+type BrandsKey = keyof typeof IRIS_BRAND_KITS_ENGLISH
+type ColourFilter = "all" | "failing" | "changed"
+
+/**
+ * Copy with inline marks, kept whole in one i18n string so a translator sees the sentence: `text`
+ * is drawn as <code>, **text** as <b>. Only for strings whose params cannot carry either mark.
+ */
+function rich(text: string): JSX.Element {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map((part) => {
+    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) return <code>{part.slice(1, -1)}</code>
+    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) return <b>{part.slice(2, -2)}</b>
+    return part
+  })
+}
 
 /** Optional context: the pane can render where there is no composer (it then hides Use). */
 function tryUse<T>(fn: () => T): T | undefined {
@@ -126,6 +151,8 @@ const readBase64 = (f: File) =>
 export function IrisBrandKits(props: { doFetch: Fetch }) {
   const json = async <T,>(path: string, init?: RequestInit): Promise<T> => (await (await props.doFetch(path, init)).json()) as T
   const prompt = tryUse(() => usePrompt())
+  const language = useLanguage()
+  const t = (key: BrandsKey, params?: Record<string, string | number>) => language.t(key, params)
 
   // ── the list ──
   const [list, { refetch: reloadList }] = createResource(() => json<{ measured: boolean; reason?: string; brands: BrandSummary[] }>("/iris/brands"))
@@ -194,11 +221,11 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
         body: JSON.stringify(body),
       })
       setConfirm(undefined)
-      if (!r.ok) return setNote({ tone: "bad", text: r.reason ?? "The save was refused.", reload: /changed since/.test(r.reason ?? "") })
+      if (!r.ok) return setNote({ tone: "bad", text: r.reason ?? t("iris.brands.note.refused"), reload: /changed since/.test(r.reason ?? "") })
       const n = diff().length
       if (r.kit) setKitRes({ measured: true, kit: r.kit })
       else await reloadKit()
-      setNote({ tone: "good", text: r.reason ?? `Saved ${n} ${n === 1 ? "change" : "changes"} to ${k.brand.name} — showing what the platform holds now.` })
+      setNote({ tone: "good", text: r.reason ?? language.plural("iris.brands.note.saved", n, { name: k.brand.name }) })
       void reloadList()
     } catch (e) {
       setConfirm(undefined)
@@ -214,15 +241,15 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
     const text = usePromptFor(k)
     prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
     requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
-    setNote({ tone: "info", text: "In the composer — read it, then press enter." })
+    setNote({ tone: "info", text: t("iris.brands.note.inComposer") })
   }
 
   async function copy(text: string, what: string) {
     try {
       await navigator.clipboard.writeText(text)
-      setNote({ tone: "good", text: `${what} copied.` })
+      setNote({ tone: "good", text: t("iris.brands.note.copied", { what }) })
     } catch {
-      setNote({ tone: "bad", text: "The clipboard is not available here — use Download." })
+      setNote({ tone: "bad", text: t("iris.brands.note.noClipboard") })
     }
   }
   function download(text: string, name: string, type: string) {
@@ -234,7 +261,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    setNote({ tone: "good", text: `Downloaded ${name}.` })
+    setNote({ tone: "good", text: t("iris.brands.note.downloaded", { name }) })
   }
 
   // ── logos: measure each one on a light and a dark tile ──
@@ -244,7 +271,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
     setProbes(url, { state: "loading" })
     try {
       const r = await json<{ ok: boolean; reason?: string; dataUrl?: string }>(`/iris/brand-logo/probe?url=${encodeURIComponent(url)}`)
-      if (!r.ok || !r.dataUrl) return setProbes(url, { state: "err", reason: r.reason ?? "could not be read" })
+      if (!r.ok || !r.dataUrl) return setProbes(url, { state: "err", reason: r.reason ?? t("iris.brands.logo.unreadable") })
       const px = await pixelsOf(r.dataUrl)
       setProbes(url, { state: "ok", src: r.dataUrl, light: logoVisibility(px, TILES.light.rgba), dark: logoVisibility(px, TILES.dark.rgba) })
     } catch (e) {
@@ -272,18 +299,18 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: file.name, type: file.type, data, variant }),
       })
-      if (!r.ok || !r.url) return setNote({ tone: "bad", text: `Upload failed — ${r.reason ?? "no URL came back"}.` })
+      if (!r.ok || !r.url) return setNote({ tone: "bad", text: t("iris.brands.note.uploadFailed", { reason: r.reason ?? t("iris.brands.note.noUrl") }) })
       setDraft("logos", variant, r.url)
-      setNote({ tone: "info", text: `Uploaded ${file.name}. It is in your draft — Save puts it in the kit.` })
+      setNote({ tone: "info", text: t("iris.brands.note.uploaded", { name: file.name }) })
     } catch (e) {
-      setNote({ tone: "bad", text: `Upload failed — ${e instanceof Error ? e.message : String(e)}.` })
+      setNote({ tone: "bad", text: t("iris.brands.note.uploadFailed", { reason: e instanceof Error ? e.message : String(e) }) })
     } finally {
       setUploading(undefined)
     }
   }
 
   const failing = createMemo(() => draft.colors.filter((c) => contrastChecks(c, grounds()).some((x) => !x.grade.pass)).length)
-  const [colourFilter, setColourFilter] = createSignal<"all" | "failing" | "changed">("all")
+  const [colourFilter, setColourFilter] = createSignal<ColourFilter>("all")
   const shownColours = createMemo(() =>
     draft.colors
       .map((c, i) => ({ c, i }))
@@ -296,6 +323,21 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
       ),
   )
 
+  // The motion presets as a segmented control. A draft whose ease/duration was typed by hand has no
+  // preset: CUSTOM (value "") keeps the control controlled with nothing selected — passing undefined
+  // would let Kobalte fall back to uncontrolled and keep showing the last preset picked.
+  const presets = Object.keys(MOTION_PRESETS) as (keyof typeof MOTION_PRESETS)[]
+  const CUSTOM: { id: string } = { id: "" }
+  const presetOptions: { id: string }[] = presets.map((id) => ({ id }))
+  const presetNow = () => presetOptions.find((o) => o.id === draft.character) ?? CUSTOM
+
+  // What each confirm shows, read once when it opens — the dialog holds it while it closes.
+  const saveAsk = () => {
+    const k = kit()
+    return confirm() === "save" && k ? { kit: k, ask: saveConfirm(k, draft), lines: diff() } : undefined
+  }
+  const leaveAsk = () => (confirm() === "leave" ? { count: diff().length, name: kit()?.brand.name ?? "" } : undefined)
+
   return (
     <div class="iris-ui iris-bk" data-slot="brand-kits">
       <Show
@@ -305,34 +347,33 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
             <div class="iris-ui-bar">
               <label class="iris-ui-search">
                 <Icon name="magnifying-glass" size="small" />
-                <input placeholder="Search brands" value={q()} onInput={(e) => setQ(e.currentTarget.value)} aria-label="Search brands" />
+                <input placeholder={t("iris.brands.search")} value={q()} onInput={(e) => setQ(e.currentTarget.value)} aria-label={t("iris.brands.search")} />
               </label>
               <span class="iris-ui-spacer" />
-              <button type="button" class="iris-ui-icon" title="Reload" aria-label="Reload brands" onClick={() => void reloadList()}>
+              <Button variant="ghost" size="small" class="iris-bk-iconbtn" title={t("iris.brands.reload.title")} aria-label={t("iris.brands.reload")} onClick={() => void reloadList()}>
                 <Show when={!list.loading} fallback={<Spinner class="iris-ui-spin" />}>
                   <Icon name="reset" size="small" />
                 </Show>
-              </button>
+              </Button>
             </div>
             <div class="iris-bk-scroll">
               <Switch>
                 <Match when={list.loading && !list()}>
-                  <div class="iris-ui-empty"><Spinner class="iris-ui-spin" />Loading brand kits…</div>
+                  <SkeletonRows rows={5} label={t("iris.brands.loading")} />
                 </Match>
                 <Match when={list() && !list()!.measured}>
-                  <div class="iris-ui-empty" role="alert">
-                    Couldn't load brand kits — {list()!.reason}.
-                    <button type="button" class="iris-ui-btn" onClick={() => void reloadList()}>Try again</button>
-                  </div>
+                  <EmptyState
+                    size="small"
+                    role="alert"
+                    title={t("iris.brands.error.list", { reason: list()!.reason ?? "" })}
+                    action={<Button size="small" onClick={() => void reloadList()}>{t("iris.brands.retry")}</Button>}
+                  />
                 </Match>
                 <Match when={list()?.measured && (list()?.brands.length ?? 0) === 0}>
-                  <div class="iris-ui-empty">
-                    No brands on this account yet.
-                    <span>Create one with <code>iris brands create</code>, then import its tokens with <code>iris brands dt import &lt;slug&gt; --css ./tokens.css</code>.</span>
-                  </div>
+                  <EmptyState size="small" title={t("iris.brands.empty")} description={rich(t("iris.brands.empty.how"))} />
                 </Match>
                 <Match when={brands().length === 0}>
-                  <div class="iris-ui-empty">No brand matches “{q()}”.</div>
+                  <EmptyState size="small" title={t("iris.brands.noMatch", { q: q() })} />
                 </Match>
               </Switch>
               <ul class="iris-bk-list">
@@ -364,9 +405,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
       >
         {/* ── the kit's toolbar ── */}
         <div class="iris-ui-bar">
-          <button type="button" class="iris-ui-icon" title="All brands" aria-label="All brands" onClick={() => leave()}>
-            <Icon name="arrow-left" size="small" />
-          </button>
+          <IconButton icon="arrow-left" variant="ghost" size="small" title={t("iris.brands.back")} aria-label={t("iris.brands.back")} onClick={() => leave()} />
           <Show when={kit()}>
             {(k) => (
               <span class="iris-bk-ident">
@@ -385,65 +424,71 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
           <span class="iris-ui-spacer" />
           <Show when={kit()}>
             <Show when={diff().length}>
-              <span class="iris-ui-chip" data-tone="warn" data-slot="bk-dirty">{diff().length} unsaved</span>
-              <button type="button" class="iris-ui-btn" onClick={discard} disabled={saving()}>Discard</button>
+              <StatusBadge size="small" tone="warning" data-slot="bk-dirty">{t("iris.brands.unsaved", { count: diff().length })}</StatusBadge>
+              <Button size="small" onClick={discard} disabled={saving()}>{t("iris.brands.discard")}</Button>
             </Show>
             <Show when={prompt && !diff().length}>
-              <button type="button" class="iris-ui-btn" onClick={use} title="Put this kit in the composer for the next Genesis artifact">Use</button>
+              <Button size="small" onClick={use} title={t("iris.brands.use.title")}>{t("iris.brands.use")}</Button>
             </Show>
-            <button type="button" class="iris-ui-btn" data-primary data-slot="bk-save" disabled={!diff().length || saving()} onClick={askSave}>
-              <Icon name="save" size="small" />
-              Save…
-            </button>
+            <Button size="small" variant="primary" icon="save" data-slot="bk-save" disabled={!diff().length || saving()} onClick={askSave}>
+              {t("iris.brands.save")}
+            </Button>
           </Show>
         </div>
         <Show when={kit()}>
-          <div class="iris-ui-tabs" role="tablist" aria-label="Brand kit parts">
-            <For each={TABS}>
-              {(t) => (
-                <button type="button" class="iris-ui-tab" role="tab" aria-selected={tab() === t.id} data-tab={t.id} onClick={() => setTab(t.id)}>
-                  {t.label}
-                  <Show when={t.part && changedIn(t.part)}>
-                    <span class="iris-bk-dot" title={`${changedIn(t.part!)} unsaved`} />
-                  </Show>
-                </button>
-              )}
-            </For>
+          <div class="iris-bk-tabs">
+            <Tabs variant="pill" size="small" value={tab()} onChange={(v: string) => setTab(v as Tab)}>
+              <Tabs.List aria-label={t("iris.brands.parts")}>
+                <For each={TABS}>
+                  {(x) => (
+                    <Tabs.Trigger value={x.id} data-tab={x.id}>
+                      {t(x.label)}
+                      <Show when={x.part && changedIn(x.part)}>
+                        <span class="iris-bk-dot" title={t("iris.brands.unsaved", { count: changedIn(x.part!) })} />
+                      </Show>
+                    </Tabs.Trigger>
+                  )}
+                </For>
+              </Tabs.List>
+            </Tabs>
           </div>
         </Show>
 
         <div class="iris-bk-scroll">
           <Show when={note()}>
             {(n) => (
-              <div class="iris-ui-callout iris-bk-note" data-tone={n().tone} role="status" data-slot="bk-note">
-                <span class="iris-ui-ic"><Icon name={n().tone === "bad" ? "warning" : n().tone === "good" ? "circle-check" : "help"} size="small" /></span>
-                <span>
-                  {n().text}
-                  <Show when={n().reload}>
-                    {" "}
-                    <button type="button" class="iris-ui-btn" onClick={() => { setNote(undefined); void reloadKit() }}>Reload kit</button>
-                  </Show>
-                </span>
-              </div>
+              <Notice
+                class="iris-bk-note"
+                tone={statusTone(n().tone)}
+                role="status"
+                data-slot="bk-note"
+                icon={<Icon name={n().tone === "bad" ? "warning" : n().tone === "good" ? "circle-check" : "help"} size="small" />}
+                action={
+                  n().reload ? (
+                    <Button size="small" onClick={() => { setNote(undefined); void reloadKit() }}>{t("iris.brands.reloadKit")}</Button>
+                  ) : undefined
+                }
+              >
+                {n().text}
+              </Notice>
             )}
           </Show>
           <Show when={showProblems() && problems().length}>
-            <div class="iris-ui-callout iris-bk-note" data-tone="bad" role="alert" data-slot="bk-problems">
-              <span class="iris-ui-ic"><Icon name="warning" size="small" /></span>
-              <span>
-                Fix {problems().length === 1 ? "this" : "these"} before saving:
-                <ul class="iris-bk-problems"><For each={problems()}>{(p) => <li>{p}</li>}</For></ul>
-              </span>
-            </div>
+            <Notice class="iris-bk-note" tone="critical" role="alert" data-slot="bk-problems" icon={<Icon name="warning" size="small" />}>
+              {language.plural("iris.brands.problems", problems().length)}
+              <ul class="iris-bk-problems"><For each={problems()}>{(p) => <li>{p}</li>}</For></ul>
+            </Notice>
           </Show>
           <Show when={kitRes.loading && !kit()}>
-            <div class="iris-ui-empty"><Spinner class="iris-ui-spin" />Loading the kit…</div>
+            <SkeletonRows rows={4} label={t("iris.brands.loadingKit")} />
           </Show>
           <Show when={kitRes() && !kitRes()!.measured}>
-            <div class="iris-ui-empty" role="alert">
-              Couldn't load this kit — {kitRes()!.reason}.
-              <button type="button" class="iris-ui-btn" onClick={() => void reloadKit()}>Try again</button>
-            </div>
+            <EmptyState
+              size="small"
+              role="alert"
+              title={t("iris.brands.error.kit", { reason: kitRes()!.reason ?? "" })}
+              action={<Button size="small" onClick={() => void reloadKit()}>{t("iris.brands.retry")}</Button>}
+            />
           </Show>
 
           <Show when={kit()}>
@@ -454,24 +499,28 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                     {/* ── Colours ── */}
                     <Match when={tab() === "colours"}>
                       <p class="iris-bk-lede">
-                        Each colour is checked against
+                        {t("iris.brands.colours.lede")}
                         <For each={grounds()}>
                           {(g, i) => (
                             <>
-                              {i() ? " and " : " "}
+                              {i() ? t("iris.brands.colours.and") : " "}
                               <span class="iris-bk-inline"><span class="iris-bk-pip" style={{ background: g.value }} />{g.name} <code>{g.value}</code></span>
                             </>
                           )}
                         </For>
-                        . Body text needs 4.5:1; large text and marks 3:1.
+                        {t("iris.brands.colours.ledeEnd")}
                       </p>
-                      <div class="iris-ui-tabs iris-bk-filter" role="toolbar" aria-label="Filter colours">
-                        <button type="button" class="iris-ui-tab" aria-pressed={colourFilter() === "all"} onClick={() => setColourFilter("all")}>All <span class="n">{draft.colors.length}</span></button>
-                        <button type="button" class="iris-ui-tab" aria-pressed={colourFilter() === "failing"} onClick={() => setColourFilter("failing")}>Not body-text safe <span class="n">{failing()}</span></button>
-                        <button type="button" class="iris-ui-tab" aria-pressed={colourFilter() === "changed"} onClick={() => setColourFilter("changed")}>Changed <span class="n">{changedIn("colours")}</span></button>
+                      <div class="iris-bk-filter">
+                        <Tabs variant="pill" size="small" value={colourFilter()} onChange={(v: string) => setColourFilter(v as ColourFilter)}>
+                          <Tabs.List aria-label={t("iris.brands.colours.filter")}>
+                            <Tabs.Trigger value="all">{t("iris.brands.colours.all")} <span class="n">{draft.colors.length}</span></Tabs.Trigger>
+                            <Tabs.Trigger value="failing">{t("iris.brands.colours.failing")} <span class="n">{failing()}</span></Tabs.Trigger>
+                            <Tabs.Trigger value="changed">{t("iris.brands.colours.changed")} <span class="n">{changedIn("colours")}</span></Tabs.Trigger>
+                          </Tabs.List>
+                        </Tabs>
                       </div>
                       <Show when={draft.colors.length === 0}>
-                        <div class="iris-ui-empty">No colours in this kit. Import some with <code>iris brands dt import {k().brand.slug} --css ./tokens.css</code>.</div>
+                        <EmptyState size="small" title={t("iris.brands.colours.none")} description={rich(t("iris.brands.colours.none.how", { slug: k().brand.slug }))} />
                       </Show>
                       <ul class="iris-bk-colours">
                         <For each={shownColours()}>
@@ -481,27 +530,25 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                             const ok = () => !!parseColor(c.value)
                             return (
                               <li class="iris-bk-colour" data-changed={changed() || undefined} data-slot="bk-colour" data-name={c.name}>
-                                <label class="iris-bk-swatch" title="Pick a colour" style={{ background: ok() ? c.value : undefined }} data-none={!ok() || undefined}>
-                                  <input type="color" aria-label={`${c.name} picker`} value={toHex6(c.value)} onInput={(e) => setDraft("colors", i, "value", e.currentTarget.value)} />
+                                <label class="iris-bk-swatch" title={t("iris.brands.colours.pick")} style={{ background: ok() ? c.value : undefined }} data-none={!ok() || undefined}>
+                                  <input type="color" aria-label={t("iris.brands.colours.picker", { name: c.name })} value={toHex6(c.value)} onInput={(e) => setDraft("colors", i, "value", e.currentTarget.value)} />
                                 </label>
                                 <div class="iris-bk-cmain">
                                   <div class="iris-bk-cname">
                                     <span class="iris-bk-name">{c.name}</span>
                                     <Show when={changed()}>
-                                      <span class="iris-bk-was" title="Saved value">was <code>{before()}</code></span>
-                                      <button type="button" class="iris-ui-icon iris-bk-reset" title="Put back" aria-label={`Put ${c.name} back`} onClick={() => setDraft("colors", i, "value", before() ?? c.value)}>
-                                        <Icon name="arrow-undo-down" size="small" />
-                                      </button>
+                                      <span class="iris-bk-was" title={t("iris.brands.was.title")}>{t("iris.brands.was")} <code>{before()}</code></span>
+                                      <IconButton icon="arrow-undo-down" variant="ghost" size="small" class="iris-bk-reset" title={t("iris.brands.putBack")} aria-label={t("iris.brands.putBack.label", { name: c.name })} onClick={() => setDraft("colors", i, "value", before() ?? c.value)} />
                                     </Show>
                                   </div>
-                                  <input class="iris-bk-input iris-bk-mono" aria-label={`${c.name} value`} aria-invalid={!ok() || undefined} value={c.value} onInput={(e) => setDraft("colors", i, "value", e.currentTarget.value)} spellcheck={false} />
+                                  <input class="iris-bk-input iris-bk-mono" aria-label={t("iris.brands.colours.value", { name: c.name })} aria-invalid={!ok() || undefined} value={c.value} onInput={(e) => setDraft("colors", i, "value", e.currentTarget.value)} spellcheck={false} />
                                   <div class="iris-bk-checks">
                                     <For each={contrastChecks(c, grounds())}>
                                       {(x) => (
-                                        <span class="iris-bk-check" title={`${c.name} on ${x.ground.name}: ${x.grade.detail}`} data-slot="bk-contrast" data-pass={x.grade.pass ? "yes" : "no"}>
+                                        <span class="iris-bk-check" title={t("iris.brands.contrast.title", { name: c.name, ground: x.ground.name, detail: x.grade.detail })} data-slot="bk-contrast" data-pass={x.grade.pass ? "yes" : "no"}>
                                           <span class="iris-bk-tile" style={{ background: x.ground.value, color: c.value }}>Aa</span>
-                                          <span class="iris-bk-ratio">on {x.ground.name} {ratioText(x.grade.ratio)}</span>
-                                          <span class="iris-ui-chip" data-tone={x.grade.tone}>{x.grade.label}</span>
+                                          <span class="iris-bk-ratio">{t("iris.brands.contrast.on", { ground: x.ground.name, ratio: ratioText(x.grade.ratio) })}</span>
+                                          <StatusBadge size="small" tone={statusTone(x.grade.tone)}>{x.grade.label}</StatusBadge>
                                         </span>
                                       )}
                                     </For>
@@ -516,9 +563,9 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
 
                     {/* ── Type ── */}
                     <Match when={tab() === "type"}>
-                      <h4 class="iris-bk-h">Families <span class="n">{draft.fonts.length}</span></h4>
+                      <h4 class="iris-bk-h">{t("iris.brands.type.families")} <span class="n">{draft.fonts.length}</span></h4>
                       <Show when={draft.fonts.length === 0}>
-                        <div class="iris-ui-empty">No font stacks in this kit.</div>
+                        <EmptyState size="small" title={t("iris.brands.type.noFonts")} />
                       </Show>
                       <ul class="iris-bk-fonts">
                         <For each={draft.fonts}>
@@ -529,42 +576,40 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                                 <div class="iris-bk-cname">
                                   <span class="iris-bk-name">{f.role}</span>
                                   <Show when={(before() ?? "").trim() !== f.family.trim()}>
-                                    <button type="button" class="iris-ui-icon iris-bk-reset" title="Put back" aria-label={`Put ${f.role} back`} onClick={() => setDraft("fonts", i(), "family", before() ?? "")}>
-                                      <Icon name="arrow-undo-down" size="small" />
-                                    </button>
+                                    <IconButton icon="arrow-undo-down" variant="ghost" size="small" class="iris-bk-reset" title={t("iris.brands.putBack")} aria-label={t("iris.brands.putBack.label", { name: f.role })} onClick={() => setDraft("fonts", i(), "family", before() ?? "")} />
                                   </Show>
                                 </div>
-                                <input class="iris-bk-input iris-bk-mono" aria-label={`${f.role} font stack`} value={f.family} onInput={(e) => setDraft("fonts", i(), "family", e.currentTarget.value)} spellcheck={false} />
+                                <input class="iris-bk-input iris-bk-mono" aria-label={t("iris.brands.type.stack", { role: f.role })} value={f.family} onInput={(e) => setDraft("fonts", i(), "family", e.currentTarget.value)} spellcheck={false} />
                                 <span class="iris-bk-specimen" style={{ "font-family": f.family }}>
-                                  {k().brand.name} — The quick brown fox <span class="iris-bk-alt">Aa Gg Rr 0123</span>
+                                  {t("iris.brands.type.specimen", { name: k().brand.name })} <span class="iris-bk-alt">Aa Gg Rr 0123</span>
                                 </span>
                               </li>
                             )
                           }}
                         </For>
                       </ul>
-                      <h4 class="iris-bk-h">Scale <span class="n">{draft.typeScale.length}</span></h4>
+                      <h4 class="iris-bk-h">{t("iris.brands.type.scale")} <span class="n">{draft.typeScale.length}</span></h4>
                       <Show when={scaleSizes(draft.typeScale).length}>
                         <div class="iris-bk-scaleview" data-slot="bk-scale">
                           <For each={scaleSizes(draft.typeScale)}>
-                            {(t) => (
+                            {(s) => (
                               <div class="iris-bk-scalerow">
-                                <span class="iris-bk-scalemeta">{t.role.replace(/^font-size-/, "")} · {t.value}</span>
-                                <span class="iris-bk-scalesample" style={{ "font-size": `${Math.min(t.px, 56)}px`, "font-family": roles().display }}>Brand kits</span>
+                                <span class="iris-bk-scalemeta">{s.role.replace(/^font-size-/, "")} · {s.value}</span>
+                                <span class="iris-bk-scalesample" style={{ "font-size": `${Math.min(s.px, 56)}px`, "font-family": roles().display }}>{t("iris.brands.type.sample")}</span>
                               </div>
                             )}
                           </For>
                         </div>
                       </Show>
                       <Show when={draft.typeScale.length === 0}>
-                        <div class="iris-ui-empty">No type scale in this kit — pages use their own sizes.</div>
+                        <EmptyState size="small" title={t("iris.brands.type.noScale")} />
                       </Show>
                       <div class="iris-bk-grid2">
                         <For each={draft.typeScale}>
-                          {(t, i) => (
+                          {(s, i) => (
                             <label class="iris-bk-field">
-                              <span>{t.role}</span>
-                              <input class="iris-bk-input iris-bk-mono" value={t.value} onInput={(e) => setDraft("typeScale", i(), "value", e.currentTarget.value)} spellcheck={false} />
+                              <span>{s.role}</span>
+                              <input class="iris-bk-input iris-bk-mono" value={s.value} onInput={(e) => setDraft("typeScale", i(), "value", e.currentTarget.value)} spellcheck={false} />
                             </label>
                           )}
                         </For>
@@ -573,9 +618,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
 
                     {/* ── Logos ── */}
                     <Match when={tab() === "logos"}>
-                      <p class="iris-bk-lede">
-                        Each mark is drawn on a light and a dark tile. One that disappears is flagged — a page picks <b>on light</b> on light grounds and <b>on dark</b> on dark ones, and falls back to <b>primary</b>.
-                      </p>
+                      <p class="iris-bk-lede">{rich(t("iris.brands.logos.lede"))}</p>
                       <LogoWarnings draft={draft} probes={probes} />
                       <ul class="iris-bk-logos">
                         <For each={LOGO_VARIANTS}>
@@ -590,9 +633,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                                   <span class="iris-bk-name">{v.label}</span>
                                   <span class="iris-bk-hint">{v.hint}</span>
                                   <Show when={before().trim() !== url()}>
-                                    <button type="button" class="iris-ui-icon iris-bk-reset" title="Put back" aria-label={`Put ${v.label} back`} onClick={() => setDraft("logos", v.id, before())}>
-                                      <Icon name="arrow-undo-down" size="small" />
-                                    </button>
+                                    <IconButton icon="arrow-undo-down" variant="ghost" size="small" class="iris-bk-reset" title={t("iris.brands.putBack")} aria-label={t("iris.brands.putBack.label", { name: v.label })} onClick={() => setDraft("logos", v.id, before())} />
                                   </Show>
                                 </div>
                                 <div class="iris-bk-tiles">
@@ -606,19 +647,19 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                                       return (
                                         <figure class="iris-bk-ltile" data-tile={tile.id} data-verdict={seen()?.verdict} data-slot="bk-ltile">
                                           <div class="iris-bk-lground" style={{ background: tile.value }}>
-                                            <Switch fallback={<span class="iris-bk-lnone" style={{ color: inkFor(tile.value) }}>No logo</span>}>
+                                            <Switch fallback={<span class="iris-bk-lnone" style={{ color: inkFor(tile.value) }}>{t("iris.brands.logo.none")}</span>}>
                                               <Match when={p()?.state === "loading"}><Spinner class="iris-ui-spin" style={{ color: inkFor(tile.value) }} /></Match>
-                                              <Match when={p()?.state === "ok"}><img src={(p() as { src: string }).src} alt={`${v.label} logo on ${tile.label.toLowerCase()}`} /></Match>
-                                              <Match when={p()?.state === "err"}><span class="iris-bk-lnone" style={{ color: inkFor(tile.value) }}>Can't draw it</span></Match>
+                                              <Match when={p()?.state === "ok"}><img src={(p() as { src: string }).src} alt={t("iris.brands.logo.alt", { variant: v.label, tile: tile.label.toLowerCase() })} /></Match>
+                                              <Match when={p()?.state === "err"}><span class="iris-bk-lnone" style={{ color: inkFor(tile.value) }}>{t("iris.brands.logo.cantDraw")}</span></Match>
                                             </Switch>
                                           </div>
                                           <figcaption>
                                             <span>{tile.label}</span>
                                             <Show when={seen()}>
                                               {(s) => (
-                                                <span class="iris-ui-chip" data-tone={s().verdict === "visible" ? "good" : expected() ? "bad" : "idle"} title={`${Math.round(s().visible * 100)}% of the mark stands out from this tile`}>
+                                                <StatusBadge size="small" tone={statusTone(s().verdict === "visible" ? "good" : expected() ? "bad" : "idle")} title={t("iris.brands.logo.standsOut", { percent: Math.round(s().visible * 100) })}>
                                                   {s().label}
-                                                </span>
+                                                </StatusBadge>
                                               )}
                                             </Show>
                                           </figcaption>
@@ -628,19 +669,17 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                                   </For>
                                 </div>
                                 <Show when={p()?.state === "err"}>
-                                  <p class="iris-bk-err">This URL is not a usable image — {(p() as { reason: string }).reason}.</p>
+                                  <p class="iris-bk-err">{t("iris.brands.logo.notImage", { reason: (p() as { reason: string }).reason })}</p>
                                 </Show>
                                 <div class="iris-bk-lrow">
-                                  <input class="iris-bk-input iris-bk-mono" aria-label={`${v.label} logo URL`} placeholder="https://… (png, svg, webp)" value={draft.logos[v.id]} onInput={(e) => setDraft("logos", v.id, e.currentTarget.value)} spellcheck={false} />
+                                  <input class="iris-bk-input iris-bk-mono" aria-label={t("iris.brands.logo.url", { variant: v.label })} placeholder={t("iris.brands.logo.url.placeholder")} value={draft.logos[v.id]} onInput={(e) => setDraft("logos", v.id, e.currentTarget.value)} spellcheck={false} />
                                   <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden onChange={(e) => { const f = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (f) void upload(v.id, f) }} />
-                                  <button type="button" class="iris-ui-btn" disabled={!!uploading()} onClick={() => file.click()} title="Upload an image to your cloud files and use its URL">
+                                  <Button size="small" disabled={!!uploading()} onClick={() => file.click()} title={t("iris.brands.logo.upload.title")}>
                                     <Show when={uploading() === v.id} fallback={<Icon name="cloud-upload" size="small" />}><Spinner class="iris-ui-spin" /></Show>
-                                    Upload
-                                  </button>
+                                    {t("iris.brands.logo.upload")}
+                                  </Button>
                                   <Show when={url()}>
-                                    <button type="button" class="iris-ui-icon" title="Remove this variant" aria-label={`Remove the ${v.label} logo`} onClick={() => setDraft("logos", v.id, "")}>
-                                      <Icon name="close-small" size="small" />
-                                    </button>
+                                    <IconButton icon="close-small" variant="ghost" size="small" title={t("iris.brands.logo.remove.title")} aria-label={t("iris.brands.logo.remove", { variant: v.label })} onClick={() => setDraft("logos", v.id, "")} />
                                   </Show>
                                 </div>
                               </li>
@@ -652,65 +691,65 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
 
                     {/* ── Voice ── */}
                     <Match when={tab() === "voice"}>
-                      <p class="iris-bk-lede">How {k().brand.name} sounds. Agents writing for the brand read these two lines.</p>
+                      <p class="iris-bk-lede">{t("iris.brands.voice.lede", { name: k().brand.name })}</p>
                       <label class="iris-bk-field iris-bk-field--block" data-changed={(was()?.voice ?? "").trim() !== draft.voice.trim() || undefined}>
-                        <span>Voice</span>
-                        <textarea class="iris-bk-input" rows={4} value={draft.voice} placeholder="Confident, technical but approachable…" onInput={(e) => setDraft("voice", e.currentTarget.value)} />
+                        <span>{t("iris.brands.voice.voice")}</span>
+                        <textarea class="iris-bk-input" rows={4} value={draft.voice} placeholder={t("iris.brands.voice.voice.placeholder")} onInput={(e) => setDraft("voice", e.currentTarget.value)} />
                       </label>
                       <label class="iris-bk-field iris-bk-field--block" data-changed={(was()?.tone ?? "").trim() !== draft.tone.trim() || undefined}>
-                        <span>Tone</span>
-                        <textarea class="iris-bk-input" rows={3} value={draft.tone} placeholder="Professional yet bold…" onInput={(e) => setDraft("tone", e.currentTarget.value)} />
+                        <span>{t("iris.brands.voice.tone")}</span>
+                        <textarea class="iris-bk-input" rows={3} value={draft.tone} placeholder={t("iris.brands.voice.tone.placeholder")} onInput={(e) => setDraft("tone", e.currentTarget.value)} />
                       </label>
-                      <h4 class="iris-bk-h">Personas <span class="n">{k().personas.length}</span></h4>
-                      <Show when={k().personas.length} fallback={<p class="iris-bk-hint">No personas. Add one with <code>iris brands personas add {k().brand.id}</code>.</p>}>
+                      <h4 class="iris-bk-h">{t("iris.brands.voice.personas")} <span class="n">{k().personas.length}</span></h4>
+                      <Show when={k().personas.length} fallback={<p class="iris-bk-hint">{rich(t("iris.brands.voice.noPersonas", { id: k().brand.id }))}</p>}>
                         <ul class="iris-bk-personas">
                           <For each={k().personas}>
                             {(p) => (
                               <li>
                                 <span class="iris-bk-name">{p.name}</span>
-                                <Show when={p.isDefault}><span class="iris-ui-chip">default</span></Show>
+                                <Show when={p.isDefault}><StatusBadge size="small">{t("iris.brands.voice.default")}</StatusBadge></Show>
                                 <Show when={p.tone}><span class="iris-bk-hint">{p.tone}</span></Show>
                               </li>
                             )}
                           </For>
                         </ul>
-                        <p class="iris-bk-hint">Personas are edited with <code>iris brands personas</code>.</p>
+                        <p class="iris-bk-hint">{rich(t("iris.brands.voice.personasEdited"))}</p>
                       </Show>
                     </Match>
 
                     {/* ── Motion ── */}
                     <Match when={tab() === "motion"}>
-                      <p class="iris-bk-lede">How {k().brand.name} moves — the ease and duration its pages and films share.</p>
-                      <div class="iris-ui-seg iris-bk-presets" role="group" aria-label="Start from">
-                        <For each={Object.entries(MOTION_PRESETS)}>
-                          {([name, m]) => (
-                            <button
-                              type="button"
-                              aria-pressed={draft.character === name}
-                              onClick={() => {
-                                setDraft({ character: name, ease: m.ease, durationMs: String(m.durationMs), stiffness: String(m.stiffness), damping: String(m.damping) })
-                              }}
-                            >
-                              {name}
-                            </button>
-                          )}
-                        </For>
-                      </div>
+                      <p class="iris-bk-lede">{t("iris.brands.motion.lede", { name: k().brand.name })}</p>
+                      <RadioGroup
+                        size="small"
+                        class="iris-bk-presets"
+                        aria-label={t("iris.brands.motion.startFrom")}
+                        options={presetOptions}
+                        current={presetNow()}
+                        value={(o) => o.id}
+                        label={(o) => o.id}
+                        onSelect={(o) => {
+                          const name = o?.id as keyof typeof MOTION_PRESETS | undefined
+                          if (!name || !MOTION_PRESETS[name]) return
+                          const m = MOTION_PRESETS[name]
+                          setDraft({ character: name, ease: m.ease, durationMs: String(m.durationMs), stiffness: String(m.stiffness), damping: String(m.damping) })
+                        }}
+                      />
                       <div class="iris-bk-grid2">
                         <label class="iris-bk-field">
-                          <span>Ease</span>
+                          <span>{t("iris.brands.motion.ease")}</span>
                           <input class="iris-bk-input iris-bk-mono" value={draft.ease} placeholder="cubic-bezier(.45,0,.15,1)" onInput={(e) => setDraft({ ease: e.currentTarget.value, character: "" })} spellcheck={false} />
                         </label>
                         <label class="iris-bk-field">
-                          <span>Duration (ms)</span>
+                          <span>{t("iris.brands.motion.duration")}</span>
                           <input class="iris-bk-input iris-bk-mono" inputmode="numeric" value={draft.durationMs} placeholder="320" onInput={(e) => setDraft({ durationMs: e.currentTarget.value, character: "" })} />
                         </label>
                         <label class="iris-bk-field">
-                          <span>Spring stiffness</span>
+                          <span>{t("iris.brands.motion.stiffness")}</span>
                           <input class="iris-bk-input iris-bk-mono" inputmode="numeric" value={draft.stiffness} placeholder="170" onInput={(e) => setDraft({ stiffness: e.currentTarget.value, character: "" })} />
                         </label>
                         <label class="iris-bk-field">
-                          <span>Spring damping</span>
+                          <span>{t("iris.brands.motion.damping")}</span>
                           <input class="iris-bk-input iris-bk-mono" inputmode="numeric" value={draft.damping} placeholder="26" onInput={(e) => setDraft({ damping: e.currentTarget.value, character: "" })} />
                         </label>
                       </div>
@@ -719,14 +758,14 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
 
                     {/* ── Preview ── */}
                     <Match when={tab() === "preview"}>
-                      <p class="iris-bk-lede">The draft, drawn. A sample card and a sample page section in {k().brand.name}'s colours, type and logo — they change as you edit.</p>
+                      <p class="iris-bk-lede">{t("iris.brands.preview.lede", { name: k().brand.name })}</p>
                       <KitCard kit={k()} draft={draft} />
                       <KitSection kit={k()} draft={draft} />
                     </Match>
 
                     {/* ── Export ── */}
                     <Match when={tab() === "export"}>
-                      <p class="iris-bk-lede">The draft{diff().length ? " (with your unsaved edits)" : ""} as CSS custom properties, and as the design tokens <code>iris brands dt push</code> takes.</p>
+                      <p class="iris-bk-lede">{rich(t("iris.brands.export.lede", { edits: diff().length ? t("iris.brands.export.withEdits") : "" }))}</p>
                       <For each={[{ ext: "css" as const, label: "CSS", text: exportCss(k(), draft), type: "text/css" }, { ext: "json" as const, label: "JSON", text: exportJson(k(), draft), type: "application/json" }]}>
                         {(x) => (
                           <section class="iris-bk-export" data-slot="bk-export" data-ext={x.ext}>
@@ -734,8 +773,8 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                               <span class="iris-bk-name">{x.label}</span>
                               <code class="iris-bk-slug">{exportName(k(), x.ext)}</code>
                               <span class="iris-ui-spacer" />
-                              <button type="button" class="iris-ui-btn" onClick={() => void copy(x.text, x.label)}><Icon name="copy" size="small" />Copy</button>
-                              <button type="button" class="iris-ui-btn" onClick={() => download(x.text, exportName(k(), x.ext), x.type)}><Icon name="download" size="small" />Export {x.label}</button>
+                              <Button size="small" icon="copy" onClick={() => void copy(x.text, x.label)}>{t("iris.brands.export.copy")}</Button>
+                              <Button size="small" icon="download" onClick={() => download(x.text, exportName(k(), x.ext), x.type)}>{t("iris.brands.export.download", { format: x.label })}</Button>
                             </div>
                             <pre class="iris-bk-pre">{x.text}</pre>
                           </section>
@@ -746,8 +785,8 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                 </div>
                 {/* The live preview beside the editor, when the panel is wide enough to hold both. */}
                 <Show when={tab() !== "preview" && tab() !== "export"}>
-                  <aside class="iris-bk-side" aria-label="Live preview">
-                    <span class="iris-bk-h">Live preview</span>
+                  <aside class="iris-bk-side" aria-label={t("iris.brands.livePreview")}>
+                    <span class="iris-bk-h">{t("iris.brands.livePreview")}</span>
                     <KitCard kit={k()} draft={draft} compact />
                   </aside>
                 </Show>
@@ -758,69 +797,68 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
       </Show>
 
       {/* ── the confirms ── */}
-      <Show when={confirm() === "save" && kit()}>
-        {(_) => {
-          const c = () => saveConfirm(kit()!, draft)
-          return (
-            <div class="iris-ui-scrim" onClick={(e) => e.target === e.currentTarget && !saving() && setConfirm(undefined)}>
-              <div class="iris-ui-dialog iris-bk-dialog" role="alertdialog" aria-modal="true" aria-labelledby="iris-bk-confirm-title" data-slot="bk-confirm">
-                <div class="iris-ui-dialog-icon" data-tone="warn"><Icon name="warning" /></div>
-                <h3 id="iris-bk-confirm-title">{c().title}</h3>
-                <For each={c().body}>{(line) => <p>{line}</p>}</For>
-                <ul class="iris-bk-diff" data-slot="bk-diff">
-                  <For each={diff()}>
-                    {(l) => (
-                      <li>
-                        <span class="iris-bk-dlabel">{l.label}</span>
-                        <span class="iris-bk-dvals">
-                          <DiffValue value={l.before} swatch={l.swatch} gone />
-                          <span class="iris-bk-arrow" aria-label="becomes">→</span>
-                          <DiffValue value={l.after} swatch={l.swatch} />
-                        </span>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-                <For each={c().warn}>
-                  {(w) => (
-                    <div class="iris-ui-callout" data-tone="warn">
-                      <span class="iris-ui-ic"><Icon name="warning" size="small" /></span>
-                      <span>{w}</span>
-                    </div>
-                  )}
-                </For>
-                <div class="iris-ui-dialog-actions">
-                  <button type="button" class="iris-ui-btn" disabled={saving()} onClick={() => setConfirm(undefined)} autofocus>Keep editing</button>
-                  <button type="button" class="iris-ui-btn" data-primary data-slot="bk-confirm-save" disabled={saving()} onClick={() => void save()}>
-                    <Show when={saving()}><Spinner class="iris-ui-spin" /></Show>
-                    Save to {kit()!.brand.name}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
-        }}
-      </Show>
-      <Show when={confirm() === "leave"}>
-        <div class="iris-ui-scrim" onClick={(e) => e.target === e.currentTarget && setConfirm(undefined)}>
-          <div class="iris-ui-dialog" role="alertdialog" aria-modal="true" aria-labelledby="iris-bk-leave-title">
-            <div class="iris-ui-dialog-icon" data-tone="warn"><Icon name="warning" /></div>
-            <h3 id="iris-bk-leave-title">Leave without saving?</h3>
-            <p>{diff().length} {diff().length === 1 ? "change" : "changes"} to {kit()?.brand.name} will be lost. Nothing has been sent.</p>
-            <div class="iris-ui-dialog-actions">
-              <button type="button" class="iris-ui-btn" onClick={() => setConfirm(undefined)} autofocus>Keep editing</button>
-              <button type="button" class="iris-ui-btn" data-primary data-tone="warn" onClick={() => leave(true)}>Discard changes</button>
-            </div>
+      <PaneDialog when={saveAsk()} onClose={() => setConfirm(undefined)} title={(c) => c.ask.title} size="normal" class="iris-bk-dialog" id="bk-confirm">
+        {(c) => (
+          <div class="iris-bk-confirm" data-slot="bk-confirm">
+            <For each={c().ask.body}>{(line) => <p>{line}</p>}</For>
+            <ul class="iris-bk-diff" data-slot="bk-diff">
+              <For each={c().lines}>
+                {(l) => (
+                  <li>
+                    <span class="iris-bk-dlabel">{l.label}</span>
+                    <span class="iris-bk-dvals">
+                      <DiffValue value={l.before} swatch={l.swatch} gone />
+                      <span class="iris-bk-arrow" aria-label={t("iris.brands.confirm.becomes")}>→</span>
+                      <DiffValue value={l.after} swatch={l.swatch} />
+                    </span>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <For each={c().ask.warn}>
+              {(w) => (
+                <Notice tone="warning" icon={<Icon name="warning" size="small" />}>
+                  {w}
+                </Notice>
+              )}
+            </For>
+            <PaneDialogActions>
+              <Button size="small" disabled={saving()} onClick={() => setConfirm(undefined)} autofocus>
+                {t("iris.brands.confirm.keepEditing")}
+              </Button>
+              <Button size="small" variant="primary" data-slot="bk-confirm-save" disabled={saving()} onClick={() => void save()}>
+                <Show when={saving()}>
+                  <Spinner class="iris-ui-spin" />
+                </Show>
+                {t("iris.brands.confirm.saveTo", { name: c().kit.brand.name })}
+              </Button>
+            </PaneDialogActions>
           </div>
-        </div>
-      </Show>
+        )}
+      </PaneDialog>
+      <PaneDialog when={leaveAsk()} onClose={() => setConfirm(undefined)} title={() => t("iris.brands.leave.title")} id="bk-leave">
+        {(c) => (
+          <div class="iris-bk-confirm" data-slot="bk-leave">
+            <p>{language.plural("iris.brands.leave.body", c().count, { name: c().name })}</p>
+            <PaneDialogActions>
+              <Button size="small" onClick={() => setConfirm(undefined)} autofocus>
+                {t("iris.brands.confirm.keepEditing")}
+              </Button>
+              <Button size="small" variant="primary" data-slot="bk-leave-discard" onClick={() => leave(true)}>
+                {t("iris.brands.leave.discard")}
+              </Button>
+            </PaneDialogActions>
+          </div>
+        )}
+      </PaneDialog>
     </div>
   )
 }
 
 function DiffValue(props: { value?: string; swatch?: boolean; gone?: boolean }) {
+  const language = useLanguage()
   return (
-    <Show when={props.value} fallback={<span class="iris-bk-dnone">{props.gone ? "not set" : "removed"}</span>}>
+    <Show when={props.value} fallback={<span class="iris-bk-dnone">{props.gone ? language.t("iris.brands.diff.notSet") : language.t("iris.brands.diff.removed")}</span>}>
       <span class="iris-bk-dval" data-gone={props.gone || undefined}>
         <Show when={props.swatch && parseColor(props.value)}>
           <span class="iris-bk-pip" style={{ background: props.value }} />
@@ -833,6 +871,7 @@ function DiffValue(props: { value?: string; swatch?: boolean; gone?: boolean }) 
 
 /** The combinations that would leave a page without a visible mark, said once at the top. */
 function LogoWarnings(props: { draft: Draft; probes: Record<string, Probe> }) {
+  const language = useLanguage()
   const seen = (v: LogoVariant) => {
     const u = props.draft.logos[v].trim()
     const p = u ? props.probes[u] : undefined
@@ -849,9 +888,12 @@ function LogoWarnings(props: { draft: Draft; probes: Record<string, Probe> }) {
       const p = seen(pick)
       if (p && p[tile].verdict !== "visible")
         out.push(
-          pick === own
-            ? `The ${tile === "light" ? "on light" : "on dark"} logo is ${p[tile].verdict} on a ${tile} page.`
-            : `On a ${tile} page the primary logo is ${p[tile].verdict} — add an ${tile === "light" ? "on light" : "on dark"} version.`,
+          language.t(
+            pick === own
+              ? tile === "light" ? "iris.brands.logo.warn.own.light" : "iris.brands.logo.warn.own.dark"
+              : tile === "light" ? "iris.brands.logo.warn.primary.light" : "iris.brands.logo.warn.primary.dark",
+            { verdict: p[tile].verdict },
+          ),
         )
     }
     return out
@@ -859,16 +901,16 @@ function LogoWarnings(props: { draft: Draft; probes: Record<string, Probe> }) {
   return (
     <For each={lines()}>
       {(l) => (
-        <div class="iris-ui-callout iris-bk-note" data-tone="warn" data-slot="bk-logo-warn">
-          <span class="iris-ui-ic"><Icon name="warning" size="small" /></span>
-          <span>{l}</span>
-        </div>
+        <Notice class="iris-bk-note" tone="warning" data-slot="bk-logo-warn" icon={<Icon name="warning" size="small" />}>
+          {l}
+        </Notice>
       )}
     </For>
   )
 }
 
 function MotionPreview(props: { ease: string; durationMs: string; color: string; ground: string }) {
+  const language = useLanguage()
   const [at, setAt] = createSignal(false)
   const ms = () => (Number(props.durationMs) >= 0 && props.durationMs.trim() ? Number(props.durationMs) : 320)
   const ease = () => props.ease.trim() || "ease"
@@ -877,7 +919,7 @@ function MotionPreview(props: { ease: string; durationMs: string; color: string;
     <div class="iris-bk-motion" data-slot="bk-motion">
       <Show when={curve()}>
         {(b) => (
-          <svg class="iris-bk-curve" viewBox="-0.1 -0.6 1.2 2.2" preserveAspectRatio="none" aria-label={`Curve of ${ease()}`}>
+          <svg class="iris-bk-curve" viewBox="-0.1 -0.6 1.2 2.2" preserveAspectRatio="none" aria-label={language.t("iris.brands.motion.curve", { ease: ease() })}>
             <path d="M0 1 L1 1 M0 1 L0 0" class="iris-bk-axis" />
             <path d={`M0 1 C ${b()[0]} ${1 - b()[1]}, ${b()[2]} ${1 - b()[3]}, 1 0`} class="iris-bk-bez" />
           </svg>
@@ -886,9 +928,9 @@ function MotionPreview(props: { ease: string; durationMs: string; color: string;
       <div class="iris-bk-track" style={{ background: props.ground }}>
         <span class="iris-bk-ball" data-at={at() ? "end" : "start"} style={{ background: props.color, transition: `left ${ms()}ms ${ease()}` }} />
       </div>
-      <button type="button" class="iris-ui-btn" onClick={() => setAt(!at())}>
-        <Icon name="play" size="small" />Play · {ms()} ms
-      </button>
+      <Button size="small" icon="play" onClick={() => setAt(!at())}>
+        {language.t("iris.brands.motion.play", { ms: ms() })}
+      </Button>
     </div>
   )
 }
@@ -915,6 +957,7 @@ function kitVars(draft: Draft): JSX.CSSProperties {
 
 /** A sample card in the kit: surface, border, logo for that ground, display type, a primary button. */
 function KitCard(props: { kit: BrandKit; draft: Draft; compact?: boolean }) {
+  const language = useLanguage()
   const r = () => previewRoles(props.draft)
   const logo = () => draftLogoFor(props.draft, r().surface)
   return (
@@ -922,13 +965,13 @@ function KitCard(props: { kit: BrandKit; draft: Draft; compact?: boolean }) {
       <article class="iris-bk-kcard" data-slot="bk-sample-card">
         <header>
           <KitLogo logo={logo()} name={props.kit.brand.name} />
-          <span class="iris-bk-ktag">New</span>
+          <span class="iris-bk-ktag">{language.t("iris.brands.sample.new")}</span>
         </header>
-        <h5>Launch your first campaign</h5>
-        <p>Agents, pages and outreach from one place — set up in an afternoon.</p>
+        <h5>{language.t("iris.brands.sample.card.title")}</h5>
+        <p>{language.t("iris.brands.sample.card.body")}</p>
         <footer>
-          <span class="iris-bk-kbtn">Get started</span>
-          <span class="iris-bk-klink">Learn more →</span>
+          <span class="iris-bk-kbtn">{language.t("iris.brands.sample.card.cta")}</span>
+          <span class="iris-bk-klink">{language.t("iris.brands.sample.card.link")}</span>
         </footer>
       </article>
     </div>
@@ -937,37 +980,38 @@ function KitCard(props: { kit: BrandKit; draft: Draft; compact?: boolean }) {
 
 /** A sample page section in the kit: nav, a hero set in the scale's largest size, three tiles. */
 function KitSection(props: { kit: BrandKit; draft: Draft }) {
+  const language = useLanguage()
   const r = () => previewRoles(props.draft)
   const logo = () => draftLogoFor(props.draft, r().bg)
   const big = () => {
     const s = scaleSizes(props.draft.typeScale)
     return s.length ? Math.min(Math.max(s.at(-1)!.px, 28), 44) : 36
   }
-  const tagline = () => props.draft.tone.trim() || props.kit.brand.description || "What the system does, shown — not sold."
+  const tagline = () => props.draft.tone.trim() || props.kit.brand.description || language.t("iris.brands.sample.page.tagline")
   return (
     <div class="iris-bk-kitground iris-bk-kpage" style={kitVars(props.draft)} data-slot="bk-sample-page">
       <nav>
         <KitLogo logo={logo()} name={props.kit.brand.name} />
-        <span>Product</span>
-        <span>Pricing</span>
-        <span>Docs</span>
-        <span class="iris-bk-kbtn iris-bk-kbtn--sm">Sign in</span>
+        <span>{language.t("iris.brands.sample.nav.product")}</span>
+        <span>{language.t("iris.brands.sample.nav.pricing")}</span>
+        <span>{language.t("iris.brands.sample.nav.docs")}</span>
+        <span class="iris-bk-kbtn iris-bk-kbtn--sm">{language.t("iris.brands.sample.nav.signIn")}</span>
       </nav>
       <section class="iris-bk-khero">
         <span class="iris-bk-ktag">{props.kit.brand.name}</span>
-        <h2 style={{ "font-size": `${big()}px` }}>Run the whole business from one place.</h2>
+        <h2 style={{ "font-size": `${big()}px` }}>{language.t("iris.brands.sample.page.title")}</h2>
         <p>{tagline()}</p>
         <div class="iris-bk-kactions">
-          <span class="iris-bk-kbtn">Start free</span>
-          <span class="iris-bk-kghost">See how it works</span>
+          <span class="iris-bk-kbtn">{language.t("iris.brands.sample.page.cta")}</span>
+          <span class="iris-bk-kghost">{language.t("iris.brands.sample.page.ghost")}</span>
         </div>
       </section>
       <div class="iris-bk-ktiles">
-        <For each={["Agents", "Pages", "Outreach"]}>
-          {(t, i) => (
+        <For each={SAMPLE_TILES}>
+          {(tile, i) => (
             <div>
-              <b>{t}</b>
-              <span>{["Work while you sleep.", "Built from your kit.", "Sent in your voice."][i()]}</span>
+              <b>{language.t(tile.name)}</b>
+              <span>{language.t(tile.line)}</span>
               <code>0{i() + 1}</code>
             </div>
           )}
@@ -976,6 +1020,12 @@ function KitSection(props: { kit: BrandKit; draft: Draft }) {
     </div>
   )
 }
+
+const SAMPLE_TILES: { name: BrandsKey; line: BrandsKey }[] = [
+  { name: "iris.brands.sample.tile.agents", line: "iris.brands.sample.tile.agents.line" },
+  { name: "iris.brands.sample.tile.pages", line: "iris.brands.sample.tile.pages.line" },
+  { name: "iris.brands.sample.tile.outreach", line: "iris.brands.sample.tile.outreach.line" },
+]
 
 /** The resolver's pick, on the tile it asks for (when the mark does not suit the ground). */
 function KitLogo(props: { logo: ReturnType<typeof draftLogoFor>; name: string }) {

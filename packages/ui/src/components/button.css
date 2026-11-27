@@ -70,6 +70,11 @@
     &[data-active="true"] {
       background-color: var(--surface-base-active);
     }
+    /* A toggle (#194375 W5): aria-pressed is the state, so the look follows it. */
+    &[aria-pressed="true"]:not(:disabled) {
+      background-color: var(--surface-base-active);
+      color: var(--text-strong);
+    }
   }
 
   &[data-variant="secondary"] {

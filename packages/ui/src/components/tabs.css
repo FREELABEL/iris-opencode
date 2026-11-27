@@ -449,6 +449,75 @@
     }
   }
 
+  /* A compact filter row (#194375 W5): sizes to its content, 24px pills, caption type.
+     It is often nested inside a panel whose own Tabs style their descendants by id (#review-panel,
+     #terminal-panel); the :is() with two ids lifts this block above those so a nested row keeps its look. */
+  &[data-variant="pill"][data-orientation="horizontal"]:is([data-size="small"], #tabs-small#tabs-small) {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    flex: none;
+    overflow: visible;
+    background-color: transparent;
+
+    > [data-slot="tabs-list"] {
+      height: auto;
+      padding: 0;
+      gap: 2px;
+      border: 0;
+      background-color: transparent;
+
+      &::after {
+        display: none;
+      }
+    }
+
+    [data-slot="tabs-trigger-wrapper"] {
+      height: 24px;
+      flex: none;
+      padding: 0 8px;
+      border: 0;
+      border-radius: var(--radius-md);
+      background-color: transparent;
+      box-shadow: none;
+      color: var(--text-weak);
+      font-family: var(--font-family-sans);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-regular);
+      line-height: var(--font-size-caption--line-height);
+
+      &::after {
+        display: none;
+      }
+
+      [data-slot="tabs-trigger"] {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 100%;
+        padding: 0;
+        color: inherit;
+        font: inherit;
+        letter-spacing: normal;
+        white-space: nowrap;
+      }
+
+      &:hover:not(:disabled) {
+        background-color: var(--surface-base-hover);
+        color: var(--text-strong);
+      }
+
+      &:has([data-selected]) {
+        background-color: var(--surface-base-active);
+        color: var(--text-strong);
+      }
+      &:has([data-slot="tabs-trigger"]:focus-visible) {
+        outline: 2px solid var(--border-interactive-focus);
+        outline-offset: 1px;
+      }
+    }
+  }
+
   &[data-variant="pill"][data-orientation="horizontal"][data-scope="filetree"] {
     [data-slot="tabs-list"] {
       height: 48px;

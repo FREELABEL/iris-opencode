@@ -93,15 +93,10 @@
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hsc-jade) 45%, transparent); }
   50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hsc-jade) 0%, transparent); }
 }
-/* All · Project · Marketplace — the Playbooks tabs: words, an underline on the open one. */
-.hsc-views { display: flex; gap: 12px; margin: 10px 0 0; padding: 0 6px; border-bottom: 1px solid var(--hsc-rule); }
-.hsc-views button {
-  all: unset; cursor: pointer; padding: 5px 0 6px; font-size: var(--font-size-caption); color: var(--hsc-faint);
-  border-bottom: 1.5px solid transparent; margin-bottom: -1px; white-space: nowrap;
-}
-.hsc-views button:hover { color: var(--hsc-ink2); }
-.hsc-views button[aria-selected="true"] { color: var(--hsc-ink); border-bottom-color: var(--hsc-ink); }
-.hsc-views button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--hsc-jade)); outline-offset: 1px; }
+/* All · Project · Marketplace — a ui Tabs pill row (#194375 W5); only its place in the column is here. */
+.hsc-views { display: flex; margin: 10px 0 0; padding: 0 4px 6px; border-bottom: 1px solid var(--hsc-rule); }
+/* A list that is still loading, or the computers column. */
+.hsc-col [data-component="skeleton-rows"] { padding: 6px 8px; }
 .hsc-jade { color: var(--hsc-jade); }
 .hsc-ib--on { color: var(--hsc-jade); border-color: color-mix(in srgb, var(--hsc-jade) 60%, transparent); }
 .hsc-run.hsc-run--add { background: var(--surface-brand-base); color: var(--text-on-brand-base); }
