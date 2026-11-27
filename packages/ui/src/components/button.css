@@ -11,29 +11,32 @@
   outline: none;
   white-space: nowrap;
 
+  /* One primary look (#194375, #663): the brand pair — every primary action is the same accent. */
   &[data-variant="primary"] {
-    background-color: var(--button-primary-base);
-    border-color: var(--border-weak-base);
-    color: var(--icon-invert-base);
+    background-color: var(--surface-brand-base);
+    border-color: transparent;
+    color: var(--text-on-brand-base);
 
     [data-slot="icon-svg"] {
-      color: var(--icon-invert-base);
+      color: var(--text-on-brand-base);
     }
 
     &:hover:not(:disabled) {
-      background-color: var(--icon-strong-hover);
+      background-color: var(--surface-brand-hover);
     }
-    &:focus:not(:disabled) {
-      background-color: var(--icon-strong-focus);
+    &:focus-visible:not(:disabled) {
+      background-color: var(--surface-brand-hover);
+      box-shadow: var(--shadow-xs-border-focus);
     }
     &:active:not(:disabled) {
-      background-color: var(--icon-strong-active);
+      background-color: var(--surface-brand-hover);
     }
     &:disabled {
-      background-color: var(--icon-strong-disabled);
+      opacity: 0.45;
+      cursor: not-allowed;
 
       [data-slot="icon-svg"] {
-        color: var(--icon-invert-base);
+        color: var(--text-on-brand-base);
       }
     }
   }
