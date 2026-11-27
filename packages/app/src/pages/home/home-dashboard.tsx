@@ -18,6 +18,8 @@ import { sayingFor } from "./home-sayings"
 import {
   agoOf,
   fetchHomeDashboard,
+  fetchHomeRecap,
+  type HomeRecap,
   homeDashboard,
   homeDashboardKey,
   sliceOf,
@@ -96,13 +98,12 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
   }
 }
 
-function Mark(props: { a: string; b: string; shape?: "split" | "square" }) {
+// A tile's mark (#194375): neutral dots, one in the accent. Colour is not what tells tiles apart.
+function Mark(props: { shape?: "split" | "square" }) {
   const r = (i: number) => (props.shape === "square" && (i === 1 || i === 2) ? "3px" : "50%")
   return (
     <div class="ihd-mk" aria-hidden="true">
-      <For each={[props.a, props.b, props.b, props.a]}>
-        {(c, i) => <i style={{ background: c, "border-radius": r(i()) }} />}
-      </For>
+      <For each={[0, 1, 2, 3]}>{(i) => <i style={{ "border-radius": r(i) }} />}</For>
     </div>
   )
 }
@@ -143,6 +144,14 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   // Beside Home, like Heartbeats (#192535): no chat is needed for the panel any more.
   const openComputers = () => openIrisPanel({ surface: "hive", sub: "machines" })
   const [now, setNow] = createSignal(Date.now())
+  // The written "Today" paragraph (#194315): read on its own — it is a model call — and again every
+  // 5 minutes; the engine caches it and writes a new one at most every 15.
+  const [written, setWritten] = createSignal<HomeRecap | null>(null)
+  const readWritten = () =>
+    void fetchHomeRecap(serverSDK().url, platform.fetch ?? globalThis.fetch).then((r) => r && setWritten(r))
+  readWritten()
+  const writtenTimer = setInterval(readWritten, 5 * 60_000)
+  onCleanup(() => clearInterval(writtenTimer))
   const timer = setInterval(() => {
     setNow(Date.now())
     void homeDashboard.load(key(), fetcher).catch(() => {})
@@ -214,7 +223,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
       <div class={`ihd ${props.class ?? ""}`}>
         <div class="ihd-hello">
           <div>
-            <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
+            <div class="ihd-label">
               ● Today
             </div>
             <h1 class="ihd-h1">
@@ -258,9 +267,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
 
         <div class="ihd-stats">
           <div class="ihd-stat" title="Boards you own or share">
-            <Mark a="var(--ihd-bl)" b="var(--ihd-in)" />
+            <Mark />
             <div class="ihd-n">{projects()}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-in)" }}>
+            <div class="ihd-label">
               Projects
             </div>
             <div class="ihd-meta">
@@ -271,9 +280,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
           </div>
           <div class="ihd-stat" title={tile("agents")?.detail}>
-            <Mark a="var(--ihd-fu)" b="var(--ihd-in)" />
+            <Mark />
             <div class="ihd-n">{tile("agents")?.value ?? "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-fu)" }}>
+            <div class="ihd-label">
               Agents
             </div>
             <div class="ihd-meta">
@@ -294,9 +303,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                 <b>{ov().stopped}</b>
               </span>
             </Show>
-            <Mark a="var(--ihd-em)" b="var(--ihd-am)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">{data()?.beats.measured ? beats().length : "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
+            <div class="ihd-label">
               Heartbeats
             </div>
             <div class="ihd-meta">
@@ -319,9 +328,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             onClick={openComputers}
             onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openComputers()}
           >
-            <Mark a="var(--ihd-cy)" b="var(--ihd-bl)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">{hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-cy)" }}>
+            <div class="ihd-label">
               Machines
             </div>
             <div class="ihd-meta">
@@ -336,11 +345,11 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
           </div>
           <div class="ihd-stat" title={tile("inbox")?.detail}>
-            <Mark a="var(--ihd-am)" b="var(--ihd-fu)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">
               {data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}
             </div>
-            <div class="ihd-label" style={{ color: "var(--ihd-am)" }}>
+            <div class="ihd-label">
               Hive inbox
             </div>
             <div class="ihd-meta">
@@ -365,9 +374,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                 <b>{needsYou()}</b>
               </span>
             </Show>
-            <Mark a="var(--ihd-em)" b="var(--ihd-bl)" />
+            <Mark />
             <div class="ihd-n">{data()?.sessions.measured ? fleet().rows.length : "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-bl)" }}>
+            <div class="ihd-label">
               Sessions
             </div>
             <div class="ihd-meta">
@@ -383,13 +392,16 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           </div>
         </div>
 
-        <Show when={data()?.recent?.measured}>
+        <Show when={data()?.recent?.measured || written()?.text}>
           <section class="ihd-recap" aria-label="Today across your projects">
             <div class="ihd-recap-h">
-              <span class="ihd-label" style={{ color: "var(--ihd-in)" }}>
+              <span class="ihd-label">
                 Today · across your projects
               </span>
             </div>
+            <Show
+              when={written()?.text}
+              fallback={
             <Show
               when={(() => {
                 const r = recap()
@@ -414,6 +426,17 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                     Your agents wrote <b>{plural(r().agents, "diary or work log", "diaries and work logs")}</b> across{" "}
                     <b>{plural(r().agentProjects, "project")}</b>.
                   </Show>
+                </p>
+              )}
+            </Show>
+              }
+            >
+              {(text) => (
+                <p
+                  class="ihd-recap-p"
+                  title={`Written by ${written()?.model ?? "a model"} from ${written()?.items ?? 0} board items and ${written()?.sessions ?? 0} sessions${written()?.agents?.length ? ` (${written()!.agents.join(", ")})` : ""}`}
+                >
+                  {text()}
                 </p>
               )}
             </Show>

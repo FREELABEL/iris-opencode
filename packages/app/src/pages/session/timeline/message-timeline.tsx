@@ -34,6 +34,8 @@ import "@/components/session/genesis-artifact-card"
 import "@/components/session/atlas-artifact-card"
 // …and the `atlas_epic` card: a multi-list plan, saved to Atlas. Its buttons fill the composer; they never send.
 import "@/components/session/atlas-epic-card"
+// Agent writes to IRIS read as cards under the commands row (#194362).
+import "@/components/session/iris-action-card"
 import { useLinksOpenInPanel } from "@/components/session/web-link-intercept"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"

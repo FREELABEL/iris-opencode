@@ -22,12 +22,12 @@
   margin-left: -6px;
   padding-bottom: 2px;
   color: var(--text-weak);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .iris-mkt__menu-btn:hover,
 .iris-mkt__menu-btn[data-expanded] {
   color: var(--text-strong);
-  background: var(--surface-raised-base-hover, var(--background-element));
+  background: var(--surface-raised-base-hover, var(--surface-raised-base));
 }
 .iris-mkt__add {
   display: grid;
@@ -42,12 +42,12 @@
   width: 12ch;
   margin: 2px 4px 4px;
   padding: 1px 6px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   color: var(--text-strong);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
   border: 1px solid var(--border-base);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   outline: none;
 }
 
@@ -83,7 +83,7 @@
 }
 .iris-mkt__hint {
   max-width: 340px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
 }
 
@@ -102,8 +102,8 @@
   gap: 6px;
   padding: 4px 8px;
   border: 1px solid var(--border-weaker-base);
-  border-radius: 7px;
-  background: var(--background-element);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised-base);
 }
 .iris-mkt__picker-ic {
   color: var(--text-weak);
@@ -114,7 +114,7 @@
   border: 0;
   outline: none;
   background: none;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 20px;
   color: var(--text-strong);
 }
@@ -138,7 +138,7 @@
 }
 .iris-mkt__picker-note {
   padding: 12px 4px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
   text-align: center;
 }
@@ -153,16 +153,16 @@
   column-gap: 8px;
   row-gap: 1px;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .iris-mkt__page:hover:not(:disabled) {
-  background: var(--surface-raised-base-hover, var(--background-element));
+  background: var(--surface-raised-base-hover, var(--surface-raised-base));
 }
 .iris-mkt__page:disabled {
   cursor: progress;
 }
 .iris-mkt__page-title {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-strong);
   overflow: hidden;
   white-space: nowrap;
@@ -171,7 +171,7 @@
 .iris-mkt__page-slug {
   grid-column: 1;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   overflow: hidden;
   white-space: nowrap;
@@ -185,19 +185,19 @@
   gap: 4px;
 }
 .iris-mkt__tag {
-  font-size: 10px;
+  font-size: var(--font-size-x-small);
   line-height: 16px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   color: var(--text-weak);
-  background: var(--background-element);
+  background: var(--surface-raised-base);
 }
 .iris-mkt__tag--on {
   color: var(--text-interactive-base);
 }
 .iris-mkt__page-refused {
   grid-column: 1 / -1;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-on-critical-base, var(--text-weak));
 }
 .iris-mkt__empty-actions {

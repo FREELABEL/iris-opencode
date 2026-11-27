@@ -1,0 +1,104 @@
+/* ActionCard (#194362): a readable record of an agent's write. Tint, never an edge bar. */
+[data-component="action-card"] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-weaker-base);
+  background: color-mix(in srgb, var(--text-base) 4%, transparent);
+  min-width: 0;
+
+  [data-slot="action-card-main"] {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  [data-slot="action-card-icon"] {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    color: var(--text-interactive-base);
+    background: color-mix(in srgb, var(--text-interactive-base) 14%, transparent);
+    font-size: var(--font-size-caption);
+    line-height: 1;
+  }
+  &[data-status="failed"] [data-slot="action-card-icon"] {
+    color: var(--surface-critical-strong);
+    background: color-mix(in srgb, var(--surface-critical-strong) 14%, transparent);
+  }
+  &[data-status="running"] [data-slot="action-card-icon"] {
+    color: var(--text-weak);
+    background: color-mix(in srgb, var(--text-base) 9%, transparent);
+  }
+  [data-slot="action-card-text"] {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  [data-slot="action-card-title"] {
+    color: var(--text-strong);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+    font-weight: var(--font-weight-medium);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  [data-slot="action-card-target"] {
+    color: var(--text-weak);
+    font-size: var(--font-size-caption);
+    line-height: var(--font-size-caption--line-height);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  [data-slot="action-card-open"] {
+    flex: none;
+    padding: 2px 8px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-interactive-base);
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+
+    &:hover {
+      background: color-mix(in srgb, var(--text-interactive-base) 12%, transparent);
+    }
+  }
+  [data-slot="action-card-detail"] {
+    margin-left: 34px;
+
+    summary {
+      width: fit-content;
+      color: var(--text-weak);
+      font-size: var(--font-size-x-small);
+      line-height: var(--font-size-x-small--line-height);
+      cursor: pointer;
+      user-select: none;
+
+      &:hover {
+        color: var(--text-base);
+      }
+    }
+    pre {
+      margin: 4px 0 0;
+      padding: 8px;
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--text-base) 6%, transparent);
+      color: var(--text-base);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-x-small);
+      line-height: var(--font-size-x-small--line-height);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  }
+}
