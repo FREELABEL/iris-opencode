@@ -12,10 +12,20 @@ import {
   startTransition,
   Suspense,
   Switch,
+  untrack,
 } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import "./iris-hive-scripts.css"
-import { focusHiveNode, irisHiveNodeFocus } from "./iris-nav"
+import {
+  focusHiveNode,
+  focusHiveScript,
+  irisHiveNodeFocus,
+  irisHiveScript,
+  irisHiveScriptFocus,
+  setIrisHiveScript,
+  type HiveScriptReport,
+  type HiveScriptRequest,
+} from "./iris-nav"
 import {
   ago,
   commandFor,
@@ -729,6 +739,77 @@ export function IrisHiveScripts(props: {
     window.addEventListener("keydown", onKey, { capture: true })
     onCleanup(() => window.removeEventListener("keydown", onKey, { capture: true }))
   })
+
+  // ── the agent's side_panel script (#194084) ───────────────────────────────────────────────────
+  // The agent steers this tab the way ⌘K `run` does: choose the script, fill in its settings, pick
+  // the computer, press Run (runOn — so a missing setting, a computer that can't run it and a run
+  // Constellation Gate holds all behave exactly as for the person). Each command id acts once, and
+  // what came of it is reported through irisHiveScript, which the panel sends back to the agent.
+  const asks = new Set<string>()
+  const [pendingRun, setPendingRun] = createSignal<HiveScriptRequest & { shared: boolean }>()
+  const tell = (q: HiveScriptRequest, r: Omit<HiveScriptReport, "id" | "slug">) => setIrisHiveScript({ id: q.id, slug: q.slug, ...r })
+  createEffect(() => {
+    const q = irisHiveScriptFocus()
+    // Wait for my scripts and the shared ones: the slug may be either.
+    if (!q || list.loading || shared.loading) return
+    untrack(() => {
+      focusHiveScript(null)
+      if (asks.has(q.id)) return
+      asks.add(q.id)
+      // Never at the cost of the person's typing: switching scripts would drop it, Run would save it.
+      if (dirty()) return tell(q, { error: `${name()} has unsaved edits in Scripts — they save or discard them first; nothing was changed` })
+      const mineHit = scripts().some((x) => x.slug === q.slug)
+      const sharedHit = mineHit ? undefined : sharedRows().find((x) => x.slug === q.slug)
+      if (!mineHit && !sharedHit) return tell(q, { error: `No script named ${q.slug} — not yours, not shared with you` })
+      if (sharedHit && q.args && Object.keys(q.args).length)
+        return tell(q, { shared: true, error: `${q.slug} is shared with you: its settings are its author's, so it runs without args` })
+      if (sharedHit) {
+        setView("all")
+        setSharedId(sharedHit.id)
+      } else {
+        if (!listed().some((x) => x.slug === q.slug)) setView("all")
+        choose(q.slug, false)
+        for (const [k, v] of Object.entries(q.args ?? {})) setArgValue(k, v)
+      }
+      tell(q, { shared: !!sharedHit || undefined })
+      if (q.run) setPendingRun({ ...q, shared: !!sharedHit })
+    })
+  })
+  // Run once the chosen script's own header (its settings, its timeout) has loaded — not the last one's.
+  createEffect(() => {
+    const q = pendingRun()
+    if (!q || hive.loading) return
+    if (!q.shared && source.loading) return
+    const unread = !q.shared && !source.latest?.script
+    if (!q.shared && !unread && source.latest?.script?.slug !== q.slug) return
+    untrack(() => {
+      setPendingRun(undefined)
+      if (unread) return tell(q, { error: `Could not read ${q.slug}: ${source.latest?.reason ?? "the sidecar did not answer"}` })
+      void (async () => {
+        const where = q.node ? findComputer(computers(), q.node) : undefined
+        if (q.node && !where) return tell(q, { shared: q.shared || undefined, error: `No computer named ${q.node}` })
+        if (where && !where.online) return tell(q, { shared: q.shared || undefined, error: `${where.name} is offline` })
+        if (where) setPickedId(where.id)
+        if (!canRun()) return tell(q, { shared: q.shared || undefined, error: busy() ? "Scripts is busy sending another run" : runTitle() })
+        await runOn(where ?? picked(), q.args)
+        const r = runs()[runKey()]
+        tell(q, {
+          shared: q.shared || undefined,
+          computer: r?.computerName,
+          taskId: r?.taskId,
+          error: r?.taskId ? undefined : (r?.reason ?? "Scripts did not send it"),
+        })
+      })()
+    })
+  })
+  // The script on screen, for side_panel state — whoever picked it.
+  createEffect(() => {
+    const cur = sharedSel()?.slug ?? (creating() ? undefined : slug())
+    if (!cur) return
+    const prev = untrack(irisHiveScript)
+    if (prev?.slug !== cur || !!prev.shared !== !!sharedSel()) setIrisHiveScript({ slug: cur, shared: sharedSel() ? true : undefined })
+  })
+  onCleanup(() => setIrisHiveScript(undefined))
 
   // ── new script ───────────────────────────────────────────────────────────────────────────────
   const [naming, setNaming] = createSignal(false)

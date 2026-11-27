@@ -2,6 +2,7 @@
 
 @import "./colors.css" layer(theme);
 @import "./theme.css" layer(theme);
+@import "./theme-fallback.css" layer(theme);
 
 @import "./base.css" layer(base);
 @import "katex/dist/katex.min.css" layer(base);
@@ -48,6 +49,11 @@
 @import "../components/toast.css" layer(components);
 @import "../components/tooltip.css" layer(components);
 @import "../components/typewriter.css" layer(components);
+@import "../components/action-card.css" layer(components);
+@import "../components/detail-view.css" layer(components);
+@import "../components/empty-state.css" layer(components);
+@import "../components/skeleton.css" layer(components);
+@import "../components/status-badge.css" layer(components);
 
 @import "./utilities.css" layer(utilities);
 @import "./animations.css" layer(utilities);

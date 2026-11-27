@@ -175,7 +175,7 @@ function DialogSelectFileLegacy(props: { filesOnly: () => boolean; onOpenFile?: 
                   </div>
                 </div>
                 <Show when={item.updated}>
-                  <span class="text-12-regular text-text-weak whitespace-nowrap ml-2">
+                  <span class="text-13-regular text-text-weak whitespace-nowrap ml-2">
                     {getRelativeTime(new Date(item.updated!).toISOString(), palette.language.t)}
                   </span>
                 </Show>

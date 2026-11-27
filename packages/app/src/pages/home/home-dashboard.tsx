@@ -9,7 +9,6 @@ import {
   compact,
   greetingOf,
   overviewOf,
-  pageOf,
   emptyText,
   listRows,
   type Indicator,
@@ -19,6 +18,8 @@ import { sayingFor } from "./home-sayings"
 import {
   agoOf,
   fetchHomeDashboard,
+  fetchHomeRecap,
+  type HomeRecap,
   homeDashboard,
   homeDashboardKey,
   sliceOf,
@@ -30,6 +31,7 @@ import { hivePillTarget } from "@/components/session/iris-hive-inbox-model"
 import { focusHiveSession } from "@/components/session/iris-nav"
 import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
 import { AgentMark } from "@/components/session/agent-mark"
+import { plural, recapOf } from "./home-recap-model"
 import "./home-dashboard.css"
 
 /**
@@ -96,13 +98,12 @@ function Indicate(props: { kind: Indicator }): JSX.Element {
   }
 }
 
-function Mark(props: { a: string; b: string; shape?: "split" | "square" }) {
+// A tile's mark (#194375): neutral dots, one in the accent. Colour is not what tells tiles apart.
+function Mark(props: { shape?: "split" | "square" }) {
   const r = (i: number) => (props.shape === "square" && (i === 1 || i === 2) ? "3px" : "50%")
   return (
     <div class="ihd-mk" aria-hidden="true">
-      <For each={[props.a, props.b, props.b, props.a]}>
-        {(c, i) => <i style={{ background: c, "border-radius": r(i()) }} />}
-      </For>
+      <For each={[0, 1, 2, 3]}>{(i) => <i style={{ "border-radius": r(i) }} />}</For>
     </div>
   )
 }
@@ -111,44 +112,20 @@ const TAB_LABEL: Record<Tab, string> = { attention: "Needs attention", active: "
 // All first: what is failing is a filter you choose, not the first thing Home shows (2026-11-04).
 const AGENT_TABS: Tab[] = ["all", "active", "attention"]
 
-type Slice = { page: number; pages: number; from: number; to: number; total: number }
-function Pager(props: { slice: Slice; onPage: (page: number) => void }) {
+// #194315: no page numbers on Home. Five rows, then "Show all N" in place.
+const FEW = 5
+function More(props: { total: number; shown: number; open: boolean; onToggle: () => void }) {
   return (
-    <div class="ihd-pager">
-      <span class="ihd-range">
-        {props.slice.from}–{props.slice.to} of {props.slice.total}
-      </span>
-      <button
-        type="button"
-        class="ihd-pg"
-        aria-label="Previous page"
-        disabled={props.slice.page <= 1}
-        onClick={() => props.onPage(props.slice.page - 1)}
-      >
-        ‹
-      </button>
-      <For each={Array.from({ length: props.slice.pages }, (_, i) => i + 1)}>
-        {(p) => (
-          <button
-            type="button"
-            class="ihd-pg"
-            aria-current={p === props.slice.page ? "page" : undefined}
-            onClick={() => props.onPage(p)}
-          >
-            {p}
-          </button>
-        )}
-      </For>
-      <button
-        type="button"
-        class="ihd-pg"
-        aria-label="Next page"
-        disabled={props.slice.page >= props.slice.pages}
-        onClick={() => props.onPage(props.slice.page + 1)}
-      >
-        ›
-      </button>
-    </div>
+    <Show when={props.total > FEW}>
+      <div class="ihd-pager">
+        <span class="ihd-range">
+          {props.shown} of {props.total}
+        </span>
+        <button type="button" class="ihd-chip" aria-expanded={props.open} onClick={() => props.onToggle()}>
+          {props.open ? "Show fewer" : `Show all ${props.total}`}
+        </button>
+      </div>
+    </Show>
   )
 }
 
@@ -167,6 +144,14 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   // Beside Home, like Heartbeats (#192535): no chat is needed for the panel any more.
   const openComputers = () => openIrisPanel({ surface: "hive", sub: "machines" })
   const [now, setNow] = createSignal(Date.now())
+  // The written "Today" paragraph (#194315): read on its own — it is a model call — and again every
+  // 5 minutes; the engine caches it and writes a new one at most every 15.
+  const [written, setWritten] = createSignal<HomeRecap | null>(null)
+  const readWritten = () =>
+    void fetchHomeRecap(serverSDK().url, platform.fetch ?? globalThis.fetch).then((r) => r && setWritten(r))
+  readWritten()
+  const writtenTimer = setInterval(readWritten, 5 * 60_000)
+  onCleanup(() => clearInterval(writtenTimer))
   const timer = setInterval(() => {
     setNow(Date.now())
     void homeDashboard.load(key(), fetcher).catch(() => {})
@@ -178,33 +163,28 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   })
 
   const [tab, setTab] = createSignal<Tab>("all")
-  const [page, setPage] = createSignal(1)
   // The card's three views (#192535). Activity first: what changed on your boards.
   const [view, setView] = createSignal<"activity" | "agents" | "inbox">("activity")
-  const [feedPage, setFeedPage] = createSignal(1)
-  const [inboxPage, setInboxPage] = createSignal(1)
-  const feed = createMemo(() => sliceOf(data()?.recent?.items ?? [], feedPage()))
-  const mail = createMemo(() => sliceOf(data()?.inbox.items ?? [], inboxPage()))
+  const [open, setOpen] = createSignal<Record<string, boolean>>({})
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }))
+  const size = (k: string, n: number) => (open()[k] ? Math.max(n, FEW) : FEW)
+  const recentItems = () => data()?.recent?.items ?? []
+  const feed = createMemo(() => sliceOf(recentItems(), 1, size("feed", recentItems().length)))
+  const mail = createMemo(() => sliceOf(data()?.inbox.items ?? [], 1, size("mail", data()?.inbox.items?.length ?? 0)))
   const openItem = (item: RecentItem) => openIrisPanel({ surface: "atlas", bloqId: item.bloqId, itemId: item.id })
   const openInbox = () => openIrisPanel(hivePillTarget("inbox"))
   // On your machines (#192626): one row per live session, any tool, any machine you have.
   const fleet = createMemo(() => fleetOf(data()?.sessions))
   const [tool, setTool] = createSignal<string | null>(null)
-  const [fleetPage, setFleetPage] = createSignal(1)
-  const fleetRows = createMemo(() => sliceOf(byTool(fleet().rows, tool()), fleetPage()))
-  const pickTool = (t: string | null) => {
-    setTool(t)
-    setFleetPage(1)
-  }
+  const fleetAll = createMemo(() => byTool(fleet().rows, tool()))
+  const fleetRows = createMemo(() => sliceOf(fleetAll(), 1, size("fleet", fleetAll().length)))
+  const pickTool = (t: string | null) => setTool(t)
   const openSessions = () => openIrisPanel({ surface: "hive", sub: "sessions" })
   const openFleetRow = (r: FleetRow) => {
     focusHiveSession({ nodeId: r.nodeId, sessionId: r.sessionId })
     openSessions()
   }
-  const pick = (t: Tab) => {
-    setTab(t)
-    setPage(1)
-  }
+  const pick = (t: Tab) => setTab(t)
 
   const beats = () => data()?.beats.heartbeats ?? []
   const tiles = createMemo(() => {
@@ -221,12 +201,18 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
   const agentList = () => (data()?.agents.measured ? data()!.agents.agents : [])
   const agentTotal = () => data()?.agents.total ?? agentList().length
   const all = createMemo(() => listRows(beats(), agentList(), tab(), now()))
-  const rows = createMemo(() => pageOf(all(), page()))
+  const rows = createMemo(() => sliceOf(all(), 1, size("agents", all().length)))
   const openAgents = () => openIrisPanel({ surface: "agents" })
   const hive = () => data()?.hive
   const online = () => hive()?.nodes.filter((n) => n.online) ?? []
   const freeSlots = () => online().reduce((s, n) => s + Math.max(0, (n.maxConcurrent ?? 0) - (n.activeTasks ?? 0)), 0)
   const models = () => new Set(online().flatMap((n) => n.modelsServing ?? [])).size
+  const recap = createMemo(() => {
+    const day = new Date(now())
+    day.setHours(0, 0, 0, 0)
+    return recapOf(recentItems(), day.getTime())
+  })
+  const needsYou = () => fleet().rows.filter((r) => r.status === "needs_you").length
   const projects = () => {
     const b = data()?.bloqs
     return b?.measured ? String(b.total ?? b.bloqs.length) : "—"
@@ -237,7 +223,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
       <div class={`ihd ${props.class ?? ""}`}>
         <div class="ihd-hello">
           <div>
-            <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
+            <div class="ihd-label">
               ● Today
             </div>
             <h1 class="ihd-h1">
@@ -281,9 +267,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
 
         <div class="ihd-stats">
           <div class="ihd-stat" title="Boards you own or share">
-            <Mark a="var(--ihd-bl)" b="var(--ihd-in)" />
+            <Mark />
             <div class="ihd-n">{projects()}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-in)" }}>
+            <div class="ihd-label">
               Projects
             </div>
             <div class="ihd-meta">
@@ -294,9 +280,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
           </div>
           <div class="ihd-stat" title={tile("agents")?.detail}>
-            <Mark a="var(--ihd-fu)" b="var(--ihd-in)" />
+            <Mark />
             <div class="ihd-n">{tile("agents")?.value ?? "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-fu)" }}>
+            <div class="ihd-label">
               Agents
             </div>
             <div class="ihd-meta">
@@ -317,9 +303,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                 <b>{ov().stopped}</b>
               </span>
             </Show>
-            <Mark a="var(--ihd-em)" b="var(--ihd-am)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">{data()?.beats.measured ? beats().length : "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-em)" }}>
+            <div class="ihd-label">
               Heartbeats
             </div>
             <div class="ihd-meta">
@@ -342,9 +328,9 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             onClick={openComputers}
             onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openComputers()}
           >
-            <Mark a="var(--ihd-cy)" b="var(--ihd-bl)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">{hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}</div>
-            <div class="ihd-label" style={{ color: "var(--ihd-cy)" }}>
+            <div class="ihd-label">
               Machines
             </div>
             <div class="ihd-meta">
@@ -359,11 +345,11 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
             </div>
           </div>
           <div class="ihd-stat" title={tile("inbox")?.detail}>
-            <Mark a="var(--ihd-am)" b="var(--ihd-fu)" shape="square" />
+            <Mark shape="square" />
             <div class="ihd-n">
               {data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}
             </div>
-            <div class="ihd-label" style={{ color: "var(--ihd-am)" }}>
+            <div class="ihd-label">
               Hive inbox
             </div>
             <div class="ihd-meta">
@@ -373,7 +359,89 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </div>
           </div>
+          <div
+            class="ihd-stat"
+            data-link="1"
+            title="Sessions running on your machines, any tool\nClick to open Hive › Sessions"
+            role="button"
+            tabIndex={0}
+            onClick={openSessions}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openSessions()}
+          >
+            <Show when={needsYou()}>
+              <span class="ihd-flag ihd-ov" data-tone="warn" title="Waiting on you">
+                <Icon name="warn" color={AMBER} />
+                <b>{needsYou()}</b>
+              </span>
+            </Show>
+            <Mark />
+            <div class="ihd-n">{data()?.sessions.measured ? fleet().rows.length : "—"}</div>
+            <div class="ihd-label">
+              Sessions
+            </div>
+            <div class="ihd-meta">
+              <span class="ihd-i" title="Machines with a live session">
+                <Icon name="slot" />
+                {fleet().machines}
+              </span>
+              <span class="ihd-i" title="Working now">
+                <i class="ihd-live" style={{ width: "6px", height: "6px" }} />
+                {fleet().rows.filter((r) => r.working || r.status === "active").length}
+              </span>
+            </div>
+          </div>
         </div>
+
+        <Show when={data()?.recent?.measured || written()?.text}>
+          <section class="ihd-recap" aria-label="Today across your projects">
+            <div class="ihd-recap-h">
+              <span class="ihd-label">
+                Today · across your projects
+              </span>
+            </div>
+            <Show
+              when={written()?.text}
+              fallback={
+            <Show
+              when={(() => {
+                const r = recap()
+                return r.empty ? null : r
+              })()}
+              fallback={<p class="ihd-recap-p">Nothing has changed on your boards yet today.</p>}
+            >
+              {(r) => (
+                <p class="ihd-recap-p">
+                  <Show when={r().mine} fallback={<>You haven’t changed anything on your boards yet today. </>}>
+                    You changed <b>{plural(r().mine, "item")}</b> across <b>{plural(r().mineProjects, "project")}</b>.{" "}
+                    <Show when={r().top}>
+                      {(t) => (
+                        <>
+                          Most of it was in <b>{t().name}</b>
+                          <Show when={t().count > 1}> ({t().count})</Show>: {t().titles.join("; ")}.{" "}
+                        </>
+                      )}
+                    </Show>
+                  </Show>
+                  <Show when={r().agents}>
+                    Your agents wrote <b>{plural(r().agents, "diary or work log", "diaries and work logs")}</b> across{" "}
+                    <b>{plural(r().agentProjects, "project")}</b>.
+                  </Show>
+                </p>
+              )}
+            </Show>
+              }
+            >
+              {(text) => (
+                <p
+                  class="ihd-recap-p"
+                  title={`Written by ${written()?.model ?? "a model"} from ${written()?.items ?? 0} board items and ${written()?.sessions ?? 0} sessions${written()?.agents?.length ? ` (${written()!.agents.join(", ")})` : ""}`}
+                >
+                  {text()}
+                </p>
+              )}
+            </Show>
+          </section>
+        </Show>
 
         <Show when={data()}>
           <section class="ihd-card" aria-label="Today">
@@ -445,7 +513,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                         </div>
                       )}
                     </For>
-                    <Pager slice={feed()} onPage={setFeedPage} />
+                    <More total={feed().total} shown={feed().items.length} open={!!open().feed} onToggle={() => toggle("feed")} />
                   </Show>
                 </Show>
               </Match>
@@ -563,41 +631,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                       }}
                     </For>
                   </Show>
-                  <div class="ihd-pager">
-                    <span class="ihd-range">
-                      {rows().from}–{rows().to} of {rows().total}
-                    </span>
-                    <button
-                      type="button"
-                      class="ihd-pg"
-                      aria-label="Previous page"
-                      disabled={rows().page <= 1}
-                      onClick={() => setPage(rows().page - 1)}
-                    >
-                      ‹
-                    </button>
-                    <For each={Array.from({ length: rows().pages }, (_, i) => i + 1)}>
-                      {(p) => (
-                        <button
-                          type="button"
-                          class="ihd-pg"
-                          aria-current={p === rows().page ? "page" : undefined}
-                          onClick={() => setPage(p)}
-                        >
-                          {p}
-                        </button>
-                      )}
-                    </For>
-                    <button
-                      type="button"
-                      class="ihd-pg"
-                      aria-label="Next page"
-                      disabled={rows().page >= rows().pages}
-                      onClick={() => setPage(rows().page + 1)}
-                    >
-                      ›
-                    </button>
-                  </div>
+                  <More total={rows().total} shown={rows().items.length} open={!!open().agents} onToggle={() => toggle("agents")} />
                   <div class="ihd-legend">
                     <span>
                       <i class="ihd-idle" />
@@ -662,7 +696,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                         </div>
                       )}
                     </For>
-                    <Pager slice={mail()} onPage={setInboxPage} />
+                    <More total={mail().total} shown={mail().items.length} open={!!open().mail} onToggle={() => toggle("mail")} />
                   </Show>
                 </Show>
               </Match>
@@ -771,7 +805,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
                   </div>
                 )}
               </For>
-              <Pager slice={fleetRows()} onPage={setFleetPage} />
+              <More total={fleetRows().total} shown={fleetRows().items.length} open={!!open().fleet} onToggle={() => toggle("fleet")} />
             </Show>
             <Show when={fleet().hidden}>
               <div class="ihd-hidden">

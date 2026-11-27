@@ -1,0 +1,55 @@
+/* Skeleton (#194371): the list's shape while it loads. Motion respects reduced-motion. */
+[data-component="skeleton"] {
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-base) 9%, transparent);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+
+  &[data-size="small"] {
+    height: 8px;
+    opacity: 0.7;
+  }
+}
+[data-component="skeleton-rows"] {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+
+  [data-slot="skeleton-heading"] {
+    width: 28%;
+    height: 12px;
+    margin: 8px 0 12px;
+  }
+  [data-slot="skeleton-row"] {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-weaker-base);
+  }
+  [data-slot="skeleton-lines"] {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  [data-slot="skeleton-trailing"] {
+    width: 56px;
+    flex: none;
+  }
+}
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-component="skeleton"] {
+    animation: none;
+  }
+}

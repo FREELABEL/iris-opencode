@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  outdatedMacEngine,
   boundsFollower,
   boundsOf,
   nativeBrowserEnabled,
@@ -155,5 +156,20 @@ describe("boundsFollower (#193405)", () => {
   test("placement numbers only go up across panes", () => {
     const a = nextPlacement()
     expect(nextPlacement()).toBe(a + 1)
+  })
+})
+
+describe("out-of-date Mac web engine", () => {
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+  test("a Mac WebKit without popover (Safari 16) is flagged", () => {
+    expect(outdatedMacEngine({ userAgent: mac, hasPopover: false })).toBe(true)
+  })
+  test("Safari 17+ is not", () => {
+    expect(outdatedMacEngine({ userAgent: mac, hasPopover: true })).toBe(false)
+  })
+  test("never on Windows or Linux, and never in Chrome (dev in a browser)", () => {
+    expect(outdatedMacEngine({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/131", hasPopover: false })).toBe(false)
+    expect(outdatedMacEngine({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15", hasPopover: false })).toBe(false)
+    expect(outdatedMacEngine({ userAgent: mac + " Chrome/120.0 Safari/537.36", hasPopover: false })).toBe(false)
   })
 })

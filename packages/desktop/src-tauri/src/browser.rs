@@ -120,10 +120,22 @@ pub fn gate<R: tauri::Runtime>(
 /// May the browser navigate here? It browses the web, so http(s) anywhere is allowed: the
 /// isolation is the protection, not a list of sites. What is refused is everything that is OURS
 /// or local-file: the app's own schemes, files on disk, and the engine sidecar's port.
+///
+/// wry asks this for EVERY frame, not just the page (wkwebview/navigation.rs has no main-frame
+/// check). So the frames a page builds for itself must pass too: `about:srcdoc` and a `blob:` made
+/// by a web page. Cloudflare Turnstile loads both, and refusing them left Posh's sign-in on
+/// "Verifying you're not a robot…" forever (2026-11-23): the check never got to run. A blob is
+/// judged by the page that made it, so `blob:tauri://…` or one from the engine port stays refused.
 pub fn navigation_allowed(url: &Url, engine_port: Option<u16>) -> bool {
     match url.scheme() {
         "http" | "https" => {}
-        "about" => return url.as_str() == "about:blank",
+        "about" => return matches!(url.as_str(), "about:blank" | "about:srcdoc"),
+        "blob" => {
+            return Url::parse(url.path())
+                .ok()
+                .filter(|inner| matches!(inner.scheme(), "http" | "https"))
+                .is_some_and(|inner| navigation_allowed(&inner, engine_port))
+        }
         _ => return false, // tauri:, ipc:, asset:, file:, data:, javascript:, custom schemes
     }
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
@@ -802,6 +814,10 @@ mod tests {
             "http://example.com",
             "http://localhost:3000/",
             "about:blank",
+            // Frames a page builds itself (Cloudflare Turnstile on posh.vip uses both).
+            "about:srcdoc",
+            "blob:https://challenges.cloudflare.com/6f1c2d3e-0000-4000-8000-000000000000",
+            "blob:https://posh.vip/0d1e2f3a-0000-4000-8000-000000000000",
         ] {
             assert!(navigation_allowed(&u(s), Some(4096)), "{s} should be allowed");
         }
@@ -821,6 +837,11 @@ mod tests {
             "http://127.0.0.1:4096/session",
             "http://localhost:4096/",
             "about:config",
+            // A blob is judged by the page that made it.
+            "blob:tauri://localhost/0d1e2f3a-0000-4000-8000-000000000000",
+            "blob:http://tauri.localhost/0d1e2f3a-0000-4000-8000-000000000000",
+            "blob:http://127.0.0.1:4096/0d1e2f3a-0000-4000-8000-000000000000",
+            "blob:null/0d1e2f3a-0000-4000-8000-000000000000",
         ] {
             assert!(!navigation_allowed(&u(s), Some(4096)), "{s} should be refused");
         }

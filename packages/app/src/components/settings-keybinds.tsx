@@ -717,7 +717,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
                         classList={{
                           "settings-v2-keybind-button": props.v2,
                           "settings-v2-keybind-button--active": props.v2 && store.active === id,
-                          "h-8 px-3 rounded-md text-12-regular": !props.v2,
+                          "h-8 px-3 rounded-md text-13-regular": !props.v2,
                           "bg-surface-base text-text-subtle hover:bg-surface-raised-base-hover active:bg-surface-raised-base-active":
                             !props.v2 && store.active !== id,
                           "border border-border-weak-base bg-surface-inset-base text-text-weak":

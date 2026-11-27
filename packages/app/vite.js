@@ -1,9 +1,14 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
+import { join } from "node:path"
 import solidPlugin from "vite-plugin-solid"
 import tailwindcss from "@tailwindcss/vite"
 import { fileURLToPath } from "url"
 
 const theme = fileURLToPath(new URL("./public/oc-theme-preload.js", import.meta.url))
+const fontDir = fileURLToPath(new URL("./public/assets", import.meta.url))
+/** True when the host serves packages/app/public itself (then vite copies the fonts already). */
+let ownPublic = false
+const fonts = () => readdirSync(fontDir).filter((name) => name.endsWith(".woff2"))
 
 /**
  * THE OLDEST WEBKIT WE DRAW IN (#191625). On macOS the desktop app renders in the system WebKit,
@@ -50,6 +55,29 @@ export default [
           // "esnext" — lowering nothing. Measured: the bundle kept all 42 light-dark() without it.
           cssTarget: "safari16",
         },
+      }
+    },
+  },
+  {
+    // The fonts live in packages/app/public/assets. Hosts with their own public dir (packages/desktop)
+    // get them too, at the same /assets/<name> URL the @font-face rules use (#194375).
+    name: "opencode-desktop:fonts",
+    configResolved(config) {
+      ownPublic = config.publicDir === fileURLToPath(new URL("./public", import.meta.url))
+    },
+    configureServer(server) {
+      if (ownPublic) return
+      server.middlewares.use((req, res, next) => {
+        const name = req.url?.match(/^\/assets\/([\w.-]+\.woff2)$/)?.[1]
+        if (!name || !fonts().includes(name)) return next()
+        res.setHeader("content-type", "font/woff2")
+        res.end(readFileSync(join(fontDir, name)))
+      })
+    },
+    generateBundle() {
+      if (ownPublic) return
+      for (const name of fonts()) {
+        this.emitFile({ type: "asset", fileName: `assets/${name}`, source: readFileSync(join(fontDir, name)) })
       }
     },
   },

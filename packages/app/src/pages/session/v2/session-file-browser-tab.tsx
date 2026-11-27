@@ -125,7 +125,7 @@ export function SessionFileBrowserTab(props: {
             <Show
               when={!loading()}
               fallback={
-                <div role="status" class="px-2 py-2 text-12-regular text-text-weak">
+                <div role="status" class="px-2 py-2 text-13-regular text-text-weak">
                   {language.t("common.loading")}
                   {language.t("common.loading.ellipsis")}
                 </div>
@@ -134,7 +134,7 @@ export function SessionFileBrowserTab(props: {
               <Show
                 when={files().length > 0}
                 fallback={
-                  <div role="status" class="px-2 py-2 text-12-regular text-text-weak">
+                  <div role="status" class="px-2 py-2 text-13-regular text-text-weak">
                     {language.t("palette.empty")}
                   </div>
                 }

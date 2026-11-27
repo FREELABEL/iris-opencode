@@ -86,6 +86,8 @@ import {
   outputOf,
   sameGroups,
 } from "./part-group"
+import { actionParts, toolActionCard } from "./tool-action-card"
+export { registerToolActionCard, type ToolActionCardEntry } from "./tool-action-card"
 export {
   gateMarkText,
   gateSummary,
@@ -1069,6 +1071,9 @@ export function ContextToolGroup(props: {
   // A commands row: every call in it is a shell command or an IRIS call (#188457, #189316).
   const commands = createMemo(() => props.parts.length > 0 && props.parts.every(isCommandTool))
   const cmd = createMemo(() => commandsSummary(props.parts))
+  // Writes the person should see without opening the row (#194362), drawn as cards under it.
+  const writes = createMemo(() => (commands() ? actionParts(props.parts) : []))
+  const onlyWrites = () => writes().length > 0 && writes().length === props.parts.length && !pending() && !(props.gate?.held ?? 0) && !props.parts.some((p) => failedCall(p))
   const [shown, setShown] = createSignal<Record<string, boolean>>({})
   const handleOpenChange = (value: boolean) => {
     if (props.open === undefined) setLocalOpen(value)
@@ -1081,6 +1086,9 @@ export function ContextToolGroup(props: {
       : i18n.t(cmd().ran === 1 ? "ui.messagePart.commands.one" : "ui.messagePart.commands.other", { count: cmd().ran })
 
   return (
+    <>
+    {/* A row of nothing but writes is said by its cards; the command is inside each one. */}
+    <Show when={!onlyWrites()}>
     <Collapsible
       open={open()}
       onOpenChange={handleOpenChange}
@@ -1258,6 +1266,13 @@ export function ContextToolGroup(props: {
         </div>
       </Collapsible.Content>
     </Collapsible>
+    </Show>
+    <Show when={writes().length > 0}>
+      <div data-slot="context-tool-group-actions">
+        <For each={writes()}>{(part) => <Dynamic component={toolActionCard()!.render} part={part} />}</For>
+      </div>
+    </Show>
+    </>
   )
 }
 
@@ -1453,17 +1468,17 @@ export function UserMessageDisplay(props: {
           <Show when={metaHead() || metaTail()}>
             <span data-slot="user-message-meta-wrap">
               <Show when={metaHead()}>
-                <span data-slot="user-message-meta" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta" class="text-13-regular text-text-weak cursor-default">
                   {metaHead()}
                 </span>
               </Show>
               <Show when={metaHead() && metaTail()}>
-                <span data-slot="user-message-meta-sep" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta-sep" class="text-13-regular text-text-weak cursor-default">
                   {"\u00A0\u00B7\u00A0"}
                 </span>
               </Show>
               <Show when={metaTail()}>
-                <span data-slot="user-message-meta-tail" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta-tail" class="text-13-regular text-text-weak cursor-default">
                   {metaTail()}
                 </span>
               </Show>
@@ -1760,7 +1775,7 @@ export function MessageDivider(props: { label: string }) {
     <div data-component="compaction-part">
       <div data-slot="compaction-part-divider">
         <span data-slot="compaction-part-line" />
-        <span data-slot="compaction-part-label" class="text-12-regular text-text-weak">
+        <span data-slot="compaction-part-label" class="text-13-regular text-text-weak">
           {props.label}
         </span>
         <span data-slot="compaction-part-line" />
@@ -1890,7 +1905,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
               })}
             />
             <Show when={meta()}>
-              <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+              <span data-slot="text-part-meta" class="text-13-regular text-text-weak cursor-default">
                 {meta()}
               </span>
             </Show>

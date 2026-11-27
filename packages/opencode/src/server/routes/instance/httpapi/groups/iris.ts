@@ -663,6 +663,17 @@ const InboxResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisInboxResponse" })
 
+// #194315: Home's "Today · across your projects", written from board items AND every machine's sessions.
+const HomeRecapResponse = Schema.Struct({
+  ...Measured,
+  text: described(Schema.NullOr(Schema.String), "The paragraph. NULL when nothing happened today, it is off, or the model failed — Home then keeps its counted sentence."),
+  model: Schema.NullOr(Schema.String),
+  generatedAt: Schema.NullOr(Schema.String),
+  items: described(Schema.Finite, "Board items changed today that it was written from"),
+  sessions: described(Schema.Finite, "Sessions active today that it was written from, every machine and agent"),
+  agents: described(Schema.Array(Schema.String), "The coding agents those sessions ran in"),
+})
+
 const RecentResponse = Schema.Struct({
   ...Measured,
   ...Paged,
@@ -808,6 +819,14 @@ const LeadsResponse = Schema.Struct({
       createdAt: Schema.optional(Schema.String),
       repliedAt: Schema.optional(Schema.Boolean),
       keywords: Schema.optional(Schema.String),
+      bid: Schema.optional(described(Schema.Finite, "Deal value in money (fl-api price_bid). Absent when the lead has none.")),
+      noteCount: Schema.optional(Schema.Finite),
+      latestNote: Schema.optional(
+        described(
+          Schema.Struct({ text: Schema.String, createdAt: Schema.optional(Schema.String) }),
+          "The newest note a person wrote on the lead (system lines skipped), cut to 280 characters.",
+        ),
+      ),
     }).annotate({ identifier: "IrisLead" }),
   ),
 }).annotate({ identifier: "IrisLeadsResponse" })
@@ -2019,6 +2038,7 @@ export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
   recent: `${root}/recent`,
+  homeRecap: `${root}/home/recap`,
   inbox: `${root}/inbox`,
   inboxMessage: `${root}/inbox/:index`,
   inboxRead: `${root}/inbox/:index/read`,
@@ -2237,6 +2257,19 @@ export const PanelStatePayload = Schema.Struct({
   url: Schema.optional(Schema.String),
   card: Schema.optional(Schema.Struct({ id: Schema.Finite, bloq: Schema.optional(Schema.Finite) })),
   dataset: Schema.optional(Schema.Struct({ slug: Schema.String, bloq: Schema.optional(Schema.Finite) })),
+  script: Schema.optional(
+    described(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        slug: Schema.String,
+        shared: Schema.optional(Schema.Boolean),
+        computer: Schema.optional(Schema.String),
+        taskId: Schema.optional(Schema.String),
+        error: Schema.optional(Schema.String),
+      }),
+      "Hive › Scripts (#194084): the script a side_panel script command selected, and the task its Run started, or why not.",
+    ),
+  ),
   catalog: Schema.optional(PanelCatalog),
   ack: Schema.optional(described(Schema.String, "The id of the iris.panel.command this report answers.")),
   error: Schema.optional(Schema.String),
@@ -2505,6 +2538,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Recent board items",
           description:
             "The account's most recently created or edited board items, newest first, across every board (Home › Activity). iris-api's Atlas search with an empty query.",
+        }),
+      ),
+      HttpApiEndpoint.get("homeRecap", IrisPaths.homeRecap, {
+        success: described(HomeRecapResponse, "Today across your projects, as one paragraph"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.homeRecap",
+          summary: "Today across your projects",
+          description:
+            "One paragraph about today, written by a model (IRIS_HOME_RECAP_MODEL, default claude-haiku-5-5) from today's board items and today's sessions on every machine, with their digests. Cached per day; written again at most every 15 minutes, and only when the inputs changed.",
         }),
       ),
       HttpApiEndpoint.get("inbox", IrisPaths.inbox, {

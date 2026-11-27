@@ -34,6 +34,8 @@ import "@/components/session/genesis-artifact-card"
 import "@/components/session/atlas-artifact-card"
 // …and the `atlas_epic` card: a multi-list plan, saved to Atlas. Its buttons fill the composer; they never send.
 import "@/components/session/atlas-epic-card"
+// Agent writes to IRIS read as cards under the commands row (#194362).
+import "@/components/session/iris-action-card"
 import { useLinksOpenInPanel } from "@/components/session/web-link-intercept"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
@@ -1163,7 +1165,7 @@ export function MessageTimeline(props: {
                             )}
                           </Show>
                         </div>
-                        <div class="pt-1 text-12-regular text-text-strong whitespace-pre-wrap break-words">
+                        <div class="pt-1 text-13-regular text-text-strong whitespace-pre-wrap break-words">
                           {comment().comment}
                         </div>
                       </div>
@@ -1641,7 +1643,7 @@ export function MessageTimeline(props: {
                                         {(pin) => (
                                           <DropdownMenu.Item data-pin-id={pin.id} onSelect={() => jumpToPin(pin)}>
                                             <div class="flex flex-col min-w-0">
-                                              <span class="truncate text-12-regular text-text-strong">{pin.text}</span>
+                                              <span class="truncate text-13-regular text-text-strong">{pin.text}</span>
                                               <Show when={pin.time}>
                                                 <span class="text-11-regular text-text-weak">{pinTime(pin.time)}</span>
                                               </Show>
@@ -1890,7 +1892,7 @@ export function MessageTimeline(props: {
                                     <div class="text-13-medium text-text-strong">
                                       {language.t("session.share.popover.title")}
                                     </div>
-                                    <div class="text-12-regular text-text-weak">
+                                    <div class="text-13-regular text-text-weak">
                                       {shareUrl()
                                         ? language.t("session.share.popover.description.shared")
                                         : language.t("session.share.popover.description.unshared")}

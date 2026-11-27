@@ -2,10 +2,15 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import "./iris-leads.css"
 import "./iris-leads-tab.css"
 import { LeadDetail, leadsCall, type Fetch } from "./iris-leads"
-import { displayName, humanDate, initials, moneyLine, noteCount, readList, type LeadRow } from "./iris-leads-model"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { displayName, readList, type LeadRow } from "./iris-leads-model"
+import { LeadsListRow, LeadsPipeline } from "./iris-leads-list"
+import { pipeline } from "./iris-leads-list-model"
+import { rememberIrisNames } from "./iris-names"
 import {
   activeFilterCount,
-  bandOf,
   bandQuery,
   BANDS,
   healthScore,
@@ -16,12 +21,12 @@ import {
   showingLine,
   sqlTime,
   stagesOf,
-  toneOf,
   type Band,
   type LeadsFilters,
 } from "./iris-leads-tab-model"
 import { inReviewCount, type ReviewBatch } from "./iris-reachr-review-model"
 import { setSurfaceCount, surfaceCount } from "./iris-surface-store"
+import { useLanguage } from "@/context/language"
 
 /**
  * "Open in Leads" from somewhere else (#192688: the Inbox). The request waits here until the Leads
@@ -56,15 +61,19 @@ const Icon = (p: { d: string; title?: string }) => (
     <path d={p.d} />
   </svg>
 )
-const MAIL = "M4 6h16v12H4zM4 7l8 6 8-6"
-const PHONE = "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"
-const AT = "M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"
 const REFRESH = "M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"
 const FILTER = "M3 5h18M6 12h12M10 19h4"
 const COLUMNS = "M3 4h18v16H3zM9 4v16"
 const CLOSE = "M18 6 6 18M6 6l12 12"
 
-export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsApproval: () => void }) {
+export function IrisLeadsTab(props: {
+  doFetch: Fetch
+  bloqId?: number
+  onNeedsApproval: () => void
+  /** Moves when the agent in this chat changed IRIS data (#194361): the list and stats re-read. */
+  refreshKey?: () => unknown
+}) {
+  const language = useLanguage()
   const call = leadsCall(props.doFetch)
   const [filters, setFilters] = createSignal<LeadsFilters>({ ...NO_FILTERS })
   const patch = (p: Partial<LeadsFilters>) => setFilters({ ...filters(), ...p })
@@ -160,6 +169,7 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
     if (failed) return setError(failed.reason ?? "Couldn't read leads")
     const found = mergePages(answers.map((r) => readList(r.data)), f.sort, f.order)
     setRows(p === 1 ? found.rows : [...rows(), ...found.rows])
+    rememberIrisNames({ leads: found.rows.map((r) => ({ id: r.id, name: displayName(r) })) })
     setListTotal(found.total)
     setLastPage(found.lastPage)
     setPage(p)
@@ -172,6 +182,7 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
     void readStats()
     void load(1)
   }
+  createEffect(on(() => props.refreshKey?.(), () => refresh(), { defer: true }))
 
   // ── Selection: one lead open in the side panel; any number checked for bulk actions ──
   const [open, setOpen] = createSignal<LeadRow>()
@@ -313,25 +324,6 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
                 </button>
               )}
             </For>
-
-            <Show when={stages()?.length}>
-              <div class="iris-lt-grp">Stages</div>
-              <For each={stages()}>
-                {(s) => (
-                  <button
-                    type="button"
-                    class="iris-lt-row"
-                    data-on={filters().stage?.status === s.status ? "" : undefined}
-                    title={s.statuses.length > 1 ? `Spelled ${s.statuses.map((x) => `"${x}"`).join(", ")}` : undefined}
-                    onClick={() => patch({ stage: filters().stage?.status === s.status ? undefined : { status: s.status, statuses: s.statuses } })}
-                  >
-                    <span class="dot" data-tone={toneOf(s.status)} />
-                    <span class="nm">{s.status}</span>
-                    <span class="ct">{s.count.toLocaleString()}</span>
-                  </button>
-                )}
-              </For>
-            </Show>
           </aside>
         </Show>
 
@@ -383,75 +375,54 @@ export function IrisLeadsTab(props: { doFetch: Fetch; bloqId?: number; onNeedsAp
           </Show>
 
           <div class="iris-lt-scroll">
-            <table class="iris-lt-table">
-              <thead>
-                <tr>
-                  <th class="cb">
-                    <input type="checkbox" aria-label="Select all shown" checked={allChecked()} ref={(el) => createEffect(() => (el.indeterminate = checked().size > 0 && !allChecked()))} onChange={toggleAll} />
-                  </th>
-                  <th>Name</th>
-                  <th class="when">Last updated</th>
-                  <th class="st">Status</th>
-                  <th class="val">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For
-                  each={rows()}
-                  fallback={
-                    <tr>
-                      <td colSpan={5} class="iris-lt-empty">
-                        {loading() ? "Loading…" : activeFilterCount(filters()) || filters().search ? "No leads match these filters" : "No leads on this board yet"}
-                      </td>
-                    </tr>
-                  }
-                >
-                  {(l) => {
-                    const band = bandOf(l.updated_at, Date.now())
-                    const ig = (l as any).contact_info?.instagram as string | undefined
-                    return (
-                      <tr data-slot="iris-lead-row" aria-current={open()?.id === l.id || undefined} onClick={() => (setOpenTab(undefined), setOpen(l))}>
-                        <td class="cb" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" aria-label={`Select ${displayName(l)}`} checked={checked().has(l.id)} onChange={() => toggleCheck(l.id)} />
-                        </td>
-                        <td class="name">
-                          <div class="who">
-                            <span class="iris-lt-av">{initials(l)}</span>
-                            <span class="nm">{displayName(l)}</span>
-                          </div>
-                          <div class="meta">
-                            <Show when={l.email}><Icon d={MAIL} title={l.email!} /></Show>
-                            <Show when={l.phone}><Icon d={PHONE} title={l.phone!} /></Show>
-                            <Show when={ig}><Icon d={AT} title={`@${ig}`} /></Show>
-                            <Show when={l.has_replied}><span class="tag" data-tone="good">Replied</span></Show>
-                            <Show when={l.has_user_account}><span class="tag">User</span></Show>
-                            <For each={(l.tags ?? []).slice(0, 2)}>{(t) => <span class="tag">{t.name}</span>}</For>
-                            <Show when={(l.tags ?? []).length > 2}><span class="more">+{(l.tags ?? []).length - 2}</span></Show>
-                          </div>
-                        </td>
-                        <td class="when">
-                          <div>{humanDate(l.updated_at)}</div>
-                          <Show when={band}>{(b) => <span class="band" data-band={b()}>{BANDS.find((x) => x.id === b())!.label}</span>}</Show>
-                        </td>
-                        <td class="st">
-                          <Show when={l.status} fallback={<span class="none">—</span>}>
-                            <span class="pill" data-tone={toneOf(l.status)}>{l.status}</span>
-                          </Show>
-                          <div class="meta">
-                            <Show when={(l.outreach_total_count ?? 0) > 0}>
-                              <span title="Outreach steps done">{l.outreach_completed_count ?? 0}/{l.outreach_total_count}</span>
-                            </Show>
-                            <Show when={noteCount(l) > 0}><span title="Notes">{noteCount(l)} notes</span></Show>
-                            <Show when={(l.tasks_count ?? 0) > 0}><span title="Tasks">{l.tasks_count} tasks</span></Show>
-                          </div>
-                        </td>
-                        <td class="val">{moneyLine(l.price_bid) || <span class="none">—</span>}</td>
-                      </tr>
-                    )
-                  }}
-                </For>
-              </tbody>
-            </table>
+            <LeadsPipeline
+              stages={pipeline(rows(), { counts: stages(), complete: listTotal() !== undefined && rows().length >= listTotal()! })}
+              active={filters().stage?.status}
+              onPick={(status) => {
+                const s = stages()?.find((x) => x.status === status)
+                patch({ stage: status ? { status, statuses: s?.statuses ?? [status] } : undefined })
+              }}
+            />
+            <div class="iris-llist" role="list" aria-label="Leads">
+              <Show when={rows().length > 0}>
+                <div class="iris-llist__head">
+                  <input type="checkbox" aria-label="Select all shown" checked={allChecked()} ref={(el) => createEffect(() => (el.indeterminate = checked().size > 0 && !allChecked()))} onChange={toggleAll} />
+                  <span>{language.t("iris.leads.selectAll")}</span>
+                </div>
+              </Show>
+              <For
+                each={rows()}
+                fallback={
+                  <Show
+                    when={!loading()}
+                    fallback={<SkeletonRows rows={8} trailing label={language.t("iris.leads.loading")} />}
+                  >
+                    <EmptyState
+                      title={language.t(activeFilterCount(filters()) || filters().search ? "iris.leads.empty.filtered.title" : "iris.leads.empty.title")}
+                      description={
+                        activeFilterCount(filters()) || filters().search
+                          ? language.t("iris.leads.empty.filtered.body")
+                          : language.t("iris.leads.empty.body")
+                      }
+                      action={
+                        activeFilterCount(filters()) || filters().search ? (
+                          <Button size="small" onClick={() => { setInput(""); setFilters({ ...NO_FILTERS }) }}>{language.t("iris.leads.empty.filtered.action")}</Button>
+                        ) : undefined
+                      }
+                    />
+                  </Show>
+                }
+              >
+                {(l) => (
+                  <LeadsListRow
+                    lead={l}
+                    current={open()?.id === l.id}
+                    onOpen={() => (setOpenTab(undefined), setOpen(l))}
+                    selection={{ checked: checked().has(l.id), onToggle: () => toggleCheck(l.id), label: `Select ${displayName(l)}` }}
+                  />
+                )}
+              </For>
+            </div>
             <div class="iris-lt-pager">
               <span>{showingLine(rows().length, listTotal())}</span>
               <Show when={page() < lastPage()}>

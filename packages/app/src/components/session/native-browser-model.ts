@@ -128,3 +128,18 @@ export function nativeBrowserEnabled(storage: Pick<Storage, "getItem"> | undefin
     return true
   }
 }
+
+/**
+ * The Mac's web engine is too old for today's sites. The Browser pane is the system WebKit, the
+ * same engine as the installed Safari: on macOS 13 with Safari 16.6 LinkedIn's menus and its
+ * Easy Apply dialog drew with no background, open over the page (2026-11-23), and people blamed
+ * IRIS. The popover attribute arrived in Safari 17 and today's sites hide their menus with it, so
+ * a WebKit without it is the line. Asked of the app's own webview, which is that same engine.
+ * Only on a Mac: Windows' WebView2 updates itself, and the fix named here is Safari's update.
+ */
+export function outdatedMacEngine(env: { userAgent: string; hasPopover: boolean }): boolean {
+  return /Macintosh|Mac OS X/.test(env.userAgent) && !/Chrome\/|Firefox\//.test(env.userAgent) && !env.hasPopover
+}
+
+export const OUTDATED_ENGINE_NOTE =
+  "This Mac's web engine is out of date, so some sites will look broken here. Update Safari in System Settings › Software Update, then restart IRIS."

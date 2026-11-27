@@ -64,7 +64,7 @@ export function DialogReportCommand(props: { report: CommandReportInput; doFetch
             {(p) => (
               <div class="px-3 pb-3 flex flex-col gap-2">
                 <div class="text-13-medium text-text-strong">{p().title}</div>
-                <pre class="max-h-[140px] overflow-auto whitespace-pre-wrap text-12-regular text-text-weak font-mono">{p().description}</pre>
+                <pre class="max-h-[140px] overflow-auto whitespace-pre-wrap text-13-regular text-text-weak font-mono">{p().description}</pre>
               </div>
             )}
           </Show>

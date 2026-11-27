@@ -45,6 +45,7 @@ import { settled } from "@/utils/settled"
 import { IrisArtifacts } from "./iris-artifacts"
 import { IrisBrandKits } from "./iris-brand-kits"
 import { IrisAtlasArtifacts } from "./iris-atlas-artifacts"
+import { irisWritesKey } from "./iris-agent-writes"
 import { atlasNotes } from "./iris-atlas-artifacts-model"
 import {
   ACCOUNT_SURFACES,
@@ -70,7 +71,7 @@ import {
   visibleNavItems,
   type NavLayout,
 } from "./iris-nav-layout"
-import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard, setIrisOpenDataset } from "./iris-nav"
+import { irisNavRequest, clearIrisNav, setIrisPanelView, setIrisOpenCard, setIrisOpenDataset, focusHiveScript } from "./iris-nav"
 import {
   heldPayload,
   holdPayload,
@@ -161,6 +162,17 @@ import { dragHasFiles, uploadCardFiles } from "./iris-card-files"
 import { IrisDelegateRail } from "./iris-delegate-rail"
 import { slideCards } from "./iris-board-motion"
 import { useLanguage } from "@/context/language"
+import { usePrompt } from "@/context/prompt"
+import { DetailView } from "@opencode-ai/ui/detail-view"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { emptyCopy, type EmptyAction } from "./iris-empty-states"
+import { LeadsListRow } from "./iris-leads-list"
+import { stageTone } from "./iris-leads-list-model"
+import { rememberIrisNames } from "./iris-names"
+import { recordDetail } from "./iris-record-detail"
+import "./iris-ad-screens.css"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
 // Re-exported: the panel tests assert on these, and they were defined here before the card
@@ -361,11 +373,15 @@ function describeFields(
   if (surface === "leads")
     return {
       title: r.name,
+      // Value and the latest note first (#194358) — they were not in the payload at all.
       fields: fieldsOf([
-        ["id", r.id],
+        ["value", typeof r.bid === "number" ? `$${r.bid.toLocaleString()}` : undefined],
+        ["latest note", r.latestNote ? `${r.latestNote.text}${r.latestNote.createdAt ? ` (${relativeAge(r.latestNote.createdAt)})` : ""}` : undefined],
+        ["notes", r.noteCount || undefined],
         ["status", r.status],
         ["company", r.company],
         ["email", r.email],
+        ["id", r.id],
         ["score", r.score],
         ["hot", r.hot],
         ["type", r.type],
@@ -1470,6 +1486,16 @@ export function SessionIrisTab() {
   const navFocused = usePaneFocused()
   const dialog = useDialog()
   const language = useLanguage()
+  // "5 cards", not a bare "5" (#194370).
+  const cardCount = (n: number) =>
+    language.t(n === 1 ? "iris.atlas.cards.one" : "iris.atlas.cards.other", { count: n.toLocaleString("en-US") })
+  const prompt = (() => {
+    try {
+      return usePrompt()
+    } catch {
+      return undefined
+    }
+  })()
   const serverSDK = useServerSDK()
   const platform = usePlatform()
   /**
@@ -2163,6 +2189,12 @@ export function SessionIrisTab() {
       .catch(() => {})
   })
   const labelsInUse = createMemo(() => (pane() === "atlas" ? boardLabels(atlasBoard()) : []))
+  // The chat names what the agent touched by these (#194362): "Added … to Call today".
+  createEffect(() => {
+    if (pane() === "atlas") rememberIrisNames({ lists: rows() as AtlasList[] })
+    if (pane() === "leads") rememberIrisNames({ leads: rows() as any[] })
+    rememberIrisNames({ boards: settled(bloqs)?.bloqs ?? [] })
+  })
   const atlasRows = createMemo<AtlasList[]>((prev) =>
     pane() === "atlas" ? keepUnchanged(prev, applyAtlasView(atlasBoard(), atlasView(), now(), meId())) : [],
   )
@@ -2292,6 +2324,8 @@ export function SessionIrisTab() {
     return sig
   }
   const STATE_WORD = { done: "Done", in_progress: "In progress", blocked: "Blocked" } as const
+  // Colour only for exceptions (#192839 rule 1): a tinted StatusBadge, never an edge bar.
+  const STATE_TONE = { done: "success", in_progress: "accent", blocked: "critical" } as const
   /** A progress ring — drawn only from child links recorded as data, never as a guessed 0%. */
   const Ring = (p: { done: number; total: number; size?: number }) => {
     const size = () => p.size ?? 30
@@ -2829,6 +2863,33 @@ export function SessionIrisTab() {
         liveBaseline = { board, lists }
       },
     ),
+  )
+
+  /*
+   * THE AGENT CHANGED IRIS (#194361). It ran `iris bloqs create-list` in this chat and the board on
+   * screen stayed as it was until you clicked away and back. When a tool call that writes to IRIS
+   * finishes, re-read whatever the panel shows. Only NEW finished writes count — opening a chat
+   * with history, or switching chats, is not news (the key is a different list, not a longer one).
+   */
+  /** Panes that read their own data (Leads) re-read when this moves. */
+  const [agentWriteTick, setAgentWriteTick] = createSignal(0)
+  const agentWrites = createMemo(() => {
+    const id = navParams.id
+    if (!id || !dirSync) return ""
+    try {
+      const data = dirSync().data
+      return irisWritesKey((data.message[id] ?? []).flatMap((m: any) => (data.part[m.id] ?? []) as any[]))
+    } catch {
+      return ""
+    }
+  })
+  createEffect(
+    on(agentWrites, (key, prev) => {
+      if (prev === undefined || !key || key === prev) return
+      if (prev && !key.startsWith(prev + ",")) return
+      liveRefresh()
+      setAgentWriteTick((n) => n + 1)
+    }),
   )
 
   createEffect(
@@ -3657,6 +3718,22 @@ export function SessionIrisTab() {
    * Hive), with nothing on screen saying the click had registered. Now the tab and header change
    * at once and only the pane body shows "Loading…", in its own <Suspense> round the pane <Switch>.
    */
+  /** The next step an empty view offers (#194369). An "ask" puts a sentence in the chat box to finish. */
+  function runEmptyAction(kind: EmptyAction) {
+    if (kind === "add-list") return openComposer("list")
+    if (kind === "marketplace") return chooseSub("marketplace", "playbooks")
+    if (kind === "connect") return chooseSub("add", "integrations")
+    if (kind === "clear-search") {
+      setQuery("")
+      setApplied("")
+      return
+    }
+    const text = language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt")
+    if (!prompt) return
+    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
+  }
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -3699,6 +3776,8 @@ export function SessionIrisTab() {
         queueMicrotask(() => openCard(id))
       }
       if (req.schema) setWantDataset(req.schema)
+      // The agent's side_panel script (#194084): Hive › Scripts reads it once it is mounted.
+      if (req.script) focusHiveScript(req.script)
     })
     clearIrisNav()
   })
@@ -4232,6 +4311,8 @@ export function SessionIrisTab() {
             classList={{
               "pbf-title": openRow()!.pane === "playbooks",
               "pbf-slug": openRow()!.pane === "playbooks" && !playbookSlugLine(openRow()!.raw),
+              // The record's own header carries the title (#194363).
+              hidden: !!recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k),
             }}
             title={openRow()!.pane === "playbooks" ? openRow()!.raw?.name : undefined}
           >
@@ -4270,7 +4351,7 @@ export function SessionIrisTab() {
                 the WHOLE side panel — so clicking "Document" blanked everything to "Loading…" for
                 as long as the fetch took (`.latest` still suspends before the first value). Here
                 only the body waits; the title, tabs and back link stay put. */}
-            <Suspense fallback={<p class="text-12-regular text-text-weak py-2">Reading…</p>}>
+            <Suspense fallback={<p class="text-13-regular text-text-weak py-2">Reading…</p>}>
               <Switch>
                 <Match when={detailTab() === "info"}>
                   {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
@@ -4331,7 +4412,49 @@ export function SessionIrisTab() {
                       onConnect={() => void startConnect(String(openRow()!.raw.type))}
                     />
                   </Show>
-                  <Show when={openRow()!.command && openRow()!.pane !== "catalog" && openRow()!.pane !== "playbooks"}>
+                  {/* A LEAD OR AN AGENT IS READ AS A RECORD YOU ACT ON (#194363): badge, the facts that
+                    matter in plain words, real buttons. Ids and scores stay in the JSON tab. */}
+                  <Show when={recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k, p) => language.t(k as any, p))}>
+                    {(d) => (
+                      <DetailView
+                        data-slot="iris-record-detail"
+                        title={d().title}
+                        subtitle={d().subtitle}
+                        badge={d().badge ? <StatusBadge tone={d().badge!.tone}>{d().badge!.label}</StatusBadge> : undefined}
+                        facts={d().facts}
+                        actions={
+                          <>
+                            <Show when={openRow()!.pane === "agents" && openRow()!.raw?.id}>
+                              <Button
+                                size="small"
+                                variant="primary"
+                                onClick={() => {
+                                  const row = openRow()!.raw
+                                  setOpenRow(null)
+                                  setAgentEditor({ agentId: Number(row.id), row })
+                                }}
+                              >
+                                {language.t("iris.detail.edit")}
+                              </Button>
+                            </Show>
+                            <Show when={openRow()!.command}>
+                              <Button size="small" variant="ghost" onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}>
+                                {language.t("iris.detail.copyCommand")}
+                              </Button>
+                            </Show>
+                          </>
+                        }
+                      />
+                    )}
+                  </Show>
+                  <Show
+                    when={
+                      openRow()!.command &&
+                      openRow()!.pane !== "catalog" &&
+                      openRow()!.pane !== "playbooks" &&
+                      !recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k)
+                    }
+                  >
                     <button
                       type="button"
                       class="iris-command"
@@ -4343,13 +4466,18 @@ export function SessionIrisTab() {
                   </Show>
                   <dl
                     class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1"
-                    classList={{ hidden: openRow()!.pane === "catalog" || openRow()!.pane === "playbooks" }}
+                    classList={{
+                      hidden:
+                        openRow()!.pane === "catalog" ||
+                        openRow()!.pane === "playbooks" ||
+                        !!recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k) => k),
+                    }}
                   >
                     <For each={openRow()!.fields}>
                       {([k, v]) => (
                         <>
                           <dt class="text-11-regular text-text-weaker">{k}</dt>
-                          <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
+                          <dd class="text-13-regular text-text-base min-w-0 break-words">{v}</dd>
                         </>
                       )}
                     </For>
@@ -4376,7 +4504,7 @@ export function SessionIrisTab() {
                   <Show
                     when={openRow()!.raw?.url}
                     fallback={
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No public URL yet — this page is {openRow()!.raw?.status ?? "unpublished"}.
                       </p>
                     }
@@ -4405,10 +4533,10 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "edit"}>
                   <Switch>
                     <Match when={pageDoc.loading && !pageDoc.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading page…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading page…</p>
                     </Match>
                     <Match when={pageDoc.latest && !pageDoc.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load this page — {pageDoc.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
@@ -4464,15 +4592,15 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "tools"}>
                   <Switch>
                     <Match when={mcpTools.loading && !mcpTools.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                      <p class="text-13-regular text-text-weak py-2">Reading…</p>
                     </Match>
                     <Match when={mcpTools.error}>
-                      <p class="text-12-regular text-text-danger-base py-2">
+                      <p class="text-13-regular text-text-danger-base py-2">
                         {String(mcpTools.error?.message ?? mcpTools.error)}
                       </p>
                     </Match>
                     <Match when={(mcpTools.latest?.length ?? 0) === 0}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No tools.
                         {openRow()!.raw?.status === "connected"
                           ? ""
@@ -4484,7 +4612,7 @@ export function SessionIrisTab() {
                       <For each={mcpTools.latest}>
                         {(t) => (
                           <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
-                            <div class="font-mono text-12-regular text-text-base">{t.name}</div>
+                            <div class="font-mono text-13-regular text-text-base">{t.name}</div>
                             <Show when={t.description}>
                               {/* Clamped: some descriptions are a page of prose (iris_agent), and one
                                 of those pushes every other tool off the screen. Full text on hover. */}
@@ -4503,7 +4631,7 @@ export function SessionIrisTab() {
                   <Show
                     when={(openRow()!.raw?.steps?.length ?? 0) > 0 || (openRow()!.raw?.args?.length ?? 0) > 0}
                     fallback={
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         This playbook publishes no step summary. The Document tab has the real thing when it is
                         installed on this machine.
                       </p>
@@ -4537,7 +4665,7 @@ export function SessionIrisTab() {
                               {i() + 1}
                             </span>
                             <div class="min-w-0 flex-1">
-                              <p class="text-12-regular text-text-base">{st.title}</p>
+                              <p class="text-13-regular text-text-base">{st.title}</p>
                               <p class="font-mono text-11-regular text-text-weaker truncate">
                                 {st.id}
                                 {st.integrations?.length ? ` · ${st.integrations.join(", ")}` : ""}
@@ -4557,11 +4685,11 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "doc"}>
                   <Switch>
                     <Match when={playbookDoc.loading && !playbookDoc.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Reading…</p>
+                      <p class="text-13-regular text-text-weak py-2">Reading…</p>
                     </Match>
                     <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
                       {/* Neither copy exists: not installed here AND not published. */}
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         No document — this playbook is not installed on this machine and has not been published.
                         <br />
                         <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
@@ -4579,7 +4707,7 @@ export function SessionIrisTab() {
                         {playbookDoc.latest!.path}
                       </p>
                       <div
-                        class="iris-markdown text-12-regular"
+                        class="iris-markdown text-13-regular"
                         innerHTML={renderMarkdown(playbookDocBody(playbookDoc.latest!.content))}
                       />
                     </Match>
@@ -4593,17 +4721,17 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "tasks"}>
                   <Switch>
                     <Match when={agentTasks.loading && !agentTasks.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading tasks…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading tasks…</p>
                     </Match>
                     <Match when={agentTasks.latest && !agentTasks.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load tasks — {agentTasks.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
                     <Match when={(agentTasks.latest?.tasks?.length ?? 0) === 0}>
                       {/* A GENUINE zero, and it says what it means: attached to a board is not
                         the same as given something to do. */}
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Nothing assigned. This agent belongs to a board but has not been handed any work — assign an
                         item with <span class="font-mono text-11-regular">iris agents assign</span>.
                       </p>
@@ -4626,7 +4754,7 @@ export function SessionIrisTab() {
                             </span>
                             <div class="min-w-0 flex-1">
                               <p
-                                class="text-12-regular"
+                                class="text-13-regular"
                                 classList={{ "text-text-weak": t.done, "text-text-base": !t.done }}
                               >
                                 {t.title}
@@ -4671,15 +4799,15 @@ export function SessionIrisTab() {
                 <Match when={detailTab() === "records"}>
                   <Switch>
                     <Match when={records.loading && !records.latest}>
-                      <p class="text-12-regular text-text-weak py-2">Loading records…</p>
+                      <p class="text-13-regular text-text-weak py-2">Loading records…</p>
                     </Match>
                     <Match when={records.latest && !records.latest!.measured}>
-                      <p class="text-12-regular text-text-weak py-2">
+                      <p class="text-13-regular text-text-weak py-2">
                         Could not load records — {records.latest!.reason ?? "unknown"}.
                       </p>
                     </Match>
                     <Match when={(records.latest?.rows?.length ?? 0) === 0}>
-                      <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
+                      <p class="text-13-regular text-text-weak py-2">This dataset has no records.</p>
                     </Match>
                     <Match when={records.latest}>
                       {/* ABSENCE OF A PHI FLAG IS NOT A CLAIM OF SAFETY.
@@ -4837,12 +4965,8 @@ export function SessionIrisTab() {
             switch is immediate and only this box waits. See chooseSurface. */}
         <Suspense
           fallback={
-            <div
-              data-slot="iris-pane-loading"
-              class="flex h-full items-center justify-center text-12-regular text-text-weak py-6"
-            >
-              Loading…
-            </div>
+            // The shape of what is coming, not the word "Loading…" (#194371).
+            <SkeletonRows data-slot="iris-pane-loading" heading={pane() === "atlas"} rows={7} trailing label={language.t("iris.loading")} />
           }
         >
           <Switch>
@@ -4873,6 +4997,7 @@ export function SessionIrisTab() {
             <Match when={pane() === "leads-crm"}>
               <IrisLeadsTab
                 doFetch={doFetch}
+                refreshKey={agentWriteTick}
                 bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
                 onNeedsApproval={() => chooseSub("review", "leads")}
               />
@@ -5042,17 +5167,17 @@ export function SessionIrisTab() {
               />
             </Match>
             <Match when={view() === "loading"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
+              <p class="px-2 py-2 text-13-regular text-text-weak">Loading…</p>
             </Match>
 
             {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
             <Match when={view() === "unreachable"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 Could not reach IRIS — {settled(bloqs)?.reason ?? "unknown"}.
               </p>
             </Match>
             <Match when={view() === "surface-error"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.
               </p>
             </Match>
@@ -5061,13 +5186,13 @@ export function SessionIrisTab() {
               {/* Offline, the reason is "fl-api 503" — our word, not the reader's. The sync chip already
                 says Offline and what is waiting (#191003). */}
               <Show when={current()?.measured && current()?.reason && !(current() as any)?.offline}>
-                <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
+                <p class="px-2 pb-2 text-13-regular text-text-weak">{current()!.reason}</p>
               </Show>
 
               <Switch>
                 <Match when={pane() === "atlas"}>
                   <Show when={atlasRows().length === 0 && rows().length > 0}>
-                    <p class="px-2 py-2 text-12-regular text-text-weak">
+                    <p class="px-2 py-2 text-13-regular text-text-weak">
                       Nothing matches these filters.{" "}
                       <button
                         type="button"
@@ -5086,7 +5211,7 @@ export function SessionIrisTab() {
                   />
                   <Show when={moveNote()}>
                     {(note) => (
-                      <p class="px-2 pb-2 text-12-regular text-text-weak" role="status">
+                      <p class="px-2 pb-2 text-13-regular text-text-weak" role="status">
                         {note()}{" "}
                         <button type="button" class="underline cursor-pointer" onClick={() => setMoveNote(null)}>
                           Dismiss
@@ -5171,7 +5296,7 @@ export function SessionIrisTab() {
                                   onClick={() => toggleFold(list)}
                                 >
                                   <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
-                                  <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                                  <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
                                 </button>
                               </header>
                               <div class="iris-board__cards">
@@ -5200,7 +5325,7 @@ export function SessionIrisTab() {
                                         data-state={sigOf(item, list.name).state ?? undefined}
                                         {...fileDropHandlers(item.id)}
                                         draggable={canDrag() || delegateOpen()}
-                                        title={canDrag() ? "Open this card, or drag it to move it" : "Open this card"}
+                                        title={`${canDrag() ? "Open this card, or drag it to move it" : "Open this card"}${item.id > 0 ? ` · #${item.id}` : ""}`}
                                         onClick={() => openCard(item.id)}
                                         onContextMenu={(e) => {
                                           e.preventDefault()
@@ -5298,12 +5423,13 @@ export function SessionIrisTab() {
                                           )}
                                         </Show>
                                         <Show when={sigOf(item, list.name).epic}>
-                                          <span class="iris-board__kicker font-mono">
-                                            EPIC {item.id < 0 ? "" : `#${item.id}`}
+                                          {/* No internal id on the card face (#194370): the epic id is in the tooltip. */}
+                                          <span class="iris-board__kicker" title={item.id < 0 ? undefined : `Epic #${item.id}`}>
+                                            Epic
                                           </span>
                                         </Show>
                                         {/* Rule 6: the bracket prefix moves into a tag; the title clamps to 3 lines. */}
-                                        <span class="iris-board__title text-text-base" title={item.title}>
+                                        <span class="iris-board__title text-13-regular text-text-base" title={item.title}>
                                           <Show when={sigOf(item, list.name).tag}>
                                             {(tag) => <span class="iris-board__tag font-mono">{tag()}</span>}
                                           </Show>
@@ -5319,15 +5445,15 @@ export function SessionIrisTab() {
                                           <span class="iris-board__flags">
                                             <Show when={sigOf(item, list.name).state}>
                                               {(st) => (
-                                                <span class="iris-flag" data-state={st()}>
+                                                <StatusBadge tone={STATE_TONE[st()]} size="small">
                                                   {STATE_WORD[st()]}
-                                                </span>
+                                                </StatusBadge>
                                               )}
                                             </Show>
                                             <Show when={sigOf(item, list.name).loud && sigOf(item, list.name).priorityFrom === "title"}>
-                                              <span class="iris-flag" data-loud={sigOf(item, list.name).loud!}>
+                                              <StatusBadge tone={sigOf(item, list.name).loud === "urgent" ? "critical" : "warning"} size="small">
                                                 {sigOf(item, list.name).priority}
-                                              </span>
+                                              </StatusBadge>
                                             </Show>
                                           </span>
                                         </Show>
@@ -5364,9 +5490,10 @@ export function SessionIrisTab() {
                                               </span>
                                             )}
                                           </Show>
-                                          <span class="font-mono tabular-nums text-text-weaker ml-auto">
-                                            {item.id < 0 ? "new" : `#${item.id}`}
-                                          </span>
+                                          {/* No internal id on the card face (#194370): it is in the card itself, and c copies it. */}
+                                          <Show when={item.id < 0}>
+                                            <span class="font-mono tabular-nums text-text-weaker ml-auto">new</span>
+                                          </Show>
                                         </span>
                                       </div>
                                     </>
@@ -5394,7 +5521,7 @@ export function SessionIrisTab() {
                                 <For each={pendingCards().filter((p) => p.listId === list.id)}>
                                   {(p) => (
                                     <div class="iris-board__card iris-board__card--pending" aria-busy="true">
-                                      <span class="text-12-regular text-text-base">{p.title}</span>
+                                      <span class="text-13-regular text-text-base">{p.title}</span>
                                       <span class="iris-board__meta">saving…</span>
                                     </div>
                                   )}
@@ -5493,7 +5620,7 @@ export function SessionIrisTab() {
                                 ›
                               </span>
                               <h3 class="iris-atlas-list__title">{list.name}</h3>
-                              <span class="iris-atlas-list__count font-mono tabular-nums">{(list.total ?? list.items.length).toLocaleString("en-US")}</span>
+                              <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
                             </button>
                             <button
                               type="button"
@@ -5691,7 +5818,7 @@ export function SessionIrisTab() {
                         >
                           ●
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{a.name}</span>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
                           {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
                         </span>
@@ -5701,19 +5828,13 @@ export function SessionIrisTab() {
                 </Match>
 
                 <Match when={pane() === "leads"}>
+                  {/* The same row as the Leads tab (#194364): name, company, stage, value. */}
                   <For each={rows()}>
                     {(l) => (
-                      <button
-                        type="button"
-                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), l))}
-                      >
-                        <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
-                        <Show when={l.status}>
-                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
-                        </Show>
-                      </button>
+                      <LeadsListRow
+                        lead={{ id: l.id, name: l.name, company: l.company, status: l.status, price_bid: l.bid, updated_at: l.createdAt }}
+                        onOpen={() => setOpenRow(describeRow(pane(), l))}
+                      />
                     )}
                   </For>
                 </Match>
@@ -5736,7 +5857,7 @@ export function SessionIrisTab() {
                         >
                           {m.status === "connected" ? "●" : "○"}
                         </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{m.name}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1">{m.name}</span>
                         {/* The status is the whole point of the row — "failed" and "needs_auth" are
                           the two a person acts on. */}
                         <span class="font-mono text-11-regular text-text-weaker shrink-0">
@@ -5757,7 +5878,7 @@ export function SessionIrisTab() {
                       >
                         <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{p.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{p.name}</span>
                           <span class="block text-11-regular text-text-weaker truncate">
                             {p.inviter ? "you invited" : "invited you"}
                             {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
@@ -5791,7 +5912,7 @@ export function SessionIrisTab() {
                           >
                             {st.status === "published" ? "●" : "○"}
                           </span>
-                          <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
+                          <span class="text-13-regular text-text-base min-w-0 flex-1">{st.name}</span>
                           {/* The page count IS the reason a site exists. Leading with it says
                             what kind of thing this row is at a glance. */}
                           <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
@@ -5844,10 +5965,10 @@ export function SessionIrisTab() {
                     connected boards cluster, and the list is the only thing that can show a
                     board with no edges — 76% of them — which a force graph renders as absence. */}
                   <Show when={projectScope() && !project() && projectInterior.loading}>
-                    <p class="px-2 py-6 text-12-regular text-text-weak">Loading this board's graph…</p>
+                    <p class="px-2 py-6 text-13-regular text-text-weak">Loading this board's graph…</p>
                   </Show>
                   <Show when={projectScope() && project()?.measured === false}>
-                    <p class="px-2 py-6 text-12-regular text-text-weak">
+                    <p class="px-2 py-6 text-13-regular text-text-weak">
                       Not connected — this board's graph could not be read
                       {(project() as any)?.reason ? ` (${(project() as any).reason})` : ""}.
                     </p>
@@ -5909,7 +6030,7 @@ export function SessionIrisTab() {
                     failed load rather than the finding it is. Offer the way out instead. */}
                   <Show when={!projectScope() && graphBoardIsolated()}>
                     <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
-                      <p class="text-12-regular text-text-weak">Nothing links to this board yet.</p>
+                      <p class="text-13-regular text-text-weak">Nothing links to this board yet.</p>
                       <button type="button" class="iris-detailnav__item" onClick={() => chooseGraphScope("full")}>
                         Show the full atlas
                       </button>
@@ -5925,7 +6046,7 @@ export function SessionIrisTab() {
                         {(n) => (
                           <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
                             <div class="flex items-baseline gap-2">
-                              <span class="text-12-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
+                              <span class="text-13-regular text-text-base min-w-0 flex-1 truncate">{n.name}</span>
                               <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
                                 {n.degree}
                               </span>
@@ -5979,7 +6100,7 @@ export function SessionIrisTab() {
                           <span class="iris-int__fallback">{providerMark(c.type, c.name)}</span>
                         </span>
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{c.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{c.name}</span>
                           {/* The one-line description the registry leads with. Without it the list
                             is 79 brand names and no way to tell what any of them would do. */}
                           <Show when={c.description}>
@@ -6061,7 +6182,7 @@ export function SessionIrisTab() {
                           <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
                         </span>
                         <span class="min-w-0 flex-1">
-                          <span class="block text-12-regular text-text-base truncate">{i.name}</span>
+                          <span class="block text-13-regular text-text-base truncate">{i.name}</span>
                           {/* An error says WHY here. A red mark with no reason is not actionable. */}
                           <Show when={i.lastError}>
                             <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
@@ -6086,7 +6207,7 @@ export function SessionIrisTab() {
                         onClick={() => setOpenRow(describeRow(pane(), sc))}
                       >
                         <div class="flex items-baseline gap-2">
-                          <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
+                          <span class="text-13-regular text-text-base min-w-0 flex-1">{sc.name}</span>
                           {/* Scope is shown because 40 of these belong to the account, not the
                             board — hiding that would put account-wide schemas under a board
                             heading, which is the Pages bug again. */}
@@ -6113,22 +6234,17 @@ export function SessionIrisTab() {
                     {(pg) => (
                       <button
                         type="button"
-                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
+                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
                         onClick={() => setOpenRow(describeRow(pane(), pg))}
                       >
-                        <span
-                          class="shrink-0"
-                          classList={{
-                            "text-text-base": pg.status === "published",
-                            "text-text-weak": pg.status !== "published",
-                          }}
-                        >
-                          {pg.status === "published" ? "●" : "○"}
-                        </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
+                        <span class="text-13-regular text-text-base min-w-0 flex-1 truncate">{pg.title}</span>
                         <Show when={pg.slug}>
-                          <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
+                          <span class="font-mono text-11-regular text-text-weak shrink-0 truncate">/{pg.slug}</span>
                         </Show>
+                        {/* Draft or Published in words (#194372), not a hollow circle. */}
+                        <StatusBadge tone={pg.status === "published" ? "success" : "neutral"} size="small" class="shrink-0">
+                          {pg.status === "published" ? "Published" : pg.status === "draft" ? "Draft" : pg.status}
+                        </StatusBadge>
                       </button>
                     )}
                   </For>
@@ -6137,8 +6253,25 @@ export function SessionIrisTab() {
             </Match>
 
             {/* Only reachable when measured===true — a genuine empty surface. */}
+            <Match when={view() === "empty" && emptyCopy(pane(), applied() && SEARCH_PLACEHOLDER[pane()] ? applied() : undefined)}>
+              {(copy) => (
+                // What goes here and the one next step (#194369), not "Nothing in Atlas › Schemas".
+                <EmptyState
+                  data-slot="iris-empty"
+                  title={language.t(copy().title as any)}
+                  description={copy().body ? language.t(copy().body as any) : undefined}
+                  action={
+                    copy().action ? (
+                      <Button size="small" variant="secondary" onClick={() => runEmptyAction(copy().action!.kind)}>
+                        {language.t(copy().action!.label as any)}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              )}
+            </Match>
             <Match when={view() === "empty"}>
-              <p class="px-2 py-2 text-12-regular text-text-weak">
+              <p class="px-2 py-2 text-13-regular text-text-weak">
                 {/* "This board is empty" and "your search matched nothing" are different facts,
                   and the first one is alarming when it is not true. */}
                 <Show

@@ -152,7 +152,7 @@ export const Info = Schema.Struct({
         description: "Enable automatic compaction when context is full (default: true)",
       }),
       prune: Schema.optional(Schema.Boolean).annotate({
-        description: "Enable pruning of old tool outputs (default: false)",
+        description: "Enable pruning of old tool outputs (default: true)",
       }),
       tail_turns: Schema.optional(NonNegativeInt).annotate({
         description:
@@ -160,6 +160,10 @@ export const Info = Schema.Struct({
       }),
       preserve_recent_tokens: Schema.optional(NonNegativeInt).annotate({
         description: "Maximum number of tokens from recent turns to preserve verbatim after compaction",
+      }),
+      trigger_tokens: Schema.optional(NonNegativeInt).annotate({
+        description:
+          "Compact once a request reaches this many tokens, even when the model's context window is larger (default: 200000; 0 = only when the window is full). Every agent step resends the whole history, so a 1M-token window left to fill makes each step slower and costlier (#194083).",
       }),
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",

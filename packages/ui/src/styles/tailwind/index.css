@@ -45,8 +45,25 @@
   --text-lg: var(--font-size-large);
   --text-xl: var(--font-size-x-large);
 
+  /* Type scale (#194375): text-11 … text-24 set the size and its paired line-height. */
+  --text-11: var(--font-size-x-small);
+  --text-11--line-height: var(--font-size-x-small--line-height);
+  --text-12: var(--font-size-caption);
+  --text-12--line-height: var(--font-size-caption--line-height);
+  --text-13: var(--font-size-small);
+  --text-13--line-height: var(--font-size-small--line-height);
+  --text-14: var(--font-size-base);
+  --text-14--line-height: var(--font-size-base--line-height);
+  --text-16: var(--font-size-large);
+  --text-16--line-height: var(--font-size-large--line-height);
+  --text-20: var(--font-size-x-large);
+  --text-20--line-height: var(--font-size-x-large--line-height);
+  --text-24: var(--font-size-2x-large);
+  --text-24--line-height: var(--font-size-2x-large--line-height);
+
   --font-weight-regular: var(--font-weight-regular);
   --font-weight-medium: var(--font-weight-medium);
+  --font-weight-semibold: var(--font-weight-semibold);
 
   --leading-lg: var(--line-height-large);
   --leading-xl: var(--line-height-x-large);
@@ -61,6 +78,7 @@
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
   --radius-xl: 0.625rem;
+  --radius-2xl: 0.75rem;
 
   --shadow-xs: var(--shadow-xs);
   --shadow-md: var(--shadow-md);

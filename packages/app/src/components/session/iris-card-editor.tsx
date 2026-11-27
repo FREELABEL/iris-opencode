@@ -1603,11 +1603,11 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
     >
       <Switch>
         <Match when={doc.loading && !doc.latest}>
-          <p class="px-4 py-2 text-12-regular text-text-weak">Loading…</p>
+          <p class="px-4 py-2 text-13-regular text-text-weak">Loading…</p>
         </Match>
         {/* NOT MEASURED — never drawn as an empty card. */}
         <Match when={doc.latest && !doc.latest.measured}>
-          <p class="px-4 py-2 text-12-regular text-text-weak">Could not load this card — {doc.latest!.reason ?? "unknown"}.</p>
+          <p class="px-4 py-2 text-13-regular text-text-weak">Could not load this card — {doc.latest!.reason ?? "unknown"}.</p>
         </Match>
         <Match when={doc.latest?.measured}>
           <div class="iris-card__frame">
@@ -1846,7 +1846,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         )}
                       </Show>
                       <div class="iris-sec">
-                        <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="#3b82f6">
+                        <SideHead icon="subagent" count={assignees.latest?.measured ? memberChoices().filter((c) => c.assignedId != null).length : undefined} tint="var(--text-interactive-base)">
                           Assigned
                         </SideHead>
                         <MembersRow
@@ -1950,7 +1950,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="pin"
                           count={doc.latest!.labels.length || undefined}
-                          tint="#a855f7"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button
                               type="button"
@@ -2006,7 +2006,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="photo"
                           count={files.latest?.measured ? files.latest.files.length || undefined : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <label class="iris-sh__add" style={{ cursor: uploading() ? "default" : "pointer" }}>
                               {uploading() ? "Uploading…" : "+ Add"}
@@ -2049,7 +2049,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="checklist"
                           count={doc.latest!.tasksMeasured && doc.latest!.tasks.length ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
-                          tint="#3b82f6"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setSide("tasks")}>
                               {doc.latest!.tasks.length ? "View all" : "+ Add"}
@@ -2093,7 +2093,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="clock"
                           count={events.latest?.measured ? events.latest.events.length || undefined : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setEvOpen(!evOpen())}>
                               {evOpen() ? "Cancel" : "+ Add"}
@@ -2138,7 +2138,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="hand"
                           count={asks.latest?.measured ? asks.latest.asks.filter((a) => a.status === "open").length || undefined : undefined}
-                          tint="#f59e0b"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button type="button" class="iris-sh__add" onClick={() => setAskOpen(!askOpen())}>
                               {askOpen() ? "Cancel" : "+ Add"}
@@ -2228,7 +2228,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         <SideHead
                           icon="checklist"
                           count={doc.latest!.tasksMeasured && doc.latest!.tasks.length > 0 ? `${doc.latest!.tasks.filter((t) => t.done).length}/${doc.latest!.tasks.length}` : undefined}
-                          tint="#22c55e"
+                          tint="var(--text-interactive-base)"
                           right={
                             <button
                               type="button"
@@ -2247,7 +2247,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                         </SideHead>
                         <Show
                           when={doc.latest!.tasksMeasured}
-                          fallback={<p class="text-12-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
+                          fallback={<p class="text-13-regular text-text-weak">Could not read tasks — {doc.latest!.tasksReason ?? "unknown"}.</p>}
                         >
                           <Show when={doc.latest!.tasks.length > 0}>
                             <div class="iris-card__progressbar iris-tasks__bar" title={`${doc.latest!.tasks.filter((t) => t.done).length} of ${doc.latest!.tasks.length} done`}>

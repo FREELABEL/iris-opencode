@@ -107,6 +107,29 @@ export async function fetchHomeDashboard(
   ])
   return { ...parts, at: Date.now() }
 }
+/** Home's written "Today" paragraph (#194315, engine /iris/home/recap). Slow (a model call), so it is
+ * read on its own and never holds up the rest of Home. null = could not read it; Home keeps the
+ * counted sentence. */
+export type HomeRecap = {
+  measured: boolean
+  reason?: string
+  text: string | null
+  model: string | null
+  generatedAt: string | null
+  items: number
+  sessions: number
+  agents: string[]
+}
+export async function fetchHomeRecap(base: string, fetch: Fetch): Promise<HomeRecap | null> {
+  try {
+    const root = base.endsWith("/") ? base.slice(0, -1) : base
+    const res = await fetch(`${root}/iris/home/recap`, { headers: { Accept: "application/json" } })
+    return res.ok ? ((await res.json()) as HomeRecap) : null
+  } catch {
+    return null
+  }
+}
+
 export function keepGoodParts(prev: HomeDashboardData, next: HomeDashboardData): HomeDashboardData {
   const pick = <K extends Exclude<keyof HomeDashboardData, "at">>(k: K) => (FAILED.has(next[k]) ? prev[k] : next[k])
   return {

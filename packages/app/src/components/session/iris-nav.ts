@@ -19,6 +19,8 @@ export type IrisNavRequest = {
   itemId?: number
   /** Atlas › Schemas: open this dataset (schema slug) on its Records tab once the list has it. */
   schema?: string
+  /** Hive › Scripts: select this script and, with `run`, press Run — the agent's side_panel script (#194084). */
+  script?: HiveScriptRequest
   /**
    * The chat whose panel this is for (#191484). With chats side by side, every panel read this
    * one signal and all of them followed an agent's "show Hive". Unset — a titlebar pill, a card —
@@ -77,6 +79,21 @@ export const irisHiveNodeFocus = hiveNodeFocus
 export function focusHiveNode(id: string | null) {
   setHiveNodeFocus(id ? { id, nonce: Date.now() + Math.random() } : null)
 }
+
+/**
+ * Hive › Scripts, steered by the agent (#194084): which script, its settings, and whether to press
+ * Run. `id` is the panel command's — Scripts acts on each id once, however often it is re-asked.
+ */
+export type HiveScriptRequest = { id: string; slug: string; args?: Record<string, string>; run?: boolean; node?: string }
+const [hiveScriptFocus, setHiveScriptFocus] = createSignal<HiveScriptRequest | null>(null)
+export const irisHiveScriptFocus = hiveScriptFocus
+export const focusHiveScript = setHiveScriptFocus
+
+/** What Scripts did with that request: the script on screen, and the task its Run started, or why not. */
+export type HiveScriptReport = { id?: string; slug: string; shared?: boolean; computer?: string; taskId?: string; error?: string }
+const [hiveScript, setHiveScript] = createSignal<HiveScriptReport | undefined>()
+export const irisHiveScript = hiveScript
+export const setIrisHiveScript = setHiveScript
 
 /** Home › On your machines (#192626): the session Hive › Sessions should open, kept until it has it. */
 const [hiveSessionFocus, setHiveSessionFocus] = createSignal<{ nodeId: string; sessionId: string; nonce: number } | null>(null)

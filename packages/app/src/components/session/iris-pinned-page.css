@@ -21,11 +21,11 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
 }
 .iris-pinned__where b {
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   color: var(--text-base);
 }
 
@@ -58,7 +58,7 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
   background: var(--background-base);
 }
@@ -77,7 +77,7 @@
   align-items: center;
   gap: 8px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   color: var(--text-weak);
 }
 .iris-pinned__warn {
@@ -85,11 +85,11 @@
 }
 .iris-pinned__title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: var(--font-size-small);
 }
 .iris-pinned__reason {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--text-weaker);
   word-break: break-word;
 }
@@ -103,7 +103,7 @@
 .iris-pinned__signin {
   flex: none;
   margin-right: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-x-small);
   color: var(--icon-success-active, var(--text-weak));
 }
 .iris-pinned__signin--off {

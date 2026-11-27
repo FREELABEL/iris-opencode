@@ -87,7 +87,7 @@ export function SettingsServerPicker() {
                           status={global.servers.health[key]}
                           class="flex items-center gap-2 min-w-0 flex-1"
                           nameClass="text-14-regular text-text-base truncate"
-                          versionClass="text-12-regular text-text-weak truncate"
+                          versionClass="text-13-regular text-text-weak truncate"
                         />
                         <DropdownMenu.ItemIndicator>
                           <Icon name="check-small" size="small" class="text-icon-weak" />

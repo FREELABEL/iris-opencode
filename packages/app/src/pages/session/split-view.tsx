@@ -408,7 +408,7 @@ function SplitGhost(props: { next: () => PaneRef | undefined; inset: { top: numb
     >
       <div class="flex max-w-[85%] flex-col items-center gap-1 rounded-xl px-4 py-3 text-center bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
         <span class="max-w-full truncate text-14-medium text-text-strong">{title()}</span>
-        <span class="text-12-regular text-text-weak">{language.t("split.drop.opens")}</span>
+        <span class="text-13-regular text-text-weak">{language.t("split.drop.opens")}</span>
       </div>
     </div>
   )
@@ -429,7 +429,7 @@ function SplitDropZone(props: { state: () => DropState | undefined }) {
         <div class="pointer-events-none absolute inset-0 z-30" data-component="session-split-dropzone">
           <Show when={state().kind !== "drop"}>
             <div class="absolute inset-x-0 top-4 flex justify-center">
-              <div class="rounded-full px-3 py-1.5 text-12-medium text-text-strong bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
+              <div class="rounded-full px-3 py-1.5 text-13-medium text-text-strong bg-v2-background-bg-layer-01 shadow-[var(--v2-elevation-floating)]">
                 {language.t(`split.drop.${state().kind}` as "split.drop.full")}
               </div>
             </div>

@@ -357,7 +357,7 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
                         <Show when={props.newLayoutDesigns ? keybindParts().length > 0 : keybind()}>
                           <Show
                             when={props.newLayoutDesigns}
-                            fallback={<span class="text-12-regular text-text-subtle">{keybind()}</span>}
+                            fallback={<span class="text-13-regular text-text-subtle">{keybind()}</span>}
                           >
                             <KeybindV2 keys={keybindParts()} variant="neutral" />
                           </Show>

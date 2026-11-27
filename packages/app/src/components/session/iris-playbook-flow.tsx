@@ -171,8 +171,10 @@ export function PlaybookTags(props: { row: any; withState?: boolean }) {
       <Show when={props.withState && props.row?.hasLocal}>
         <span
           class="pbf-tag pbf-tag--state"
+          data-state={props.row.action === "update" ? "update" : "installed"}
           title={props.row.localWhere ? `Installed — ${props.row.localWhere}` : "Installed"}
         >
+          <Ic name={props.row.action === "update" ? "arrow-up" : "check"} size={13} />
           {props.row.action === "update" ? `Update · v${props.row.version}` : "Installed"}
         </span>
       </Show>
@@ -270,9 +272,11 @@ export function PlaybookFlowRow(props: { row: any; onOpen: () => void }) {
 
 /**
  * The list. NOT YOURS starts at the first row whose owner is not you — the server sorts owned
- * first — and is drawn once, as a heading, rather than badged on every row. It NAMES THE OWNER
- * rather than saying "not yours": on this account every one belongs to user 2945, the same
- * person's second login, and an account number is a fact they can act on.
+ * first — and is drawn once, as a heading, rather than badged on every row.
+ *
+ * It does NOT print the owner's account number (#194360). It used to, for one person with two
+ * logins; on every other account the marketplace is someone else's, and the heading showed the
+ * platform owner's user id to every customer. Another account's id is never shown.
  */
 export function PlaybookFlowList(props: {
   rows: any[]
@@ -288,8 +292,7 @@ export function PlaybookFlowList(props: {
           <>
             <Show when={!pb.owned && (i() === 0 || props.rows[i() - 1]?.owned)}>
               <h4 class="pbf-group">
-                Owned by another account
-                {pb.ownerUserId ? ` · #${pb.ownerUserId}` : ""} — you can run these, not edit them
+                Owned by another account — you can run these, not edit them
               </h4>
             </Show>
             <PlaybookFlowRow row={pb} onOpen={() => props.onOpen(pb)} />
@@ -379,7 +382,8 @@ export function PlaybookFlowInfo(props: {
       ["scope", r.scope],
       ["access", r.accessType],
       ["active", r.active == null ? undefined : String(r.active)],
-      ["owner", r.ownerUserId != null ? `#${r.ownerUserId}${r.owned ? " (you)" : ""}` : undefined],
+      // Yours or not — never another account's id (#194360).
+      ["owner", r.owned ? "you" : r.ownerUserId != null ? "another account" : undefined],
       ["landing page", r.publicUrl],
     ]
     return out.filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => [k, String(v)])
@@ -419,15 +423,21 @@ export function PlaybookFlowInfo(props: {
       </Show>
       <Show when={props.installResult}>
         {(r) => (
-          <p class="pbf-note" data-tone={r().ok ? undefined : "bad"}>
-            {r().message}
+          <p class="pbf-note pbf-note--result" data-tone={r().ok ? "good" : "bad"} role="status">
+            <Ic name={r().ok ? "check" : "circle-x"} size={14} />
+            <span>{r().message}</span>
           </p>
         )}
       </Show>
       <Show when={runNote()}>
-        <p class="pbf-note" data-slot="pbf-run-note">
-          {runNote() === "copied" ? "Copied — paste it into a terminal to run it: " : "Run this in a terminal: "}
-          <code>{runCommand()}</code>
+        <p class="pbf-note pbf-note--result" data-slot="pbf-run-note" data-tone={runNote() === "copied" ? "good" : undefined}>
+          <Show when={runNote() === "copied"}>
+            <Ic name="check" size={14} />
+          </Show>
+          <span>
+            {runNote() === "copied" ? "Copied — paste it into a terminal to run it: " : "Run this in a terminal: "}
+            <code>{runCommand()}</code>
+          </span>
         </p>
       </Show>
 

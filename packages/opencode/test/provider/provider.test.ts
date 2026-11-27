@@ -2169,3 +2169,104 @@ it.instance(
     },
   },
 )
+
+// #194085: OpenCode Go dropped kimi-k2.6 (and others). The server forwards the old ids, but the
+// manifest no longer lists them, so a saved selection failed locally as "Model unavailable"
+// before any request went out. getModel now resolves a retired id to its replacement.
+it.instance(
+  "iris: a retired model id resolves to the model that replaced it",
+  Effect.gen(function* () {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (url === "https://iris.test/api/v6/openai/models") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "iris/kimi-k2.7-code", name: "Kimi K2.7 Code", available: true },
+              { id: "iris/gemini-3.5-flash", name: "Gemini 3.5 Flash", available: true },
+            ],
+            // A retirement the desktop does not know yet arrives with the manifest.
+            retired: { "iris/gemini-2-flash": "iris/gemini-3.5-flash" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+    try {
+      const iris = ProviderV2.ID.make("iris")
+      const kimi = yield* Provider.use.getModel(iris, ModelV2.ID.make("kimi-k2.6"))
+      expect(String(kimi.id)).toBe("kimi-k2.7-code")
+      const gemini = yield* Provider.use.getModel(iris, ModelV2.ID.make("gemini-2-flash"))
+      expect(String(gemini.id)).toBe("gemini-3.5-flash")
+      // Retired, but its replacement is not offered here: still an error, not a wrong model.
+      const missing = yield* Provider.use.getModel(iris, ModelV2.ID.make("minimax-m2.7")).pipe(Effect.flip)
+      expect(missing._tag).toBe("ProviderModelNotFoundError")
+      // The retired ids are not offered in the picker.
+      const providers = yield* list
+      expect(Object.keys(providers[iris]!.models)).not.toContain("kimi-k2.6")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }),
+  {
+    config: {
+      provider: {
+        iris: {
+          name: "IRIS",
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://iris.test/api/v6/openai", apiKey: "test-key" },
+        },
+      },
+    },
+  },
+)
+
+// #194085: the bundled seed (and opencode.json files copied from it) still listed mimo-v2.5-go and
+// deepseek-v4-flash-go. Present in config, they stayed in the picker and went out under the
+// retired name instead of being forwarded.
+it.instance(
+  "iris: a retired id still in config is hidden and forwards to its replacement",
+  Effect.gen(function* () {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (url === "https://iris.test/api/v6/openai/models") {
+        return new Response(
+          JSON.stringify({ data: [{ id: "iris/mimo-v2.6-flash", name: "MiMo V2.6 Flash", available: true }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+    try {
+      const iris = ProviderV2.ID.make("iris")
+      const ids = Object.keys((yield* list)[iris]!.models)
+      expect(ids).not.toContain("mimo-v2.5-go")
+      // Retired, but its replacement is not served here: left alone rather than hidden.
+      expect(ids).toContain("deepseek-v4-flash-go")
+      expect(ids).toContain("my-own-model")
+      const mimo = yield* Provider.use.getModel(iris, ModelV2.ID.make("mimo-v2.5-go"))
+      expect(String(mimo.id)).toBe("mimo-v2.6-flash")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }),
+  {
+    config: {
+      provider: {
+        iris: {
+          name: "IRIS",
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://iris.test/api/v6/openai", apiKey: "test-key" },
+          models: {
+            "mimo-v2.5-go": { name: "MiMo V2.5 Go" },
+            "deepseek-v4-flash-go": { name: "DeepSeek V4 Flash Go" },
+            "my-own-model": { name: "Mine" },
+          },
+        },
+      },
+    },
+  },
+)

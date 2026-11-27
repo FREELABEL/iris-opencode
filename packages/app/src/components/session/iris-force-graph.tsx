@@ -103,10 +103,14 @@ const EDGE_STYLE: Record<string, { color: string; dash?: string }> = {
   feeds_into: { color: "#f97316" },
   mirrors: { color: "#ec4899", dash: "2,2" },
 }
-const edgeStyle = (t?: string) => (t ? EDGE_STYLE[t] : undefined) ?? { color: "#374151" }
+// An untyped edge is neutral, from the theme (#194375): #374151 was all but invisible on a dark panel.
+// var() in an SVG presentation attribute resolves like CSS, so it follows a theme switch live.
+const edgeStyle = (t?: string) => (t ? EDGE_STYLE[t] : undefined) ?? { color: "var(--v2-border-border-strong)" }
 
 /**
- * ELON'S 14-TYPE VOCABULARY, colours verbatim.
+ * ELON'S 14-TYPE VOCABULARY, colours verbatim — except three that did not read on both grounds
+ * (#194375): playbook and list yellow/lime were 1.5:1 on light paper (now the 600 steps), and
+ * cards' pale slate vanished on light (now the theme's muted text colour).
  *
  * This graph already spoke it without knowing: NODE_COLOR was "#6366f1", which is exactly
  * Elon's `bloq` colour. Every node here was a board, so the graph was the `bloq` layer of this
@@ -130,9 +134,9 @@ export const NODE_TYPES: Record<string, { label: string; color: string; icon: st
   program: { label: "Programs", color: "#fb923c", icon: "M3 9l9-4 9 4-9 4zM7 12v5c0 1 2 2 5 2s5-1 5-2v-5" },
   leadcluster: { label: "Lead Groups", color: "#f472b6", icon: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M15 20a6 6 0 0 1 6-6" },
   memory: { label: "Memory", color: "#a78bfa", icon: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" },
-  playbook: { label: "Playbooks", color: "#facc15", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
-  list: { label: "Lists", color: "#a3e635", icon: "M4 5h4v14H4zM10 5h4v14h-4zM16 5h4v14h-4z" },
-  item: { label: "Cards", color: "#cbd5e1", icon: "M5 4h14v11l-4 5H5zM19 15h-4v5" },
+  playbook: { label: "Playbooks", color: "#ca8a04", icon: "M4 5h7v15H4zM13 5h7v15h-7zM11 5v15" },
+  list: { label: "Lists", color: "#65a30d", icon: "M4 5h4v14H4zM10 5h4v14h-4zM16 5h4v14h-4z" },
+  item: { label: "Cards", color: "var(--v2-text-text-muted)", icon: "M5 4h14v11l-4 5H5zM19 15h-4v5" },
 }
 /*
  * ELON'S 14, PLUS `list` AND `item` — and `page` is still gone.
@@ -992,7 +996,7 @@ export function IrisForceGraph(props: {
       >
         <defs>
           <marker id="iris-arrow" viewBox="-0 -5 10 10" refX="28" refY="0" orient="auto" markerWidth="6" markerHeight="6">
-            <path d="M 0,-5 L 10,0 L 0,5" fill="#4b5563" />
+            <path d="M 0,-5 L 10,0 L 0,5" fill="var(--v2-text-text-faint)" />
           </marker>
         </defs>
         <g transform={`translate(${view().x},${view().y}) scale(${view().k})`}>
@@ -1024,9 +1028,9 @@ export function IrisForceGraph(props: {
                   y={(e.y1 + e.y2) / 2 - 3 * labelScale(view().k)}
                   text-anchor="middle"
                   font-size={String(9 * labelScale(view().k))}
-                  /* Elon's gray (#6b7280) — the edge colour itself is loud next to a tinted
-                     line and competes with the nodes; Elon's label is a caption, not a signal. */
-                  fill="#6b7280"
+                  /* A caption, not a signal (Elon's grey), from the theme so it reads light or dark.
+                     The edge colour itself is loud next to a tinted line and competes with the nodes. */
+                  fill="var(--v2-text-text-muted)"
                   style={{ "pointer-events": "none" }}
                 >
                   {edgeCaption(e)}

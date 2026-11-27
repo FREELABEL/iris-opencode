@@ -272,7 +272,10 @@ const layer = Layer.effect(
     // calls, then erases output of older tool calls to free context space
     const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
       const cfg = yield* config.get()
-      if (!cfg.compaction?.prune) return
+      // On unless switched off (#194083): old tool output (page snapshots, file reads) is the
+      // bulk of a long session and is resent on every step. Pruning clears it from the
+      // model's view only — the parts stay in the session for the transcript.
+      if (cfg.compaction?.prune === false) return
       yield* Effect.logInfo("pruning")
 
       const msgs = yield* session
