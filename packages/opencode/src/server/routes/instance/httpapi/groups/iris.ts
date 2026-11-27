@@ -1427,6 +1427,92 @@ const RoomMessageSchema = Schema.Struct({
   routing: Schema.optional(Schema.Literals(["mention", "room-default"])),
 }).annotate({ identifier: "IrisRoomMessage" })
 
+// ── Shared workspaces (#194307) ─────────────────────────────────────────────
+const SharedRightsSchema = Schema.Struct({
+  role: Schema.NullOr(Schema.String),
+  canPost: Schema.Boolean,
+  canStop: Schema.Boolean,
+  isOwner: Schema.Boolean,
+}).annotate({ identifier: "IrisSharedRights" })
+const SharedRoomSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  project: Schema.NullOr(Schema.Struct({ id: Schema.Finite, name: Schema.String })),
+  ownerName: Schema.NullOr(Schema.String),
+  you: SharedRightsSchema,
+  sessionIds: Schema.Array(Schema.String),
+  messageCount: Schema.optional(Schema.Finite),
+  updatedAt: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisSharedRoom" })
+const SharedMessageSchema = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["person", "agent", "event"]),
+  senderId: Schema.String,
+  senderName: Schema.String,
+  text: Schema.String,
+  at: Schema.String,
+  deliveredTo: Schema.Array(Schema.String),
+}).annotate({ identifier: "IrisSharedMessage" })
+const SessionStateSchema = Schema.Struct({
+  sessionId: Schema.String,
+  provider: Schema.NullOr(Schema.String),
+  machine: Schema.NullOr(Schema.String),
+  online: Schema.Boolean,
+  lastSeen: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisSharedSessionState" })
+const TranscriptEntrySchema = Schema.Struct({
+  role: Schema.Literals(["user", "assistant"]),
+  kind: Schema.Literals(["text", "tool"]),
+  text: Schema.String,
+  tool: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
+  at: Schema.String,
+}).annotate({ identifier: "IrisSharedTranscriptEntry" })
+const SharedTranscriptResponse = Schema.Struct({
+  ...Measured,
+  entries: Schema.Array(TranscriptEntrySchema),
+  offset: Schema.NullOr(Schema.Finite),
+  incremental: Schema.Boolean,
+  reset: Schema.Boolean,
+  ranOn: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisSharedTranscriptResponse" })
+const SharedRoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(SharedRoomSchema) }).annotate({
+  identifier: "IrisSharedRoomsResponse",
+})
+const SharedRoomResponse = Schema.Struct({
+  ...Measured,
+  room: Schema.NullOr(SharedRoomSchema),
+  messages: Schema.Array(SharedMessageSchema),
+  sessions: Schema.Array(SessionStateSchema),
+}).annotate({ identifier: "IrisSharedRoomResponse" })
+const SharedSayResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  result: Schema.optional(
+    Schema.Struct({
+      outcome: Schema.Literals(["delivered", "parked", "held", "saved"]),
+      delivered: Schema.Finite,
+      note: Schema.NullOr(Schema.String),
+      agentsNote: Schema.NullOr(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "IrisSharedSayResponse" })
+const SharedActionResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+  roomId: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisSharedActionResponse" })
+const SharedJoinResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  outcome: Schema.optional(Schema.Literals(["preview", "joined", "member", "check_email"])),
+  projectId: Schema.optional(Schema.Finite),
+  projectName: Schema.optional(Schema.String),
+  ownerName: Schema.optional(Schema.NullOr(Schema.String)),
+  role: Schema.optional(Schema.NullOr(Schema.String)),
+}).annotate({ identifier: "IrisSharedJoinResponse" })
+
 const RoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(RoomSchema) }).annotate({
   identifier: "IrisRoomsResponse",
 })
@@ -2183,6 +2269,15 @@ export const IrisPaths = {
   rooms: `${root}/rooms`,
   room: `${root}/rooms/:roomID`,
   roomMessages: `${root}/rooms/:roomID/messages`,
+  // Shared workspaces (#194307): rooms filed under an Atlas project.
+  sharedRooms: `${root}/shared-rooms`,
+  sharedRoom: `${root}/shared-rooms/:roomID`,
+  sharedRoomSay: `${root}/shared-rooms/:roomID/say`,
+  sharedRoomStop: `${root}/shared-rooms/:roomID/stop`,
+  sharedRoomUnshare: `${root}/shared-rooms/:roomID/unshare`,
+  sharedRoomShare: `${root}/shared-rooms/share`,
+  sharedRoomJoin: `${root}/shared-rooms/join`,
+  sharedRoomTranscript: `${root}/shared-rooms/:roomID/sessions/:sessionID/transcript`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
   hiveHere: `${root}/hive/here`,
@@ -3688,6 +3783,39 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Send a message to a room; @mention addresses agents",
         }),
       ),
+      HttpApiEndpoint.get("sharedRooms", IrisPaths.sharedRooms, {
+        success: described(SharedRoomsResponse, "Rooms shared with you through your Atlas projects (#194307)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRooms", summary: "Shared rooms" })),
+      HttpApiEndpoint.get("sharedRoom", IrisPaths.sharedRoom, {
+        params: { roomID: Schema.String },
+        success: described(SharedRoomResponse, "A shared room: its thread, your rights, and where its sessions run"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoom", summary: "A shared room" })),
+      HttpApiEndpoint.post("sharedRoomSay", IrisPaths.sharedRoomSay, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ text: Schema.String }),
+        success: described(SharedSayResponse, "Typed into the room's live session(s): delivered, parked, held or saved"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomSay", summary: "Type into a shared room" })),
+      HttpApiEndpoint.post("sharedRoomStop", IrisPaths.sharedRoomStop, {
+        params: { roomID: Schema.String },
+        success: described(SharedActionResponse, "Stop what the room's sessions are doing"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomStop", summary: "Stop a shared room" })),
+      HttpApiEndpoint.post("sharedRoomUnshare", IrisPaths.sharedRoomUnshare, {
+        params: { roomID: Schema.String },
+        success: described(SharedActionResponse, "Make the room personal again"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomUnshare", summary: "Stop sharing a room" })),
+      HttpApiEndpoint.get("sharedRoomTranscript", IrisPaths.sharedRoomTranscript, {
+        params: { roomID: Schema.String, sessionID: Schema.String },
+        query: Schema.Struct({ since: Schema.optional(Schema.String) }),
+        success: described(SharedTranscriptResponse, "The agent's side of a shared chat, read from the machine that runs it"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomTranscript", summary: "A shared chat's live transcript" })),
+      HttpApiEndpoint.post("sharedRoomShare", IrisPaths.sharedRoomShare, {
+        payload: Schema.Struct({ sessionId: Schema.String, projectId: Schema.Finite, name: Schema.String }),
+        success: described(SharedActionResponse, "Share one of this computer's chats with a project"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomShare", summary: "Share a chat with your team" })),
+      HttpApiEndpoint.post("sharedRoomJoin", IrisPaths.sharedRoomJoin, {
+        payload: Schema.Struct({ invite: Schema.String, preview: Schema.optional(Schema.Boolean) }),
+        success: described(SharedJoinResponse, "Join a team's project from an invite link, as the person signed in here"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomJoin", summary: "Join a shared workspace" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
         query: Schema.Struct({

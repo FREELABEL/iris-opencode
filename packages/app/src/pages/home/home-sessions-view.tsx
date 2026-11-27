@@ -18,6 +18,8 @@ import {
   type HomeSessionRecord,
   type OpenSessionOptions,
 } from "./home-sessions-controller"
+import { createHomeScope, HomeScopeBar, HomeSharedChats } from "./home-shared-chats"
+import { sharedRooms } from "@/components/session/iris-shared-store"
 
 const SHOW_HOME_SESSION_ARCHIVE = false
 const HOME_SECTION_LABEL = "text-v2-text-text-muted [font-weight:440]"
@@ -74,6 +76,8 @@ export type HomeSessionsViewProps = {
 }
 
 export function HomeSessionsView(props: HomeSessionsViewProps) {
+  // Shared workspaces (#194307): All · This computer · Shared.
+  const [scope, setScope] = createHomeScope()
   return (
     <section
       ref={props.onSetHoverTarget}
@@ -118,6 +122,11 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
         // Fill the drawer; on Home the dashboard sits above, so the list is only as tall as it is.
         classList={{ "min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]": !!props.compact }}
       >
+        <HomeScopeBar scope={scope} onScope={setScope} />
+        <Show when={scope() !== "local"}>
+          <HomeSharedChats scope={scope} />
+        </Show>
+        <Show when={scope() !== "shared"}>
         <Suspense
           fallback={
             <div class="pt-3">
@@ -128,10 +137,12 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
           <Show
             when={props.groups().length > 0}
             fallback={
-              <HomeSessionsEmpty
-                onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
-                language={props.language}
-              />
+              <Show when={!(scope() === "all" && sharedRooms().length > 0)}>
+                <HomeSessionsEmpty
+                  onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
+                  language={props.language}
+                />
+              </Show>
             }
           >
             <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
@@ -155,6 +166,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
             </div>
           </Show>
         </Suspense>
+        </Show>
       </div>
     </section>
   )

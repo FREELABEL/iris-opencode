@@ -81,6 +81,7 @@ import {
   syncLabel,
   syncOfPayload,
 } from "./iris-surface-store"
+import { IrisSharedRooms } from "./iris-shared-rooms"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisAgentGallery } from "./iris-agent-gallery"
@@ -755,6 +756,7 @@ const SCOPED_PANES = new Set(["pages", "agents"])
 const SELF_PANES = new Set([
   "agent-gallery",
   "rooms",
+  "shared-rooms",
   "artifacts",
   "atlas-artifacts",
   "agent-live",
@@ -883,6 +885,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "all", label: "Agents", pane: "agent-gallery", path: () => `/iris/agents/gallery` },
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
+    // Shared workspaces (#194307): live chats teammates shared with your projects.
+    { id: "shared", label: "Shared", pane: "shared-rooms", path: () => `/iris/shared-rooms` },
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
     // Every agent that runs on its own schedule (#189110): is it beating, did the last beat work,
     // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
@@ -1265,6 +1269,7 @@ const PANEL_HINTS: Record<string, string> = {
   "atlas/artifacts": "Atlas notes this conversation produced",
   agents: "The account's AI agents",
   "agents/all": "Every agent and person — filter, sort, open one to see it live",
+  "agents/shared": "Live chats your team shared with you — watch, type in, stop",
   "agents/rooms": "Group chats with several agents (@mention them)",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
   "agents/running": "Every agent working right now — who started whom, and each call it makes",
@@ -2181,7 +2186,8 @@ export function SessionIrisTab() {
   const [meId, setMeId] = createSignal<number | null>(null)
   let meAsked = false
   createEffect(() => {
-    if (pane() !== "atlas" || meAsked) return
+    // Shared rooms (#194307) need it too: "You" on your messages, and Stop for the turn you sent.
+    if ((pane() !== "atlas" && pane() !== "shared-rooms") || meAsked) return
     meAsked = true
     void doFetch("/iris/me")
       .then((r) => r.json())
@@ -4972,6 +4978,9 @@ export function SessionIrisTab() {
           <Switch>
             {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
               rooms, and "empty" must still show the New room button. */}
+            <Match when={pane() === "shared-rooms"}>
+              <IrisSharedRooms doFetch={doFetch} myId={meId()} />
+            </Match>
             <Match when={pane() === "rooms"}>
               <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
             </Match>
