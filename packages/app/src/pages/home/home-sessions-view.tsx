@@ -18,7 +18,7 @@ import {
   type HomeSessionRecord,
   type OpenSessionOptions,
 } from "./home-sessions-controller"
-import { createHomeScope, HomeScopeBar, HomeSharedChats } from "./home-shared-chats"
+import { createHomeScope, HomeSharedChats } from "./home-shared-chats"
 import { sharedRooms } from "@/components/session/iris-shared-store"
 
 const SHOW_HOME_SESSION_ARCHIVE = false
@@ -77,7 +77,9 @@ export type HomeSessionsViewProps = {
 
 export function HomeSessionsView(props: HomeSessionsViewProps) {
   // Shared workspaces (#194307): All · This computer · Shared.
-  const [scope, setScope] = createHomeScope()
+  // The compact drawer has no left column to change it, so it always shows every chat.
+  const [homeScope] = createHomeScope()
+  const scope = () => (props.compact ? "all" : homeScope())
   return (
     <section
       ref={props.onSetHoverTarget}
@@ -122,7 +124,6 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
         // Fill the drawer; on Home the dashboard sits above, so the list is only as tall as it is.
         classList={{ "min-h-[calc(100cqh-72px)] lg:min-h-[calc(100cqh-96px)]": !!props.compact }}
       >
-        <HomeScopeBar scope={scope} onScope={setScope} />
         <Show when={scope() !== "local"}>
           <HomeSharedChats scope={scope} />
         </Show>

@@ -9,8 +9,12 @@ import {
   firstName,
   groupByProject,
   initials,
-  mergeTimeline,
+  agentLabel,
+  facepile,
+  mergeRoomTimeline,
   sayNote,
+  typingLine,
+  type Presence,
   sessionLine,
   type SayResult,
   type SessionState,
@@ -18,7 +22,8 @@ import {
   type SharedRoom,
   type TranscriptEntry,
 } from "./iris-shared-rooms-model"
-import { setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
+import { canOpenRoomTab, openSharedRoom, setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
+import { DialogAddAgent } from "./dialog-add-agent"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogJoinTeam } from "./dialog-join-team"
 
@@ -33,7 +38,8 @@ import { DialogJoinTeam } from "./dialog-join-team"
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type ListPayload = { measured: boolean; reason?: string; rooms: SharedRoom[] }
-type RoomPayload = { measured: boolean; reason?: string; room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[] }
+type RoomPayload = { measured: boolean; reason?: string; room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[]; present?: Presence[] }
+type PresencePayload = { measured: boolean; reason?: string; present: Presence[] }
 type SayPayload = { ok: boolean; reason?: string; result?: SayResult }
 type ActionPayload = { ok: boolean; reason?: string; message?: string }
 type TranscriptPayload = { measured: boolean; reason?: string; entries: TranscriptEntry[]; offset: number | null; incremental: boolean; reset: boolean; ranOn: string | null }
@@ -99,7 +105,7 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
   // "Open this room" from anywhere else in the app (a chat's Shared marker, the share dialog).
   createEffect(
     on(sharedOpenRequest, (req) => {
-      if (req) choose(req.id)
+      if (req && !canOpenRoomTab()) choose(req.id)
     }),
   )
 
@@ -165,7 +171,7 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
                     {(r) => {
                       const active = () => !!r.updatedAt && Date.now() - new Date(r.updatedAt).getTime() < ACTIVE_MS
                       return (
-                        <button class="sr-row" onClick={() => choose(r.id)}>
+                        <button class="sr-row" onClick={() => (canOpenRoomTab() ? openSharedRoom(r.id, r.name) : choose(r.id))}>
                           <Avatar name={r.ownerName ?? "?"} />
                           <span class="sr-row-main">
                             <span class="sr-row-name">{r.name}</span>
@@ -193,84 +199,144 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
           </div>
         }
       >
-        {(id) => <Room id={id()} json={json} post={post} myId={props.myId ?? null} onBack={() => { choose(null); void refetch() }} />}
+        {(id) => (
+          <SharedRoomView
+            id={id()}
+            doFetch={props.doFetch}
+            myId={props.myId ?? null}
+            layout="panel"
+            onBack={() => {
+              choose(null)
+              void refetch()
+            }}
+          />
+        )}
       </Show>
     </div>
   )
 }
 
-function Room(props: {
+/**
+ * One shared room (#194463, #194465, #194466) — every person and every agent in it, live.
+ *
+ * `pane`: its own tab in the main chat area, like any chat. `panel`: inside the side panel (the old
+ * place, kept for the layout without tabs). Each agent in the room is followed from the computer
+ * that runs it and labelled with whose it is; what people type in the room reaches every agent,
+ * and is shown once. Who is here is a facepile; who is typing says so above the composer.
+ */
+export function SharedRoomView(props: {
   id: string
+  doFetch: Fetch
   myId: number | null
-  json: <T>(path: string, init?: RequestInit, fallback?: T) => Promise<T>
-  post: <T>(path: string, body: unknown, fallback: T) => Promise<T>
-  onBack: () => void
+  layout: "pane" | "panel"
+  onBack?: () => void
+  /** Told the room's name once it loads — the tab shows it. */
+  onRoom?: (name: string) => void
 }) {
-  const empty: RoomPayload = { measured: false, room: null, messages: [], sessions: [] }
+  const dialog = useDialog()
+  const json = async <T,>(path: string, init?: RequestInit, fallback?: T): Promise<T> => {
+    try {
+      const res = await props.doFetch(path, init)
+      return (await res.json()) as T
+    } catch (e) {
+      if (fallback !== undefined) return { ...(fallback as object), reason: e instanceof Error ? e.message : String(e) } as T
+      throw e
+    }
+  }
+  const post = <T,>(path: string, body: unknown, fallback: T) =>
+    json<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, fallback)
+  const base = () => `/iris/shared-rooms/${encodeURIComponent(props.id)}`
+
+  const empty: RoomPayload = { measured: false, room: null, messages: [], sessions: [], present: [] }
   const [data, setData] = createSignal<RoomPayload | null>(null)
   const [now, setNow] = createSignal(new Date())
   const [draft, setDraft] = createSignal("")
   const [busy, setBusy] = createSignal<"send" | "stop" | null>(null)
   const [note, setNote] = createSignal<{ tone: "good" | "warn" | "bad"; text: string } | null>(null)
-  const [chat, setChat] = createSignal<TranscriptEntry[]>([])
-  const [chatReason, setChatReason] = createSignal<string | null>(null)
+  const [chats, setChats] = createSignal<Record<string, TranscriptEntry[]>>({})
+  const [troubles, setTroubles] = createSignal<Record<string, string>>({})
   const [chatLoaded, setChatLoaded] = createSignal(false)
+  const [present, setPresent] = createSignal<Presence[]>([])
   let scroller: HTMLDivElement | undefined
   let lastCount = 0
-  let cursor: number | null = null
-  let following: string | null = null
+  const cursors = new Map<string, number>()
 
   const stickToBottom = (n: number) => {
     if (n !== lastCount && scroller) {
-      const near = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
+      const near = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
       if (near || lastCount === 0) queueMicrotask(() => scroller && (scroller.scrollTop = scroller.scrollHeight))
     }
     lastCount = n
   }
 
-  /** The agent's side: the first session's transcript, followed from a byte cursor. */
+  /** One agent's side, followed from its byte cursor, on the computer that runs it. */
   const readChat = async (sessionId: string) => {
-    if (following !== sessionId) {
-      following = sessionId
-      cursor = null
-      setChat([])
-      setChatLoaded(false)
-    }
-    const q = cursor !== null ? `?since=${cursor}` : ""
-    const t = await props.json<TranscriptPayload>(
-      `/iris/shared-rooms/${encodeURIComponent(props.id)}/sessions/${encodeURIComponent(sessionId)}/transcript${q}`,
+    const since = cursors.get(sessionId)
+    const t = await json<TranscriptPayload>(
+      `${base()}/sessions/${encodeURIComponent(sessionId)}/transcript${since !== undefined ? `?since=${since}` : ""}`,
       undefined,
       { measured: false, entries: [], offset: null, incremental: false, reset: false, ranOn: null },
     )
-    setChatLoaded(true)
     if (!t.measured) {
-      setChatReason(t.reason ?? "The computer running this chat did not answer.")
+      setTroubles((p) => ({ ...p, [sessionId]: t.reason ?? "did not answer" }))
       return
     }
-    setChatReason(null)
-    setChat((prev) => (t.incremental && !t.reset && cursor !== null ? [...prev, ...t.entries] : t.entries))
-    if (t.offset !== null) cursor = t.offset
+    setTroubles((p) => {
+      if (!(sessionId in p)) return p
+      const { [sessionId]: _, ...rest } = p
+      return rest
+    })
+    setChats((p) => ({
+      ...p,
+      [sessionId]: t.incremental && !t.reset && since !== undefined ? [...(p[sessionId] ?? []), ...t.entries] : t.entries,
+    }))
+    if (t.offset !== null) cursors.set(sessionId, t.offset)
   }
 
   const load = async () => {
-    const d = await props.json<RoomPayload>(`/iris/shared-rooms/${encodeURIComponent(props.id)}`, undefined, empty)
+    const d = await json<RoomPayload>(base(), undefined, empty)
     setData(d)
+    if (d.room?.name) props.onRoom?.(d.room.name)
+    if (d.present) setPresent(d.present)
     setNow(new Date())
-    const first = d.room?.sessionIds[0]
-    if (first) await readChat(first)
+    await Promise.all((d.room?.sessionIds ?? []).map(readChat))
+    setChatLoaded(true)
     stickToBottom(timeline().length)
   }
+
+  // "I am here": every 10 s, at once when typing starts, and as "background" when not in front.
+  let typingSent = 0
+  const lookingNow = () => typeof document !== "undefined" && document.visibilityState === "visible" && document.hasFocus()
+  const checkIn = async (typing = false) => {
+    const r = await post<PresencePayload>(`${base()}/presence`, { state: lookingNow() ? "active" : "background", typing }, { measured: false, present: [] })
+    if (r.measured) setPresent(r.present)
+  }
+
   createEffect(
     on(
       () => props.id,
       () => {
         let alive = true
         lastCount = 0
+        cursors.clear()
+        setChats({})
+        setTroubles({})
+        setChatLoaded(false)
         void load()
+        void checkIn()
         const t = setInterval(() => alive && void load(), FOLLOW_MS)
+        const p = setInterval(() => alive && void checkIn(), 10_000)
+        const onVis = () => alive && void checkIn()
+        window.addEventListener("focus", onVis)
+        window.addEventListener("blur", onVis)
+        document.addEventListener("visibilitychange", onVis)
         onCleanup(() => {
           alive = false
           clearInterval(t)
+          clearInterval(p)
+          window.removeEventListener("focus", onVis)
+          window.removeEventListener("blur", onVis)
+          document.removeEventListener("visibilitychange", onVis)
         })
       },
     ),
@@ -278,32 +344,54 @@ function Room(props: {
 
   const room = () => data()?.room ?? null
   const messages = () => data()?.messages ?? []
-  /** The chat when we can read it; what people typed in the room when we cannot. */
+  const sessions = () => data()?.sessions ?? []
+  const labelOf = (s: SessionState) => agentLabel(s, room()?.ownerName ?? null, props.myId)
+  const lanes = createMemo(() =>
+    sessions().map((s) => ({ sessionId: s.sessionId, label: labelOf(s), host: s.hostName ?? room()?.ownerName ?? null, entries: chats()[s.sessionId] ?? [] })),
+  )
+  const anyChat = () => lanes().some((l) => l.entries.length > 0)
+  const allTrouble = () => sessions().length > 0 && sessions().every((s) => troubles()[s.sessionId])
+  /** Every agent's chat when we can read them; what people typed in the room when we cannot. */
   const timeline = createMemo(() =>
-    chat().length || (chatLoaded() && !chatReason())
-      ? mergeTimeline(chat(), messages(), room()?.ownerName ?? null)
+    anyChat() || (chatLoaded() && !allTrouble())
+      ? mergeRoomTimeline(lanes(), messages(), room()?.ownerName ?? null)
       : messages().map((m) => ({
           key: m.id,
           kind: (m.kind === "event" ? "event" : m.kind === "agent" ? "agent" : "person") as "event" | "agent" | "person",
           speaker: m.senderName,
           text: m.text,
           at: m.at,
+          lane: undefined as string | undefined,
         })),
   )
+  const laneHue = (lane?: string) => {
+    const l = lanes().find((x) => x.sessionId === lane)
+    return String(hue(l?.label ?? "agent"))
+  }
   const stopVisible = createMemo(() => !!room() && canStopNow(room()!, messages(), props.myId))
+  const pile = createMemo(() => facepile(present(), 5))
+  const typing = createMemo(() => typingLine(present(), props.myId))
+  const firstTrouble = () => {
+    const id = Object.keys(troubles())[0]
+    if (!id) return null
+    const s = sessions().find((x) => x.sessionId === id)
+    return { reason: troubles()[id], who: s?.hostName ?? room()?.ownerName ?? null }
+  }
 
   const send = async () => {
     const text = draft().trim()
     if (!text || busy()) return
     setBusy("send")
     setNote(null)
-    const r = await props.post<SayPayload>(`/iris/shared-rooms/${encodeURIComponent(props.id)}/say`, { text }, { ok: false })
+    const r = await post<SayPayload>(`${base()}/say`, { text }, { ok: false })
     setBusy(null)
     if (!r.ok || !r.result) {
       setNote({ tone: "bad", text: r.reason ?? "That did not send." })
       return
     }
     setDraft("")
+    typingSent = 0
+    void checkIn(false)
     const tone = r.result.outcome === "delivered" ? "good" : "warn"
     setNote({ tone, text: sayNote(r.result, room()?.ownerName ?? null) + (r.result.agentsNote ? ` ${r.result.agentsNote}` : "") })
     void load()
@@ -312,18 +400,37 @@ function Room(props: {
   const stop = async () => {
     if (busy()) return
     setBusy("stop")
-    const r = await props.post<ActionPayload>(`/iris/shared-rooms/${encodeURIComponent(props.id)}/stop`, {}, { ok: false })
+    const r = await post<ActionPayload>(`${base()}/stop`, {}, { ok: false })
     setBusy(null)
     setNote(r.ok ? { tone: r.message?.startsWith("Nothing") ? "warn" : "good", text: r.message || "Stopped." } : { tone: "bad", text: r.reason ?? "Stop did not go through." })
     void load()
   }
 
+  const removeAgent = async (s: SessionState) => {
+    const r = await post<ActionPayload>(`${base()}/sessions/${encodeURIComponent(s.sessionId)}/remove`, {}, { ok: false })
+    setNote(r.ok ? { tone: "good", text: `${labelOf(s)} left the room. Its chat keeps running on ${s.machine ?? "its computer"}.` } : { tone: "bad", text: r.reason ?? "That did not go through." })
+    void load()
+  }
+
+  const addAgent = () =>
+    dialog.show(() => (
+      <DialogAddAgent
+        doFetch={props.doFetch}
+        roomId={props.id}
+        roomName={room()?.name ?? "this room"}
+        inRoom={sessions().map((s) => s.sessionId)}
+        onAdded={() => void load()}
+      />
+    ))
+
   return (
-    <div class="sr-room">
+    <div class="sr-room" data-layout={props.layout}>
       <header class="sr-room-head">
-        <button class="sr-iconbtn" aria-label="Back to shared chats" title="Back" onClick={props.onBack}>
-          <Icon name="arrow-left" size="small" />
-        </button>
+        <Show when={props.onBack}>
+          <button class="sr-iconbtn" aria-label="Back to shared chats" title="Back" onClick={() => props.onBack?.()}>
+            <Icon name="arrow-left" size="small" />
+          </button>
+        </Show>
         <div class="sr-room-title">
           <h2>{room()?.name ?? ""}</h2>
           <div class="sr-room-meta" style={{ visibility: room() ? "visible" : "hidden" }}>
@@ -335,7 +442,7 @@ function Room(props: {
                 </span>
               )}
             </Show>
-            <span class="sr-room-owner">{room()?.you.isOwner ? "Your chat" : `${firstName(room()?.ownerName ?? null)}'s chat`}</span>
+            <span class="sr-room-owner">{room()?.you.isOwner ? "Your room" : `${firstName(room()?.ownerName ?? null)}'s room`}</span>
             <Show when={room() && !room()!.you.canPost}>
               <span class="sr-chip" data-tone="info">
                 <Icon name="eye" size="small" /> watching
@@ -343,8 +450,27 @@ function Room(props: {
             </Show>
           </div>
         </div>
+        <Show when={pile().shown.length}>
+          <div class="sr-pile" role="group" aria-label={`In the room: ${present().map((p) => p.name).join(", ")}`}>
+            <For each={pile().shown}>
+              {(p) => (
+                <span
+                  class="sr-pile-face"
+                  data-state={p.state}
+                  title={`${p.userId === props.myId ? "You" : p.name} — ${p.state === "active" ? "here now" : "has it open"}`}
+                  style={{ "--sr-hue": String(hue(p.name)) }}
+                >
+                  {initials(p.name)}
+                </span>
+              )}
+            </For>
+            <Show when={pile().more}>
+              <span class="sr-pile-face sr-pile-more">+{pile().more}</span>
+            </Show>
+          </div>
+        </Show>
         <Show when={stopVisible()}>
-          <button class="sr-stop" disabled={busy() === "stop"} onClick={() => void stop()} title="Stop what this chat is doing right now">
+          <button class="sr-stop" disabled={busy() === "stop"} onClick={() => void stop()} title="Stop what the agents in this room are doing right now">
             <Icon name="stop" size="small" />
             {busy() === "stop" ? "Stopping…" : "Stop"}
           </button>
@@ -354,42 +480,57 @@ function Room(props: {
       <div class="sr-sessions">
         {/* Only say "no live chat" once the room has answered — a loading room is not an empty one. */}
         <Show
-          when={(data()?.sessions ?? []).length}
+          when={sessions().length}
           fallback={
             <div class="sr-session" data-tone="gone">
               <span class="sr-dot" />
-              {data() ? "No live chat is connected to this room" : "Connecting…"}
+              {data() ? "No agent is in this room yet" : "Connecting…"}
             </div>
           }
         >
-          <For each={data()?.sessions ?? []}>
+          <For each={sessions()}>
             {(s) => {
               const l = () => sessionLine(s, now())
+              const mine = () => props.myId !== null && s.hostUserId === props.myId
               return (
-                <div class="sr-session" data-tone={l().tone}>
+                <div class="sr-session sr-agent" data-tone={l().tone}>
                   <span class="sr-dot" />
-                  <span class="sr-session-text">{l().text}</span>
-                  <span class="sr-session-detail">{l().detail}</span>
+                  <span class="sr-agent-name" style={{ "--sr-hue": laneHue(s.sessionId) }}>{labelOf(s)}</span>
+                  <span class="sr-session-detail">
+                    {s.machine ? `on ${s.machine} · ` : ""}
+                    {l().detail}
+                  </span>
+                  <Show when={mine() || room()?.you.isOwner}>
+                    <button class="sr-agent-remove" title={`Take ${labelOf(s)} out of the room`} aria-label={`Take ${labelOf(s)} out of the room`} onClick={() => void removeAgent(s)}>
+                      <Icon name="close" size="small" />
+                    </button>
+                  </Show>
                 </div>
               )
             }}
           </For>
         </Show>
+        <Show when={room()?.you.canPost}>
+          <button class="sr-add-agent" onClick={addAgent} title="Bring a chat from your computer into this room">
+            + Add my agent
+          </button>
+        </Show>
       </div>
 
       <div class="sr-timeline" ref={scroller}>
-        <Show when={chatReason() && room()?.sessionIds.length}>
+        <Show when={firstTrouble() && sessions().length}>
           <div class="sr-chat-note">
             <Icon name="warning" size="small" />
             <span>
-              {chatTrouble(chatReason(), room()?.ownerName ?? null)} Showing what people typed in the room until it is back.
+              {chatTrouble(firstTrouble()!.reason, firstTrouble()!.who)}{" "}
+              {allTrouble() ? "Showing what people typed in the room until it is back." : "The other agents are still shown."}
             </span>
           </div>
         </Show>
         <Show when={data() && !timeline().length}>
           <div class="sr-empty sr-empty-inline">
             <p class="sr-empty-title">Quiet so far</p>
-            <p class="sr-empty-body">Messages typed here go straight into the live chat, with your name on them.</p>
+            <p class="sr-empty-body">What you type here reaches every agent in the room, with your name on it.</p>
           </div>
         </Show>
         <For each={timeline()}>
@@ -406,7 +547,7 @@ function Room(props: {
                   </div>
                 </Match>
                 <Match when={m.kind === "tool"}>
-                  <div class="sr-tool">
+                  <div class="sr-tool" style={{ "--sr-hue": laneHue(m.lane) }}>
                     <span class="sr-tool-dot" />
                     {m.text}
                   </div>
@@ -425,7 +566,7 @@ function Room(props: {
                   </div>
                 </Match>
                 <Match when={true}>
-                  <div class="sr-msg" data-grouped={grouped() ? "" : undefined} data-kind={m.kind}>
+                  <div class="sr-msg" data-grouped={grouped() ? "" : undefined} data-kind={m.kind} style={{ "--sr-hue": m.kind === "agent" ? laneHue(m.lane) : String(hue(m.speaker)) }}>
                     <Show when={!grouped()} fallback={<span class="sr-avatar-gap" />}>
                       <Show when={m.kind === "agent"} fallback={<Avatar name={m.speaker} size="sm" />}>
                         <span class="sr-agent-mark" aria-hidden="true">
@@ -439,9 +580,9 @@ function Room(props: {
                     <div class="sr-msg-body">
                       <Show when={!grouped()}>
                         <div class="sr-msg-head">
-                          <span class="sr-msg-name">{m.kind === "agent" ? "Agent" : m.speaker}</span>
+                          <span class="sr-msg-name">{m.speaker}</span>
                           <Show when={m.kind === "person" && (m as { viaRoom?: boolean }).viaRoom}>
-                            <span class="sr-delivered">from the room</span>
+                            <span class="sr-delivered">in the room</span>
                           </Show>
                           <span class="sr-time">{ago(m.at, now())}</span>
                         </div>
@@ -457,6 +598,9 @@ function Room(props: {
       </div>
 
       <footer class="sr-compose-wrap">
+        <div class="sr-typing" aria-live="polite">
+          {typing() ?? ""}
+        </div>
         <Show when={note()}>
           {(n) => (
             <div class="sr-note" data-tone={n().tone}>
@@ -476,13 +620,18 @@ function Room(props: {
           <div class="sr-compose">
             <textarea
               rows="1"
-              placeholder={room() ? composerHint(room()!) : ""}
+              placeholder={sessions().length > 1 ? "Message everyone in the room — people and agents…" : room() ? composerHint(room()!) : ""}
               value={draft()}
               maxLength={16000}
               onInput={(e) => {
                 setDraft(e.currentTarget.value)
                 e.currentTarget.style.height = "auto"
                 e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 160) + "px"
+                // Tell the room you are typing — at most every 4 s, so a long message is one signal.
+                if (e.currentTarget.value.trim() && Date.now() - typingSent > 4000) {
+                  typingSent = Date.now()
+                  void checkIn(true)
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {

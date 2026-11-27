@@ -94,6 +94,7 @@ export type LayoutRoute =
   | { type: "draft"; draftID: string; server?: ServerConnection.Key }
   | { type: "dir-new-sesssion"; dir: string; dirBase64: string; server?: ServerConnection.Key }
   | { type: "session"; sessionId: string; server?: ServerConnection.Key }
+  | { type: "shared"; roomId: string; server?: ServerConnection.Key }
 
 const sessionPath = (key: string) => {
   const dir = SessionStateKey.route(key).split("/")[0]
@@ -136,6 +137,8 @@ export const currentRoute = (pathname: string, search: string): LayoutRoute => {
     if (!draftID) return { type: "home" }
     return { type: "draft", draftID }
   }
+
+  if (parts[0] === "shared" && parts[1]) return { type: "shared", roomId: decodeURIComponent(parts[1]) }
 
   if (parts[0] === "server" && parts[2] === "session" && parts[3]) {
     return {

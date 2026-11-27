@@ -169,6 +169,56 @@ function SessionTabEntry(props: {
   )
 }
 
+/** A shared room's tab (#194463): two people for an icon, the room's name for a title. */
+function SharedTabSlot(props: {
+  tab: Extract<Tab, { type: "shared" }>
+  id: string
+  index: () => number
+  active: () => boolean
+  onNavigate: (element: HTMLDivElement) => void
+  onClose: () => void
+}) {
+  const sortable = useSortable({
+    get id() {
+      return props.id
+    },
+    get index() {
+      return props.index()
+    },
+  })
+  let ref!: HTMLDivElement
+  return (
+    <div
+      ref={sortable.ref}
+      data-titlebar-tab-slot
+      data-tab-key={props.id}
+      data-active={props.active()}
+      data-kind="shared"
+      class="relative flex w-56 min-w-7 max-w-56 flex-shrink"
+    >
+      <DraftTabItem
+        ref={(el) => {
+          ref = el
+        }}
+        href={tabHref(props.tab)}
+        title={props.tab.title || "Shared chat"}
+        icon={
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" class="text-v2-state-fg-success">
+            <circle cx="6" cy="5.5" r="2.25" />
+            <path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5" />
+            <circle cx="11.25" cy="6" r="1.75" />
+            <path d="M11 9.6c1.5.1 2.6 1.2 3 3" />
+          </svg>
+        }
+        onNavigate={() => props.onNavigate(ref)}
+        onClose={props.onClose}
+        active={props.active()}
+        dragging={sortable.isDragSource()}
+      />
+    </div>
+  )
+}
+
 function DraftTabSlot(props: {
   tab: Extract<Tab, { type: "draft" }>
   id: string
@@ -227,7 +277,7 @@ export function TitlebarTabStrip(props: {
   let listRef!: HTMLDivElement
   let resizeFrame: number | undefined
   const [visibility, setVisibility] = createStore<Record<string, boolean>>({})
-  const visibleTabs = createMemo(() => props.tabs.filter((tab) => tab.type === "draft" || visibility[tabKey(tab)]))
+  const visibleTabs = createMemo(() => props.tabs.filter((tab) => tab.type !== "session" || visibility[tabKey(tab)]))
   const visibleTabIds = () => visibleTabs().map(tabKey)
 
   command.register("titlebar-tab-cycle", () => [
@@ -376,6 +426,22 @@ export function TitlebarTabStrip(props: {
                       forceTruncate={props.forceTruncate}
                       serverCtx={serverCtx}
                       onVisibleChange={(visible) => setVisibility(id, visible)}
+                      onNavigate={(element) => {
+                        ref = element
+                        props.onNavigate(tab, element)
+                      }}
+                      onClose={() => props.onClose(tab)}
+                    />
+                  )
+                }
+
+                if (tab.type === "shared") {
+                  return (
+                    <SharedTabSlot
+                      tab={tab}
+                      id={id}
+                      index={visibleIndex}
+                      active={() => props.currentTab() === tab}
                       onNavigate={(element) => {
                         ref = element
                         props.onNavigate(tab, element)

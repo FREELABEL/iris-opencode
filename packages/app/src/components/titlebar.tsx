@@ -9,7 +9,9 @@ import {
   Show,
   Switch,
   untrack,
+  onCleanup,
 } from "solid-js"
+import { setSharedRoomOpener } from "@/components/session/iris-shared-store"
 import { sessionsDrawerOpen, toggleSessionsDrawer } from "@/components/sessions-drawer-state"
 import { createStore } from "solid-js/store"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
@@ -218,8 +220,18 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   .catch(() => {}),
             )
 
+            // A shared room opens as a tab (#194463): every "open this room" in the app comes here.
+            setSharedRoomOpener((roomId, title) => {
+              const tab = tabsStoreActions.addSharedTab({ server: server.key, roomId, title })
+              tabsStoreActions.select(tab)
+            })
+            onCleanup(() => setSharedRoomOpener(null))
+
             const matchRoute = (route: LayoutRoute) => {
               if (route.type === "home") return
+              if (route.type === "shared") {
+                return tabsStore.find((item) => item.type === "shared" && item.roomId === route.roomId)
+              }
               if (route.type === "draft") {
                 return tabsStore.find((item) => item.type === "draft" && item.draftID === route.draftID)
               }
@@ -251,6 +263,10 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                 return
               }
 
+              if (route.type === "shared") {
+                tabsStoreActions.addSharedTab({ server: route.server ?? server.key, roomId: route.roomId })
+                return
+              }
               if (route.type === "session") {
                 const s = session()
                 if (!s) return

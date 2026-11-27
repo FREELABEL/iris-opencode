@@ -773,3 +773,141 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ── multiplayer room (#194463 #194465 #194466) ──────────────────────────── */
+/* In the main pane the room reads like a chat: one centred column, the header and the agents
+   strip spanning it, the composer at the bottom. */
+.sr-room[data-layout="pane"] .sr-room-head,
+.sr-room[data-layout="pane"] .sr-sessions,
+.sr-room[data-layout="pane"] .sr-compose-wrap {
+  padding-left: max(20px, calc((100% - 760px) / 2));
+  padding-right: max(20px, calc((100% - 760px) / 2));
+}
+.sr-room[data-layout="pane"] .sr-timeline {
+  padding-left: max(20px, calc((100% - 760px) / 2));
+  padding-right: max(20px, calc((100% - 760px) / 2));
+  padding-top: 20px;
+}
+.sr-room[data-layout="pane"] .sr-room-head {
+  padding-top: 18px;
+  align-items: center;
+}
+.sr-room[data-layout="pane"] .sr-compose-wrap {
+  border-top: 0;
+  padding-bottom: 16px;
+}
+
+/* Who is here: green ring = looking now, faded = open behind another window. */
+.sr-pile {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 6px;
+}
+.sr-pile-face {
+  --sr-hue: 160;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  border-radius: var(--radius-full);
+  display: inline-grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  color: hsl(var(--sr-hue) 55% 30%);
+  background: hsl(var(--sr-hue) 70% 90%);
+  box-shadow:
+    0 0 0 2px var(--background-base, #fff),
+    0 0 0 3.5px var(--sr-live);
+}
+:root[data-color-scheme="dark"] .sr-pile-face {
+  color: hsl(var(--sr-hue) 70% 82%);
+  background: hsl(var(--sr-hue) 30% 22%);
+}
+.sr-pile-face[data-state="background"] {
+  opacity: 0.55;
+  box-shadow: 0 0 0 2px var(--background-base, #fff);
+}
+.sr-pile-more {
+  color: var(--text-weak);
+  background: var(--sr-soft);
+  box-shadow: 0 0 0 2px var(--background-base, #fff);
+}
+
+/* The agents in the room, each with whose it is. */
+.sr-agent {
+  position: relative;
+}
+.sr-agent-name {
+  font-weight: var(--font-weight-medium);
+  color: hsl(var(--sr-hue, 160) 45% 36%);
+  white-space: nowrap;
+}
+:root[data-color-scheme="dark"] .sr-agent-name {
+  color: hsl(var(--sr-hue, 160) 60% 72%);
+}
+.sr-agent-remove {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--text-weaker);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+}
+.sr-agent:hover .sr-agent-remove,
+.sr-agent-remove:focus-visible {
+  opacity: 1;
+}
+.sr-agent-remove:hover {
+  color: var(--text-strong);
+  background: var(--sr-soft);
+}
+.sr-add-agent {
+  align-self: flex-start;
+  margin-top: 2px;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.sr-add-agent:hover {
+  color: var(--text-strong);
+}
+
+/* An agent's message carries its owner's colour on the mark; a tool line too. */
+.sr-msg[data-kind="agent"] .sr-msg-name {
+  color: hsl(var(--sr-hue, 160) 45% 36%);
+}
+:root[data-color-scheme="dark"] .sr-msg[data-kind="agent"] .sr-msg-name {
+  color: hsl(var(--sr-hue, 160) 60% 72%);
+}
+
+/* "Flo is typing…" — holds its line so the composer never jumps. */
+.sr-typing {
+  min-height: 16px;
+  font-size: var(--font-size-x-small);
+  color: var(--text-weak);
+  font-style: italic;
+}
+
+.sr-add-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.sr-add-kind {
+  flex: none;
+  font-size: var(--font-size-x-small);
+  color: var(--text-weak);
+}
+.sr-pile-face:first-child {
+  margin-left: 0;
+}
