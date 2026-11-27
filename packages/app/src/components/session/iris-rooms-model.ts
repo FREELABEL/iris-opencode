@@ -43,6 +43,9 @@ export function mentionedAgents(text: string, agents: RoomAgent[]): RoomAgent[] 
  * composer so an unaddressed message is never a guess.
  */
 export function defaultResponders(agents: RoomAgent[]): RoomAgent[] {
+  // A room with a lead sends an un-addressed message to the lead alone (#194494).
+  const lead = agents.find((a) => a.role === "lead")
+  if (lead) return [lead]
   const always = agents.filter((a) => a.autoRespond)
   if (always.length) return always
   const primary = agents.find((a) => a.role === "primary")

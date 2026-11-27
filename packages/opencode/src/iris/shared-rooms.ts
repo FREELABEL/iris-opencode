@@ -56,6 +56,10 @@ export type SessionState = {
   hostUserId: number | null
   hostName: string | null
 }
+/** One of the platform's cloud agents in the room (#194496): its own model and instructions. */
+export type CloudAgent = { id: string; name: string; model: string | null; role: string; autoRespond: boolean }
+/** Agents handing work to each other right now (#194495). */
+export type Chain = { depth: number; turns: number; maxTurns: number; maxHops: number }
 /** Someone in the room right now (#194465). */
 export type Presence = { userId: number; name: string; state: "active" | "background"; typing: boolean }
 export type TranscriptEntry = { role: "user" | "assistant"; kind: "text" | "tool"; text: string; tool: string | null; detail: string | null; at: string }
@@ -194,8 +198,8 @@ export async function fetchSharedRooms(): Promise<Read<{ rooms: SharedRoom[] }>>
 
 export async function fetchSharedRoom(
   id: string,
-): Promise<Read<{ room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[]; present: Presence[] }>> {
-  const empty = { room: null, messages: [], sessions: [], present: [] }
+): Promise<Read<{ room: SharedRoom | null; messages: SharedMessage[]; sessions: SessionState[]; present: Presence[]; agents: CloudAgent[]; chain: Chain | null }>> {
+  const empty = { room: null, messages: [], sessions: [], present: [], agents: [], chain: null }
   try {
     const r = await call(`/api/threads/${encodeURIComponent(id)}`)
     if (!r.ok) return { measured: false, reason: failure(r.j, r.status), data: empty }
@@ -206,7 +210,8 @@ export async function fetchSharedRoom(
       .sort((a: SharedMessage, b: SharedMessage) => (a.at === b.at ? (a.id < b.id ? -1 : 1) : a.at < b.at ? -1 : 1))
     const sessions = (Array.isArray(r.j?.sessions) ? r.j.sessions : []).map(readSessionState)
     const present = (Array.isArray(r.j?.present) ? r.j.present : []).map(readPresence)
-    return { measured: true, data: { room, messages, sessions, present } }
+    const agents = (Array.isArray(r.j?.thread?.agents) ? r.j.thread.agents : []).map(readCloudAgent)
+    return { measured: true, data: { room, messages, sessions, present, agents, chain: readChain(r.j?.chain) } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
   }
@@ -449,6 +454,71 @@ export async function removeSessionFromRoom(id: string, sessionId: string): Prom
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return { ok: false, reason: "Not a chat." }
   try {
     const r = await call(`/api/threads/${encodeURIComponent(id)}/sessions/${sessionId}`, { method: "DELETE" })
+    return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cloud agents in a room, and their hand-offs (#194493–#194496)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function readCloudAgent(a: any): CloudAgent {
+  const cfg = a?.config && typeof a.config === "object" ? a.config : {}
+  const set = a?.settings && typeof a.settings === "object" ? a.settings : {}
+  const model = cfg.model ?? cfg.ai_model ?? set.model ?? set.ai_model ?? a?.model ?? null
+  return {
+    id: str(a?.id),
+    name: str(a?.name) || `Agent ${str(a?.id)}`,
+    model: model ? str(model) : null,
+    role: str(a?.pivot?.role ?? a?.role) || "participant",
+    autoRespond: Boolean(a?.pivot?.auto_respond ?? a?.auto_respond),
+  }
+}
+
+export function readChain(c: any): Chain | null {
+  if (!c || typeof c !== "object") return null
+  return {
+    depth: Number(c.depth) || 0,
+    turns: Number(c.turns) || 0,
+    maxTurns: Number(c.max_turns) || 6,
+    maxHops: Number(c.max_hops) || 3,
+  }
+}
+
+const ROLES = new Set(["lead", "participant", "observer", "support", "primary"])
+
+/** Put one of your cloud agents in the room — as the lead, or answering everything / only @mentions. */
+export async function addRoomAgent(id: string, input: { agentId: number; role?: string; autoRespond?: boolean }): Promise<{ ok: boolean; reason?: string }> {
+  const role = input.role && ROLES.has(input.role) ? input.role : "participant"
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/agents`, {
+      method: "POST",
+      body: JSON.stringify({ agent_id: String(input.agentId), role, auto_respond: input.autoRespond === true }),
+    })
+    return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Change an agent's role in the room, or whether it answers everything. */
+export async function updateRoomAgent(id: string, agentId: string, input: { role?: string; autoRespond?: boolean }): Promise<{ ok: boolean; reason?: string }> {
+  const body: Record<string, unknown> = {}
+  if (input.role && ROLES.has(input.role)) body.role = input.role
+  if (typeof input.autoRespond === "boolean") body.auto_respond = input.autoRespond
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/agents/${encodeURIComponent(agentId)}`, { method: "PATCH", body: JSON.stringify(body) })
+    return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function removeRoomAgent(id: string, agentId: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const r = await call(`/api/threads/${encodeURIComponent(id)}/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" })
     return r.ok ? { ok: true } : { ok: false, reason: failure(r.j, r.status) }
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }

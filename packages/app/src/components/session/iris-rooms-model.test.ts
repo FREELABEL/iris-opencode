@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  defaultResponders,
   insertMention,
   mentionQuery,
   mentionSuggestions,
@@ -81,4 +82,12 @@ test("sortMessages keeps send order within one second", () => {
     "0199-0002",
     "0199-0003",
   ])
+})
+
+test("a room with a lead sends an un-addressed message to the lead (#194494)", () => {
+  const agents = [
+    { id: "1", name: "Lead", role: "lead", autoRespond: false },
+    { id: "2", name: "Helper", role: "participant", autoRespond: true },
+  ]
+  expect(defaultResponders(agents).map((a) => a.name)).toEqual(["Lead"])
 })

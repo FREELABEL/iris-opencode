@@ -1518,6 +1518,10 @@ const SharedRoomResponse = Schema.Struct({
   messages: Schema.Array(SharedMessageSchema),
   sessions: Schema.Array(SessionStateSchema),
   present: Schema.Array(PresenceSchema),
+  agents: Schema.Array(
+    Schema.Struct({ id: Schema.String, name: Schema.String, model: Schema.NullOr(Schema.String), role: Schema.String, autoRespond: Schema.Boolean }),
+  ),
+  chain: Schema.NullOr(Schema.Struct({ depth: Schema.Finite, turns: Schema.Finite, maxTurns: Schema.Finite, maxHops: Schema.Finite })),
 }).annotate({ identifier: "IrisSharedRoomResponse" })
 const SharedSayResponse = Schema.Struct({
   ok: Schema.Boolean,
@@ -2311,6 +2315,9 @@ export const IrisPaths = {
   sharedRoomUnshare: `${root}/shared-rooms/:roomID/unshare`,
   sharedRoomShare: `${root}/shared-rooms/share`,
   sharedRoomJoin: `${root}/shared-rooms/join`,
+  sharedRoomAgentAdd: `${root}/shared-rooms/:roomID/agents`,
+  sharedRoomAgentUpdate: `${root}/shared-rooms/:roomID/agents/:agentID`,
+  sharedRoomAgentRemove: `${root}/shared-rooms/:roomID/agents/:agentID/remove`,
   sharedRoomPresence: `${root}/shared-rooms/:roomID/presence`,
   sharedRoomAddSession: `${root}/shared-rooms/:roomID/sessions`,
   sharedRoomRemoveSession: `${root}/shared-rooms/:roomID/sessions/:sessionID/remove`,
@@ -3853,6 +3860,20 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({ invite: Schema.String, preview: Schema.optional(Schema.Boolean) }),
         success: described(SharedJoinResponse, "Join a team's project from an invite link, as the person signed in here"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomJoin", summary: "Join a shared workspace" })),
+      HttpApiEndpoint.post("sharedRoomAgentAdd", IrisPaths.sharedRoomAgentAdd, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ agentId: Schema.Finite, role: Schema.optional(Schema.String), autoRespond: Schema.optional(Schema.Boolean) }),
+        success: described(SharedActionResponse, "Put one of your cloud agents in the room (#194496)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentAdd", summary: "Add a cloud agent to a shared room" })),
+      HttpApiEndpoint.post("sharedRoomAgentUpdate", IrisPaths.sharedRoomAgentUpdate, {
+        params: { roomID: Schema.String, agentID: Schema.String },
+        payload: Schema.Struct({ role: Schema.optional(Schema.String), autoRespond: Schema.optional(Schema.Boolean) }),
+        success: described(SharedActionResponse, "Change an agent's role, or whether it answers everything"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentUpdate", summary: "Configure a room agent" })),
+      HttpApiEndpoint.post("sharedRoomAgentRemove", IrisPaths.sharedRoomAgentRemove, {
+        params: { roomID: Schema.String, agentID: Schema.String },
+        success: described(SharedActionResponse, "Take a cloud agent out of the room"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentRemove", summary: "Remove a cloud agent from a room" })),
       HttpApiEndpoint.post("sharedRoomPresence", IrisPaths.sharedRoomPresence, {
         params: { roomID: Schema.String },
         payload: Schema.Struct({ state: Schema.Literals(["active", "background"]), typing: Schema.optional(Schema.Boolean) }),

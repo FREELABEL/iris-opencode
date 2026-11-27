@@ -303,7 +303,7 @@ const DUP_MS = 2 * 60 * 1000
  * so each transcript holds its own copy of it: shown once (same person, same words, within two
  * minutes). What each agent says and does is labelled with whose agent it is.
  */
-export function mergeRoomTimeline(lanes: Lane[], room: SharedMessage[], ownerName: string | null): TimelineItem[] {
+export function mergeRoomTimeline(lanes: Lane[], room: SharedMessage[], ownerName: string | null, cloudAgents = false): TimelineItem[] {
   const items: TimelineItem[] = []
   const seen: { key: string; at: number }[] = []
   const many = lanes.length > 1
@@ -329,12 +329,25 @@ export function mergeRoomTimeline(lanes: Lane[], room: SharedMessage[], ownerNam
   }
   for (const m of room) {
     if (m.kind === "event") items.push({ key: `r${m.id}`, kind: "event", speaker: "IRIS", text: m.text, at: m.at })
-    else if (m.kind === "person" && m.deliveredTo.length === 0) items.push({ key: `r${m.id}`, kind: "note", speaker: m.senderName, text: m.text, at: m.at })
+    // A cloud agent's reply lives in the room itself (#194496): its own name, its own lane.
+    else if (m.kind === "agent") items.push({ key: `r${m.id}`, kind: "agent", speaker: m.senderName, text: m.text, at: m.at, lane: `cloud:${m.senderId}` })
+    // A line no computer's chat took: "only in the room" — unless the room's cloud agents answer
+    // the room itself, in which case it is simply the conversation (#194496).
+    else if (m.kind === "person" && m.deliveredTo.length === 0)
+      items.push({ key: `r${m.id}`, kind: cloudAgents ? "person" : "note", speaker: m.senderName, text: m.text, at: m.at })
   }
   return items
     .map((it, i) => ({ it, i }))
     .sort((a, b) => (a.it.at && b.it.at && a.it.at !== b.it.at ? (a.it.at < b.it.at ? -1 : 1) : a.i - b.i))
     .map((x) => x.it)
+}
+
+export type Chain = { depth: number; turns: number; maxTurns: number; maxHops: number }
+
+/** "Agents are talking · 3 of 6 replies" — while agents hand work to each other (#194495). */
+export function chainLine(chain: Chain | null | undefined): string | null {
+  if (!chain) return null
+  return `Agents are talking · ${chain.turns} of ${chain.maxTurns} replies`
 }
 
 /** "Flo is typing…", "Flo and Maya are typing…", "3 people are typing…" — never you. */

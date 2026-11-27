@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared, parseInviteToken, inviteTrouble, readPresence, readActivity } from "./shared-rooms"
+import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared, parseInviteToken, inviteTrouble, readPresence, readActivity, readCloudAgent, readChain } from "./shared-rooms"
 
 // Shared workspaces (#194307): what Desktop draws for a room filed under an Atlas project.
 
@@ -166,5 +166,19 @@ describe("a room's row (#194490)", () => {
       unread: 0,
       working: false,
     })
+  })
+})
+
+describe("cloud agents in a room (#194496)", () => {
+  test("reads an agent's model from wherever the agent keeps it, and its role in the room", () => {
+    expect(readCloudAgent({ id: 7, name: "Researcher", config: { model: "gpt-4.1-nano" }, pivot: { role: "lead", auto_respond: false } })).toEqual({
+      id: "7", name: "Researcher", model: "gpt-4.1-nano", role: "lead", autoRespond: false,
+    })
+    expect(readCloudAgent({ id: 8, settings: { model: "claude-haiku" } }).model).toBe("claude-haiku")
+    expect(readCloudAgent({ id: 9 }).name).toBe("Agent 9")
+  })
+  test("reads the hand-off chain, or nothing", () => {
+    expect(readChain({ depth: 2, turns: 3, max_turns: 6, max_hops: 3 })).toEqual({ depth: 2, turns: 3, maxTurns: 6, maxHops: 3 })
+    expect(readChain(null)).toBeNull()
   })
 })
