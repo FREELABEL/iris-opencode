@@ -53,8 +53,8 @@ export function avatarColor(seed: string): string {
 }
 
 /**
- * A face. People are round, in a colour from their name. Agents are rounded squares in the IRIS
- * violet, with their own initials and a small spark — so three agents are three names, not three
+ * A face. People are round, in a colour from their name. Agents are rounded squares in the theme
+ * brand colour, with their own initials and a small spark — so three agents are three names, not three
  * copies of the same robot, and nobody mistakes an agent for a colleague.
  */
 export function Avatar(props: { name: string; kind: "user" | "agent"; size?: number; title?: string }) {
@@ -68,10 +68,8 @@ export function Avatar(props: { name: string; kind: "user" | "agent"; size?: num
         width: `${size()}px`,
         height: `${size()}px`,
         "font-size": `${Math.round(size() * 0.38)}px`,
-        background:
-          props.kind === "agent"
-            ? `linear-gradient(135deg, ${IRIS_COLORS.violet}, ${IRIS_COLORS.blue})`
-            : avatarColor(props.name),
+        // Agents wear the theme brand pair (session-iris-tab.css); people keep their name colour.
+        background: props.kind === "agent" ? undefined : avatarColor(props.name),
       }}
     >
       {initials(props.name)}

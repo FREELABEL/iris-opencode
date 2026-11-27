@@ -5,10 +5,8 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { usePlatform } from "@/context/platform"
 import { trackUpgrade } from "@/utils/upgrade-funnel"
 import { planSummary, type SummaryInput } from "./plan-summary"
-import { IRIS_COLORS, PlanMark } from "./plan-mark"
+import { PlanMark } from "./plan-mark"
 
-const GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.fuchsia}, ${IRIS_COLORS.blue}, ${IRIS_COLORS.cyan})`
-const BUTTON_GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.violet}, #2563eb)`
 
 export interface PlanOffer {
   slug: string
@@ -185,13 +183,11 @@ export function PlanCards(props: {
             >
               <div
                 class="h-full rounded-full transition-[width] duration-500"
-                style={{
-                  width: `${summary().percent}%`,
-                  "background-image":
-                    (summary().percent ?? 0) >= 90
-                      ? "linear-gradient(90deg, #f59e0b, #facc15)"
-                      : GRADIENT,
+                classList={{
+                  "bg-v2-state-fg-warning": (summary().percent ?? 0) >= 90,
+                  "bg-surface-brand-base": (summary().percent ?? 0) < 90,
                 }}
+                style={{ width: `${summary().percent}%` }}
               />
             </div>
           </Show>
@@ -214,13 +210,12 @@ export function PlanCards(props: {
                   <button
                     type="button"
                     data-slot="iris-upgrade-choose"
-                    class="h-10 rounded-lg px-4 text-[14px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+                    class="h-10 rounded-lg px-4 text-[14px] font-semibold transition-colors disabled:opacity-60"
                     classList={{
-                      "text-white": !!p.popular,
+                      "bg-surface-brand-base text-text-on-brand-base hover:bg-surface-brand-hover": !!p.popular,
                       "border border-v2-border-border-base text-v2-text-text-strong hover:bg-v2-background-bg-base":
                         !p.popular,
                     }}
-                    style={p.popular ? { background: BUTTON_GRADIENT } : undefined}
                     disabled={opening() !== null}
                     onClick={() => void choose(p.slug)}
                   >
@@ -234,8 +229,7 @@ export function PlanCards(props: {
                         <li class="flex gap-2">
                           <span
                             aria-hidden="true"
-                            class="mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: [IRIS_COLORS.fuchsia, IRIS_COLORS.blue, IRIS_COLORS.cyan][i() % 3] }}
+                            class="mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full bg-surface-brand-base"
                           />
                           {f}
                         </li>
@@ -247,15 +241,15 @@ export function PlanCards(props: {
                   <div
                     data-slot="iris-upgrade-plan"
                     data-layout={rows() ? "rows" : "columns"}
+                    data-popular={p.popular ? "" : undefined}
                     class="rounded-xl border p-5"
-                    classList={{ "flex flex-col gap-3": !rows(), "grid gap-x-8 gap-y-3": rows() }}
-                    style={{
-                      "grid-template-columns": rows() ? "minmax(200px, 240px) 1fr" : undefined,
-                      "border-color": p.popular
-                        ? IRIS_COLORS.blue
-                        : "var(--v2-border-border-base, rgba(127,127,127,.25))",
-                      "box-shadow": p.popular ? `0 0 0 1px ${IRIS_COLORS.blue}33` : undefined,
+                    classList={{
+                      "flex flex-col gap-3": !rows(),
+                      "grid gap-x-8 gap-y-3": rows(),
+                      "border-surface-brand-base ring-1 ring-surface-brand-base/20": !!p.popular,
+                      "border-v2-border-border-base": !p.popular,
                     }}
+                    style={{ "grid-template-columns": rows() ? "minmax(200px, 240px) 1fr" : undefined }}
                   >
                     <div class="flex flex-col gap-3">
                       <div class="flex items-center gap-2.5">
@@ -265,8 +259,7 @@ export function PlanCards(props: {
                         </span>
                         <Show when={p.popular}>
                           <span
-                            class="whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-white"
-                            style={{ background: BUTTON_GRADIENT }}
+                            class="whitespace-nowrap rounded-full bg-surface-brand-base px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-text-on-brand-base"
                           >
                             Most popular
                           </span>
