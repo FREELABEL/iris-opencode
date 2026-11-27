@@ -301,3 +301,8 @@ test("in a room with cloud agents a person's line is the conversation, not 'only
   expect(mergeRoomTimeline([], m, null, true)[0].kind).toBe("person")
   expect(mergeRoomTimeline([], m, null, false)[0].kind).toBe("note")
 })
+
+test("when the room's agents take a message, the note says so (#194496)", () => {
+  expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null, agentsAnswered: 1 }, "Alex")).toBe("The room's agent is on it.")
+  expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null }, "Alex")).toBe("Saved here. No live chat is connected right now.")
+})

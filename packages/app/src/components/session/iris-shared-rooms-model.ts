@@ -43,7 +43,14 @@ export type SessionState = {
 }
 /** Someone in the room right now (#194465). */
 export type Presence = { userId: number; name: string; state: "active" | "background"; typing: boolean }
-export type SayResult = { outcome: "delivered" | "parked" | "held" | "saved"; delivered: number; note: string | null; agentsNote: string | null }
+export type SayResult = {
+  outcome: "delivered" | "parked" | "held" | "saved"
+  delivered: number
+  note: string | null
+  agentsNote: string | null
+  /** How many of the room's cloud agents answered in the first round (#194496). */
+  agentsAnswered?: number
+}
 
 export type ProjectGroup = { project: { id: number; name: string }; rooms: SharedRoom[]; latest: string }
 
@@ -120,6 +127,9 @@ const whose = (r: { ownerName: string | null }) => `${firstName(r.ownerName)}'s`
 
 export function sayNote(r: SayResult, ownerName: string | null): string {
   const owner = firstName(ownerName)
+  // The room's own agents took it (#194496) — that is where it went, whatever else did.
+  if ((r.agentsAnswered ?? 0) > 0 && r.outcome !== "delivered" && r.outcome !== "parked")
+    return r.agentsAnswered === 1 ? "The room's agent is on it." : `${r.agentsAnswered} of the room's agents are on it.`
   switch (r.outcome) {
     case "delivered":
       return `Sent to ${owner}'s chat.`

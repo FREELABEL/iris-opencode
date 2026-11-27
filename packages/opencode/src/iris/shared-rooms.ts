@@ -63,7 +63,14 @@ export type Chain = { depth: number; turns: number; maxTurns: number; maxHops: n
 /** Someone in the room right now (#194465). */
 export type Presence = { userId: number; name: string; state: "active" | "background"; typing: boolean }
 export type TranscriptEntry = { role: "user" | "assistant"; kind: "text" | "tool"; text: string; tool: string | null; detail: string | null; at: string }
-export type SayResult = { outcome: "delivered" | "parked" | "held" | "saved"; delivered: number; note: string | null; agentsNote: string | null }
+export type SayResult = {
+  outcome: "delivered" | "parked" | "held" | "saved"
+  delivered: number
+  note: string | null
+  agentsNote: string | null
+  /** How many of the room's cloud agents answered in the first round (#194496). */
+  agentsAnswered?: number
+}
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v))
 const SESSION = "session:"
@@ -164,9 +171,10 @@ export function readSayResult(j: any): SayResult {
   const d: any[] = Array.isArray(j?.node_deliveries) ? j.node_deliveries : []
   const note = j?.delivery_note ? str(j.delivery_note) : null
   const agentsNote = j?.agents_note ? str(j.agents_note) : null
-  if (j?.delivery_held) return { outcome: "held", delivered: 0, note, agentsNote }
-  if (d.some((x) => x?.parked)) return { outcome: "parked", delivered: 0, note, agentsNote }
-  return { outcome: d.length ? "delivered" : "saved", delivered: d.length, note, agentsNote }
+  const agentsAnswered = Number(j?.response_count) || 0
+  if (j?.delivery_held) return { outcome: "held", delivered: 0, note, agentsNote, agentsAnswered }
+  if (d.some((x) => x?.parked)) return { outcome: "parked", delivered: 0, note, agentsNote, agentsAnswered }
+  return { outcome: d.length ? "delivered" : "saved", delivered: d.length, note, agentsNote, agentsAnswered }
 }
 
 function failure(j: any, status: number): string {
@@ -224,7 +232,9 @@ export async function sayInRoom(id: string, text: string): Promise<{ ok: boolean
   try {
     const r = await call(`/api/threads/${encodeURIComponent(id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content: t, trigger_responses: false }),
+      // The room's cloud agents answer the owner's message (#194496). A member's message never
+      // starts them — the server refuses that (they run on the owner's bill) and says so.
+      body: JSON.stringify({ content: t, trigger_responses: true }),
     })
     if (!r.ok) return { ok: false, reason: failure(r.j, r.status) }
     return { ok: true, result: readSayResult(r.j) }

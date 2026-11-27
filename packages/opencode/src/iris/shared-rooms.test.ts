@@ -182,3 +182,7 @@ describe("cloud agents in a room (#194496)", () => {
     expect(readChain(null)).toBeNull()
   })
 })
+
+test("reads how many of the room's agents answered (#194496)", () => {
+  expect(readSayResult({ node_deliveries: [], response_count: 2 }).agentsAnswered).toBe(2)
+})

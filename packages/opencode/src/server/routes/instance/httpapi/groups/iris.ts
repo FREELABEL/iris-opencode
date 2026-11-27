@@ -1532,6 +1532,7 @@ const SharedSayResponse = Schema.Struct({
       delivered: Schema.Finite,
       note: Schema.NullOr(Schema.String),
       agentsNote: Schema.NullOr(Schema.String),
+      agentsAnswered: Schema.optional(Schema.Finite),
     }),
   ),
 }).annotate({ identifier: "IrisSharedSayResponse" })
