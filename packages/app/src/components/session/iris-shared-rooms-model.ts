@@ -220,3 +220,41 @@ export function chatTrouble(reason: string | null, ownerName: string | null): st
   if (r.includes("not found")) return `That chat isn't open on ${who} anymore.`
   return `${who} couldn't share the chat right now.`
 }
+
+// ── telling you, anywhere in the app, that something is shared ──────────────
+
+const ACTIVE_MS = 10 * 60 * 1000
+
+/** The titlebar pill: null when nothing is shared with you (no pill), else what is live now. */
+export function pillSummary(rooms: SharedRoom[], now: Date = new Date()): { count: number; active: number; label: string; hint: string } | null {
+  if (!rooms.length) return null
+  const active = rooms.filter((r) => r.updatedAt && now.getTime() - new Date(r.updatedAt).getTime() < ACTIVE_MS).length
+  const count = rooms.length
+  return {
+    count,
+    active,
+    label: active ? `${active} live` : `${count} shared`,
+    hint: `Shared with your team: ${count} ${count === 1 ? "chat" : "chats"}, ${active ? `${active} active now` : "none active now"}`,
+  }
+}
+
+/** The room that shares this chat, if any — what the chat's own header marks. */
+export function roomForSession(rooms: SharedRoom[], sessionId: string | undefined | null): SharedRoom | null {
+  if (!sessionId) return null
+  return rooms.find((r) => r.sessionIds.includes(sessionId)) ?? null
+}
+
+/** What an invite lets you do, in plain words. Unknown roles read as the least. */
+export function roleWords(role: string | null): string {
+  const r = (role ?? "").toLowerCase()
+  if (r === "owner" || r === "admin") return "watch its shared chats, type into them and stop them"
+  if (r === "editor" || r === "edit" || r === "write") return "watch its shared chats and type into them"
+  return "watch its shared chats"
+}
+
+export type HomeScope = "all" | "local" | "shared"
+
+/** Shared chats in the order Home shows them: the one that moved last first. */
+export function homeSharedRows(rooms: SharedRoom[]): SharedRoom[] {
+  return [...rooms].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared } from "./shared-rooms"
+import { readSharedRoom, readSharedMessage, readSessionState, readSayResult, isShared, parseInviteToken, inviteTrouble } from "./shared-rooms"
 
 // Shared workspaces (#194307): what Desktop draws for a room filed under an Atlas project.
 
@@ -104,5 +104,25 @@ describe("readTranscriptEntry — the agent's side of a shared chat", () => {
     })
     expect(readTranscriptEntry({ role: "assistant", type: "tool_use", tool: "Bash", command: "npm test" })).toMatchObject({ detail: "npm test", at: "" })
     expect(readTranscriptEntry({ role: "user", type: "text", text: "hi" }).role).toBe("user")
+  })
+})
+
+describe("joining from an invite link", () => {
+  test("takes the token out of a full link, a link with extras, or the bare token", () => {
+    expect(parseInviteToken("https://heyiris.io/invite/AbC123xyz_-9")).toBe("AbC123xyz_-9")
+    expect(parseInviteToken("  https://freelabel.net/invite/AbC123xyz9/?ref=x ")).toBe("AbC123xyz9")
+    expect(parseInviteToken("AbC123xyz9")).toBe("AbC123xyz9")
+  })
+  test("refuses what is not an invite", () => {
+    expect(parseInviteToken("")).toBeNull()
+    expect(parseInviteToken("hello there")).toBeNull()
+    expect(parseInviteToken("https://heyiris.io/p/pricing")).toBeNull()
+    expect(parseInviteToken("abc")).toBeNull()
+  })
+  test("says why an invite was refused in plain words", () => {
+    expect(inviteTrouble(410, {})).toMatch(/expired/)
+    expect(inviteTrouble(403, {})).toMatch(/different email/)
+    expect(inviteTrouble(404, {})).toMatch(/not valid/)
+    expect(inviteTrouble(400, { error: "You cannot redeem your own share link" })).toMatch(/already in it/)
   })
 })

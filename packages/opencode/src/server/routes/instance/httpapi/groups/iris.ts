@@ -1492,6 +1492,15 @@ const SharedActionResponse = Schema.Struct({
   message: Schema.optional(Schema.String),
   roomId: Schema.optional(Schema.String),
 }).annotate({ identifier: "IrisSharedActionResponse" })
+const SharedJoinResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  outcome: Schema.optional(Schema.Literals(["preview", "joined", "member", "check_email"])),
+  projectId: Schema.optional(Schema.Finite),
+  projectName: Schema.optional(Schema.String),
+  ownerName: Schema.optional(Schema.NullOr(Schema.String)),
+  role: Schema.optional(Schema.NullOr(Schema.String)),
+}).annotate({ identifier: "IrisSharedJoinResponse" })
 
 const RoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(RoomSchema) }).annotate({
   identifier: "IrisRoomsResponse",
@@ -2255,6 +2264,7 @@ export const IrisPaths = {
   sharedRoomStop: `${root}/shared-rooms/:roomID/stop`,
   sharedRoomUnshare: `${root}/shared-rooms/:roomID/unshare`,
   sharedRoomShare: `${root}/shared-rooms/share`,
+  sharedRoomJoin: `${root}/shared-rooms/join`,
   sharedRoomTranscript: `${root}/shared-rooms/:roomID/sessions/:sessionID/transcript`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
@@ -3780,6 +3790,10 @@ export const IrisApi = HttpApi.make("iris").add(
         payload: Schema.Struct({ sessionId: Schema.String, projectId: Schema.Finite, name: Schema.String }),
         success: described(SharedActionResponse, "Share one of this computer's chats with a project"),
       }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomShare", summary: "Share a chat with your team" })),
+      HttpApiEndpoint.post("sharedRoomJoin", IrisPaths.sharedRoomJoin, {
+        payload: Schema.Struct({ invite: Schema.String, preview: Schema.optional(Schema.Boolean) }),
+        success: described(SharedJoinResponse, "Join a team's project from an invite link, as the person signed in here"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomJoin", summary: "Join a shared workspace" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
         query: Schema.Struct({

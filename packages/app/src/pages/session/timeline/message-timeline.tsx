@@ -89,6 +89,10 @@ import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { sessionTitle } from "@/utils/session-title"
 import { scheduleConnectedMeasure } from "./measure"
+import { openSharedRoom, sharedFetch, sharedRooms } from "@/components/session/iris-shared-store"
+import { roomForSession } from "@/components/session/iris-shared-rooms-model"
+import { DialogShareWithTeam } from "@/components/session/dialog-share-with-team"
+import "@/components/session/iris-shared-rooms.css"
 import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
 import { MessageComment, SummaryDiff, TimelineRow, TimelineRowMap } from "./rows"
@@ -342,6 +346,13 @@ export function MessageTimeline(props: {
   const titleLabel = createMemo(() => sessionTitle(titleValue()))
   const shareUrl = createMemo(() => info()?.share?.url)
   const shareEnabled = createMemo(() => sync().data.config.share !== "disabled")
+  // Shared workspaces (#194307): is this chat filed under a team project?
+  const sharedRoom = createMemo(() => roomForSession(sharedRooms(), sessionID()))
+  const shareWithTeam = (id: string) => {
+    const f = sharedFetch()
+    if (!f) return
+    dialog.show(() => <DialogShareWithTeam doFetch={f} sessionId={id} title={titleLabel() ?? ""} />)
+  }
   const parentID = createMemo(() => info()?.parentID)
   const parent = createMemo(() => {
     const id = parentID()
@@ -1531,6 +1542,24 @@ export function MessageTimeline(props: {
                       "gap-3": !settings.general.newLayoutDesigns(),
                     }}
                   >
+                    <Show when={sharedRoom()}>
+                      {(room) => (
+                        <TooltipV2
+                          placement="bottom"
+                          value={<>Your team in {room().project?.name ?? "this project"} sees this chat live</>}
+                        >
+                          <button
+                            type="button"
+                            class="sr-marker"
+                            data-slot="session-shared-marker"
+                            onClick={() => openSharedRoom(room().id)}
+                          >
+                            <span class="sr-pulse" aria-hidden="true" />
+                            Shared · {room().project?.name ?? room().name}
+                          </button>
+                        </TooltipV2>
+                      )}
+                    </Show>
                     <SessionContextUsage
                       placement="bottom"
                       buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
@@ -1615,6 +1644,11 @@ export function MessageTimeline(props: {
                                     <DropdownMenu.ItemLabel>
                                       {language.t("session.share.action.share")}
                                     </DropdownMenu.ItemLabel>
+                                  </DropdownMenu.Item>
+                                </Show>
+                                <Show when={!sharedRoom() && sharedFetch()}>
+                                  <DropdownMenu.Item onSelect={() => shareWithTeam(id)}>
+                                    <DropdownMenu.ItemLabel>Share with team…</DropdownMenu.ItemLabel>
                                   </DropdownMenu.Item>
                                 </Show>
                                 <DropdownMenu.Item onSelect={() => exportSession(id)}>
@@ -1806,6 +1840,9 @@ export function MessageTimeline(props: {
                                 >
                                   {language.t("session.share.action.share")}...
                                 </MenuV2.Item>
+                              </Show>
+                              <Show when={!sharedRoom() && sharedFetch()}>
+                                <MenuV2.Item onSelect={() => shareWithTeam(id)}>Share with team…</MenuV2.Item>
                               </Show>
                               <MenuV2.Item onSelect={() => exportSession(id)}>
                                 {language.t("common.export")}...

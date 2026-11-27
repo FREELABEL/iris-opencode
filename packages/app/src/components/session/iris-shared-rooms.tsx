@@ -18,6 +18,9 @@ import {
   type SharedRoom,
   type TranscriptEntry,
 } from "./iris-shared-rooms-model"
+import { setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { DialogJoinTeam } from "./dialog-join-team"
 
 /**
  * Agents › Shared (#194307) — the live chats your team shared with your Atlas projects.
@@ -69,6 +72,7 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
   const post = <T,>(path: string, body: unknown, fallback: T) =>
     json<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, fallback)
 
+  const dialog = useDialog()
   const [list, { refetch }] = createResource(() => json<ListPayload>("/iris/shared-rooms", undefined, { measured: false, rooms: [] }))
   const listTimer = setInterval(() => void refetch(), 30_000)
   onCleanup(() => clearInterval(listTimer))
@@ -86,6 +90,18 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
       id ? localStorage.setItem(OPEN_KEY, id) : localStorage.removeItem(OPEN_KEY)
     } catch {}
   }
+
+  // Keep the app-wide list (titlebar pill, chat markers) in step with what this pane read.
+  createEffect(() => {
+    const l = list()
+    if (l?.measured) setSharedRooms(l.rooms ?? [])
+  })
+  // "Open this room" from anywhere else in the app (a chat's Shared marker, the share dialog).
+  createEffect(
+    on(sharedOpenRequest, (req) => {
+      if (req) choose(req.id)
+    }),
+  )
 
   const groups = createMemo(() => groupByProject(list()?.rooms ?? []))
   const total = createMemo(() => (list()?.rooms ?? []).length)
@@ -106,6 +122,9 @@ export function IrisSharedRooms(props: { doFetch: Fetch; myId?: number | null })
                   </Show>
                 </h2>
               </div>
+              <button class="sr-btn sr-join-btn" onClick={() => dialog.show(() => <DialogJoinTeam doFetch={props.doFetch} />)}>
+                Join a team…
+              </button>
               <button class="sr-iconbtn" title="Refresh" aria-label="Refresh" onClick={() => void refetch()}>
                 <Icon name="refresh" size="small" />
               </button>

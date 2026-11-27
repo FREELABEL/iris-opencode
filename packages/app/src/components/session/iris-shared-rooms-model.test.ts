@@ -9,6 +9,8 @@ import {
   composerHint,
   type SharedRoom,
   type SharedMessage,
+  roleWords,
+  homeSharedRows,
 } from "./iris-shared-rooms-model"
 
 const room = (over: Partial<SharedRoom>): SharedRoom => ({
@@ -142,5 +144,37 @@ describe("why the chat cannot be shown — in words, never node ids", () => {
     expect(chatTrouble("Session abc not found", "Alex")).toBe("That chat isn't open on Alex's computer anymore.")
     expect(chatTrouble("not signed in to IRIS — run `iris auth login`", "Alex")).toBe("You're not signed in to IRIS.")
     expect(chatTrouble("something odd 01a21990-1e67-71f3-ac8c-1d03a3db0cfd", "Alex")).toBe("Alex's computer couldn't share the chat right now.")
+  })
+})
+
+import { pillSummary, roomForSession } from "./iris-shared-rooms-model"
+describe("telling you, anywhere in the app, that something is shared", () => {
+  const r = (id: string, sessionIds: string[], updatedAt: string, project = "Pricing launch"): SharedRoom => ({
+    id, name: id, project: { id: 1, name: project }, ownerName: "Alex", you: { role: "editor", canPost: true, canStop: false, isOwner: false }, sessionIds, updatedAt,
+  })
+  test("the titlebar pill counts what is live now, and stays away when nothing is shared", () => {
+    expect(pillSummary([], NOW)).toBeNull()
+    const rooms = [r("a", ["s1"], "2026-11-26T19:58:00Z"), r("b", ["s2"], "2026-11-26T19:55:00Z"), r("c", ["s3"], "2026-11-26T12:00:00Z")]
+    expect(pillSummary(rooms, NOW)).toEqual({ count: 3, active: 2, label: "2 live", hint: "Shared with your team: 3 chats, 2 active now" })
+    expect(pillSummary([r("c", ["s3"], "2026-11-26T12:00:00Z")], NOW)).toEqual({ count: 1, active: 0, label: "1 shared", hint: "Shared with your team: 1 chat, none active now" })
+  })
+  test("a chat knows the room that shares it", () => {
+    const rooms = [r("a", ["ses_1"], "t"), r("b", ["ses_2", "ses_3"], "t", "Client: Vanguard")]
+    expect(roomForSession(rooms, "ses_3")?.id).toBe("b")
+    expect(roomForSession(rooms, "ses_9")).toBeNull()
+    expect(roomForSession(rooms, undefined)).toBeNull()
+  })
+})
+
+describe("joining and Home", () => {
+  test("an invite's role in plain words, least access when unknown", () => {
+    expect(roleWords("editor")).toMatch(/type into them/)
+    expect(roleWords("owner")).toMatch(/stop them/)
+    expect(roleWords("viewer")).toBe("watch its shared chats")
+    expect(roleWords(null)).toBe("watch its shared chats")
+  })
+  test("Home lists the shared chat that moved last first", () => {
+    const r = (id: string, updatedAt?: string) => ({ id, name: id, project: null, ownerName: null, you: { role: null, canPost: false, canStop: false, isOwner: false }, sessionIds: [], updatedAt })
+    expect(homeSharedRows([r("a", "2026-11-27T10:00:00Z"), r("b", "2026-11-27T11:00:00Z"), r("c")]).map((x) => x.id)).toEqual(["b", "a", "c"])
   })
 })

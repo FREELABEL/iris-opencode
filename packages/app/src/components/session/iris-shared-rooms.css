@@ -618,3 +618,158 @@
   padding: 8px 10px;
   margin-bottom: 8px;
 }
+
+/* ── Share with your team (dialog) ────────────────────────────────────────── */
+.sr-share {
+  height: auto;
+  gap: 8px;
+  padding: 4px 20px 20px;
+}
+.sr-share-label {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-strong);
+  margin-top: 6px;
+}
+.sr-share-input {
+  font: inherit;
+  font-size: var(--font-size-small);
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--sr-line);
+  background: var(--background-base);
+  color: var(--text-strong);
+}
+.sr-share-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sr-live) 45%, var(--sr-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sr-live) 12%, transparent);
+}
+.sr-share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sr-share-option {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-small);
+  color: var(--text-base);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.sr-share-option:hover {
+  background: var(--sr-softer);
+}
+.sr-share-option[data-on] {
+  border-color: color-mix(in srgb, var(--sr-live) 40%, var(--sr-line));
+  background: color-mix(in srgb, var(--sr-live) 7%, transparent);
+  color: var(--text-strong);
+}
+.sr-share-radio {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--text-weaker);
+  flex: none;
+}
+.sr-share-option[data-on] .sr-share-radio {
+  border-color: var(--sr-live);
+  box-shadow: inset 0 0 0 3px var(--background-base), inset 0 0 0 8px var(--sr-live);
+}
+.sr-share-hint {
+  font-size: var(--font-size-caption);
+  color: var(--text-weak);
+}
+.sr-share-facts {
+  margin: 8px 0 0;
+  padding: 10px 12px 10px 28px;
+  border-radius: var(--radius-lg);
+  background: var(--sr-softer);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-large);
+  color: var(--text-weak);
+}
+.sr-share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sr-share-go {
+  font: inherit;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  padding: 6px 16px;
+  border-radius: var(--radius-md);
+  border: 0;
+  background: var(--text-strong);
+  color: var(--background-base);
+  cursor: pointer;
+}
+.sr-share-go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── the "Shared" marker in a chat's title row ───────────────────────────── */
+.sr-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-x-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--ui-good, #059669);
+  background: color-mix(in srgb, var(--ui-good, #059669) 11%, transparent);
+  border: 0;
+  border-radius: var(--radius-full);
+  padding: 3px 10px 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sr-marker:hover {
+  background: color-mix(in srgb, var(--ui-good, #059669) 18%, transparent);
+}
+.sr-marker .sr-pulse {
+  width: 6px;
+  height: 6px;
+}
+
+/* ── Join a team ─────────────────────────────────────────────────────────── */
+.sr-join-big {
+  font-size: var(--font-size-large, 16px);
+  font-weight: var(--font-weight-medium);
+  margin: 4px 0 6px;
+}
+.sr-join-card {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ui-good, #059669) 8%, transparent);
+}
+.sr-join-name {
+  font-weight: var(--font-weight-medium);
+  margin-bottom: 2px;
+}
+.sr-join-btn {
+  margin-left: auto;
+  margin-right: 4px;
+}
+.sr-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

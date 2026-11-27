@@ -12,7 +12,7 @@
  * Rooms live on iris-api (IRIS_API). A call to the wrong host 404s, and a 404 on a room reads as
  * "no such room", so every call names its base.
  */
-import { IRIS_API, irisFetch } from "./platform"
+import { FL_API, IRIS_API, irisFetch } from "./platform"
 
 export type Rights = { role: string | null; canPost: boolean; canStop: boolean; isOwner: boolean }
 export type SharedRoom = {
@@ -254,5 +254,97 @@ export async function fetchSharedTranscript(
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Join a workspace from an invite link (#194307)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The token out of whatever was pasted: a full invite link (`…/invite/<token>`), a link with a
+ * query or trailing slash, or the bare token. Null when it is not shaped like one.
+ */
+export function parseInviteToken(input: string | null | undefined): string | null {
+  const s = String(input ?? "").trim()
+  if (!s) return null
+  const m = /\/invite\/([A-Za-z0-9_-]{8,128})(?:[/?#]|$)/.exec(s)
+  if (m) return m[1]
+  return /^[A-Za-z0-9_-]{8,128}$/.test(s) ? s : null
+}
+
+export type InvitePreview = { projectId: number; projectName: string; ownerName: string | null; role: string | null }
+export type JoinResult = {
+  ok: boolean
+  reason?: string
+  /** "joined" — you are in now · "member" — you already were · "check_email" — the server wants
+   * you to confirm by email first (it could not tell this app is signed in as you). */
+  outcome?: "joined" | "member" | "check_email"
+  projectId?: number
+  projectName?: string
+}
+
+/** Plain words for the ways an invite can be refused. */
+export function inviteTrouble(status: number, j: any): string {
+  if (status === 404) return "That invite link is not valid. Ask for a new one."
+  if (status === 410) return "That invite has expired or has been used up. Ask for a new one."
+  if (status === 403) return "That invite was made for a different email address."
+  if (status === 400 && /own share link/i.test(str(j?.error))) return "That is your own project's invite — you are already in it."
+  if (status === 429) return "Too many tries. Wait a minute and try again."
+  return str(j?.error) || `The invite did not go through (${status}).`
+}
+
+/** What the invite is for, before joining. fl-api, public route. */
+export async function previewInvite(token: string): Promise<Read<InvitePreview | null>> {
+  try {
+    const res = await irisFetch(`/api/v1/bloq/share-link/${encodeURIComponent(token)}`, FL_API, {}, null)
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok || j?.success === false) return { measured: false, reason: inviteTrouble(res.status, j), data: null }
+    const d = j?.data ?? {}
+    return {
+      measured: true,
+      data: { projectId: Number(d.bloq_id), projectName: str(d.bloq_name) || "a project", ownerName: d.owner_name ? str(d.owner_name) : null, role: d.permission ? str(d.permission) : null },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+/**
+ * Join as the person signed in to this app. fl-api grants the invite to an EXISTING account only
+ * when the caller proves it is that account (its own sign-in on the request), so this sends the
+ * account's own email with its own key — never an email typed by someone.
+ */
+export async function joinInvite(token: string): Promise<JoinResult> {
+  try {
+    let email: string | null = null
+    for (const ep of ["/api/user", "/api/v1/me"]) {
+      const r = await irisFetch(ep, FL_API)
+      if (!r.ok) continue
+      const j = (await r.json().catch(() => ({}))) as any
+      const e = j?.data?.email ?? j?.email
+      if (typeof e === "string" && e.includes("@")) {
+        email = e
+        break
+      }
+    }
+    if (!email) return { ok: false, reason: "Sign in to IRIS first, then try the invite again." }
+    const res = await irisFetch(`/api/v1/bloq/share-link/${encodeURIComponent(token)}/redeem`, FL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    const d = j?.data ?? {}
+    const project = { projectId: d.bloq_id != null ? Number(d.bloq_id) : undefined, projectName: d.bloq_name ? str(d.bloq_name) : undefined }
+    if (j?.success === true) {
+      // The server could not tie this request to the account (it mails a sign-in link instead).
+      if (d.requires_sign_in) return { ok: true, outcome: "check_email", ...project }
+      if (d.already_member || res.status === 409) return { ok: true, outcome: "member", ...project }
+      if (res.ok) return { ok: true, outcome: "joined", ...project }
+    }
+    return { ok: false, reason: inviteTrouble(res.status, j) }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }

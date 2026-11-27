@@ -25,6 +25,8 @@ import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
 import { hivePillTarget } from "./session/iris-hive-inbox-model"
+import { openSharedRoom, sharedRooms, watchSharedRooms } from "./session/iris-shared-store"
+import { pillSummary } from "./session/iris-shared-rooms-model"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -255,6 +257,12 @@ export function TitlebarIrisPills() {
   })
 
   const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
+  // Shared workspaces (#194307): one app-wide read of the chats your team shares with you.
+  watchSharedRooms(doFetch)
+  const [sharedTick, setSharedTick] = createSignal(Date.now())
+  const sharedTimer = setInterval(() => setSharedTick(Date.now()), 30_000)
+  onCleanup(() => clearInterval(sharedTimer))
+  const shared = createMemo(() => pillSummary(sharedRooms(), new Date(sharedTick())))
 
   // These poll every 30s from OUTSIDE the session's error boundary, so a rejected fetch (sidecar
   // restarting, Windows resuming from sleep) used to throw straight to app.tsx and replace the whole
@@ -463,6 +471,33 @@ export function TitlebarIrisPills() {
             </TooltipV2>
           </Show>
 
+          {/* Shared with your team (#194307): only when something is shared with you. Green dot when
+              a shared chat moved in the last 10 minutes. */}
+          <Show when={shared()}>
+            {(sum) => (
+              <TooltipV2 placement="bottom" value={<>{sum().hint}</>}>
+                <button
+                  type="button"
+                  data-slot="iris-shared-pill"
+                  class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                  classList={{ "text-v2-text-text-base": sum().active > 0 }}
+                  aria-label={sum().hint}
+                  onClick={() => openSharedRoom(null)}
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="6" cy="5.5" r="2.25" />
+                    <path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5" />
+                    <circle cx="11.25" cy="6" r="1.75" />
+                    <path d="M11 9.6c1.5.1 2.6 1.2 3 3" />
+                  </svg>
+                  <Show when={sum().active > 0}>
+                    <span class="inline-block size-1.5 rounded-full bg-v2-state-fg-success" aria-hidden="true" />
+                  </Show>
+                  <span class="font-mono tabular-nums">{sum().label}</span>
+                </button>
+              </TooltipV2>
+            )}
+          </Show>
           {/* Always present (#189279): the inbox is a place, not only an alert. The badge is the
               alert — its own accent, never the fleet dot's green/red. */}
           <Show when={unread() && unread() !== "—"}>
