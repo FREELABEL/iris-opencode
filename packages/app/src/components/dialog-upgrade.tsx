@@ -6,6 +6,7 @@ import { usePlatform } from "@/context/platform"
 import { trackUpgrade } from "@/utils/upgrade-funnel"
 import { planSummary, type SummaryInput } from "./plan-summary"
 import { PlanMark } from "./plan-mark"
+import "./dialog-upgrade.css"
 
 
 export interface PlanOffer {
@@ -152,7 +153,7 @@ export function PlanCards(props: {
               <span
                 class="tabular-nums"
                 classList={{
-                  "text-v2-state-fg-warning font-medium": summary().over,
+                  "iris-upgrade__warn font-medium": summary().over,
                   "text-v2-text-text-base": !summary().over,
                 }}
                 data-slot="iris-plan-summary-allowance"
