@@ -1,19 +1,35 @@
+#[cfg(desktop)]
 mod accounts;
+#[cfg(desktop)]
 mod browser;
+#[cfg(desktop)]
 mod browser_eval;
+#[cfg(desktop)]
 mod chrome_cookies;
+#[cfg(desktop)]
 mod cli;
+#[cfg(desktop)]
 mod deep_link;
+#[cfg(desktop)]
 mod engine_auth;
+#[cfg(desktop)]
 mod engine_supervisor;
+#[cfg(desktop)]
 mod google_signin;
+#[cfg(desktop)]
 mod history_home;
+#[cfg(desktop)]
 mod keep_awake;
+#[cfg(desktop)]
 mod login;
+#[cfg(desktop)]
 mod onboarding;
+#[cfg(desktop)]
 mod window_customizer;
 
+#[cfg(desktop)]
 use cli::{cli_health, install_cli, sync_cli};
+#[cfg(desktop)]
 use std::{
     collections::VecDeque,
     net::{SocketAddr, TcpListener},
@@ -23,26 +39,37 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(desktop)]
 use tauri::{
     path::BaseDirectory, AppHandle, LogicalSize, Manager, RunEvent, WebviewUrl, WebviewWindow,
 };
+#[cfg(desktop)]
 use tauri_plugin_clipboard_manager::ClipboardExt;
+#[cfg(desktop)]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
+#[cfg(desktop)]
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+#[cfg(desktop)]
 use tauri_plugin_shell::ShellExt;
+#[cfg(desktop)]
 use tokio::net::TcpSocket;
 
+#[cfg(desktop)]
 use crate::window_customizer::{LinuxMicrophonePlugin, PinchZoomDisablePlugin};
 
 #[derive(Clone)]
+#[cfg(desktop)]
 struct ServerState(Arc<Mutex<Option<CommandChild>>>);
 
 #[derive(Clone)]
+#[cfg(desktop)]
 struct LogState(Arc<Mutex<VecDeque<String>>>);
 
+#[cfg(desktop)]
 const MAX_LOG_ENTRIES: usize = 200;
 
 #[tauri::command]
+#[cfg(desktop)]
 fn kill_sidecar(app: AppHandle) {
     // Every caller is deliberate — quitting, restarting, or the updater stopping the engine before
     // it swaps the bundle — so the supervisor must not read the exit as a crash (#190516). The
@@ -60,6 +87,7 @@ fn kill_sidecar(app: AppHandle) {
 /// a call). The installer kills too, but anything it cannot kill ends the update, so the app,
 /// which can, does it first. Async so the window is not frozen while it waits.
 #[tauri::command]
+#[cfg(desktop)]
 async fn prepare_for_update(app: AppHandle) -> Result<(), String> {
     kill_sidecar(app);
     #[cfg(windows)]
@@ -73,6 +101,7 @@ async fn prepare_for_update(app: AppHandle) -> Result<(), String> {
 
 /// Kill every iris-cli.exe and wait until none is listed, or say which are left.
 #[cfg(windows)]
+#[cfg(desktop)]
 fn stop_all_cli_processes(limit: Duration) -> Result<(), String> {
     use std::process::Command;
     let listed = || -> bool {
@@ -99,6 +128,7 @@ fn stop_all_cli_processes(limit: Duration) -> Result<(), String> {
 
 /// Kill the engine this app started, if any, without touching supervision. The supervisor uses
 /// this before a respawn; `kill_sidecar` uses it after pausing.
+#[cfg(desktop)]
 fn stop_engine_child(app: &AppHandle) {
     let Some(server_state) = app.try_state::<ServerState>() else {
         println!("Server not running");
@@ -128,12 +158,14 @@ fn stop_engine_child(app: &AppHandle) {
 /// value in the window's initialization script, so only the app's own pages can read it. None
 /// when the app attached to an engine it did not start, which is the old, unauthenticated case.
 #[derive(serde::Serialize)]
+#[cfg(desktop)]
 struct EngineCredentials {
     username: &'static str,
     password: String,
 }
 
 #[tauri::command]
+#[cfg(desktop)]
 fn engine_credentials() -> Option<EngineCredentials> {
     let password = engine_auth::current_password();
     // Remembered so a respawn can tell whether the window still holds the right one (#191482).
@@ -147,10 +179,12 @@ fn engine_credentials() -> Option<EngineCredentials> {
 /// A line from the window — an uncaught error, an unhandled rejection, or a document load — for
 /// engine.log, which outlives a reload (#191508).
 #[tauri::command]
+#[cfg(desktop)]
 fn log_renderer(app: AppHandle, kind: String, message: String) {
     engine_supervisor::log_line(&app, &engine_supervisor::renderer_line(&kind, &message));
 }
 
+#[cfg(desktop)]
 fn set_engine_child(app: &AppHandle, child: CommandChild) {
     if let Some(state) = app.try_state::<ServerState>() {
         if let Ok(mut slot) = state.0.lock() {
@@ -160,6 +194,7 @@ fn set_engine_child(app: &AppHandle, child: CommandChild) {
 }
 
 #[tauri::command]
+#[cfg(desktop)]
 async fn copy_logs_to_clipboard(app: AppHandle) -> Result<(), String> {
     let log_state = app.try_state::<LogState>().ok_or("Log state not found")?;
 
@@ -178,6 +213,7 @@ async fn copy_logs_to_clipboard(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(desktop)]
 async fn get_logs(app: AppHandle) -> Result<String, String> {
     let log_state = app.try_state::<LogState>().ok_or("Log state not found")?;
 
@@ -192,6 +228,7 @@ async fn get_logs(app: AppHandle) -> Result<String, String> {
 /// The port from OPENCODE_PORT, when one was given. Only then is an engine already answering on
 /// it one to attach to (#191482).
 /// Every app command. Registered through the webview gate in `run` (#193062), never directly.
+#[cfg(desktop)]
 fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
             browser::browser_show,
@@ -228,8 +265,10 @@ fn app_commands() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
 
 /// The engine sidecar's port, once chosen. The Browser refuses to navigate to it (#193062): the
 /// engine is ours, and a web page has no business loading it as a page.
+#[cfg(desktop)]
 static ENGINE_PORT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+#[cfg(desktop)]
 pub(crate) fn engine_port_hint() -> Option<u16> {
     match ENGINE_PORT.load(std::sync::atomic::Ordering::Relaxed) {
         0 => None,
@@ -237,6 +276,7 @@ pub(crate) fn engine_port_hint() -> Option<u16> {
     }
 }
 
+#[cfg(desktop)]
 fn configured_sidecar_port() -> Option<u32> {
     option_env!("OPENCODE_PORT")
         .map(|s| s.to_string())
@@ -244,6 +284,7 @@ fn configured_sidecar_port() -> Option<u32> {
         .and_then(|port_str| port_str.parse().ok())
 }
 
+#[cfg(desktop)]
 fn free_sidecar_port() -> u32 {
     TcpListener::bind("127.0.0.1:0")
         .expect("Failed to bind to find free port")
@@ -258,6 +299,7 @@ fn free_sidecar_port() -> u32 {
 /// file on one developer's laptop (`~/.config/opencode/AGENTS.md`) — written by no installer,
 /// referenced in no repo — which meant every client install was a generic coding agent that
 /// did not know it was IRIS, that `iris leads` existed, or that it could drive the platform.
+#[cfg(desktop)]
 const IRIS_BASELINE_AGENTS_MD: &str = include_str!("../resources/iris-agents.md");
 
 /// Seed `~/.config/opencode/AGENTS.md` if, and only if, it does not already exist.
@@ -279,6 +321,7 @@ const IRIS_BASELINE_AGENTS_MD: &str = include_str!("../resources/iris-agents.md"
 /// the same place. Hardcoding `~/.config` here (as the instruction seeder used to) means that
 /// on any machine with XDG_CONFIG_HOME set, the file is written somewhere the agent never
 /// looks — and the symptom is an agent with no IRIS context and no error anywhere.
+#[cfg(desktop)]
 fn opencode_config_dir() -> Option<std::path::PathBuf> {
     // Resolve from home explicitly rather than via unwrap_or_default(): defaulting an absent
     // home to an empty PathBuf and then joining ".config" produced the RELATIVE path
@@ -300,6 +343,7 @@ fn opencode_config_dir() -> Option<std::path::PathBuf> {
     Some(base.join("opencode"))
 }
 
+#[cfg(desktop)]
 fn seed_iris_instructions() {
     let Some(dir) = opencode_config_dir() else {
         return;
@@ -330,6 +374,7 @@ fn seed_iris_instructions() {
 ///
 /// Missing file, missing key and unreadable file are all the same non-fatal answer: None.
 /// A user who has not run `iris-login` yet must still get a working app.
+#[cfg(desktop)]
 fn iris_env_value(key: &str) -> Option<String> {
     let path = dirs_next_home()?.join(".iris").join("sdk").join(".env");
     let contents = std::fs::read_to_string(path).ok()?;
@@ -368,6 +413,7 @@ fn iris_env_value(key: &str) -> Option<String> {
 /// (no identity file), and it ran on `opencode/hy3-free` rather than our proxy (no provider
 /// config, so `enabled_providers`/`disabled_providers` never applied and her usage bypassed
 /// our billing entirely).
+#[cfg(desktop)]
 fn dirs_next_home() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -391,6 +437,7 @@ fn dirs_next_home() -> Option<std::path::PathBuf> {
 // makes this MORE likely, not less, because a disk image is exactly what people open and run
 // from.
 #[cfg(target_os = "macos")]
+#[cfg(desktop)]
 fn translocated_from() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.to_string_lossy().to_string();
@@ -402,6 +449,7 @@ fn translocated_from() -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[cfg(desktop)]
 fn translocated_from() -> Option<String> {
     None
 }
@@ -409,6 +457,7 @@ fn translocated_from() -> Option<String> {
 // Tell the user what is wrong and what to do about it, then quit. Continuing is not an option
 // worth offering: the sidecar cannot start from here, so every screen after this one would be
 // a slower, more confusing version of the same failure.
+#[cfg(desktop)]
 const TRANSLOCATION_MESSAGE: &str = concat!(
     "IRIS is running from a temporary read-only copy, so it cannot start its local server.",
     "\n\n",
@@ -428,6 +477,7 @@ const TRANSLOCATION_MESSAGE: &str = concat!(
 /// is a remote-code-execution hole the moment anything but the menu can call it, and Tauri
 /// commands are reachable from page JavaScript.
 #[tauri::command]
+#[cfg(desktop)]
 async fn iris_action(action: String) -> Result<String, String> {
     let (bin, args): (&str, &[&str]) = match action.as_str() {
         "daemon-status" => ("iris-daemon", &["status"]),
@@ -506,6 +556,7 @@ async fn iris_action(action: String) -> Result<String, String> {
 /// account. The window opens on top, cannot be dismissed, and closes itself once signed in.
 ///
 /// Silent and free when a key exists: one file read, then return.
+#[cfg(desktop)]
 fn require_sign_in(app: &AppHandle) {
     if iris_env_value("IRIS_API_KEY").is_some() {
         return;
@@ -544,15 +595,19 @@ fn require_sign_in(app: &AppHandle) {
 /// How long the main window has to claim sign-in before the standalone window opens instead.
 // 20 s, not 10: the page can only claim sign-in after asking the engine, which may still be
 // starting on a cold launch — a 10 s window lost that race and opened the window over the page.
+#[cfg(desktop)]
 const SIGNIN_CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+#[cfg(desktop)]
 static SIGNIN_IN_APP: AtomicBool = AtomicBool::new(false);
 
 /// The main window is showing sign-in itself; don't open the separate window over it.
 #[tauri::command]
+#[cfg(desktop)]
 fn signin_in_app() {
     SIGNIN_IN_APP.store(true, Ordering::SeqCst);
 }
 
+#[cfg(desktop)]
 fn warn_if_translocated(app: &AppHandle) -> bool {
     let Some(path) = translocated_from() else {
         return false;
@@ -595,11 +650,13 @@ fn warn_if_translocated(app: &AppHandle) -> bool {
 /// Measured on a clean machine under an isolated HOME, the shipped app served the
 /// `opencode` provider with 29 models. So every download we handed out was a user pointed
 /// at someone else's models, someone else's routing, and someone else's billing.
+#[cfg(desktop)]
 const IRIS_PROVIDER_JSON: &str = include_str!("../resources/iris-provider.json");
 
 /// The credential is NOT in that file — it is `{env:IRIS_API_KEY}`, resolved by the CLI's
 /// config loader from the process env, which spawn_sidecar populates from
 /// ~/.iris/sdk/.env. A shipped artifact must never carry a real key.
+#[cfg(desktop)]
 fn seed_iris_provider() {
     let Some(config_dir) = opencode_config_dir() else {
         return;
@@ -737,6 +794,7 @@ fn seed_iris_provider() {
     }
 }
 
+#[cfg(desktop)]
 fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let log_state = app.state::<LogState>();
     let log_state_clone = log_state.inner().clone();
@@ -939,6 +997,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
 /// The IRIS_API_KEY the running engine was spawned with. None until this app spawns one —
 /// and it stays None when the app attached to an engine it did not start, because then there
 /// is nothing here that could re-key it.
+#[cfg(desktop)]
 static ENGINE_KEY: Mutex<Option<String>> = Mutex::new(None);
 
 /// Keep the engine's credential equal to the one on disk. Runs for the life of the app.
@@ -964,6 +1023,7 @@ static ENGINE_KEY: Mutex<Option<String>> = Mutex::new(None);
 /// Two polls must agree before acting (a file caught mid-write is not a new key), and the
 /// restart waits while the sign-in window is running setup — it owns the restart then, and
 /// shows the user what happened first.
+#[cfg(desktop)]
 fn watch_engine_key(app: AppHandle) {
     std::thread::spawn(move || {
         let mut pending: Option<String> = None;
@@ -1024,6 +1084,7 @@ fn watch_engine_key(app: AppHandle) {
     });
 }
 
+#[cfg(desktop)]
 fn restart_engine(app: &AppHandle) {
     // Forget the engine key so the watcher cannot fire twice while the restart is under way.
     if let Ok(mut k) = ENGINE_KEY.lock() {
@@ -1035,6 +1096,7 @@ fn restart_engine(app: &AppHandle) {
     app.request_restart();
 }
 
+#[cfg(desktop)]
 async fn is_server_running(port: u32) -> bool {
     TcpSocket::new_v4()
         .unwrap()
@@ -1047,6 +1109,7 @@ async fn is_server_running(port: u32) -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(desktop)]
 pub fn run() {
     let updater_enabled = option_env!("TAURI_SIGNING_PRIVATE_KEY").is_some();
 
@@ -1297,4 +1360,29 @@ pub fn run() {
                 kill_sidecar(app.clone());
             }
         });
+}
+
+// iPhone (#194511). iOS will not let an app start the engine sidecar, so the phone build is the
+// same interface pointed at an engine on one of the person's own machines (over Tailscale, later
+// the Hive relay). Everything above is desktop-only; this is the whole native side on mobile.
+#[cfg(mobile)]
+#[tauri::mobile_entry_point]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .setup(|app| {
+            // No initialization_script port: window.__OPENCODE__.mobile tells the frontend to
+            // load the mobile entry, which asks which machine to connect to.
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
+                .initialization_script("window.__OPENCODE__ ??= {}; window.__OPENCODE__.mobile = true;")
+                .build()?;
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

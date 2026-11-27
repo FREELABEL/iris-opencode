@@ -6,6 +6,8 @@
 //     window.__OPENCODE__.updaterEnabled = <bool>
 //     window.__OPENCODE__.port           = <u16>
 //
+// The iPhone build (#194511) sets only `mobile = true`: there is no sidecar, so no port.
+//
 // Upstream declares `Window.__OPENCODE__` as `{ deepLinks?: string[] }` (app.tsx). Those
 // are OUR additions, and the nested object type cannot be widened by declaration merging,
 // so the cast lives here — once, named, documented — instead of at every call site.
@@ -15,6 +17,7 @@ type OpencodeBridge = {
   deepLinks?: string[]
   updaterEnabled?: boolean
   port?: number
+  mobile?: boolean
 }
 
 export function opencodeGlobal(): OpencodeBridge {

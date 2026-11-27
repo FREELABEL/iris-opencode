@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "IRIS",
+  "identifier": "io.heyiris.app",
+  "version": "0.1.0",
+  "bundle": {
+    "icon": [
+      "icons/prod/ios/AppIcon-512@2x.png"
+    ],
+    "externalBin": [],
+    "iOS": {
+      "minimumSystemVersion": "16.0"
+    }
+  }
+}

@@ -1,0 +1,146 @@
+name: iOS build (IRIS on iPhone, #194511)
+
+# The iPhone build of packages/desktop: the same interface, no engine sidecar (iOS will not run
+# one), connected to an engine on one of the person's own machines. This job builds it for the
+# iOS Simulator, unsigned, launches it and keeps a screenshot. The signed TestFlight lane comes
+# once the App Store Connect key and app record exist (epic #194511).
+#
+# Push-triggered on the work branches because a workflow_dispatch workflow cannot be started from
+# a branch until the file is on main.
+on:
+  push:
+    branches: ["wt/194511-**"]
+    paths:
+      - ".github/workflows/ios-build.yml"
+      - "packages/desktop/**"
+      - "packages/app/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable (iOS targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: ios-sim
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/wt/194511-') }}
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          command -v xcodegen || brew install xcodegen
+
+      - name: Generate the Xcode project
+        working-directory: packages/desktop
+        run: ./node_modules/.bin/tauri ios init --ci
+
+      # The repo's iOS icon set, with the alpha channel flattened: App Store Connect refuses an app
+      # icon that has one.
+      - name: App icon
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          SET=$(find gen/apple -type d -name AppIcon.appiconset | head -1)
+          cp icons/prod/ios/*.png "$SET"/
+          for f in "$SET"/*.png; do
+            sips -s format jpeg "$f" --out "$RUNNER_TEMP/flat.jpg" >/dev/null
+            sips -s format png "$RUNNER_TEMP/flat.jpg" --out "$f" >/dev/null
+          done
+          sips -g hasAlpha "$SET/AppIcon-512@2x.png"
+
+      - name: Build the interface
+        working-directory: packages/desktop
+        run: bun run build
+
+      - name: Build for the Simulator
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          PROJ=$(ls -d gen/apple/*.xcodeproj | head -1)
+          SCHEME=$(xcodebuild -list -json -project "$PROJ" | jq -r '.project.schemes[] | select(endswith("_iOS"))' | head -1)
+          echo "project=$PROJ scheme=$SCHEME"
+          xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -arch arm64 \
+            -derivedDataPath "$RUNNER_TEMP/dd" CODE_SIGNING_ALLOWED=NO build | tail -40
+          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name '*.app' -maxdepth 2 | head -1)
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+
+      - name: Launch in the Simulator and take a screenshot
+        run: |
+          set -euo pipefail
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone 1[5-7]( Pro)?$"))][0].udid')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" "$APP"
+          BUNDLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          xcrun simctl launch "$DEVICE" "$BUNDLE"
+          sleep 20
+          mkdir -p "$RUNNER_TEMP/shots"
+          xcrun simctl io "$DEVICE" screenshot "$RUNNER_TEMP/shots/connect.png"
+          # Still running 20 s after launch = it did not crash on start.
+          xcrun simctl spawn "$DEVICE" launchctl list | grep -i "$BUNDLE"
+
+      - name: Upload screenshot and app
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          path: |
+            ${{ runner.temp }}/shots/
+          if-no-files-found: warn
+
+  # The desktop app must not notice: the same commit still compiles for macOS.
+  desktop-still-compiles:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: desktop-test-aarch64
+          save-if: false
+      - name: Frontend builds (typecheck + vite)
+        working-directory: packages/desktop
+        run: bun run build
+      # tauri-build checks that every externalBin exists; a stub stands in for the engine.
+      - name: cargo check (macOS)
+        working-directory: packages/desktop/src-tauri
+        run: |
+          mkdir -p sidecars && touch sidecars/iris-cli-aarch64-apple-darwin sidecars/iris-mic-aarch64-apple-darwin
+          cargo check --locked --target aarch64-apple-darwin
+          cargo test --locked --target aarch64-apple-darwin --no-run
