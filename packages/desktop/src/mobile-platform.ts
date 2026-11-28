@@ -58,7 +58,10 @@ export async function verify(http: Fetch, email: string, code: string): Promise<
 
 export async function listMachines(http: Fetch, account: Account): Promise<Node[]> {
   const reply = await hive(http, account, `/api/v6/nodes/?user_id=${account.userId}`)
-  return sortMachines(Array.isArray(reply?.data) ? reply.data : [])
+  // {nodes: [...], device_totals} (fl-iris-api ComputeNodeController::index). `data` is the CLI's
+  // --json wrapper, not the API's; it is read only as a fallback.
+  const list = Array.isArray(reply?.nodes) ? reply.nodes : Array.isArray(reply?.data) ? reply.data : []
+  return sortMachines(list)
 }
 
 /** Ready first, then online, then by name: the machine you can tap is at the top. */

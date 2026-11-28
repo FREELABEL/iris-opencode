@@ -142,8 +142,13 @@ describe("choosing a machine", () => {
     expect(note(node("a", true, { enabled: true, engine: "running" }))).toBe("Online")
   })
 
-  test("the machine list is read from data[] and sorted", async () => {
-    const { http, asked } = network({ [HIVE_API]: () => json(200, { data: [node("b", false), node("a", true, { enabled: true })] }) })
+  test("the machine list is read from nodes[] — the reply GET /api/v6/nodes really sends — and sorted", async () => {
+    // RECORDED 2026-11-28 from production: top-level keys are exactly ["nodes", "device_totals"].
+    // The first version of this test used {data: [...]} (the CLI's --json wrapper, typed by hand)
+    // and passed, while the phone would have shown "No machines yet" for every account.
+    const { http, asked } = network({
+      [HIVE_API]: () => json(200, { nodes: [node("b", false), node("a", true, { enabled: true })], device_totals: {} }),
+    })
     expect((await listMachines(http, account)).map((n) => n.name)).toEqual(["a", "b"])
     expect(asked[0]!.url).toBe(`${HIVE_API}/api/v6/nodes/?user_id=2945`)
   })
