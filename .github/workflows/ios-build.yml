@@ -38,6 +38,15 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # The phone's conversation with the platform (#194511): the send-code payload against the
+      # one Desktop ships, the HTTP plugin's JS and Rust halves on one release, reply parsing, and
+      # read-only checks against production. Each test is a TestFlight build that failed first.
+      - name: Phone platform tests (live)
+        working-directory: packages/desktop
+        env:
+          IRIS_LIVE: "1"
+        run: bun test src/mobile-platform.test.ts
+
       - name: Install Rust stable (iOS targets)
         uses: dtolnay/rust-toolchain@stable
         with:

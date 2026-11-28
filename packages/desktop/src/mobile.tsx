@@ -15,13 +15,12 @@ import { fetch } from "@tauri-apps/plugin-http"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
 import pkg from "../package.json"
+import { engineFor, listMachines, note, sendCode, SignInExpired, verify, type Account, type Engine, type Node } from "./mobile-platform"
 
 // Platform calls go through the native HTTP plugin (`fetch` above), so no CORS rule on either
 // host can block sign-in. Calls to an engine use the webview's own fetch (`globalThis.fetch`),
 // because that is what the interface uses afterwards: testing reachability any other way would
 // pass a check the app then fails.
-const AUTH_API = "https://raichu.heyiris.io"
-const HIVE_API = "https://freelabel.net"
 // The same public endpoint IRIS Desktop's onboarding events go to (src-tauri/src/onboarding.rs).
 const EVENTS_API = "https://heyiris.io/api/v1/genesis/events"
 const VISITOR_KEY = "iris.mobile.visitor"
@@ -30,17 +29,8 @@ const VISITOR_KEY = "iris.mobile.visitor"
 const ACCOUNT_KEY = "iris.mobile.account"
 const MACHINE_KEY = "iris.mobile.machine"
 
-type Account = { token: string; userId: number; email: string }
 // A Hive machine is remembered by id; its address and token are asked for on every launch.
 type Choice = { kind: "hive"; nodeId: string; name: string } | { kind: "address"; url: string; password: string }
-type Engine = { url: string; username: string; password: string; expiresAt?: number }
-type Node = {
-  id: string
-  name: string
-  connection_status: string
-  last_heartbeat_at?: string | null
-  phone?: { enabled?: boolean; url?: string; engine?: string } | null
-}
 
 const root = document.getElementById("root")!
 
@@ -68,7 +58,8 @@ async function start() {
   if (choice?.kind === "address") return openEngine({ url: choice.url, username: "opencode", password: choice.password }, () => showAddress(choice))
   if (!account) return showSignIn()
   if (!choice) return showMachines(account)
-  const engine = await engineFor(account, choice.nodeId).catch((e: Error) => e)
+  const engine = await engineFor(fetch, account, choice.nodeId).catch((e: Error) => e)
+  if (engine instanceof SignInExpired) return (forget(), showSignIn(engine.message))
   if (engine instanceof Error) return showMachines(account, `${choice.name}: ${engine.message}`)
   return openEngine(engine, () => showMachines(account))
 }
@@ -122,7 +113,10 @@ function showSignIn(problem?: string) {
     setBusy(true)
     const step = sent() ? "verify" : "send_code"
     if (step === "send_code") track("iphone.signin.code_requested")
-    const result = await (sent() ? verify(email(), code()) : sendCode(email())).catch((e: Error) => e)
+    const result = await (sent()
+      ? verify(fetch, email(), code()).then((account) => localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account)))
+      : sendCode(fetch, email())
+    ).catch((e: Error) => e)
     setBusy(false)
     if (result instanceof Error) return (track("iphone.signin.failed", `${step}: ${result.message}`), setError(result.message))
     if (!sent()) return (track("iphone.signin.code_sent"), setSent(true))
@@ -193,18 +187,23 @@ function showMachines(account: Account, problem?: string) {
   const [busy, setBusy] = createSignal("")
 
   const load = () =>
-    listMachines(account)
+    listMachines(fetch, account)
       .then((list) => {
         track("iphone.machines.loaded", `${list.length} machines, ${list.filter((n) => n.connection_status === "online" && n.phone?.enabled).length} ready`)
         setNodes(list)
       })
-      .catch((e: Error) => (track("iphone.machines.failed", e.message), setError(e.message)))
+      .catch((e: Error) => {
+        track("iphone.machines.failed", e.message)
+        if (e instanceof SignInExpired) return (forget(), showSignIn(e.message))
+        setError(e.message)
+      })
   void load()
 
   const choose = async (node: Node) => {
     setError("")
     setBusy(node.id)
-    const engine = await engineFor(account, node.id).catch((e: Error) => e)
+    const engine = await engineFor(fetch, account, node.id).catch((e: Error) => e)
+    if (engine instanceof SignInExpired) return (forget(), showSignIn(engine.message))
     if (engine instanceof Error) return (track("iphone.connect.failed", `token: ${engine.message}`), setBusy(""), setError(`${node.name}: ${engine.message}`))
     const problem = await reach(engine)
     setBusy("")
@@ -337,94 +336,6 @@ function Screen(props: { children: JSX.Element }) {
   return <main style={styles.page}>{props.children}</main>
 }
 
-function note(node: Node) {
-  if (node.connection_status !== "online") return "Offline"
-  if (!node.phone?.enabled) return "Phone access is off on this machine"
-  if (node.phone.engine === "stopped") return "Online · IRIS Desktop is not open"
-  return "Online"
-}
-
-async function sendCode(email: string) {
-  if (!email.includes("@")) throw new Error("Enter your email address.")
-  // Exactly Desktop's payload (public/login.html): `email` alone is a 422, and auto_create is what
-  // lets an account that has never signed in get a code at all.
-  await post(`${AUTH_API}/api/v1/auth/send-login-code`, {
-    email: email.trim(),
-    method: "with_login_code",
-    expiration_minutes: 30,
-    auto_create: true,
-  })
-}
-
-async function verify(email: string, code: string) {
-  if (code.length !== 6) throw new Error("The code is 6 digits.")
-  const data = await post(`${AUTH_API}/api/v1/auth/login-with-code`, {
-    email: email.trim(),
-    login_code: code, // NOT `code`: the endpoint names this field login_code (login.html)
-    generate_sdk_token: true,
-    sdk_token_name: "IRIS iPhone",
-    sdk_token_expires_days: 365,
-  })
-  // Nested, as in login.html: data.data.sdk_token.key.
-  const token = data?.data?.sdk_token?.key
-  if (typeof token !== "string" || !token) throw new Error("Signed in, but no token came back. Try again.")
-  const who = await fetch(`${AUTH_API}/api/v1/auth/whoami`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } })
-  const user = who.ok ? (await who.json())?.data : undefined
-  if (typeof user?.id !== "number") throw new Error("Signed in, but your account could not be read. Try again.")
-  localStorage.setItem(ACCOUNT_KEY, JSON.stringify({ token, userId: user.id, email: user.email ?? email.trim() } satisfies Account))
-}
-
-async function listMachines(account: Account): Promise<Node[]> {
-  const data = await hive(account, `/api/v6/nodes/?user_id=${account.userId}`)
-  const list = (Array.isArray(data?.data) ? data.data : []) as Node[]
-  // Ready first, then online, then by name: the one you can tap is at the top.
-  const rank = (n: Node) => (n.connection_status === "online" ? (n.phone?.enabled ? 0 : 1) : 2)
-  return [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
-}
-
-/** A token the platform signs for this one machine (hp1, ADR-03), and the address to use it at. */
-async function engineFor(account: Account, nodeId: string): Promise<Engine> {
-  const data = await hive(account, `/api/v6/nodes/${encodeURIComponent(nodeId)}/phone-token?user_id=${account.userId}`, {})
-  if (typeof data?.token !== "string" || typeof data?.url !== "string") throw new Error("this machine did not return an address.")
-  return { url: data.url, username: "iris", password: data.token, expiresAt: Date.parse(data.expires_at) || undefined }
-}
-
-async function hive(account: Account, path: string, body?: unknown) {
-  const response = await fetch(HIVE_API + path, {
-    method: body ? "POST" : "GET",
-    headers: { Authorization: `Bearer ${account.token}`, Accept: "application/json", "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  }).catch(() => undefined)
-  if (!response) throw new Error("No connection. Check this phone is online.")
-  if (response.status === 401) {
-    localStorage.removeItem(ACCOUNT_KEY)
-    throw new Error("Your sign-in has expired. Sign in again.")
-  }
-  const data = await response.json().catch((e: Error) => (response.ok ? new Error(`could not read the reply (${e.message}).`) : {}))
-  if (data instanceof Error) throw data
-  if (response.status === 409) throw new Error("phone access is not turned on for this machine yet.")
-  if (!response.ok) throw new Error(data?.message || data?.error || `the server answered ${response.status}.`)
-  return data
-}
-
-async function post(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(body),
-  }).catch(() => undefined)
-  if (!response) throw new Error("No connection. Check this phone is online.")
-  // An unreadable body on a 2xx is a fault in the app, not an empty answer: build 11 turned the
-  // HTTP plugin's failed body read (JS 2.5.9 against Rust 2.5.4) into "no token came back".
-  const data = await response.json().catch((e: Error) => (response.ok ? new Error(`Could not read the server's reply (${e.message}).`) : {}))
-  if (data instanceof Error) throw data
-  // The auth API puts validation messages under `details` ({field: [messages]}); Laravel under `errors`.
-  const fields = data?.details ?? data?.errors
-  const detail = fields && typeof fields === "object" ? Object.values(fields).flat().join(" ") : ""
-  if (!response.ok) throw new Error(detail || data?.message || data?.error || `Something went wrong (${response.status}).`)
-  return data
-}
-
 /** Why this engine cannot be used, in words a person can act on — or nothing when it can. */
 async function reach(engine: Engine) {
   if (!URL.canParse(engine.url)) return "That address is not a web address."
@@ -465,6 +376,12 @@ function track(event: string, label?: string) {
       props: { app_version: pkg.version, os: "ios" },
     }),
   }).catch(() => undefined)
+}
+
+/** The account's token was refused: forget it, and the machine chosen with it. */
+function forget() {
+  localStorage.removeItem(ACCOUNT_KEY)
+  localStorage.removeItem(MACHINE_KEY)
 }
 
 function read<T>(key: string): T | undefined {
