@@ -323,6 +323,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
           <div
             class="ihd-stat"
             data-link="1"
+            data-tile="machines"
             title={`${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines`}
             role="button"
             tabIndex={0}
@@ -345,7 +346,7 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </span>
             </div>
           </div>
-          <div class="ihd-stat" title={tile("inbox")?.detail}>
+          <div class="ihd-stat" data-tile="inbox" title={tile("inbox")?.detail}>
             <Mark shape="square" />
             <div class="ihd-n">
               {data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}

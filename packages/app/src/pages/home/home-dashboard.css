@@ -136,3 +136,21 @@
 .ihd-ask-plus { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ihd-btn); color: var(--text-on-brand-base); flex: none; }
 .ihd-ask-plus svg { width: 14px; height: 14px; }
 .ihd-ask kbd { margin-left: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
+
+/* Phone (#194511, Alex on build 38). The titlebar already carries machines online and the Hive
+   inbox count (superscripts on its Hive and Inbox icons), so Home stops repeating them: the status
+   line under the greeting and the Machines / Hive inbox tiles go — "2 stopped" stays on the
+   Heartbeats tile. The greeting stacks above one row of two equal buttons instead of sharing a
+   line with a round pill and a square button that never lined up. */
+@media (max-width: 767px) {
+  .ihd-hello { flex-direction: column; align-items: stretch; gap: 14px; }
+  .ihd-status { display: none; }
+  .ihd-stat[data-tile="machines"], .ihd-stat[data-tile="inbox"] { display: none; }
+  .ihd-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ihd-actions > .ihd-go, .ihd-actions > .ihd-chip {
+    display: flex; align-items: center; justify-content: center;
+    height: 44px; padding: 0 12px; border-radius: var(--radius-lg);
+    font-size: var(--font-size-base, 15px); font-weight: var(--font-weight-medium); white-space: nowrap;
+  }
+  .ihd-actions > .ihd-go { order: -1; }
+}

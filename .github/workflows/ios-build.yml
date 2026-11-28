@@ -136,6 +136,8 @@ jobs:
         working-directory: packages/desktop
         run: bun run build
         env:
+          # Without it vite.js defaults the channel to "dev" and the titlebar shows a DEV badge.
+          OPENCODE_CHANNEL: latest
           VITE_IRIS_SIM_ENGINE: http://127.0.0.1:4096
           VITE_IRIS_SIM_PASSWORD: sim-check
 
@@ -266,6 +268,9 @@ jobs:
       - name: Build the interface
         working-directory: packages/desktop
         run: bun run build
+        env:
+          # The App Store build is the release channel: no DEV badge (vite.js defaults to "dev").
+          OPENCODE_CHANNEL: latest
       # Sign in with Apple must be switched on for io.heyiris.app before Xcode can sign a build that
       # carries the entitlement ("Automatic signing cannot update bundle identifier"). The Admin
       # App Store Connect key can do that through the API: look the App ID up, and add the

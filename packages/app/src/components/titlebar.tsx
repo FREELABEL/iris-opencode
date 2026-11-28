@@ -427,6 +427,9 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   />
                 </TooltipV2>
 
+                {/* No chat tabs on a phone (#194511): a few px each, and a tap could close one. The
+                    cube on the left opens every chat (the drawer) — that is the phone's way in. */}
+                <div class="contents max-md:hidden">
                 <TitlebarTabStrip
                   tabs={tabsStore}
                   currentTab={currentTab}
@@ -442,6 +445,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   }}
                   onReorder={(keys) => tabsStoreActions.reorder(keys)}
                 />
+                </div>
                 <TooltipV2
                   placement="bottom"
                   value={
