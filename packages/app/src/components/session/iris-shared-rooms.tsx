@@ -277,10 +277,20 @@ export function SharedRoomView(props: {
   let lastCount = 0
   const cursors = new Map<string, number>()
 
-  const stickToBottom = (n: number) => {
-    if (n !== lastCount && scroller) {
-      const near = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
-      if (near || lastCount === 0) queueMicrotask(() => scroller && (scroller.scrollTop = scroller.scrollHeight))
+  // Follow the conversation while you are at the bottom of it. Whether you are is read when YOU
+  // scroll, not after new messages render: a burst of agent replies (#194493) is taller than any
+  // "near the bottom" margin, so measuring afterwards left the newest replies out of view.
+  let pinned = true
+  const onScroll = () => {
+    if (scroller) pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
+  }
+  const stickToBottom = (n: number, force = false) => {
+    if (n !== lastCount && scroller && (pinned || force || lastCount === 0)) {
+      queueMicrotask(() => {
+        if (!scroller) return
+        scroller.scrollTop = scroller.scrollHeight
+        pinned = true
+      })
     }
     lastCount = n
   }
@@ -427,6 +437,7 @@ export function SharedRoomView(props: {
       return
     }
     setDraft("")
+    pinned = true
     typingSent = 0
     void checkIn(false)
     const tone = r.result.outcome === "delivered" ? "good" : "warn"
@@ -530,10 +541,13 @@ export function SharedRoomView(props: {
         <Show
           when={sessions().length}
           fallback={
-            <div class="sr-session" data-tone="gone">
-              <span class="sr-dot" />
-              {data() ? "No agent is in this room yet" : "Connecting…"}
-            </div>
+            // Cloud agents are listed just below; only an empty room says it is empty.
+            <Show when={!cloud().length}>
+              <div class="sr-session" data-tone="gone">
+                <span class="sr-dot" />
+                {data() ? "No agent is in this room yet" : "Connecting…"}
+              </div>
+            </Show>
           }
         >
           <For each={sessions()}>
@@ -579,7 +593,7 @@ export function SharedRoomView(props: {
         </Show>
       </div>
 
-      <div class="sr-timeline" ref={scroller}>
+      <div class="sr-timeline" ref={scroller} onScroll={onScroll}>
         <Show when={firstTrouble() && sessions().length}>
           <div class="sr-chat-note">
             <Icon name="warning" size="small" />
@@ -720,7 +734,15 @@ export function SharedRoomView(props: {
               onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
               onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
               rows="1"
-              placeholder={sessions().length > 1 ? "Message everyone in the room — people and agents…" : room() ? composerHint(room()!) : ""}
+              placeholder={
+                sessions().length > 1 || (cloud().length && sessions().length)
+                  ? "Message everyone in the room — people and agents…"
+                  : cloud().length
+                    ? "Message the room — the lead takes it from here, or @mention an agent…"
+                    : room()
+                      ? composerHint(room()!)
+                      : ""
+              }
               value={draft()}
               maxLength={16000}
               onInput={(e) => {
