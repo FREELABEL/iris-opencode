@@ -12,6 +12,7 @@ import { IRIS_QUICK_EDIT_ENGLISH } from "./iris-quick-edit"
 import { IRIS_HIVE_SCRIPTS_ENGLISH } from "./iris-hive-scripts"
 import { IRIS_AGENT_EDITOR_ENGLISH } from "./iris-agent-editor"
 import { IRIS_HOME_AGENTS_ENGLISH } from "./iris-home-agents"
+import { IRIS_ROOM_OUTBOX_PULSE_ENGLISH } from "./iris-room-outbox-pulse"
 
 export const dict = {
   ...DESKTOP_NATIVE_ENGLISH,
@@ -27,6 +28,7 @@ export const dict = {
   ...IRIS_HIVE_SCRIPTS_ENGLISH,
   ...IRIS_AGENT_EDITOR_ENGLISH,
   ...IRIS_HOME_AGENTS_ENGLISH,
+  ...IRIS_ROOM_OUTBOX_PULSE_ENGLISH,
   "command.category.suggested": "Suggested",
   "command.category.view": "View",
   "command.category.project": "Project",

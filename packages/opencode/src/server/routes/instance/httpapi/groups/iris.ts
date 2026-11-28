@@ -584,7 +584,7 @@ const PulseContactResponse = Schema.Struct({
         coverage: Schema.NullOr(Schema.Finite),
       }),
       stops: Schema.Array(PulseStopRow),
-      owed: Schema.Array(Schema.Struct({ what: Schema.String, amount: Schema.optional(Schema.String), since: Schema.optional(Schema.String) })),
+      owed: Schema.Array(Schema.Struct({ what: Schema.String, amount: Schema.optional(Schema.String), since: Schema.optional(Schema.String), due: Schema.optional(described(Schema.String, "An overdue task's due date, as the record has it — the app words it relative to now")) })),
       channels: Schema.Struct({ read: Schema.Finite, total: Schema.Finite }),
     }),
   ),
@@ -2375,7 +2375,6 @@ export const IrisPaths = {
   integrationConnect: `${root}/integrations/connect`,
   onboardingState: `${root}/onboarding/state`,
   onboardingMail: `${root}/onboarding/mail`,
-  onboardingGround: `${root}/onboarding/ground`,
   onboardingCapabilities: `${root}/onboarding/capabilities`,
   onboardingWorkspace: `${root}/onboarding/workspace`,
   onboardingTrack: `${root}/onboarding/track`,
@@ -4518,35 +4517,6 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.onboardingMail",
           summary: "Read recent mail",
           description: "The first real data pull: up to 10 recent inbox threads via iris-api execute-direct. Also what stamps users.activated_at server-side (T1). measured=false carries the reason (not connected, token expired) so the screen can say what to do.",
-        }),
-      ),
-      HttpApiEndpoint.post("onboardingGround", IrisPaths.onboardingGround, {
-        payload: Schema.Struct({ threads: Schema.Array(Schema.Struct({
-              id: Schema.String,
-              threadId: Schema.optional(Schema.String),
-              subject: Schema.String,
-              from: Schema.String,
-              date: Schema.optional(Schema.String),
-              snippet: Schema.String,
-              unread: Schema.optional(Schema.Boolean),
-              automated: Schema.optional(Schema.Boolean),
-              kind: Schema.optional(Schema.Literals(["person", "action", "fyi"])),
-            })) }),
-        success: described(
-          Schema.Struct({
-            ...Measured,
-            industry: Schema.optional(Schema.String),
-            businessType: Schema.optional(Schema.String),
-            line: Schema.optional(described(Schema.String, "One sentence for the headline.")),
-            choices: described(Schema.Array(Schema.String), "Answers to 'What do you want off your plate first?', taken from what was found."),
-          }).annotate({ identifier: "IrisOnboardingGround" }),
-          "Who this person is, from their own inbox",
-        ),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "iris.onboardingGround",
-          summary: "Ground IRIS on recent mail",
-          description: "Sends a compact digest (sender name, subject, snippet; under 5,000 chars) to workflow-generation/business-summary. Nobody is asked to describe their business: the inbox is the description.",
         }),
       ),
       HttpApiEndpoint.post("onboardingCapabilities", IrisPaths.onboardingCapabilities, {

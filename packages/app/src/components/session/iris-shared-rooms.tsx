@@ -25,7 +25,10 @@ import {
   type SharedRoom,
   type TranscriptEntry,
 } from "./iris-shared-rooms-model"
-import { canOpenRoomTab, openSharedRoom, setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
+import { canOpenRoomTab, openSharedRoom, refreshSharedRooms, setSharedRooms, sharedOpenRequest } from "./iris-shared-store"
+import { Button } from "@opencode-ai/ui/button"
+import { useLanguage } from "@/context/language"
+import { PaneDialog, PaneDialogActions } from "./iris-pane-dialog"
 import { DialogAddAgent } from "./dialog-add-agent"
 import { RoomAgentsDrawer, type CloudAgent } from "./iris-room-agents"
 import { insertMention, mentionQuery, mentionSuggestions, recipientsLine } from "./iris-rooms-model"
@@ -265,7 +268,10 @@ export function SharedRoomView(props: {
   const [data, setData] = createSignal<RoomPayload | null>(null)
   const [now, setNow] = createSignal(new Date())
   const [draft, setDraft] = createSignal("")
-  const [busy, setBusy] = createSignal<"send" | "stop" | null>(null)
+  const [busy, setBusy] = createSignal<"send" | "stop" | "unshare" | null>(null)
+  const language = useLanguage()
+  // Stop sharing (#194509): only the person who shared the room is offered it, behind a confirm.
+  const [confirmUnshare, setConfirmUnshare] = createSignal(false)
   const [note, setNote] = createSignal<{ tone: "good" | "warn" | "bad"; text: string } | null>(null)
   const [chats, setChats] = createSignal<Record<string, TranscriptEntry[]>>({})
   const [troubles, setTroubles] = createSignal<Record<string, string>>({})
@@ -458,6 +464,21 @@ export function SharedRoomView(props: {
     void load()
   }
 
+  const unshare = async () => {
+    if (busy()) return
+    setBusy("unshare")
+    const r = await post<ActionPayload>(`${base()}/unshare`, {}, { ok: false })
+    setBusy(null)
+    setConfirmUnshare(false)
+    if (!r.ok) {
+      setNote({ tone: "bad", text: language.t("iris.shared.unshare.failed", { reason: r.reason ?? "unknown" }) })
+      return
+    }
+    setNote({ tone: "good", text: language.t("iris.shared.unshare.done") })
+    void refreshSharedRooms()
+    props.onBack?.()
+  }
+
   const removeAgent = async (s: SessionState) => {
     const r = await post<ActionPayload>(`${base()}/sessions/${encodeURIComponent(s.sessionId)}/remove`, {}, { ok: false })
     setNote(r.ok ? { tone: "good", text: `${labelOf(s)} left the room. Its chat keeps running on ${s.machine ?? "its computer"}.` } : { tone: "bad", text: r.reason ?? "That did not go through." })
@@ -538,7 +559,40 @@ export function SharedRoomView(props: {
             {busy() === "stop" ? "Stopping…" : "Stop"}
           </button>
         </Show>
+        <Show when={room()?.you.isOwner}>
+          <Button
+            type="button"
+            size="small"
+            variant="ghost"
+            data-slot="sr-unshare"
+            disabled={busy() === "unshare"}
+            title={language.t("iris.shared.unshare.hint")}
+            onClick={() => setConfirmUnshare(true)}
+          >
+            {language.t("iris.shared.unshare")}
+          </Button>
+        </Show>
       </header>
+      <PaneDialog
+        when={confirmUnshare()}
+        onClose={() => setConfirmUnshare(false)}
+        id="sr-unshare-confirm"
+        title={() => language.t("iris.shared.unshare.title")}
+      >
+        {() => (
+          <>
+            <p>{language.t("iris.shared.unshare.body")}</p>
+            <PaneDialogActions>
+              <Button type="button" size="small" variant="secondary" onClick={() => setConfirmUnshare(false)}>
+                {language.t("common.cancel")}
+              </Button>
+              <Button type="button" size="small" variant="primary" disabled={busy() === "unshare"} onClick={() => void unshare()}>
+                {busy() === "unshare" ? language.t("iris.shared.unshare.busy") : language.t("iris.shared.unshare")}
+              </Button>
+            </PaneDialogActions>
+          </>
+        )}
+      </PaneDialog>
 
       <div class="sr-sessions">
         {/* Only say "no live chat" once the room has answered — a loading room is not an empty one. */}
