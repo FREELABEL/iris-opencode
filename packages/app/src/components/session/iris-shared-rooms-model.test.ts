@@ -19,6 +19,7 @@ import {
   roomFaces,
   mixHome,
   liveRooms,
+  chainLine,
 } from "./iris-shared-rooms-model"
 
 const room = (over: Partial<SharedRoom>): SharedRoom => ({
@@ -282,4 +283,26 @@ describe("Home live cards (#194490)", () => {
     expect(liveRooms(rooms, 1, now, 5).map((x) => x.id)).not.toContain("onlyme")
     expect(liveRooms(rooms, 1, now, 5).map((x) => x.id)).not.toContain("quiet")
   })
+})
+
+describe("cloud agents and hand-offs (#194493–#194496)", () => {
+  test("a cloud agent's room reply is on the timeline under its own name", () => {
+    const t = mergeRoomTimeline([], [{ id: "m1", kind: "agent", senderId: "7", senderName: "Researcher", text: "40% pick annual", at: "2026-11-27T12:00:00Z", deliveredTo: [] }], null)
+    expect(t).toEqual([{ key: "rm1", kind: "agent", speaker: "Researcher", text: "40% pick annual", at: "2026-11-27T12:00:00Z", lane: "cloud:7" }])
+  })
+  test("says when agents are talking, and how far", () => {
+    expect(chainLine({ depth: 1, turns: 3, maxTurns: 6, maxHops: 3 })).toBe("Agents are talking · 3 of 6 replies")
+    expect(chainLine(null)).toBeNull()
+  })
+})
+
+test("in a room with cloud agents a person's line is the conversation, not 'only in the room'", () => {
+  const m = [{ id: "p", kind: "person" as const, senderId: "1", senderName: "Alex", text: "write the post", at: "2026-11-27T12:00:00Z", deliveredTo: [] }]
+  expect(mergeRoomTimeline([], m, null, true)[0].kind).toBe("person")
+  expect(mergeRoomTimeline([], m, null, false)[0].kind).toBe("note")
+})
+
+test("when the room's agents take a message, the note says so (#194496)", () => {
+  expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null, agentsAnswered: 1 }, "Alex")).toBe("The room's agent is on it.")
+  expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null }, "Alex")).toBe("Saved here. No live chat is connected right now.")
 })
