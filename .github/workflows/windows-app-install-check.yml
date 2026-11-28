@@ -29,7 +29,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "install exited $LASTEXITCODE" }
 
       - name: Read the Start-menu shortcut back with Windows' own shell
-        shell: pwsh
+        shell: powershell   # Windows PowerShell 5.1: the classic System.Drawing the shell interop below compiles against
         run: |
           $dir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\IRIS Apps'
           Get-ChildItem $dir | Format-Table Name, Length
