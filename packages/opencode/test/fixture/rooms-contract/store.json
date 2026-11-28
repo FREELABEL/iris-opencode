@@ -1,0 +1,80 @@
+{
+    "thread": {
+        "user_id": 1001,
+        "name": "Launch plan",
+        "description": null,
+        "status": "active",
+        "id": "00000000-0000-4000-8000-000000000001",
+        "updated_at": "2026-11-28T12:00:00+00:00",
+        "created_at": "2026-11-28T12:00:00+00:00",
+        "participants": [
+            {
+                "id": 1002,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "1003",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "lead",
+                "can_respond": true,
+                "auto_respond": false,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            },
+            {
+                "id": 1004,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "1005",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "participant",
+                "can_respond": true,
+                "auto_respond": true,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            }
+        ],
+        "agents": [
+            {
+                "id": 1003,
+                "user_id": 1001,
+                "name": "Planner",
+                "config": {
+                    "model": "gpt-4.1-nano"
+                },
+                "settings": {
+                    "webAccess": true,
+                    "agentIntegrations": []
+                },
+                "pivot": {
+                    "role": "lead",
+                    "auto_respond": false,
+                    "can_respond": true
+                }
+            },
+            {
+                "id": 1005,
+                "user_id": 1001,
+                "name": "Researcher",
+                "config": {
+                    "model": "gpt-4.1-nano"
+                },
+                "settings": {
+                    "webAccess": true,
+                    "agentIntegrations": []
+                },
+                "pivot": {
+                    "role": "participant",
+                    "auto_respond": true,
+                    "can_respond": true
+                }
+            }
+        ]
+    },
+    "message": "Thread created successfully"
+}
