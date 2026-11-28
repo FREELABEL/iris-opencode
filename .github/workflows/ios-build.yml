@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd packages/opencode && bun run script/build.ts --single --skip-install > "$RUNNER_TEMP/engine-build.log" 2>&1) || { tail -40 "$RUNNER_TEMP/engine-build.log"; exit 1; }
-          BIN=$(ls packages/opencode/dist/opencode-darwin-arm64/bin/iris)
+          BIN="$PWD/packages/opencode/dist/opencode-darwin-arm64/bin/iris"
           PROJECT="$RUNNER_TEMP/Work"; mkdir -p "$PROJECT"
           (cd "$PROJECT" && OPENCODE_SERVER_PASSWORD=sim-check nohup "$BIN" serve --port 4096 --hostname 127.0.0.1 > "$RUNNER_TEMP/engine.log" 2>&1 &)
           ls -la "$BIN"
