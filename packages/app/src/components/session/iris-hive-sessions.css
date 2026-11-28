@@ -21,7 +21,7 @@
 .hss-sum b { color: var(--hsc-ink); }
 .hss-sep { margin: 0 6px; color: var(--hsc-faint); }
 .hss-note { margin: 4px 0 0; font-size: var(--font-size-caption); color: var(--hsc-amber); }
-.hss-empty { padding: 16px 2px; }
+.hss-empty { margin: 12px 0; }
 
 .hss-nodes, .hss-sessions, .hss-transcript { list-style: none; margin: 0; padding: 0; }
 .hss-node { border: 1px solid var(--hsc-rule); border-radius: var(--radius-2xl); background: var(--hsc-card); margin-bottom: 8px; overflow: hidden; }

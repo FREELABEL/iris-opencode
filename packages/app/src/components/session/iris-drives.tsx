@@ -1,6 +1,10 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, Show, type JSX } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import { Spinner } from "@opencode-ai/ui/spinner"
+import { CommandAction } from "@/components/command-action"
+import { RelativeTime } from "@opencode-ai/ui/relative-time"
+import { Stat } from "@opencode-ai/ui/stat"
+import { useLanguage } from "@/context/language"
 import "./iris-drives.css"
 import {
   baseName,
@@ -336,7 +340,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
       </Show>
 
       <Show when={!data.loading} fallback={<div class="iris-drv-loading"><Spinner class="iris-drv-spin" /> Reading your drives…</div>}>
-        <Show when={data()?.state === "ok" && drives().length} fallback={<TopState data={data()} retry={refetch} copy={copy} />}>
+        <Show when={data()?.state === "ok" && drives().length} fallback={<TopState data={data()} retry={refetch} copy={copy} doFetch={props.doFetch} />}>
           <Show when={drive()}>
             <div class="iris-drv-chips" role="tablist" aria-label="Drives">
               <For each={drives()}>
@@ -367,16 +371,14 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
               <DriveState
                 title="This drive hasn't been scanned"
                 body="It's catalogued, but nothing on it has been read yet. Scan it on the machine it's plugged into."
-                action="Copy scan command"
-                onAction={() => copy(scanCommand(drive()!), "the scan command")}
+                cta={<ScanAction drive={drive()!} doFetch={props.doFetch} onDone={refetch} />}
               />
             </Show>
             <Show when={drive() && emptyDrive(drive()!, driveFolders()) && segment() !== "info" && !folder()}>
               <DriveState
                 title="Nothing catalogued on this drive"
                 body="The last scan found no project folders or files. If that's wrong, scan it again where it's plugged in."
-                action="Copy scan command"
-                onAction={() => copy(scanCommand(drive()!), "the scan command")}
+                cta={<ScanAction drive={drive()!} doFetch={props.doFetch} onDone={refetch} />}
               />
             </Show>
             <Show when={drive() && segment() === "info" && !folder()}>
@@ -578,36 +580,40 @@ function DriveInfo(props: { drive: Drive; folders: DriveFolder[]; findings: Driv
           {fmtGb(d.usedGb)} used · {fmtGb(d.freeGb)} free · {fmtGb(d.sizeGb)}
         </div>
       </Show>
+      {/* Stat (#194581): the three numbers that say what is on the drive, labelled. */}
+      <div class="iris-drv-stats">
+        <Stat size="small" label="Files" value={fmtCount(d.files)} />
+        <Stat size="small" label="Folders" value={fmtCount(d.folders ?? props.folders.length)} />
+        <Stat
+          size="small"
+          label="Findings"
+          value={fmtCount(d.sensitiveFiles)}
+          changeText={
+            props.findings.length ? `${countBy(props.findings, "exposed")} exposed${props.complete ? "" : " so far"}` : undefined
+          }
+        />
+      </div>
       <dl class="iris-drv-kv">
         <dt>Kind</dt>
         <dd>{d.kind ?? "—"}</dd>
         <dt>Encrypted</dt>
         <dd>{d.encrypted ? "yes" : "no"}</dd>
-        <dt>Files</dt>
-        <dd class="iris-drv-mono">{fmtCount(d.files)}</dd>
-        <dt>Folders</dt>
-        <dd class="iris-drv-mono">{fmtCount(d.folders ?? props.folders.length)}</dd>
-        <dt>Findings</dt>
-        <dd class="iris-drv-mono">
-          {fmtCount(d.sensitiveFiles)}
-          <Show when={props.findings.length}>
-            {" "}
-            <span class="iris-drv-weak">
-              ({countBy(props.findings, "exposed")} exposed{props.complete ? "" : " so far"})
-            </span>
-          </Show>
-        </dd>
         <dt>Scanned</dt>
-        <dd class="iris-drv-mono">{fmtDate(d.lastScanned)}</dd>
+        <dd>
+          <RelativeTime value={d.lastScanned} fallback="—" />
+        </dd>
         <dt>Last seen</dt>
         <dd>
           {d.lastSeenOn ?? "—"}
           <Show when={d.lastSeenAt}>
-            <span class="iris-drv-mono"> · {fmtDate(d.lastSeenAt)}</span>
+            {" · "}
+            <RelativeTime value={d.lastSeenAt} />
           </Show>
         </dd>
         <dt>Backup</dt>
-        <dd class="iris-drv-mono">{d.lastBackupAt ? fmtDate(d.lastBackupAt) : "—"}</dd>
+        <dd>
+          <RelativeTime value={d.lastBackupAt} fallback="—" />
+        </dd>
       </dl>
       <p class="iris-drv-weak">Paths are valid only on the machine this drive is plugged into.</p>
     </div>
@@ -671,15 +677,41 @@ function FindingsFooter(props: {
   )
 }
 
-function DriveState(props: { title: string; body: string; action: string; onAction: () => void }) {
+function DriveState(props: { title: string; body: string; action?: string; onAction?: () => void; cta?: JSX.Element }) {
   return (
     <div class="iris-drv-state">
       <div class="iris-drv-state-t">{props.title}</div>
       <p>{props.body}</p>
-      <button class="iris-drv-btn" data-primary onClick={props.onAction}>
-        {props.action}
-      </button>
+      <Show
+        when={props.cta}
+        fallback={
+          <button class="iris-drv-btn" data-primary onClick={() => props.onAction?.()}>
+            {props.action}
+          </button>
+        }
+      >
+        {props.cta}
+      </Show>
     </div>
+  )
+}
+
+/**
+ * Scan, as a button that runs it (#194581), not a line to copy. The line opens first: the
+ * path is where the drive is mounted on THIS computer, so the person checks it, then confirms.
+ */
+function ScanAction(props: { drive?: Drive; doFetch: Fetch; onDone: () => void }) {
+  const language = useLanguage()
+  return (
+    <CommandAction
+      command={scanCommand(props.drive)}
+      label={language.t(props.drive ? "iris.drives.scan.again" : "iris.drives.scan.new")}
+      describe={language.t("iris.drives.scan.describe")}
+      editable
+      fetch={props.doFetch}
+      base=""
+      onDone={(r) => r.ran && r.code === 0 && props.onDone()}
+    />
   )
 }
 
@@ -688,6 +720,7 @@ function TopState(props: {
   data?: DrivesPayload & { bridge: boolean }
   retry: () => void
   copy: (text: string, what: string) => void
+  doFetch: Fetch
 }) {
   const s = () => props.data
   return (
@@ -723,8 +756,7 @@ function TopState(props: {
           <DriveState
             title="No drives catalogued yet"
             body="Scan a drive or folder on the machine it's plugged into. It shows up here, and on every computer you sign in to."
-            action="Copy scan command"
-            onAction={() => props.copy(scanCommand(), "the scan command")}
+            cta={<ScanAction doFetch={props.doFetch} onDone={props.retry} />}
           />
         </Show>
       </Show>

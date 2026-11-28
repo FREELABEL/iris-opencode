@@ -1,5 +1,8 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { useLanguage } from "@/context/language"
+import { CommandAction } from "@/components/command-action"
 import "./iris-hive-scripts.css"
 import "./iris-hive-sessions.css"
 import { focusHiveSession, irisHiveSessionFocus } from "./iris-nav"
@@ -74,6 +77,7 @@ export function IrisHiveSessions(props: {
   /** "Continue here" (#191492): start a chat on THIS machine from a session on another. Absent: no button. */
   onContinue?: (c: { text: string }) => Promise<void>
 }) {
+  const language = useLanguage()
   const now = () => props.now?.() ?? Date.now()
   const getJson = async <T,>(path: string, fallback: T, init?: RequestInit): Promise<T> => {
     try {
@@ -186,10 +190,25 @@ export function IrisHiveSessions(props: {
             </Show>
           </header>
 
+          {/* Not "Run iris hive connect" (#194581): the button runs it, after a confirm. */}
           <Show when={data.latest?.measured && nodes().length === 0}>
-            <p class="hsc-muted hss-empty">
-              No machines on this account yet. Run <code class="hsc-mono">iris hive connect</code> on one to add it.
-            </p>
+            <EmptyState
+              class="hss-empty"
+              size="small"
+              title={language.t("iris.hive.sessions.empty.title")}
+              description={language.t("iris.hive.sessions.empty.body")}
+              action={
+                <CommandAction
+                  command="iris hive connect"
+                  label={language.t("iris.hive.sessions.empty.action")}
+                  describe={language.t("iris.hive.sessions.empty.describe")}
+                  write
+                  fetch={props.doFetch}
+                  base=""
+                  onDone={(r) => r.ran && r.code === 0 && void refresh()}
+                />
+              }
+            />
           </Show>
 
           <ul class="hss-nodes">

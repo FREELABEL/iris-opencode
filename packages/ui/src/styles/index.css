@@ -54,6 +54,8 @@
 @import "../components/empty-state.css" layer(components);
 @import "../components/skeleton.css" layer(components);
 @import "../components/status-badge.css" layer(components);
+@import "../components/list-row.css" layer(components);
+@import "../components/stat.css" layer(components);
 @import "../components/notice.css" layer(components);
 
 @import "./utilities.css" layer(utilities);

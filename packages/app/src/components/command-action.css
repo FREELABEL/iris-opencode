@@ -1,0 +1,131 @@
+/* CommandAction (#194581): a button that runs an iris command; Copy CLI in its overflow menu. */
+[data-component="command-action"] {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+
+  [data-slot="command-action-row"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .command-action-spinner {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+[data-slot="command-action-result"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+
+  [data-slot="command-action-result-head"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  [data-slot="command-action-result-detail"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-base);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+  }
+  [data-slot="command-action-output"] {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--text-base) 5%, transparent);
+    color: var(--text-base);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-x-small);
+    line-height: var(--font-size-x-small--line-height);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  [data-slot="command-action-note"] {
+    margin: 0;
+    color: var(--text-weak);
+    font-size: var(--font-size-caption);
+  }
+}
+
+/* The run flow, in the app's Dialog. */
+[data-component="command-run"] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  min-width: min(520px, 80vw);
+  max-width: 640px;
+  padding: 0 20px 20px;
+
+  [data-slot="command-run-form"],
+  [data-slot="command-run-confirm"],
+  [data-slot="command-run-result"] {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  [data-slot="command-run-form"] input {
+    font-family: var(--font-family-mono);
+  }
+  [data-slot="command-run-lead"] {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: var(--font-size-base);
+    line-height: var(--font-size-base--line-height);
+  }
+  [data-slot="command-run-why"] {
+    margin: 0;
+    color: var(--text-weak);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+  }
+  [data-slot="command-run-label"] {
+    margin-top: 4px;
+    color: var(--text-weak);
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-medium);
+  }
+  [data-slot="command-run-line"] {
+    display: block;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--text-base) 6%, transparent);
+    color: var(--text-strong);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  [data-slot="command-run-running"] {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--text-base);
+    font-size: var(--font-size-small);
+  }
+  [data-slot="command-run-actions"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  [data-slot="command-run-spacer"] {
+    flex: 1;
+  }
+}

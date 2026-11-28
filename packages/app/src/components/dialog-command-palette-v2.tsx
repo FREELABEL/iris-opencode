@@ -346,17 +346,15 @@ function PaletteRow(props: {
               </Show>
             </div>
           </div>
-          {/* An icon, not the word "copy" — the label repeated on every row and said the same
-              thing each time. aria-label keeps it announced for a screen reader. */}
-          <span class="command-palette-v2-cli-copy shrink-0" aria-label="Copy command" title="Copy command">
+          {/* Choosing the row RUNS it now (#194581) — the run flow opens with the line to edit, a
+              confirm for anything that changes something, and Copy beside Run. The mark says so. */}
+          <span
+            class="command-palette-v2-cli-copy shrink-0"
+            aria-label={props.language.t("palette.cli.run")}
+            title={props.language.t("palette.cli.run")}
+          >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <rect x="5.75" y="5.75" width="7.5" height="7.5" rx="1.75" stroke="currentColor" stroke-width="1.3" />
-              <path
-                d="M10.25 5.5v-1.75A1.75 1.75 0 008.5 2h-4.75A1.75 1.75 0 002 3.75V8.5a1.75 1.75 0 001.75 1.75H5.5"
-                stroke="currentColor"
-                stroke-width="1.3"
-                stroke-linecap="round"
-              />
+              <path d="M5 3.5v9l7-4.5-7-4.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
             </svg>
           </span>
         </Match>

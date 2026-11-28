@@ -24,7 +24,7 @@ export function IrisPager(props: {
     <div class={`flex items-center gap-2 text-11-regular text-text-weaker ${props.class ?? "py-2"}`} data-slot="iris-pager">
       {props.children}
       <Show when={props.summary}>
-        {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+        {(text) => <span class="tabular-nums">{text()}</span>}
       </Show>
       <span class="ms-auto flex items-center gap-1">
         <Show when={paged() && props.hasPrevious}>

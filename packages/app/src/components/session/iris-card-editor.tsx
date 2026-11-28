@@ -9,6 +9,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Icon } from "@opencode-ai/ui/icon"
 import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { renderMarkdown } from "./iris-item"
+import { absoluteTime, relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 
 /**
  * The card editor — a board item you can CHANGE from the panel (#185485).
@@ -299,17 +300,8 @@ function shortWhen(iso: string | undefined): string {
 /** "just now", "5m ago", "2h ago", "3d ago", then a date — how Elon dates a card's history. */
 export function timeAgo(iso: string | undefined, now: number): string {
   if (!iso) return ""
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return iso
-  const s = Math.max(0, Math.round((now - t) / 1000))
-  if (s < 45) return "just now"
-  const m = Math.round(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.round(h / 24)
-  if (d < 30) return `${d}d ago`
-  return shortDate(iso)
+  // An unreadable value is shown as it came, so nothing is silently dropped.
+  return relativeWords(iso, now) || iso
 }
 
 export interface TrailRow {
@@ -2214,7 +2206,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                               <dd>{assigned().map((a) => a.name).join(", ")}</dd>
                             </Show>
                             <dt>Updated</dt>
-                            <dd title={doc.latest!.updatedAt}>{timeAgo(doc.latest!.updatedAt, now()) || "—"}</dd>
+                            <dd title={absoluteTime(doc.latest!.updatedAt)}>{timeAgo(doc.latest!.updatedAt, now()) || "—"}</dd>
                           </dl>
                         </Show>
                       </div>
@@ -2679,7 +2671,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                           <div class="iris-bubble__col">
                                             <div class="iris-bubble__meta">
                                               <span class="iris-bubble__who">{c().mine ? "You" : c().row.actor || "Someone"}</span>
-                                              <span title={c().row.at}>{timeAgo(c().row.at, now())}</span>
+                                              <span title={absoluteTime(c().row.at)}>{timeAgo(c().row.at, now())}</span>
                                             </div>
                                             <div class="iris-bubble__text">{c().row.text}</div>
                                           </div>

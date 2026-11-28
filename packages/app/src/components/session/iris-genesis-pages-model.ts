@@ -1,3 +1,4 @@
+import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 /**
  * GENESIS › PAGES (#192632) — the decisions behind the cards and the detail, pure so they are tested
  * without a DOM or a network: what each filter means, what the pager says, how old "updated" reads,
@@ -77,31 +78,9 @@ export function rangeLine(p: { page: number; perPage: number; shown: number; tot
   return `${range} of ${p.total.toLocaleString("en-US")}${p.totalIsExact ? "" : "+"}`
 }
 
-const UNITS: [number, string][] = [
-  [60, "minute"],
-  [60 * 24, "hour"],
-  [60 * 24 * 7, "day"],
-  [60 * 24 * 30, "week"],
-  [60 * 24 * 365, "month"],
-]
-
-/** "just now", "5 minutes ago", "yesterday", "3 days ago", "2 weeks ago", "4 months ago", "2 years ago". */
+/** The app's one relative time (#194581): "just now", "5m ago", "yesterday", "3d ago", "Nov 3". */
 export function relativeTime(iso: string | undefined, now: number): string | undefined {
-  if (!iso) return undefined
-  const t = Date.parse(iso)
-  if (!Number.isFinite(t)) return undefined
-  const mins = Math.max(0, Math.floor((now - t) / 60_000))
-  if (mins < 1) return "just now"
-  const step = [1, 60, 60 * 24, 60 * 24 * 7, 60 * 24 * 30]
-  for (const [i, [limit, unit]] of UNITS.entries()) {
-    if (mins < limit) {
-      const n = Math.floor(mins / step[i])
-      if (unit === "day" && n === 1) return "yesterday"
-      return `${n} ${unit}${n === 1 ? "" : "s"} ago`
-    }
-  }
-  const years = Math.floor(mins / (60 * 24 * 365))
-  return `${years} year${years === 1 ? "" : "s"} ago`
+  return relativeWords(iso, now) || undefined
 }
 
 /** The exact time, for the hover on a relative one. */

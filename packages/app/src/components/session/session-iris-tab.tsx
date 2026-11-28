@@ -168,6 +168,9 @@ import { DetailView } from "@opencode-ai/ui/detail-view"
 import { EmptyState } from "@opencode-ai/ui/empty-state"
 import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { ListRow } from "@opencode-ai/ui/list-row"
+import { isTimestamp, relativeTime as relativeWords, timeWithExact } from "@opencode-ai/ui/relative-time"
+import { Avatar } from "@opencode-ai/ui/avatar"
 import { emptyCopy, type EmptyAction } from "./iris-empty-states"
 import { LeadsListRow } from "./iris-leads-list"
 import { stageTone } from "./iris-leads-list-model"
@@ -289,11 +292,18 @@ function arrayKeyFor(pane: string): string {
   return pane
 }
 
-/** Non-empty fields only — a detail panel full of "—" teaches nothing. */
+/** A detail's value as words. A platform timestamp reads "5m ago (Nov 3, 2026, 4:05 PM)", never raw ISO (#194581). */
+function readableField(v: unknown): string {
+  if (typeof v === "boolean") return v ? "yes" : "no"
+  const s = String(v)
+  return isTimestamp(s) ? timeWithExact(s) : s
+}
+
+/** Non-empty fields only — a detail panel full of "—" teaches nothing. Times read as words. */
 const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
   pairs
     .filter(([, v]) => v !== undefined && v !== null && v !== "" && !(typeof v === "number" && Number.isNaN(v)))
-    .map(([k, v]) => [k, typeof v === "boolean" ? (v ? "yes" : "no") : String(v)])
+    .map(([k, v]) => [k, readableField(v)])
 
 /**
  * What clicking a row opens, per surface.
@@ -303,16 +313,9 @@ const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
  * one of them got a fix.
  */
 
-/** "20h ago" — plain, so a stale reading announces its own age. */
+/** "20h ago" — plain, so a stale reading announces its own age. The one rule: ui relativeTime. */
 function relativeAge(iso: string): string | undefined {
-  const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return undefined
-  const mins = Math.floor((Date.now() - t) / 60000)
-  if (mins < 1) return "just now"
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
+  return relativeWords(iso) || undefined
 }
 
 /**
@@ -1483,6 +1486,13 @@ export function useRequestIrisSurface() {
 export function useIrisActiveSurface() {
   const scope = useIrisPanelScope()
   return () => normalizeSurface(scope.surface() ?? windowIrisPanelScope.surface() ?? "atlas")
+}
+
+/** A site's status in a word: "Draft", "Archived" — the platform's own word when it is not one we name. */
+function siteStatusWord(status: unknown, t: (key: "iris.sites.status.draft") => string): string {
+  const v = String(status ?? "").trim()
+  if (!v || v === "draft") return t("iris.sites.status.draft")
+  return v.charAt(0).toUpperCase() + v.slice(1)
 }
 
 export function SessionIrisTab() {
@@ -5937,37 +5947,33 @@ export function SessionIrisTab() {
                 </Match>
 
                 <Match when={pane() === "sites"}>
+                  {/* ListRow (#194581): the site's mark, its name, where it lives, when it last
+                    changed, a word for its status and its page count — not "● name 12p". */}
                   <For each={rows()}>
                     {(st) => (
-                      <button
-                        type="button"
+                      <ListRow
                         data-slot="iris-site-row"
-                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow("sites", st))}
-                      >
-                        <div class="flex items-baseline gap-2">
-                          <span
-                            class="shrink-0"
-                            classList={{
-                              "text-text-base": st.status === "published",
-                              "text-text-weak": st.status !== "published",
-                            }}
-                          >
-                            {st.status === "published" ? "●" : "○"}
-                          </span>
-                          <span class="text-13-regular text-text-base min-w-0 flex-1">{st.name}</span>
-                          {/* The page count IS the reason a site exists. Leading with it says
-                            what kind of thing this row is at a glance. */}
-                          <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
-                            {st.pagesCount}p
-                          </span>
-                        </div>
-                        <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
-                          /{st.slug}
-                          {st.owner ? ` · ${st.owner}` : ""}
-                          {st.requiresAuth ? " · gated" : ""}
-                        </p>
-                      </button>
+                        class="border-b border-border-weaker-base last:border-0"
+                        leading={
+                          <Avatar
+                            size="small"
+                            fallback={String(st.name ?? "?").slice(0, 1).toUpperCase()}
+                            background="color-mix(in srgb, var(--text-base) 10%, transparent)"
+                            foreground="var(--text-base)"
+                          />
+                        }
+                        title={st.name}
+                        secondary={`/${st.slug}${st.requiresAuth ? ` · ${language.t("iris.sites.signIn")}` : ""}`}
+                        time={st.updatedAt}
+                        status={{
+                          label: st.status === "published" ? language.t("iris.sites.status.published") : siteStatusWord(st.status, language.t),
+                          tone: st.status === "published" ? "success" : "neutral",
+                          mark: "dot",
+                        }}
+                        trailing={language.plural("iris.sites.pageCount", Number(st.pagesCount) || 0)}
+                        onSelect={() => setOpenRow(describeRow("sites", st))}
+                        selectLabel={st.name}
+                      />
                     )}
                   </For>
                 </Match>
@@ -6347,7 +6353,11 @@ export function SessionIrisTab() {
             summary={
               pane() === "atlas"
                 ? undefined
-                : pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })
+                : pageSummary({
+                    shown: rows().length,
+                    env: current() as PageEnvelope | undefined,
+                    noun: pane() === "sites" ? (rows().length === 1 ? "site" : "sites") : undefined,
+                  })
             }
             loading={data.loading}
             hasMore={(current() as PageEnvelope | undefined)?.hasMore}

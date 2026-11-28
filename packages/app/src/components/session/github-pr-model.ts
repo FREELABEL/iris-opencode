@@ -1,3 +1,4 @@
+import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 /**
  * Pure parts of the in-app PR view (#192937), apart from the component so they are tested
  * without loading the Markdown renderer (its worker cannot load under bun test).
@@ -47,13 +48,7 @@ export type Load =
 export const STATE_LABEL: Record<Pr["state"], string> = { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" }
 
 export function ago(iso: string | undefined): string {
-  const t = iso ? Date.parse(iso) : NaN
-  if (!Number.isFinite(t)) return ""
-  const s = Math.max(0, (Date.now() - t) / 1000)
-  if (s < 60) return "just now"
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
+  return relativeWords(iso)
 }
 
 /** "2 failing · 1 pending · 3 passed" — failing first, because that is what a person acts on. */
