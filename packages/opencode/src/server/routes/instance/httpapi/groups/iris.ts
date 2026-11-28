@@ -1700,6 +1700,97 @@ const PlanResponse = Schema.Struct({
   resetsAt: Schema.optional(described(Schema.NullOr(Schema.String), "When the allowance window resets, ISO-8601.")),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
+  // Usage as a progression (epic #194525). Every one optional: absent = the server did not say.
+  capTokens: Schema.optional(described(Schema.NullOr(Schema.Finite), "This week's allowance in tokens.")),
+  grantTokens: Schema.optional(
+    described(Schema.NullOr(Schema.Finite), "Top-up and reward tokens left, spent only after the weekly allowance."),
+  ),
+  nextTier: Schema.optional(
+    described(
+      Schema.NullOr(
+        Schema.Struct({
+          slug: Schema.String,
+          label: Schema.String,
+          priceUsd: Schema.NullOr(Schema.Finite),
+          period: Schema.String,
+          capTokensWeek: Schema.NullOr(Schema.Finite),
+        }),
+      ),
+      "The plan one rung up. NULL = none (top of the ladder, or staff).",
+    ),
+  ),
+  runoutAt: Schema.optional(
+    described(Schema.NullOr(Schema.String), "When the allowance runs out at this week's pace, ISO-8601. NULL = not before the reset."),
+  ),
+  progress: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        level: Schema.NullOr(Schema.Struct({ key: Schema.String, label: Schema.String })),
+        nextLevel: Schema.NullOr(
+          Schema.Struct({ key: Schema.String, label: Schema.String, requires: Schema.NullOr(Schema.String) }),
+        ),
+        checklist: Schema.Array(
+          Schema.Struct({
+            key: Schema.String,
+            label: Schema.String,
+            done: Schema.Boolean,
+            rewardTokens: Schema.NullOr(Schema.Finite),
+          }),
+        ),
+        streakWeeks: Schema.NullOr(Schema.Finite),
+      }),
+    ),
+  ),
+  lastWeek: Schema.optional(
+    described(
+      Schema.NullOr(
+        Schema.Struct({
+          runs: Schema.NullOr(Schema.Finite),
+          tokens: Schema.NullOr(Schema.Finite),
+          agentRuns: Schema.NullOr(Schema.Finite),
+          pagesPublished: Schema.NullOr(Schema.Finite),
+        }),
+      ),
+      "What was measured last week. Only counted facts; nothing estimated.",
+    ),
+  ),
+})
+
+/** Top-ups, invites and auto top-up (epic #194525). Every failure carries a sentence in `reason`. */
+const TopupPacksResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  packs: Schema.Array(
+    Schema.Struct({ key: Schema.String, tokens: Schema.Finite, priceUsd: Schema.Finite, label: Schema.NullOr(Schema.String) }),
+  ),
+})
+
+const TopupResult = Schema.Struct({
+  ok: Schema.Boolean,
+  url: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisTopupResult" })
+
+const InviteResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  invite: Schema.NullOr(
+    Schema.Struct({
+      url: Schema.String,
+      code: Schema.NullOr(Schema.String),
+      rewardTokens: Schema.NullOr(Schema.Finite),
+      invited: Schema.NullOr(Schema.Finite),
+      rewarded: Schema.NullOr(Schema.Finite),
+    }),
+  ),
+})
+
+const AutoTopupResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  autoTopup: Schema.NullOr(
+    Schema.Struct({ enabled: Schema.Boolean, pack: Schema.NullOr(Schema.String), monthlyCapUsd: Schema.NullOr(Schema.Finite) }),
+  ),
 })
 
 /**
@@ -2355,6 +2446,10 @@ export const IrisPaths = {
   accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
   checkout: `${root}/checkout`,
+  topupPacks: `${root}/topup/packs`,
+  topup: `${root}/topup`,
+  invite: `${root}/invite`,
+  autoTopup: `${root}/auto-topup`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
   githubPr: `${root}/github/pr`,
@@ -2656,6 +2751,53 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Start checkout",
           description:
             "Creates a Stripe Checkout session for one plan, for the signed-in account, and returns its URL. The desktop opens it directly — checkout never goes through a web app sign-in.",
+        }),
+      ),
+      HttpApiEndpoint.get("topupPacks", IrisPaths.topupPacks, {
+        success: described(TopupPacksResponse, "The top-up packs on sale"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.topupPacks",
+          summary: "Top-up packs",
+          description: "One-time token packs (epic #194525), spent only after the weekly allowance. Prices are fl-api's.",
+        }),
+      ),
+      HttpApiEndpoint.post("topup", IrisPaths.topup, {
+        payload: Schema.Struct({ pack: Schema.String }),
+        success: described(TopupResult, "Stripe's checkout URL for the pack, or why there is none"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.topup",
+          summary: "Start a top-up",
+          description: "Creates a Stripe Checkout session for one top-up pack on the signed-in account and returns its URL.",
+        }),
+      ),
+      HttpApiEndpoint.get("invite", IrisPaths.invite, {
+        success: described(InviteResponse, "This account's invite link and its reward"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.invite",
+          summary: "Invite link",
+          description: "The link to share, what both people get, and how many have joined through it.",
+        }),
+      ),
+      HttpApiEndpoint.get("autoTopup", IrisPaths.autoTopup, {
+        success: described(AutoTopupResponse, "Whether top-ups happen automatically"),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.autoTopup", summary: "Auto top-up", description: "Read the auto top-up setting." }),
+      ),
+      HttpApiEndpoint.put("autoTopupSave", IrisPaths.autoTopup, {
+        payload: Schema.Struct({
+          enabled: Schema.Boolean,
+          pack: Schema.optional(Schema.NullOr(Schema.String)),
+          monthlyCapUsd: Schema.optional(Schema.NullOr(Schema.Finite)),
+        }),
+        success: described(AutoTopupResponse, "The auto top-up setting as saved"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.autoTopupSave",
+          summary: "Save auto top-up",
+          description: "Turn auto top-up on or off, and choose its pack and monthly cap.",
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
