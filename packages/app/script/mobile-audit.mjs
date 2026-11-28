@@ -106,6 +106,20 @@ function measure({ MIN_MAIN, MIN_TARGET }) {
   }
   const clips = (s) => s.overflowX !== "visible"
   const scrolls = (el, s) => (s.overflowX === "auto" || s.overflowX === "scroll") && el.scrollWidth > el.clientWidth + 1
+  // The part of el a person can see: its box cut by every ancestor that clips (a tab scrolled
+  // half out of its strip is only the half that is left).
+  const visRect = (el) => {
+    const r = el.getBoundingClientRect()
+    let [l, t, rt, b] = [r.left, r.top, r.right, r.bottom]
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const s = getComputedStyle(p)
+      if (s.overflowX === "visible" && s.overflowY === "visible") continue
+      const pr = p.getBoundingClientRect()
+      if (s.overflowX !== "visible") ((l = Math.max(l, pr.left)), (rt = Math.min(rt, pr.right)))
+      if (s.overflowY !== "visible") ((t = Math.max(t, pr.top)), (b = Math.min(b, pr.bottom)))
+    }
+    return { left: l, top: t, right: rt, bottom: b }
+  }
 
   // (a) the page column. The shell marks it; without the shell, <main>.
   const columns = [...document.querySelectorAll('[data-component="iris-shell-page"]')]
@@ -243,8 +257,8 @@ function measure({ MIN_MAIN, MIN_TARGET }) {
   for (let i = 0; i < outer.length; i++)
     for (let j = i + 1; j < outer.length; j++) {
       if (layers.get(outer[i]) !== layers.get(outer[j])) continue
-      const a = outer[i].getBoundingClientRect()
-      const b = outer[j].getBoundingClientRect()
+      const a = visRect(outer[i])
+      const b = visRect(outer[j])
       const w = Math.min(a.right, b.right) - Math.max(a.left, b.left)
       const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
       if (w > 2 && h > 2)
