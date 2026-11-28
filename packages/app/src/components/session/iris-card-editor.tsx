@@ -9,7 +9,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Icon } from "@opencode-ai/ui/icon"
 import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { renderMarkdown } from "./iris-item"
-import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
+import { absoluteTime, relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 
 /**
  * The card editor — a board item you can CHANGE from the panel (#185485).
@@ -2206,7 +2206,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                               <dd>{assigned().map((a) => a.name).join(", ")}</dd>
                             </Show>
                             <dt>Updated</dt>
-                            <dd title={doc.latest!.updatedAt}>{timeAgo(doc.latest!.updatedAt, now()) || "—"}</dd>
+                            <dd title={absoluteTime(doc.latest!.updatedAt)}>{timeAgo(doc.latest!.updatedAt, now()) || "—"}</dd>
                           </dl>
                         </Show>
                       </div>
@@ -2671,7 +2671,7 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                                           <div class="iris-bubble__col">
                                             <div class="iris-bubble__meta">
                                               <span class="iris-bubble__who">{c().mine ? "You" : c().row.actor || "Someone"}</span>
-                                              <span title={c().row.at}>{timeAgo(c().row.at, now())}</span>
+                                              <span title={absoluteTime(c().row.at)}>{timeAgo(c().row.at, now())}</span>
                                             </div>
                                             <div class="iris-bubble__text">{c().row.text}</div>
                                           </div>
