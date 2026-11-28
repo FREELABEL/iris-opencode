@@ -6551,7 +6551,7 @@
       "describe": "make me an app — a dashboard or tool over your own IRIS data (your agents, leads, a dataset) with buttons, its own icon, in your Start menu or Dock. One step.",
       "aliases": [],
       "run": "iris genesis app <name>",
-      "haystack": "genesis app make me an app — a dashboard or tool over your own iris data (your agents, leads, a dataset) with buttons, its own icon, in your start menu or dock. one step. show what it shows:  about one line on what it is for (shown before sign-in) no-install publish it, but do not add it to the start menu / dock json"
+      "haystack": "genesis app make me an app — a dashboard or tool over your own iris data (your agents, leads, a dataset) with buttons, its own icon, in your start menu or dock. one step. show what it shows:  about one line on what it is for (shown before sign-in) board the project board it belongs to, so it shows in that project no-install publish it, but do not add it to the start menu / dock json"
     },
     {
       "kind": "command",

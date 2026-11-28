@@ -90,6 +90,7 @@ export const PagesAppCmd = cmd({
       .positional("name", { type: "string", demandOption: true, describe: 'what to call it, e.g. "My Command Center"' })
       .option("show", { type: "string", default: "agents", describe: 'what it shows: "agents" (with pause/resume), a dataset slug, or a collection like "leads:all"' })
       .option("about", { type: "string", describe: "one line on what it is for (shown before sign-in)" })
+      .option("board", { type: "number", describe: "the project board it belongs to, so it shows in that project's Genesis tab (default: your \"My Apps\" board)" })
       .option("no-install", { type: "boolean", default: false, describe: "publish it, but do not add it to the Start menu / Dock" })
       .option("json", { type: "boolean", default: false })
       .example('iris pages app "My Command Center"', "your agents, with pause and resume, in your Start menu or Dock")
@@ -106,7 +107,7 @@ export const PagesAppCmd = cmd({
 
     const sp = json ? null : prompts.spinner()
     sp?.start(`Making ${name}…`)
-    const board = await appsBoard(userId)
+    const board = Number(args.board) > 0 ? Number(args.board) : await appsBoard(userId)
     if (!board) {
       sp?.stop("Not made")
       return fail(`Could not find or make your "${APPS_BOARD}" board.`, "board")
