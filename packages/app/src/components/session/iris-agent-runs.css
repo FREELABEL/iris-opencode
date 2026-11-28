@@ -28,8 +28,8 @@
   color: var(--iar-ink); background: var(--iar-surface); font-size: var(--font-size-caption); line-height: 1.4;
 }
 .iar *, .iar *::before, .iar *::after { box-sizing: border-box; }
-.iar button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
-.iar button:focus-visible { outline: 2px solid var(--border-interactive-focus, var(--iar-jade)); outline-offset: 1px; }
+.iar button:not([data-component]) { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.iar button:not([data-component]):focus-visible { outline: 2px solid var(--border-interactive-focus, var(--iar-jade)); outline-offset: 1px; }
 .iar-num { font-family: var(--iar-mono); font-variant-numeric: tabular-nums; }
 .iar-warn { margin: 0 0 8px; color: var(--iar-amber); }
 .iar-empty { margin: 4px 2px 12px; color: var(--iar-ink2); }
@@ -133,3 +133,16 @@
 @keyframes iar-draw { from { clip-path: inset(0 100% 100% 0); } to { clip-path: inset(0 0 0 0); } }
 @media (prefers-reduced-motion: reduce) { .iar *, .iar *::before { animation: none !important; } }
 @container (max-width: 320px) { .iar-callrow { grid-template-columns: 14px minmax(0, 1fr) 40px; } .iar-trk { display: none; } }
+
+/* #194505: Recently finished as a table — result, what it was asked, which agents, when, how long. */
+.iar-recent { margin-top: 10px; border-top: 1px solid var(--iar-rule); padding-top: 10px; }
+.iar-rt-head, .iar-past > summary.iar-rt { display: grid; grid-template-columns: 78px minmax(0, 1.6fr) minmax(0, 1fr) 64px 56px; gap: 10px; align-items: center; }
+.iar-rt-head { padding: 0 6px 4px; font-size: var(--font-size-x-small); color: var(--iar-faint); border-bottom: 1px solid var(--iar-rule); }
+.iar-past > summary.iar-rt { padding: 7px 6px; border-bottom: 1px solid color-mix(in srgb, var(--iar-rule) 60%, transparent); border-radius: 0; color: var(--iar-ink); }
+.iar-past > summary.iar-rt:focus-visible { outline: none; box-shadow: var(--shadow-xs-border-focus); border-radius: var(--radius-md); }
+.iar-rt .iar-past-t { font-weight: var(--font-weight-medium); }
+.iar-rt-who { color: var(--iar-ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iar-rt > .iar-num { font-size: var(--font-size-x-small); color: var(--iar-ink2); text-align: right; }
+.iar-rt-head > span:nth-child(n + 4) { text-align: right; }
+.iar-none-row { display: flex; align-items: center; gap: 10px; margin: 2px 2px 8px; }
+.iar-none-row .iar-empty { margin: 0; }

@@ -25,6 +25,9 @@ export type GalleryAgent = {
   workspaceId?: number
   workspaceMatch?: string
   lastUsedAt?: string
+  /** The scheduled job's last_run_at (engine `lastRun`). Also moves on a skipped beat (#189113). */
+  lastRun?: string
+  failures?: number
   files?: number
   flags?: string[]
   functions?: string[]

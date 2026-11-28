@@ -5001,7 +5001,7 @@ export function SessionIrisTab() {
               <IrisHeartbeats doFetch={doFetch} />
             </Match>
             <Match when={pane() === "agent-runs"}>
-              <IrisAgentRuns />
+              <IrisAgentRuns onStart={() => chooseSub("all", "agents")} />
             </Match>
             <Match when={pane() === "leads-crm"}>
               <IrisLeadsTab

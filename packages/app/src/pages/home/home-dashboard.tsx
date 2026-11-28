@@ -33,6 +33,9 @@ import { byTool, fleetOf, type FleetRow } from "./home-fleet-model"
 import { AgentMark } from "@/components/session/agent-mark"
 import { plural, recapOf } from "./home-recap-model"
 import { Spinner } from "@opencode-ai/ui/spinner"
+import { Button } from "@opencode-ai/ui/button"
+import { useLanguage } from "@/context/language"
+import { changeOf, runChangeOf } from "./home-tiles-model"
 import "./home-dashboard.css"
 
 /**
@@ -130,6 +133,69 @@ function More(props: { total: number; shown: number; open: boolean; onToggle: ()
   )
 }
 
+/** Home reads one page of each list (home-dashboard-data.ts): the inbox's 25, the board feed's 50. */
+const INBOX_PAGE = 25
+const RECENT_PAGE = 50
+
+/**
+ * A Home tile (#194504): the whole tile opens its pane, the facts under the number are words, and a
+ * zero carries its next step instead of a dead 0. The next step is its own button beside the tile's,
+ * never inside it (a button in a button is not clickable).
+ */
+function Tile(props: {
+  label: string
+  /** Where it goes, in words — the tooltip and the accessible name's suffix. */
+  open: string
+  onOpen: () => void
+  value: string
+  hint?: string
+  mark?: "split" | "square"
+  facts: string[]
+  flag?: { tone: "bad" | "warn"; text: string }
+  zero?: { text: string; action?: string; onAction?: () => void }
+}) {
+  return (
+    <div class="ihd-stat" data-link="1" data-zero={props.zero ? "" : undefined}>
+      <button
+        type="button"
+        class="ihd-stat-open"
+        title={props.hint ? `${props.hint}\n${props.open}` : props.open}
+        aria-label={`${props.label}: ${props.value}. ${props.zero?.text ?? props.facts.join(", ")}. ${props.open}`}
+        onClick={() => props.onOpen()}
+      >
+        <Show when={props.flag}>
+          {(f) => (
+            <span class="ihd-flag ihd-ov" data-tone={f().tone}>
+              <Icon name={f().tone === "bad" ? "stop" : "warn"} color={f().tone === "bad" ? RED : AMBER} />
+              {f().text}
+            </span>
+          )}
+        </Show>
+        <Mark shape={props.mark} />
+        <span class="ihd-n">{props.value}</span>
+        <span class="ihd-label">{props.label}</span>
+        <Show
+          when={props.zero}
+          fallback={
+            <Show when={props.facts.length}>
+              <span class="ihd-meta">{props.facts.join(" · ")}</span>
+            </Show>
+          }
+        >
+          {(z) => <span class="ihd-meta">{z().text}</span>}
+        </Show>
+      </button>
+      <Show when={props.zero?.action && props.zero.onAction}>
+        <div class="ihd-stat-next">
+          <Button size="small" variant="secondary" onClick={() => props.zero?.onAction?.()}>
+            {props.zero!.action}
+          </Button>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 export function HomeDashboard(props: { class?: string; onNewChat?: () => void; onSettings?: () => void }) {
   const serverSDK = useServerSDK()
   const platform = usePlatform()
@@ -214,6 +280,28 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
     return recapOf(recentItems(), day.getTime())
   })
   const needsYou = () => fleet().rows.filter((r) => r.status === "needs_you").length
+  const language = useLanguage()
+  const t = (key: Parameters<typeof language.t>[0], params?: Record<string, string | number>) => language.t(key, params)
+  const n = (key: Parameters<typeof language.t>[0], value: number) => t(key, { count: value })
+  const count = (one: Parameters<typeof language.t>[0], many: Parameters<typeof language.t>[0], value: number) =>
+    value === 1 ? t(one) : n(many, value)
+  const openAtlas = () => openIrisPanel({ surface: "atlas" })
+  // The change since yesterday (#194504), only where Home's own reads can say it.
+  const dayStart = () => {
+    const d = new Date(now())
+    d.setHours(0, 0, 0, 0)
+    return d.getTime()
+  }
+  const runs = createMemo(() => (data()?.beats.measured ? runChangeOf(beats(), dayStart()) : null))
+  const mailDay = createMemo(() => {
+    const items = data()?.inbox.items
+    return data()?.inbox.measured && items ? changeOf(items.map((m) => m.receivedAt), dayStart(), { capped: items.length >= INBOX_PAGE }) : null
+  })
+  const today = createMemo(() => {
+    const items = recentItems()
+    const c = data()?.recent?.measured ? changeOf(items.map((i) => i.updatedAt), dayStart(), { capped: items.length >= RECENT_PAGE }) : null
+    return { projects: c?.today }
+  })
   const projects = () => {
     const b = data()?.bloqs
     return b?.measured ? String(b.total ?? b.bloqs.length) : "—"
@@ -240,14 +328,15 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
               </Show>
               <Show when={hive()?.measured}>
                 <span class="ihd-i" title="Machines online">
-                  <i class="ihd-live" />
+                  {/* Green only when something is up; none online is a neutral ring (#194504). */}
+                  <i class={online().length ? "ihd-live" : "ihd-idle"} />
                   {online().length}/{hive()!.nodes.length} online
                 </span>
               </Show>
               <Show when={data()?.inbox.measured && data()!.inbox.unread != null}>
                 <span class="ihd-i" title="Unread in your Hive inbox">
                   <Icon name="mail" />
-                  {data()!.inbox.unread}
+                  {n("home.status.unread", data()!.inbox.unread!)}
                 </span>
               </Show>
             </div>
@@ -267,130 +356,117 @@ export function HomeDashboard(props: { class?: string; onNewChat?: () => void; o
         </div>
 
         <div class="ihd-stats">
-          <div class="ihd-stat" title="Boards you own or share">
-            <Mark />
-            <div class="ihd-n">{projects()}</div>
-            <div class="ihd-label">
-              Projects
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i">
-                <Icon name="grid" />
-                boards
-              </span>
-            </div>
-          </div>
-          <div class="ihd-stat" title={tile("agents")?.detail}>
-            <Mark />
-            <div class="ihd-n">{tile("agents")?.value ?? "—"}</div>
-            <div class="ihd-label">
-              Agents
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i" title="On a schedule">
-                <Icon name="clock" />
-                {ov().scheduled}
-              </span>
-              <span class="ihd-i" title="Healthy">
-                <i class="ihd-live" style={{ width: "6px", height: "6px" }} />
-                {ov().healthy}
-              </span>
-            </div>
-          </div>
-          <div class="ihd-stat" title="Scheduled agent heartbeats">
-            <Show when={ov().stopped}>
-              <span class="ihd-flag ihd-ov" data-tone="bad" title="Not running">
-                <Icon name="stop" color={RED} />
-                <b>{ov().stopped}</b>
-              </span>
-            </Show>
-            <Mark shape="square" />
-            <div class="ihd-n">{data()?.beats.measured ? beats().length : "—"}</div>
-            <div class="ihd-label">
-              Heartbeats
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i" title="Running today">
-                <Icon name="bolt" color="var(--ihd-em)" />
-                {ov().runsToday}
-              </span>
-              <span class="ihd-i" title="Paused">
-                <Icon name="pause" />
-                {ov().paused}
-              </span>
-            </div>
-          </div>
-          <div
-            class="ihd-stat"
-            data-link="1"
-            title={`${tile("machines")?.detail ?? ""}\nClick to open Hive › Machines`}
-            role="button"
-            tabIndex={0}
-            onClick={openComputers}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openComputers()}
-          >
-            <Mark shape="square" />
-            <div class="ihd-n">{hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}</div>
-            <div class="ihd-label">
-              Machines
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i" title="Free task slots">
-                <Icon name="slot" />
-                {freeSlots()}
-              </span>
-              <span class="ihd-i" title="AI models serving">
-                <Icon name="chip" />
-                {models()}
-              </span>
-            </div>
-          </div>
-          <div class="ihd-stat" title={tile("inbox")?.detail}>
-            <Mark shape="square" />
-            <div class="ihd-n">
-              {data()?.inbox.measured && data()!.inbox.unread != null ? data()!.inbox.unread : "—"}
-            </div>
-            <div class="ihd-label">
-              Hive inbox
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i">
-                <Icon name="mail" />
-                unread
-              </span>
-            </div>
-          </div>
-          <div
-            class="ihd-stat"
-            data-link="1"
-            title="Sessions running on your machines, any tool\nClick to open Hive › Sessions"
-            role="button"
-            tabIndex={0}
-            onClick={openSessions}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openSessions()}
-          >
-            <Show when={needsYou()}>
-              <span class="ihd-flag ihd-ov" data-tone="warn" title="Waiting on you">
-                <Icon name="warn" color={AMBER} />
-                <b>{needsYou()}</b>
-              </span>
-            </Show>
-            <Mark />
-            <div class="ihd-n">{data()?.sessions.measured ? fleet().rows.length : "—"}</div>
-            <div class="ihd-label">
-              Sessions
-            </div>
-            <div class="ihd-meta">
-              <span class="ihd-i" title="Machines with a live session">
-                <Icon name="slot" />
-                {fleet().machines}
-              </span>
-              <span class="ihd-i" title="Working now">
-                <i class="ihd-live" style={{ width: "6px", height: "6px" }} />
-                {fleet().rows.filter((r) => r.working || r.status === "active").length}
-              </span>
-            </div>
-          </div>
+          <Tile
+            label={t("home.tile.projects.label")}
+            open={t("home.tile.projects.open")}
+            onOpen={openAtlas}
+            value={projects()}
+            facts={[
+              data()?.recent?.measured && today().projects
+                ? count("home.tile.projects.changedOne", "home.tile.projects.changedMany", today().projects!)
+                : t("home.tile.projects.fact"),
+            ]}
+            zero={
+              data()?.bloqs?.measured && projects() === "0"
+                ? { text: t("home.tile.projects.zero"), action: t("home.tile.projects.zeroAction"), onAction: openAtlas }
+                : undefined
+            }
+          />
+          <Tile
+            label={t("home.tile.agents.label")}
+            open={t("home.tile.agents.open")}
+            onOpen={openAgents}
+            value={tile("agents")?.value ?? "—"}
+            hint={tile("agents")?.detail}
+            facts={data()?.beats.measured ? [n("home.tile.fact.scheduled", ov().scheduled), n("home.tile.fact.healthy", ov().healthy)] : []}
+            zero={
+              data()?.agents.measured && agentTotal() === 0
+                ? { text: t("home.tile.agents.zero"), action: t("home.tile.agents.zeroAction"), onAction: openAgents }
+                : undefined
+            }
+          />
+          <Tile
+            label={t("home.tile.heartbeats.label")}
+            open={t("home.tile.heartbeats.open")}
+            onOpen={openHeartbeats}
+            mark="square"
+            value={data()?.beats.measured ? String(beats().length) : "—"}
+            flag={ov().stopped ? { tone: "bad", text: n("home.tile.flag.stopped", ov().stopped) } : undefined}
+            facts={[
+              count("home.tile.fact.runsTodayOne", "home.tile.fact.runsTodayMany", runs()?.today ?? ov().runsToday),
+              runs() ? n("home.tile.fact.yesterday", runs()!.yesterday) : n("home.tile.fact.paused", ov().paused),
+            ]}
+            zero={
+              data()?.beats.measured && beats().length === 0
+                ? { text: t("home.tile.heartbeats.zero"), action: t("home.tile.heartbeats.zeroAction"), onAction: openHeartbeats }
+                : undefined
+            }
+          />
+          <Tile
+            label={t("home.tile.machines.label")}
+            open={t("home.tile.machines.open")}
+            onOpen={openComputers}
+            mark="square"
+            value={hive()?.measured ? `${online().length}/${hive()!.nodes.length}` : "—"}
+            hint={tile("machines")?.detail}
+            facts={
+              hive()?.measured
+                ? [
+                    count("home.tile.fact.freeSlotsOne", "home.tile.fact.freeSlotsMany", freeSlots()),
+                    count("home.tile.fact.modelsOne", "home.tile.fact.modelsMany", models()),
+                  ]
+                : []
+            }
+            zero={
+              hive()?.measured && hive()!.nodes.length === 0
+                ? { text: t("home.tile.machines.zero"), action: t("home.tile.machines.zeroAction"), onAction: openComputers }
+                : undefined
+            }
+          />
+          <Tile
+            label={t("home.tile.inbox.label")}
+            open={t("home.tile.inbox.open")}
+            onOpen={openInbox}
+            mark="square"
+            value={data()?.inbox.measured && data()!.inbox.unread != null ? String(data()!.inbox.unread) : "—"}
+            hint={tile("inbox")?.detail}
+            facts={
+              data()?.inbox.measured
+                ? mailDay()
+                  ? [n("home.tile.fact.newToday", mailDay()!.today), n("home.tile.fact.yesterday", mailDay()!.yesterday)]
+                  : [t("home.tile.inbox.fact")]
+                : []
+            }
+            zero={data()?.inbox.measured && data()!.inbox.unread === 0 && !mailDay()?.today ? { text: t("home.tile.inbox.zero") } : undefined}
+          />
+          <Tile
+            label={t("home.tile.sessions.label")}
+            open={t("home.tile.sessions.open")}
+            onOpen={openSessions}
+            value={data()?.sessions.measured ? String(fleet().rows.length) : "—"}
+            flag={
+              needsYou()
+                ? { tone: "warn", text: count("home.tile.flag.needsYouOne", "home.tile.flag.needsYouMany", needsYou()) }
+                : undefined
+            }
+            facts={
+              data()?.sessions.measured && fleet().rows.length
+                ? [
+                    count("home.tile.fact.machinesOne", "home.tile.fact.machinesMany", fleet().machines),
+                    n("home.tile.fact.working", fleet().rows.filter((r) => r.working || r.status === "active").length),
+                  ]
+                : []
+            }
+            zero={
+              data()?.sessions.measured && fleet().rows.length === 0
+                ? {
+                    text: t("home.tile.sessions.zero"),
+                    action: props.onNewChat ? t("home.tile.sessions.zeroAction") : undefined,
+                    onAction: props.onNewChat,
+                  }
+                : undefined
+            }
+          />
         </div>
 
         <Show when={data()?.recent?.measured || written()?.text}>
