@@ -39,6 +39,9 @@ import {
 } from "./iris-hive-inbox-model"
 import { bumpIrisInbox } from "./iris-nav"
 import { usePlatform } from "@/context/platform"
+import { useLanguage } from "@/context/language"
+import { CommandAction } from "@/components/command-action"
+import { RelativeTime } from "@opencode-ai/ui/relative-time"
 
 /**
  * Hive › Inbox — v2 (#190917, "Make the Hive inbox a place people work").
@@ -111,6 +114,7 @@ export function IrisHiveInbox(props: {
   // When this computer's Hive connection is down the inbox cannot be read, and the only way back
   // used to be a terminal (or, on macOS, a menu item). One click restarts it from here.
   const platform = usePlatform()
+  const language = useLanguage()
   const [reconnecting, setReconnecting] = createSignal(false)
   const offline = createMemo(() => !!list.latest && !list.latest.measured)
   const reconnect = async () => {
@@ -589,7 +593,23 @@ export function IrisHiveInbox(props: {
             {list.latest?.reason ? ` — ${list.latest.reason}` : ""}.
             <Show
               when={platform.irisAction}
-              fallback={<span> Run <code>iris-daemon restart</code> in a terminal, then check again.</span>}
+              fallback={
+                // No desktop shell here (IRIS in a browser): the same restart, through the CLI, as a
+                // button with a confirm (#194583) — not a line to paste into a terminal.
+                <span class="hib-reconnect-run">
+                  <CommandAction
+                    command="iris hive connect --force"
+                    label={language.t("iris.hive.inbox.reconnect")}
+                    describe={language.t("iris.hive.inbox.reconnect.describe")}
+                    write
+                    size="small"
+                    variant="secondary"
+                    fetch={props.doFetch}
+                    base=""
+                    onDone={(r) => r.ran && r.code === 0 && setTimeout(reload, 3000)}
+                  />
+                </span>
+              }
             >
               {" "}
               <button type="button" class="hib-reconnect" disabled={reconnecting()} onClick={() => void reconnect()}>
@@ -699,18 +719,34 @@ export function IrisHiveInbox(props: {
               <nav class="hib-rail" aria-label="Threads">
                 <For each={rail()}>
                   {(x) => (
+                    // Who, the last line and when (#194583) — not initials alone. A narrow panel
+                    // folds back to the avatar strip (iris-hive-inbox.css).
                     <button
                       type="button"
                       class="hib-rail-btn"
                       classList={{ "hib-rail-btn--on": samePeer(x.peer, p()) }}
                       title={x.peer}
                       aria-label={`${x.peer}${x.unread ? `, ${x.unread} unread` : ""}`}
+                      aria-current={samePeer(x.peer, p()) ? "true" : undefined}
                       onClick={() => setPeer(x.peer)}
                     >
-                      <Avatar name={x.peer} />
-                      <Show when={x.unread > 0}>
-                        <i class="hib-rail-dot" />
-                      </Show>
+                      <span class="hib-rail-av">
+                        <Avatar name={x.peer} />
+                        <Show when={x.unread > 0}>
+                          <i class="hib-rail-dot" />
+                        </Show>
+                      </span>
+                      <span class="hib-rail-text">
+                        <span class="hib-rail-top">
+                          <b class="hib-rail-name" data-unread={x.unread > 0 ? "1" : undefined}>
+                            {x.peer}
+                          </b>
+                          <Show when={x.last > 0}>
+                            <RelativeTime class="hib-rail-time hsc-num" value={x.last} now={now()} />
+                          </Show>
+                        </span>
+                        <span class="hib-rail-line">{x.lastLine ? (x.lastMine ? language.t("iris.hive.inbox.you", { text: x.lastLine }) : x.lastLine) : "\u00a0"}</span>
+                      </span>
                     </button>
                   )}
                 </For>
@@ -824,7 +860,7 @@ export function IrisHiveInbox(props: {
                                             <summary>For developers</summary>
                                             <div class="hib-dev-row">
                                               <code class="hsc-mono">{inboxCli(mm())}</code>
-                                              <button type="button" class="hib-ib" title="Copy CLI command" onClick={() => void copyCli(mm())}>
+                                              <button type="button" class="hib-ib" title={language.t("command.run.copyCli")} aria-label={language.t("command.run.copyCli")} onClick={() => void copyCli(mm())}>
                                                 <Ic name={copied() ? "check" : "copy"} />
                                               </button>
                                             </div>

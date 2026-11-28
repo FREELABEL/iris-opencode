@@ -101,5 +101,7 @@ export const IRIS_OUTREACH_ENGLISH = {
   "iris.outreach.kv.board": "Board",
   "iris.outreach.kv.runsOn": "Runs on",
   "iris.outreach.kv.noCampaign": "no campaign",
-  "iris.outreach.readOnly": "Read-only here. Edit with ",
+  "iris.outreach.readOnly": "The steps are read-only in this view.",
+  "iris.outreach.change": "Change it",
+  "iris.outreach.change.describe": "Replaces this strategy with the one in a JSON file on this computer. Put the file's path after --from-json, then run it; IRIS asks before it saves.",
 } as const

@@ -198,3 +198,8 @@
   .hmc-stats { grid-template-columns: 1fr 1fr; }
   .hmc-btn { padding: 8px 12px; }
 }
+
+/* #194583: steps that run here are buttons; the developer fold keeps the CLI line. */
+.hmc-add-run { justify-content: flex-start; }
+.hmc-dev-copy { margin-top: 6px; padding: 3px 8px; font-size: var(--font-size-x-small); }
+.hmc-empty-state { margin: 8px 0; }

@@ -207,3 +207,4 @@
 .pls-chip--status { border: 1px solid var(--hsc-rule); background: none; }
 .pls-lock { display: inline-grid; place-items: center; color: var(--hsc-faint); }
 .pls-err { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pls-fixrun { margin: 4px 0 8px; }

@@ -3,6 +3,9 @@ import { createStore } from "solid-js/store"
 import { LIVE_SANDBOX } from "./iris-artifacts-model"
 import { atlasNoteUrl, fallbackTitle, type AtlasNote } from "./iris-atlas-artifacts-model"
 import { clearAtlasFocus, irisAtlasFocus } from "./iris-nav"
+import { IrisArtifactHistory, type HistoryRow } from "./iris-artifact-history"
+import { useLanguage } from "@/context/language"
+import { showToast } from "@/utils/toast"
 
 /**
  * Atlas › Artifacts (epic #187717): the Atlas notes this session produced, each shown LIVE — the
@@ -33,7 +36,10 @@ export function IrisAtlasArtifacts(props: {
     return x && !list.some((n) => n.url === x.url) ? [x, ...list] : list
   })
 
+  const language = useLanguage()
   const [openUrl, setOpenUrl] = createSignal<string | undefined>()
+  /** The list view (#194583): every note this chat made, as rows — the same list Genesis uses. */
+  const [listView, setListView] = createSignal(false)
   const [listOpen, setListOpen] = createSignal(false)
   const [reload, setReload] = createSignal(0)
 
@@ -64,6 +70,29 @@ export function IrisAtlasArtifacts(props: {
   // The note's own title wins over what the session recorded: a model's guess, or a uuid.
   const titleOf = (n: AtlasNote) => checks[n.url]?.title ?? n.title
   const unavailable = (n: AtlasNote) => checks[n.url]?.state === "unavailable"
+  const rows = createMemo<HistoryRow[]>(() =>
+    notes().map((n) => ({
+      key: n.url,
+      title: titleOf(n),
+      kind: "note" as const,
+      author: n.source === "tool" ? language.t("iris.atlasNotes.sharedInChat") : language.t("iris.atlasNotes.publishedHere"),
+      when: n.at,
+      status: unavailable(n)
+        ? { label: language.t("iris.artifacts.status.notPublic"), tone: "warning" as const }
+        : checks[n.url]?.state === "public"
+          ? { label: language.t("iris.artifacts.status.public"), tone: "success" as const }
+          : undefined,
+      shareUrl: unavailable(n) ? undefined : n.url,
+      selected: n.url === openUrl(),
+    })),
+  )
+  const share = (r: HistoryRow) => {
+    if (!r.shareUrl) return
+    void navigator.clipboard
+      ?.writeText(r.shareUrl)
+      .then(() => showToast({ variant: "success", icon: "check", description: language.t("iris.artifacts.history.shared") }))
+      .catch(() => showToast({ description: r.shareUrl }))
+  }
 
   createEffect(() => {
     const want = irisAtlasFocus()
@@ -79,17 +108,24 @@ export function IrisAtlasArtifacts(props: {
 
   return (
     <div class="iris-artifacts">
-      <Show when={!props.sessionId}>
-        <p class="iris-artifacts__note">Open a session — these are the Atlas notes the conversation produced.</p>
-      </Show>
-      <Show when={props.sessionId && notes().length === 0}>
-        <p class="iris-artifacts__note">
-          No Atlas notes yet. When your agent publishes or shares an Atlas note in this conversation — a plan, an
-          epic, a brief — it opens here, live, with its link.
-        </p>
+      {/* The list (#194583): what this chat made, when, and whether it is public — and the empty
+          state when there is nothing yet, with the next step. */}
+      <Show when={listView() || notes().length === 0}>
+        <IrisArtifactHistory
+          rows={rows()}
+          empty={{
+            title: language.t(props.sessionId ? "iris.atlasNotes.empty.title" : "iris.atlasNotes.noChat.title"),
+            body: language.t(props.sessionId ? "iris.atlasNotes.empty.body" : "iris.atlasNotes.noChat.body"),
+          }}
+          onOpen={(r) => {
+            setOpenUrl(r.key)
+            setListView(false)
+          }}
+          onShare={share}
+        />
       </Show>
 
-      <Show when={open()}>
+      <Show when={!listView() && open()}>
         {(note) => (
           <>
             <div class="iris-artifacts__toolbar">
@@ -134,6 +170,9 @@ export function IrisAtlasArtifacts(props: {
                   </ul>
                 </Show>
               </div>
+              <button type="button" class="iris-card__linkbtn iris-artifacts__histbtn" data-action="atlas-notes-list" onClick={() => setListView(true)}>
+                {language.t("iris.atlasNotes.list")}
+              </button>
               <span class="iris-artifacts__sep" />
               <strong class="iris-artifacts__tbtitle">{titleOf(note())}</strong>
               <span class="iris-artifacts__tbmeta iris-atlas-note__url" data-testid="atlas-note-url" title={note().url}>
@@ -148,6 +187,15 @@ export function IrisAtlasArtifacts(props: {
               <Show when={props.openExternal}>
                 <button type="button" class="iris-card__linkbtn" onClick={() => props.openExternal!(note().url)}>
                   Open in browser
+                </button>
+              </Show>
+              <Show when={!unavailable(note())}>
+                <button
+                  type="button"
+                  class="iris-card__linkbtn"
+                  onClick={() => share({ key: note().url, title: titleOf(note()), kind: "note", shareUrl: note().url })}
+                >
+                  {language.t("iris.artifacts.history.share")}
                 </button>
               </Show>
             </div>

@@ -1,0 +1,7 @@
+/* Card › Sharing › "Work on it with an agent" (#194583): the button first, the CLI line after it. */
+.iris-card__agent { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.iris-card__agent .iris-card__help { margin: 0; }
+.iris-card__agent-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.iris-card__agent-cmd {
+  flex: 1 1 auto; min-width: 0; font-size: var(--font-size-x-small); color: var(--text-weak);
+}

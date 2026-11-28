@@ -1476,12 +1476,17 @@ function SideCard(props: {
           <Icon name="copy" size="small" />
         </button>
       </Show>
+      {/* The CLI line is for developers (#194583): the page is already open here, with its own
+          Open / Publish actions, so the line folds away instead of reading as the next step. */}
       <Show when={cmd()}>
-        <button type="button" class="iris-gp-copy iris-gp-cmd" title={language.t("iris.pages.copyCommand")} onClick={() => props.onCopy(cmd(), language.t("iris.pages.what.command"))}>
-          <Icon name="console" size="small" />
-          <span class="iris-gp-grow">{cmd()}</span>
-          <Icon name="copy" size="small" />
-        </button>
+        <details class="iris-gp-dev">
+          <summary>{language.t("iris.pages.side.dev")}</summary>
+          <button type="button" class="iris-gp-copy iris-gp-cmd" title={language.t("command.run.copyCli")} onClick={() => props.onCopy(cmd(), language.t("iris.pages.what.command"))}>
+            <Icon name="console" size="small" />
+            <span class="iris-gp-grow">{cmd()}</span>
+            <Icon name="copy" size="small" />
+          </button>
+        </details>
       </Show>
       <Show when={props.info && !props.info.measured}>
         <p class="iris-gp-muted">{language.t("iris.pages.side.partial", { reason: props.info!.reason ?? "" })}</p>

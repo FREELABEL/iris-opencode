@@ -178,6 +178,26 @@ export namespace Artifacts {
     return out.sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : 0)).slice(0, MAX_LIST)
   }
 
+  /**
+   * HISTORY (#194583): every artifact in this store, across every chat, newest first, each with
+   * the chat it belongs to — the pane's "All chats" list. Same files as `list`, read the same way;
+   * nothing is cached or indexed, so it can never disagree with what a chat shows.
+   */
+  export function history(rootDir: string, limit = MAX_LIST): (Meta & { session: string })[] {
+    let sessions: string[]
+    try {
+      sessions = readdirSync(rootDir)
+    } catch {
+      return []
+    }
+    const out: (Meta & { session: string })[] = []
+    for (const session of sessions) {
+      if (!validSegment(session)) continue
+      for (const m of list(rootDir, session)) out.push({ ...m, session })
+    }
+    return out.sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : 0)).slice(0, limit)
+  }
+
   /** One artifact with its content, or undefined. `truncated` says the preview is partial. */
   export function read(
     rootDir: string,

@@ -145,3 +145,8 @@
 .iris-gp-dhead > [data-component="status-badge"] { flex: none; }
 .iris-gp-confirm { display: flex; flex-direction: column; gap: 8px; }
 .iris-gp-confirm p { margin: 0; }
+
+/* #194583: the CLI line folds under "For developers". */
+.iris-gp-dev { margin-top: 4px; }
+.iris-gp-dev summary { cursor: pointer; font-size: var(--font-size-x-small); color: var(--text-weak); padding: 2px 0; }
+.iris-gp-dev[open] summary { margin-bottom: 4px; }
