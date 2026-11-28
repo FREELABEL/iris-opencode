@@ -1,0 +1,202 @@
+/* Model picker detail pane (#194383). Tokens only — see packages/ui/script/lint-tokens.ts. */
+[data-component="model-detail-pane"] {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+  color: var(--v2-text-text-base);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-empty"] {
+  margin: auto;
+  color: var(--v2-text-text-faint);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-head"] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-provider"],
+[data-component="model-detail-pane"] [data-slot="model-fact-label"],
+[data-component="model-detail-pane"] [data-slot="model-section-head"] {
+  color: var(--v2-text-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-name"] {
+  margin: 0;
+  font-size: var(--font-size-large);
+  line-height: var(--font-size-large--line-height);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-tight);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-runs-on"] {
+  margin: 0;
+  color: var(--v2-text-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-about"] {
+  margin: 4px 0 0;
+  color: var(--v2-text-text-base);
+  text-wrap: pretty;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-good-for"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-chips"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-chip"] {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--v2-background-bg-layer-03);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-facts"],
+[data-component="model-detail-pane"] [data-slot="model-stats"] {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-stats"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-facts"] [data-slot="model-fact"] {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--v2-background-bg-layer-02);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-fact"] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-fact-value"] {
+  font-weight: var(--font-weight-medium);
+}
+
+/* Colour carries meaning, not decoration: low cost / fast reads good, the opposite reads caution. */
+[data-component="model-detail-pane"] [data-slot="model-fact-value"][data-level="low"] {
+  color: color-mix(in oklab, var(--icon-success-base) 65%, var(--v2-text-text-base));
+}
+
+[data-component="model-detail-pane"] [data-slot="model-fact-value"][data-level="high"] {
+  color: color-mix(in oklab, var(--icon-warning-base) 65%, var(--v2-text-text-base));
+}
+
+[data-component="model-detail-pane"] [data-slot="model-fact-hint"] {
+  overflow: hidden;
+  color: var(--v2-text-text-faint);
+  font-size: var(--font-size-x-small);
+  line-height: var(--font-size-x-small--line-height);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-section"] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--v2-border-border-muted);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-section-head"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: var(--font-weight-medium);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-source"] {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--v2-text-text-faint);
+  font: inherit;
+  font-weight: var(--font-weight-regular);
+  cursor: pointer;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-source"]:hover {
+  color: var(--v2-text-text-base);
+  text-decoration: underline;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-none"] {
+  margin: 0;
+  color: var(--v2-text-text-faint);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-score"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-score-row"] {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+[data-component="model-detail-pane"] [data-slot="model-score-label"] {
+  color: var(--v2-text-text-muted);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-score-value"] {
+  font-size: var(--font-size-x-large);
+  line-height: var(--font-size-x-large--line-height);
+  font-weight: var(--font-weight-semibold);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-score-rank"] {
+  margin-left: auto;
+  color: var(--v2-text-text-muted);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-bar"] {
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--v2-background-bg-layer-03);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-bar"] > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--v2-text-text-accent);
+}
+
+[data-component="model-detail-pane"] [data-slot="model-abilities"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--v2-text-text-faint);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}

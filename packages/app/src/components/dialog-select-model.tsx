@@ -1,5 +1,5 @@
 import { Popover as Kobalte } from "@kobalte/core/popover"
-import { Component, ComponentProps, createEffect, createMemo, For, JSX, Show } from "solid-js"
+import { Component, ComponentProps, createEffect, createMemo, createSignal, For, JSX, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocal } from "@/context/local"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -14,7 +14,6 @@ import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { Tag as TagV2 } from "@opencode-ai/ui/v2/badge-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
-import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
 import { decode64 } from "@/utils/base64"
@@ -22,6 +21,8 @@ import { handleDocumentSearchKeydown } from "@/utils/search-keydown"
 import { createMenuDismissController } from "@/utils/menu-dismiss-controller"
 import { createEventListener } from "@solid-primitives/event-listener"
 import { matchesModelSearch } from "./dialog-select-model-search"
+import { ModelDetailPane } from "./model-details/model-detail-pane"
+import { useModelDetails } from "./model-details/use-model-details"
 
 const isFree = (provider: string, cost: { input: number } | undefined) =>
   provider === "opencode" && (!cost || cost.input === 0)
@@ -50,6 +51,9 @@ const ModelList: Component<{
   onSelect: () => void
   action?: JSX.Element
   model?: ModelState
+  /** The detail pane replaces the hover card; the narrow dialog keeps it. */
+  tooltip?: boolean
+  onMove?: (item: ModelItem | undefined) => void
 }> = (props) => {
   const model = props.model ?? useLocal().model
   const language = useLanguage()
@@ -79,7 +83,11 @@ const ModelList: Component<{
         if (!popularProviders.includes(aProvider) && popularProviders.includes(bProvider)) return 1
         return popularProviders.indexOf(aProvider) - popularProviders.indexOf(bProvider)
       }}
-      itemWrapper={(item, node) => (
+      onMove={props.onMove}
+      itemWrapper={(item, node) =>
+        props.tooltip === false ? (
+          node
+        ) : (
         <Tooltip
           class="w-full"
           placement="right-start"
@@ -89,7 +97,8 @@ const ModelList: Component<{
         >
           {node}
         </Tooltip>
-      )}
+        )
+      }
       onSelect={(x) => {
         model.set(x ? { modelID: x.id, providerID: x.provider.id } : undefined, {
           recent: true,
@@ -131,6 +140,9 @@ export function ModelSelectorPopover(props: {
   })
   const dialog = useDialog()
   const local = useLocal()
+  const details = useModelDetails()
+  const [moved, setMoved] = createSignal<ModelItem | undefined>()
+  const shown = () => moved() ?? (props.model ?? local.model).current()
   const directory = () => decode64(local.slug())
 
   const close = (dismiss: Dismiss) => {
@@ -157,7 +169,11 @@ export function ModelSelectorPopover(props: {
     <Kobalte
       open={store.open}
       onOpenChange={(next) => {
-        if (next) setStore("dismiss", null)
+        if (next) {
+          setStore("dismiss", null)
+          setMoved(undefined)
+          details.refresh()
+        }
         setStore("open", next)
       }}
       modal={false}
@@ -167,7 +183,8 @@ export function ModelSelectorPopover(props: {
       <Kobalte.Trigger as={props.trigger} />
       <Kobalte.Portal>
         <Kobalte.Content
-          class="w-72 h-80 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
+          data-slot="model-selector"
+          class="flex h-[440px] max-h-[calc(100vh-96px)] w-[664px] max-w-[calc(100vw-24px)] rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
           onEscapeKeyDown={(event) => {
             close("escape")
             event.preventDefault()
@@ -186,9 +203,12 @@ export function ModelSelectorPopover(props: {
           }}
         >
           <Kobalte.Title class="sr-only">{language.t("dialog.model.select.title")}</Kobalte.Title>
+          <div class="flex w-72 shrink-0 flex-col border-r border-border-base p-2">
           <ModelList
             provider={props.provider}
             model={props.model}
+            tooltip={false}
+            onMove={setMoved}
             onSelect={() => close("select")}
             class="p-1"
             action={
@@ -216,6 +236,10 @@ export function ModelSelectorPopover(props: {
               </div>
             }
           />
+          </div>
+          <ScrollView class="min-h-0 min-w-0 flex-1">
+            <ModelDetailPane item={shown()} doc={details.doc()} />
+          </ScrollView>
         </Kobalte.Content>
       </Kobalte.Portal>
     </Kobalte>
@@ -301,6 +325,7 @@ function ModelSelectorPopoverV2View(props: {
   onClose: () => void
 }) {
   const language = useLanguage()
+  const details = useModelDetails()
   const [store, setStore] = createStore({ open: false, search: "", active: "" })
   let searchRef: HTMLInputElement | undefined
   let contentRef: HTMLDivElement | undefined
@@ -308,6 +333,13 @@ function ModelSelectorPopoverV2View(props: {
 
   const models = createMemo(() => props.models(store.search))
   const groups = createMemo(() => props.groups(models()))
+  // The pane follows the highlighted row; on "Manage models" or an empty search it shows the
+  // model in use, so it is never blank while there is something to say.
+  const shown = createMemo(
+    () =>
+      models().find((item) => modelKey(item) === store.active) ??
+      props.models("").find((item) => modelKey(item) === props.current()),
+  )
   const keys = () => [...models().map(modelKey), manageKey]
   const initialActive = () => {
     const selected = props.current()
@@ -319,6 +351,7 @@ function ModelSelectorPopoverV2View(props: {
     store.active ? contentRef?.querySelector<HTMLElement>(`[data-option-key="${CSS.escape(store.active)}"]`) : undefined
   const setOpen = (open: boolean) => {
     if (open) {
+      details.refresh()
       dismiss.allowTriggerRestore()
       setStore({ open: true, active: initialActive() })
       setTimeout(() =>
@@ -378,11 +411,13 @@ function ModelSelectorPopoverV2View(props: {
       <MenuV2.Portal>
         <MenuV2.Content
           ref={(element: HTMLDivElement) => (contentRef = element)}
-          class="w-[284px] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 !p-0 shadow-[var(--v2-elevation-floating)] focus:outline-none"
+          data-slot="model-selector-v2"
+          class="flex !flex-row h-[440px] max-h-[calc(100vh-96px)] w-[664px] max-w-[calc(100vw-24px)] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 !p-0 shadow-[var(--v2-elevation-floating)] focus:outline-none"
           onPointerDownOutside={dismiss.preventTriggerRestore}
           onFocusOutside={dismiss.preventTriggerRestore}
           onCloseAutoFocus={dismiss.onCloseAutoFocus}
         >
+          <div class="flex w-[264px] shrink-0 flex-col border-r border-v2-border-border-muted">
           <div class="flex flex-col p-0.5">
             <div class="flex h-7 items-center gap-2 rounded-sm pl-3 pr-2.5 text-v2-icon-icon-muted">
               <Icon name="magnifying-glass" size="small" class="shrink-0" />
@@ -437,7 +472,7 @@ function ModelSelectorPopoverV2View(props: {
             </div>
           </div>
           <div class="h-px bg-v2-border-border-muted" />
-          <ScrollView data-slot="model-selector-scroll" class="max-h-[220px] min-h-0">
+          <ScrollView data-slot="model-selector-scroll" class="min-h-0 flex-1">
             <div class="flex flex-col p-0.5 pt-0">
               <Show
                 when={models().length > 0}
@@ -456,20 +491,6 @@ function ModelSelectorPopoverV2View(props: {
                       <MenuV2.RadioGroup value={props.current()}>
                         <For each={group.items}>
                           {(item) => (
-                            <TooltipV2
-                              class="w-full"
-                              placement="right-start"
-                              gutter={6}
-                              openDelay={0}
-                              value={
-                                <ModelTooltip
-                                  model={item}
-                                  latest={item.latest}
-                                  free={isFree(item.provider.id, item.cost)}
-                                  v2
-                                />
-                              }
-                            >
                               <MenuV2.RadioItem
                                 value={modelKey(item)}
                                 data-option-key={modelKey(item)}
@@ -490,7 +511,6 @@ function ModelSelectorPopoverV2View(props: {
                                   <TagV2 class="shrink-0">{language.t("model.tag.latest")}</TagV2>
                                 </Show>
                               </MenuV2.RadioItem>
-                            </TooltipV2>
                           )}
                         </For>
                       </MenuV2.RadioGroup>
@@ -515,6 +535,10 @@ function ModelSelectorPopoverV2View(props: {
               <span class="min-w-0 flex-1 truncate leading-5">{language.t("dialog.model.manage")}</span>
             </MenuV2.Item>
           </div>
+          </div>
+          <ScrollView class="min-h-0 min-w-0 flex-1">
+            <ModelDetailPane item={shown()} doc={details.doc()} />
+          </ScrollView>
         </MenuV2.Content>
       </MenuV2.Portal>
     </MenuV2>
