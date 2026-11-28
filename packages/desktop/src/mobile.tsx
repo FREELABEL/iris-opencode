@@ -56,6 +56,11 @@ const platform: Platform = {
 }
 
 async function start() {
+  // CI's Simulator check only (ios-build.yml): the build is pointed at an engine running on the
+  // runner, so every build is screenshotted connected — Home, safe area, sidebar — before it can
+  // reach TestFlight. Unset in every other build, including the TestFlight one.
+  const sim = import.meta.env.VITE_IRIS_SIM_ENGINE as string | undefined
+  if (sim) return openEngine({ url: sim, username: "opencode", password: String(import.meta.env.VITE_IRIS_SIM_PASSWORD ?? "") }, (problem) => showAddress({ url: sim, password: "" }, problem))
   track("iphone.launch")
   const choice = read<Choice>(MACHINE_KEY)
   const signedIn = accounts()

@@ -10,6 +10,9 @@
 	     for *.ts.net only. Remove once every pairing is HTTPS. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<!-- 127.0.0.1 over http: the engine CI's Simulator check connects to. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>ts.net</key>
