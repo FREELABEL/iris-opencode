@@ -465,3 +465,31 @@ export function liveRooms(rooms: SharedRoom[], myId: number | null, now: Date = 
     .slice(0, max)
     .map((x) => x.r)
 }
+
+// ── minimal room UI (#194566) ────────────────────────────────────────────────
+
+const BRANDS: Record<string, string> = {
+  gpt: "GPT", glm: "GLM", deepseek: "DeepSeek", qwen: "Qwen", kimi: "Kimi", gemini: "Gemini", claude: "Claude",
+  minimax: "MiniMax", mimo: "MiMo", grok: "Grok", llama: "Llama", mistral: "Mistral", hy: "Hy", step: "Step", longcat: "LongCat", iris: "IRIS",
+}
+const WORDS: Record<string, string> = { ai: "AI", mini: "Mini", nano: "Nano", pro: "Pro", max: "Max", flash: "Flash", plus: "Plus", code: "Code", preview: "Preview", lite: "Lite" }
+
+/** "iris/gpt-6-luna" → "GPT-6 Luna", "iris/deepseek-v4-pro" → "DeepSeek V4 Pro" — a name a person reads, not an id. */
+export function modelLabel(id: string | null | undefined): string {
+  if (!id) return ""
+  const bare = String(id).split("/").pop() ?? ""
+  const parts = bare.split("-").filter(Boolean)
+  if (!parts.length) return String(id)
+  const out: string[] = []
+  parts.forEach((p, i) => {
+    const low = p.toLowerCase()
+    if (i === 0 && BRANDS[low]) out.push(BRANDS[low])
+    else if (/^v\d/.test(low)) out.push(low.toUpperCase())
+    else if (/^\d/.test(low)) {
+      // GPT keeps its hyphen ("GPT-6"); other families read "Gemini 4", "GLM 5.3".
+      if (i === 1 && out[0] === "GPT") out[0] = `GPT-${low}`
+      else out.push(low)
+    } else out.push(WORDS[low] ?? low.charAt(0).toUpperCase() + low.slice(1))
+  })
+  return out.join(" ")
+}

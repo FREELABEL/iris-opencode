@@ -171,3 +171,21 @@ export function signedMemberUrl(member: string, signed: { url: string; signed: b
   const i = signed.url.indexOf("#atlas_code=")
   return i < 0 ? member : member.split("#")[0] + signed.url.slice(i)
 }
+
+/**
+ * The slug of an IRIS page address the Browser tab may open SIGNED IN (#194350), or null. Only a
+ * plain https://<PAGE_HOST>/p/<slug> — no query, no fragment — because the signed address is built
+ * from the slug alone and must not drop anything the person typed. Whether the person may open it
+ * signed in is the engine's and the server's call (page-signin mints only for a member).
+ */
+export function irisPageSlug(url: string | undefined | null): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    if (u.protocol !== "https:" || u.host !== PAGE_HOST || u.search || u.hash) return null
+    const m = /^\/p\/([A-Za-z0-9_-]{1,120})\/?$/.exec(u.pathname)
+    return m ? m[1]! : null
+  } catch {
+    return null
+  }
+}
