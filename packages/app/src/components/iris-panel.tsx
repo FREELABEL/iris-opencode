@@ -201,7 +201,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
               type="button"
               role="tab"
               aria-selected={active() === tab.id}
-              class="flex h-7 items-center gap-1.5 rounded-[6px] px-2 text-[12.5px] text-v2-text-text-muted hover:text-v2-text-text-base aria-selected:bg-v2-background-bg-layer-02 aria-selected:text-v2-text-text-base"
+              class="flex h-7 max-md:h-8 items-center gap-1.5 rounded-[6px] px-2 text-[12.5px] text-v2-text-text-muted hover:text-v2-text-text-base aria-selected:bg-v2-background-bg-layer-02 aria-selected:text-v2-text-text-base"
               onClick={() => request(tab.id)}
             >
               <IrisProductIcon id={tab.id} />
@@ -216,6 +216,7 @@ export function IrisPanel(props: { onClose?: () => void }) {
             icon={<Icon name="plus-small" />}
             variant="ghost-muted"
             size="large"
+            class="max-md:!h-8 max-md:!w-8"
             aria-label="Add a tab"
             data-callout="add-tab"
           />
@@ -230,7 +231,8 @@ export function IrisPanel(props: { onClose?: () => void }) {
           <IconButton
             icon="close-small"
             variant="ghost"
-            class="h-6 w-6"
+            // One tap on a phone, where the panel is a full-screen sheet (#194511).
+            class="h-6 w-6 max-md:h-9 max-md:w-9"
             aria-label="Close the panel"
             onClick={() => props.onClose?.()}
           />
