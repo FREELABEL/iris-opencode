@@ -92,8 +92,9 @@ jobs:
             exit 1
           fi
           tail -30 "$LOG"
-          APP=$(find src-tauri/gen/apple/build src-tauri/target "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -path '*simulator*' -maxdepth 8 2>/dev/null | head -1)
-          [ -n "$APP" ] || APP=$(find src-tauri/gen/apple/build -name '*.app' -maxdepth 6 | head -1)
+          # tauri copies the finished bundle here ("Finished 1 iOS Bundle at"), not DerivedData.
+          APP="$PWD/src-tauri/gen/apple/build/arm64-sim/IRIS.app"
+          [ -f "$APP/Info.plist" ] || { echo "no app at $APP"; ls -R src-tauri/gen/apple/build | head -30; exit 1; }
           echo "APP=$APP" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
 

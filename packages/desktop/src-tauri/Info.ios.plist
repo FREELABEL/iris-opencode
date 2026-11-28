@@ -5,5 +5,21 @@
 	<!-- Only standard HTTPS/TLS, so no export-compliance question on every TestFlight build. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- #194511: a machine on the person's own tailnet is reached by its MagicDNS name. Until the
+	     tailnet has HTTPS certificates that is plain HTTP, which WireGuard already encrypts; allowed
+	     for *.ts.net only. Remove once every pairing is HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>
