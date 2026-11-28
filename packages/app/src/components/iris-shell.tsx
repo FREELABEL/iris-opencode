@@ -13,6 +13,7 @@ import {
   type ParentProps,
 } from "solid-js"
 import { Portal } from "solid-js/web"
+import { createMediaQuery } from "@solid-primitives/media"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
@@ -22,6 +23,12 @@ const irisPanel = () => import("@/components/iris-panel")
 const IrisPanel = lazy(() => irisPanel().then((m) => ({ default: m.IrisPanel })))
 import { clearIrisPanelOpen, irisPanelOpenRequest } from "@/components/session/iris-nav"
 import { irisSplitShare, setIrisSplitShare } from "@/components/iris-split"
+import {
+  IRIS_SHELL_PANEL_MIN,
+  IRIS_SHELL_PHONE_QUERY,
+  irisShellPanelLayout,
+  irisShellPanelMax,
+} from "@/components/iris-shell-layout"
 /**
  * ONE SHELL: the page on the left, the panel on the right (#192535).
  *
@@ -99,8 +106,11 @@ export function IrisShell(props: ParentProps) {
   let row: HTMLDivElement | undefined
   const observer = new ResizeObserver(() => row && setRowWidth(row.clientWidth))
   onCleanup(() => observer.disconnect())
-  const maxWidth = () => Math.max(360, Math.round(rowWidth() * 0.8))
-  const panelWidth = () => Math.min(maxWidth(), Math.max(360, Math.round(rowWidth() * (1 - irisSplitShare()))))
+  // On a phone the panel is a sheet over the page, not a column beside it (#194511).
+  const phone = createMediaQuery(IRIS_SHELL_PHONE_QUERY)
+  const layout = () => irisShellPanelLayout({ phone: phone(), row: rowWidth(), share: irisSplitShare() })
+  const overlay = () => layout().overlay
+  const panelWidth = () => layout().width
   // A claiming chat's own side panel answers "open IRIS" itself; only the default panel does here.
   createEffect(() => {
     if (!irisPanelOpenRequest() || untrack(claimed)) return
@@ -111,7 +121,8 @@ export function IrisShell(props: ParentProps) {
     slot,
     open: panelOpen,
     setOpen: setPanelOpen,
-    width: () => (visible() ? panelWidth() : 0),
+    // A sheet takes no room from the page.
+    width: () => (visible() && !overlay() ? panelWidth() : 0),
     claim(open) {
       setClaims((list) => [...list, open])
       onCleanup(() => setClaims((list) => list.filter((item) => item !== open)))
@@ -124,33 +135,53 @@ export function IrisShell(props: ParentProps) {
           row = el
           observer.observe(el)
         }}
-        class="flex min-h-0 min-w-0 flex-1 self-stretch"
+        class="relative flex min-h-0 min-w-0 flex-1 self-stretch"
       >
-        <div class="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>
+        <div data-component="iris-shell-page" class="flex min-h-0 min-w-0 flex-1 flex-col">
+          {props.children}
+        </div>
         {/* Hidden, never unmounted: the container (and what is portaled into it) survives. */}
         <div
           data-component="iris-shell-panel"
-          class="relative flex min-h-0 shrink-0"
-          classList={{ hidden: !visible() }}
-          style={{ width: `${panelWidth()}px` }}
+          data-overlay={overlay() ? "" : undefined}
+          class="flex min-h-0"
+          classList={{
+            hidden: !visible(),
+            "relative shrink-0": !overlay(),
+            // A sheet over the page, under the titlebar (whose toggle shows it pressed); its own
+            // header has the close. The layout already pads top and bottom by the safe area;
+            // the sides matter once the phone is turned.
+            "absolute inset-0 z-40 flex-col bg-v2-background-bg-deep": overlay(),
+          }}
+          style={
+            overlay()
+              ? {
+                  "padding-left": "env(safe-area-inset-left, 0px)",
+                  "padding-right": "env(safe-area-inset-right, 0px)",
+                }
+              : { width: `${panelWidth()}px` }
+          }
         >
-          <ResizeHandle
-            direction="horizontal"
-            edge="start"
-            size={panelWidth()}
-            min={360}
-            max={maxWidth()}
-            onResize={(width) => setIrisSplitShare(1 - width / rowWidth())}
-          />
+          {/* Nothing to resize on a phone, and an edge handle there sat over the page. */}
+          <Show when={!overlay()}>
+            <ResizeHandle
+              direction="horizontal"
+              edge="start"
+              size={panelWidth()}
+              min={IRIS_SHELL_PANEL_MIN}
+              max={irisShellPanelMax(rowWidth())}
+              onResize={(width) => setIrisSplitShare(1 - width / rowWidth())}
+            />
+          </Show>
           <div ref={setSlot} class="flex min-h-0 min-w-0 flex-1 py-2 pr-2" classList={{ hidden: !claimed() }} />
           {/* Closed means unmounted: a hidden panel kept fetching and polling Atlas behind Home. */}
           <Show when={!claimed() && panelOpen()}>
             <aside
               aria-label="IRIS"
-              class={`
-                m-2 ml-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
-                bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
-              `}
+              class="min-h-0 min-w-0 flex-1 overflow-hidden bg-v2-background-bg-base"
+              classList={{
+                "m-2 ml-0 rounded-[10px] shadow-[var(--v2-elevation-raised)]": !overlay(),
+              }}
             >
               <Show when={settled()}>
                 <Suspense>

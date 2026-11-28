@@ -1,4 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createMediaQuery } from "@solid-primitives/media"
+import { IRIS_SHELL_PHONE_QUERY } from "@/components/iris-shell-layout"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { usePlatform } from "@/context/platform"
@@ -26,6 +28,7 @@ const find = (target: string) => document.querySelector(`[data-callout="${target
  */
 export function FeatureCallouts(props: { callouts?: Callout[] }) {
   const platform = usePlatform()
+  const phone = createMediaQuery(IRIS_SHELL_PHONE_QUERY)
   const [store, setStore, , ready] = persisted("callouts.v1", createStore<{ seen: string[] }>({ seen: [] }))
   const [active, setActive] = createSignal<{ callout: Callout; target: string }>()
   const [pos, setPos] = createSignal<ReturnType<typeof placeCallout>>()
@@ -67,6 +70,7 @@ export function FeatureCallouts(props: { callouts?: Callout[] }) {
       version: import.meta.env.DEV ? undefined : platform.version,
       now: new Date(),
       onScreen: (t) => onScreen(find(t)),
+      phone: phone(),
     })
     if (!next) return void (candidateSince = undefined)
     candidateSince ??= Date.now()
@@ -102,7 +106,7 @@ export function FeatureCallouts(props: { callouts?: Callout[] }) {
   })
 
   return (
-    <Show when={active()}>
+    <Show when={!phone() && active()}>
       {(a) => (
         <Portal>
           <div

@@ -60,7 +60,13 @@ export function pickCallout(input: {
   version?: string
   now: Date
   onScreen: (target: string) => boolean
+  /**
+   * A phone-width window (#194511). A 320 px card on a 393 px screen sat over the IRIS panel's
+   * tabs and its close, the very controls it pointed at; the news waits for a wider window.
+   */
+  phone?: boolean
 }): { callout: Callout; target: string } | undefined {
+  if (input.phone) return undefined
   const seen = new Set(input.seen)
   for (const callout of input.callouts) {
     if (seen.has(callout.id)) continue

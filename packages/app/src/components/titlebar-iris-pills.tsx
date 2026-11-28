@@ -351,7 +351,7 @@ export function TitlebarIrisPills() {
       <Portal mount={mount()!}>
         <div
           data-slot="iris-pills"
-          class="flex shrink-0 items-center gap-1 mr-3 text-[12px] text-v2-text-text-weak"
+          class="flex shrink-0 items-center gap-1 mr-3 max-md:mr-1 text-[12px] text-v2-text-text-weak"
         >
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
@@ -466,7 +466,8 @@ export function TitlebarIrisPills() {
           <Show when={notice()}>
             <TooltipV2 placement="bottom" value={<>{notice()!.hint}</>}>
               <span data-slot="iris-auth-pill" class="text-v2-text-text-danger cursor-default">
-                ⚠ {notice()!.text}
+                {/* On a phone the words pushed the panel toggle off the screen (#194511): the sign stays. */}
+                ⚠ <span class="max-md:sr-only">{notice()!.text}</span>
               </span>
             </TooltipV2>
           </Show>

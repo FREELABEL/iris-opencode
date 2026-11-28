@@ -654,6 +654,7 @@ function PromptInputV2ConfiguredSelect(props: {
           <ProviderIcon id={providerID()!} class="size-4 shrink-0 opacity-60" />
         </Show>
       }
+      shrink={props.model}
       onSelect={props.control.onSelect}
     />
   )
@@ -666,11 +667,14 @@ export function PromptInputV2Select(props: {
   current: string
   currentIcon?: JSX.Element
   class?: string
+  /** Give way first when the row is short: the model's name, in a phone-width chat box (#194511). */
+  shrink?: boolean
   onOpenChange?: (open: boolean) => void
   onSelect: (id: string) => void
 }) {
   return (
     <TooltipV2
+      class={props.shrink ? "min-w-0" : undefined}
       placement="top"
       value={
         <>
@@ -684,7 +688,7 @@ export function PromptInputV2Select(props: {
           as={ButtonV2}
           variant="ghost-muted"
           size="normal"
-          class={`max-w-[220px] justify-start ![font-weight:440] ${props.class ?? ""}`}
+          class={`${props.shrink ? "min-w-0 " : ""}max-w-[220px] justify-start ![font-weight:440] ${props.class ?? ""}`}
           aria-label={props.title}
         >
           {props.currentIcon}
