@@ -142,3 +142,4 @@
 .hbt-chip-ms { color: var(--hsc-faint); }
 .hbt-empty { margin: 8px 0; }
 .hbt .hmc-acts { align-items: center; }
+.hbt-when-tile { font-variant-numeric: tabular-nums; }

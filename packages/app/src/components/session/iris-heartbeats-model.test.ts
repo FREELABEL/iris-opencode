@@ -49,14 +49,14 @@ describe("Agents › Heartbeats — what is true", () => {
     expect(nextFireAt(m)).toBe("2026-10-13T11:00:00.000Z")
     expect(heldForHours(m)).toBe(true)
     expect(stateOf(m, NOW)).toBe("ok")
-    expect(lineOf(m, NOW)).toBe("Next in 14h · held for its hours · last beat 4 days ago")
+    expect(lineOf(m, NOW)).toBe("Next in 14h · held for its hours · last beat 4d ago")
     // past its window opening with no beat → late
     expect(stateOf(m, Date.parse("2026-10-13T11:16:00Z"))).toBe("late")
     expect(stateOf(m, Date.parse("2026-10-13T11:14:00Z"))).toBe("ok")
     // with no schedule it WOULD have been 3 days late, and owed every 8-hourly wake since
     const free = { ...m, schedule: null }
     expect(stateOf(free, NOW)).toBe("late")
-    expect(lineOf(free, NOW)).toBe("Late · due 3 days ago")
+    expect(lineOf(free, NOW)).toBe("Late · due 3d ago")
     expect(weekOf(free, NOW).missed.length).toBe(12)
     expect(problemsOf(free, NOW)[0].kind).toBe("late")
     const w = weekOf(m, NOW)
@@ -68,13 +68,13 @@ describe("Agents › Heartbeats — what is true", () => {
     const c = by("Music Curator") // every 2 hours, woke 19:30, newest run 13:04
     expect(Date.parse(c.lastRunAt!)).toBeGreaterThan(Date.parse(lastBeatAt(c)!))
     expect(stateOf(c, NOW)).toBe("silent")
-    expect(lineOf(c, NOW)).toBe("Wakes but does nothing · last real beat 8 h ago")
+    expect(lineOf(c, NOW)).toBe("Wakes but does nothing · last real beat 8h ago")
     expect(weekOf(c, NOW).missed.length).toBe(3)
     // a heartbeat created months ago that wakes every day and has never run
     const s = by("Sales Agent")
     expect(s.runs).toEqual([])
     expect(s.runCount).toBe(0)
-    expect(problemsOf(s, NOW)[0].text).toBe("Wakes up but has never done anything — woke 9 h ago")
+    expect(problemsOf(s, NOW)[0].text).toBe("Wakes up but has never done anything — woke 9h ago")
     // one late write-back is not a skip: an hourly beat whose run is a minute older than its wake
     expect(stateOf(by("Store Assistant"), NOW)).toBe("ok")
   })

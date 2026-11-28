@@ -8,7 +8,7 @@ import { requestIrisNav } from "./iris-nav"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import "./iris-heartbeats.css"
-import { ago } from "./iris-hive-scripts-model"
+import { RelativeTime } from "@opencode-ai/ui/relative-time"
 import {
   beatSentence,
   beatStory,
@@ -536,23 +536,25 @@ export function IrisHeartbeats(props: {
                 <dl class="hmc-stats">
                   <div>
                     <dt title="The newest beat that actually ran — a recorded run">Last real beat</dt>
-                    <dd class="hsc-num" data-low={st() === "silent" ? "1" : undefined}>
-                      {lastBeatAt(r()) ? ago(lastBeatAt(r()), now()) : "never"}
+                    <dd class="hbt-when-tile" data-low={st() === "silent" ? "1" : undefined}>
+                      <RelativeTime value={lastBeatAt(r()) || undefined} now={now()} fallback="never" />
                     </dd>
                   </div>
                   <div>
                     <dt>Next beat</dt>
-                    <dd class="hsc-num" data-low={st() === "late" ? "1" : undefined}>
+                    <dd class="hbt-when-tile" data-low={st() === "late" ? "1" : undefined}>
                       {paused() ? "paused" : untilOf(nextFireAt(r()), now())}
                     </dd>
                   </div>
                   <div>
                     <dt title="When the scheduler last woke it, whether or not it then did anything">Last woke</dt>
-                    <dd class="hsc-num">{ago(r().lastRunAt, now())}</dd>
+                    <dd class="hbt-when-tile">
+                      <RelativeTime value={r().lastRunAt} now={now()} fallback="—" />
+                    </dd>
                   </div>
                   <div>
                     <dt>Reports to</dt>
-                    <dd class="hsc-num">{r().reportTo ? `${r().reportTo} ${r().reportTo === 1 ? "person" : "people"}` : "nobody"}</dd>
+                    <dd class="hbt-when-tile">{r().reportTo ? `${r().reportTo} ${r().reportTo === 1 ? "person" : "people"}` : "nobody"}</dd>
                   </div>
                 </dl>
 

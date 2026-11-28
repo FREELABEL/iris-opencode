@@ -13,7 +13,10 @@
  *    `completed` with the error text as its reply. A reply that IS an error is a failed beat.
  * Both are server bugs; until they are fixed, the panel must not draw a green beat that never ran.
  */
-import { ago, shortAgo } from "./iris-hive-scripts-model"
+import { relativeTime } from "@opencode-ai/ui/relative-time"
+
+/** The app's one relative date ("1h ago", "yesterday") — the same words as Leads and Agents (#194583). */
+const ago = (iso: string | null | undefined, now: number): string => relativeTime(iso, now) || "—"
 
 export type HeartbeatRun = {
   id: number
@@ -432,7 +435,7 @@ export function untilOf(iso: string | null | undefined, now: number): string {
   const at = t(iso)
   if (!Number.isFinite(at)) return "—"
   const d = at - now
-  if (d <= 0) return shortAgo(iso, now) === "now" ? "now" : `${shortAgo(iso, now)} ago`
+  if (d <= 0) return ago(iso, now)
   const m = Math.round(d / 60_000)
   if (m < 60) return `in ${Math.max(1, m)}m`
   const h = Math.round(m / 60)
