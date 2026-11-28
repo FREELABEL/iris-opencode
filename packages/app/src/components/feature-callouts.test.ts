@@ -29,7 +29,9 @@ describe("pickCallout", () => {
   })
 
   test("seen ones never come back", () => {
-    expect(pickCallout({ callouts: [A, B], seen: ["a"], version: "1.18.211", now, onScreen: all })?.callout.id).toBe("b")
+    expect(pickCallout({ callouts: [A, B], seen: ["a"], version: "1.18.211", now, onScreen: all })?.callout.id).toBe(
+      "b",
+    )
     expect(pickCallout({ callouts: [A, B], seen: ["a", "b"], version: "1.18.211", now, onScreen: all })).toBeUndefined()
   })
 
@@ -43,6 +45,15 @@ describe("pickCallout", () => {
 
   test("old news retires itself", () => {
     expect(pickCallout({ callouts: [B], seen: [], now: new Date("2027-01-02"), onScreen: all })).toBeUndefined()
+  })
+
+  test("not on a phone: the card covers the panel's tabs and close it points at (#194511)", () => {
+    expect(
+      pickCallout({ callouts: [A, B], seen: [], version: "1.18.211", now, onScreen: all, phone: true }),
+    ).toBeUndefined()
+    expect(
+      pickCallout({ callouts: [A], seen: [], version: "1.18.211", now, onScreen: all, phone: false })?.callout.id,
+    ).toBe("a")
   })
 
   test("nothing on screen, nothing shown", () => {
