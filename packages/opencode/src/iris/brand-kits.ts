@@ -18,6 +18,7 @@
  * too, and a save writes the variants to `brand.logo`, where the resolver reads them.
  */
 import { FL_API, irisFetch, resolveToken, resolveUserId, tokenSource, type PlatformResult } from "./platform"
+import { audienceSummary, cleanAudienceInput, validateAudience, type AudienceIssue } from "./brand-audience"
 
 /**
  * The sections the pane may write. `fonts`/`font` are where some kits keep their stacks instead of
@@ -94,6 +95,26 @@ export interface BrandKit {
   personas: { name: string; isDefault: boolean; tone?: string }[]
   /** Each editable section exactly as read, serialised — echo it back on save. */
   sections: Record<EditableSection, string>
+  /** `brand.metadata.audience` as stored (audience.v1, #194611). Absent when the brand has none. */
+  audience?: unknown
+  /** The audience exactly as read (keys sorted, `null` when none) — echo it back on an audience save. */
+  audienceRead: string
+}
+
+/** JSON with every object's keys sorted: the platform's JSON column may reorder keys, so pins compare this. */
+export function stableJson(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sort)
+      : x && typeof x === "object"
+        ? Object.fromEntries(Object.keys(x as object).sort().map((k) => [k, sort((x as Record<string, unknown>)[k])]))
+        : x
+  return JSON.stringify(sort(v ?? null))
+}
+
+const audienceOf = (brand: any): unknown => {
+  const m = brand?.metadata
+  return m && typeof m === "object" && !Array.isArray(m) ? m.audience : undefined
 }
 
 /**
@@ -288,6 +309,8 @@ export function kitOf(brand: any, rawTokens: unknown): BrandKit {
       EditableSection,
       string
     >,
+    ...(audienceOf(brand) != null ? { audience: audienceOf(brand) } : {}),
+    audienceRead: stableJson(audienceOf(brand)),
   }
 }
 
@@ -410,6 +433,88 @@ export async function saveBrandKit(input: {
 /** The single-section save the first pane used (#188816) — now one case of saveBrandKit. */
 export function saveBrandSection(input: { id: number; section: string; value: unknown; expected: string }) {
   return saveBrandKit({ id: input.id, changes: { [input.section]: input.value }, expected: { [input.section]: input.expected } })
+}
+
+// ── the audience: who the brand sells to (audience.v1, #194611) ─────────────────────────────
+
+/**
+ * A brand's audience as stored, with what the validator says about it and one line per segment
+ * (what an agent reads first). `expected` is what an audience save echoes back.
+ */
+export async function fetchBrandAudience(id: number): Promise<
+  PlatformResult<{ audience?: unknown; expected: string; summary: string[]; errors: AudienceIssue[]; warnings: AudienceIssue[] }>
+> {
+  const empty = { expected: stableJson(null), summary: [], errors: [], warnings: [] }
+  const userId = await brandDeps.userId()
+  if (!userId) return { measured: false, reason: notSignedIn(), data: empty }
+  try {
+    const res = await brandDeps.fetch(`/api/v1/brands/${id}`)
+    if (!res.ok) return { measured: false, reason: res.status === 404 ? "no such brand on your account" : `fl-api ${res.status}`, data: empty }
+    const audience = audienceOf(((await res.json()) as any)?.data)
+    if (audience == null) return { measured: true, data: empty }
+    const v = validateAudience(audience)
+    return { measured: true, data: { audience, expected: stableJson(audience), summary: audienceSummary(audience), errors: v.errors, warnings: v.warnings } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: empty }
+  }
+}
+
+/**
+ * Save a brand's audience to `brand.metadata.audience`.
+ *
+ * fl-api's PATCH /brands/{id} REPLACES `metadata` whole (BrandController::update → $brand->update),
+ * and metadata also holds design_tokens, the transcription glossary and transcript treatments. So
+ * this is a read-modify-write: re-read the brand, refuse if its audience moved since `expected`,
+ * then send the metadata it just read with only `audience` replaced, and read back. Validated with
+ * the shared audience.v1 validator first; errors come back with their paths and nothing is sent.
+ */
+export async function saveBrandAudience(input: {
+  id: number
+  audience: unknown
+  /** BrandKit.audienceRead (or fetchBrandAudience's `expected`) — the audience as the editor read it. */
+  expected: string
+}): Promise<{ ok: boolean; reason?: string; errors?: AudienceIssue[]; warnings?: AudienceIssue[]; kit?: BrandKit }> {
+  const userId = await brandDeps.userId()
+  if (!userId) return { ok: false, reason: notSignedIn() }
+  const audience = cleanAudienceInput(input.audience)
+  const v = validateAudience(audience)
+  if (!v.ok)
+    return {
+      ok: false,
+      reason: `the audience has ${v.errors.length === 1 ? "1 problem" : `${v.errors.length} problems`} — nothing was saved`,
+      errors: v.errors,
+      warnings: v.warnings,
+    }
+  if (typeof input.expected !== "string") return { ok: false, reason: "the audience was sent without what it replaces — reload the kit" }
+  try {
+    const now = await brandDeps.fetch(`/api/v1/brands/${input.id}`)
+    if (!now.ok) return { ok: false, reason: now.status === 404 ? "no such brand on your account" : `fl-api ${now.status}` }
+    const brand = ((await now.json()) as any)?.data
+    const metadata: Record<string, unknown> =
+      brand?.metadata && typeof brand.metadata === "object" && !Array.isArray(brand.metadata) ? brand.metadata : {}
+    if (stableJson(metadata.audience) !== input.expected)
+      return { ok: false, reason: "the audience changed since you opened this kit — reload before saving" }
+    const res = await brandDeps.fetch(`/api/v1/brands/${input.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ metadata: { ...metadata, audience } }),
+    })
+    const j = (await res.json().catch(() => ({}))) as any
+    if (!res.ok) return { ok: false, reason: String(j?.message ?? `fl-api ${res.status}`) }
+    const kept = j?.data?.metadata
+    const lost = kept && typeof kept === "object" ? Object.keys(metadata).filter((k) => k !== "audience" && !(k in kept)) : []
+    const again = await fetchBrandKit(input.id)
+    if (!again.measured) return { ok: true, warnings: v.warnings, reason: `saved; reload failed: ${again.reason}` }
+    if (again.data.kit?.audienceRead !== stableJson(audience))
+      return { ok: false, kit: again.data.kit, reason: "the platform accepted the save but holds a different audience — reload and check" }
+    return {
+      ok: true,
+      kit: again.data.kit,
+      warnings: v.warnings,
+      ...(lost.length ? { reason: `saved, but the brand no longer has ${lost.join(", ")} — tell support` } : {}),
+    }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 // ── logos: upload one, and look at one ─────────────────────────────────────────

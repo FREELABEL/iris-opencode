@@ -17,6 +17,8 @@ import { CommandAction } from "@/components/command-action"
 import { PaneDialog, PaneDialogActions, statusTone } from "./iris-pane-dialog"
 import "./iris-pane-layout.css"
 import "./iris-brand-kits.css"
+import { audienceDiffLines, createAudienceEditor, IrisBrandAudience } from "./iris-brand-audience"
+import { audienceToSave } from "./iris-brand-audience-model"
 import {
   bezierOf,
   buildSave,
@@ -80,7 +82,7 @@ type BrandSummary = {
   accounts?: number
   files?: number
 }
-type Tab = "colours" | "type" | "logos" | "voice" | "motion" | "preview" | "export"
+type Tab = "colours" | "type" | "logos" | "voice" | "motion" | "audience" | "preview" | "export"
 type Probe = { state: "loading" } | { state: "err"; reason: string } | { state: "ok"; src: string; light: LogoSeen; dark: LogoSeen }
 
 const TABS: { id: Tab; label: BrandsKey; part?: DiffLine["part"] }[] = [
@@ -89,6 +91,7 @@ const TABS: { id: Tab; label: BrandsKey; part?: DiffLine["part"] }[] = [
   { id: "logos", label: "iris.brands.tab.logos", part: "logos" },
   { id: "voice", label: "iris.brands.tab.voice", part: "voice" },
   { id: "motion", label: "iris.brands.tab.motion", part: "motion" },
+  { id: "audience", label: "iris.brands.tab.audience", part: "audience" },
   { id: "preview", label: "iris.brands.tab.preview" },
   { id: "export", label: "iris.brands.tab.export" },
 ]
@@ -230,8 +233,16 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
   const [draft, setDraft] = createStore<Draft>(draftFromKit({ brand: { id: 0, name: "", slug: "", status: "" }, colors: [], fonts: [], typeScale: [], personas: [], sections: {} }))
   createEffect(on(kit, (k) => k && setDraft(reconcile(draftFromKit(k)))))
   const [tab, setTab] = createSignal<Tab>("colours")
-  const diff = createMemo(() => (kit() ? diffKit(kit()!, draft) : []))
-  const problems = createMemo(() => draftProblems(draft))
+  // Who the brand sells to (#194611): its own draft, saved by the same Save and guarded by the same leave.
+  const audience = createAudienceEditor(kit)
+  const audT = (key: string, params?: Record<string, string | number>) => language.t(key as BrandsKey, params)
+  const diff = createMemo<DiffLine[]>(() => (kit() ? [...diffKit(kit()!, draft), ...audienceDiffLines(audience, kit()!.audience, audT)] : []))
+  const audienceErrors = createMemo(() => (audience.changed() ? audience.check().errors.length : 0))
+  const problems = createMemo(() => {
+    const out = draftProblems(draft)
+    if (audienceErrors()) out.push(language.plural("iris.brands.audienceProblems", audienceErrors()))
+    return out
+  })
   const changedIn = (part: DiffLine["part"]) => diff().filter((l) => l.part === part).length
   const grounds = createMemo(() => groundsOf(draft.colors))
   const roles = createMemo(() => previewRoles(draft))
@@ -257,12 +268,16 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
   function discard() {
     const k = kit()
     if (k) setDraft(reconcile(draftFromKit(k)))
+    audience.discard()
     setShowProblems(false)
     setNote(undefined)
   }
   function askSave() {
     setNote(undefined)
-    if (problems().length) return setShowProblems(true)
+    if (problems().length) {
+      if (audienceErrors()) audience.reveal()
+      return setShowProblems(true)
+    }
     setShowProblems(false)
     setConfirm("save")
   }
@@ -271,19 +286,51 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
     const k = kit()
     if (!k) return
     setSaving(true)
+    const tokenLines = diffKit(k, draft).length
+    const n = diff().length
+    let landed = false
     try {
-      const body = buildSave(k, draft)
-      const r = await json<{ ok: boolean; reason?: string; kit?: BrandKit; saved?: string[] }>(`/iris/brands/${k.brand.id}/save`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
+      if (tokenLines) {
+        const body = buildSave(k, draft)
+        const r = await json<{ ok: boolean; reason?: string; kit?: BrandKit; saved?: string[] }>(`/iris/brands/${k.brand.id}/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })
+        if (!r.ok) {
+          setConfirm(undefined)
+          return setNote({ tone: "bad", text: r.reason ?? t("iris.brands.note.refused"), reload: /changed since/.test(r.reason ?? "") })
+        }
+        landed = true
+        if (audience.changed()) audience.keepNext(audience.aud)
+        if (r.kit) setKitRes({ measured: true, kit: r.kit })
+        else await reloadKit()
+      }
+      if (audience.changed()) {
+        const r = await json<{ ok: boolean; reason?: string; kit?: BrandKit; errors?: { path: string; message: string; code: string }[] }>(
+          `/iris/brands/${k.brand.id}/audience/save`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audience: audienceToSave(audience.aud), expected: (kit() ?? k).audienceRead ?? "null" }),
+          },
+        )
+        if (!r.ok) {
+          setConfirm(undefined)
+          if (r.errors?.length) {
+            audience.setServer(r.errors as never)
+            audience.reveal()
+          }
+          const reason = r.reason ?? t("iris.brands.note.refused")
+          return setNote({ tone: "bad", text: landed ? t("iris.brands.note.audienceRefused", { reason }) : reason, reload: /changed since/.test(reason) })
+        }
+        audience.setServer([])
+        audience.setShown(false)
+        if (r.kit) setKitRes({ measured: true, kit: r.kit })
+        else await reloadKit()
+      }
       setConfirm(undefined)
-      if (!r.ok) return setNote({ tone: "bad", text: r.reason ?? t("iris.brands.note.refused"), reload: /changed since/.test(r.reason ?? "") })
-      const n = diff().length
-      if (r.kit) setKitRes({ measured: true, kit: r.kit })
-      else await reloadKit()
-      setNote({ tone: "good", text: r.reason ?? language.plural("iris.brands.note.saved", n, { name: k.brand.name }) })
+      setNote({ tone: "good", text: language.plural("iris.brands.note.saved", n, { name: k.brand.name }) })
       void reloadList()
     } catch (e) {
       setConfirm(undefined)
@@ -392,8 +439,11 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
   // What each confirm shows, read once when it opens — the dialog holds it while it closes.
   const saveAsk = () => {
     const k = kit()
-    return confirm() === "save" && k ? { kit: k, ask: saveConfirm(k, draft), lines: diff() } : undefined
+    return confirm() === "save" && k ? { kit: k, ask: audienceOnlyConfirm(saveConfirm(k, draft, diff().length - diffKit(k, draft).length), diffKit(k, draft).length, k.brand.name), lines: diff() } : undefined
   }
+  // Only the audience changed: no page's look changes, so the confirm says what does.
+  const audienceOnlyConfirm = (ask: ReturnType<typeof saveConfirm>, tokenLines: number, name: string) =>
+    tokenLines ? ask : { ...ask, body: [t("iris.brands.confirm.audienceBody", { name })] }
   const leaveAsk = () => (confirm() === "leave" ? { count: diff().length, name: kit()?.brand.name ?? "" } : undefined)
 
   return (
@@ -819,6 +869,11 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                       <MotionPreview ease={draft.ease} durationMs={draft.durationMs} color={roles().primary} ground={roles().bg} />
                     </Match>
 
+                    {/* ── Audience (#194611) ── */}
+                    <Match when={tab() === "audience"}>
+                      <IrisBrandAudience ed={audience} brandName={k().brand.name} />
+                    </Match>
+
                     {/* ── Preview ── */}
                     <Match when={tab() === "preview"}>
                       <p class="iris-bk-lede">{t("iris.brands.preview.lede", { name: k().brand.name })}</p>
@@ -847,7 +902,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                   </Switch>
                 </div>
                 {/* The live preview beside the editor, when the panel is wide enough to hold both. */}
-                <Show when={tab() !== "preview" && tab() !== "export"}>
+                <Show when={tab() !== "preview" && tab() !== "export" && tab() !== "audience"}>
                   <aside class="iris-bk-side" aria-label={t("iris.brands.livePreview")}>
                     <span class="iris-bk-h">{t("iris.brands.livePreview")}</span>
                     <KitCard kit={k()} draft={draft} compact />
@@ -869,11 +924,18 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                 {(l) => (
                   <li>
                     <span class="iris-bk-dlabel">{l.label}</span>
-                    <span class="iris-bk-dvals">
-                      <DiffValue value={l.before} swatch={l.swatch} gone />
-                      <span class="iris-bk-arrow" aria-label={t("iris.brands.confirm.becomes")}>→</span>
-                      <DiffValue value={l.after} swatch={l.swatch} />
-                    </span>
+                    <Show
+                      when={l.note}
+                      fallback={
+                        <span class="iris-bk-dvals">
+                          <DiffValue value={l.before} swatch={l.swatch} gone />
+                          <span class="iris-bk-arrow" aria-label={t("iris.brands.confirm.becomes")}>→</span>
+                          <DiffValue value={l.after} swatch={l.swatch} />
+                        </span>
+                      }
+                    >
+                      <span class="iris-bk-dvals iris-bk-dnote">{l.note}</span>
+                    </Show>
                   </li>
                 )}
               </For>

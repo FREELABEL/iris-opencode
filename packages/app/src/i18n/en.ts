@@ -8,6 +8,7 @@ import { IRIS_INBOX_ENGLISH } from "./iris-inbox"
 import { IRIS_OUTREACH_ENGLISH } from "./iris-outreach"
 import { IRIS_AUDIENCES_ENGLISH } from "./iris-audiences"
 import { IRIS_BRAND_KITS_ENGLISH } from "./iris-brand-kits"
+import { IRIS_BRAND_AUDIENCE_ENGLISH } from "./iris-brand-audience"
 import { IRIS_LEXICON_AGREEMENTS_ENGLISH } from "./iris-lexicon-agreements"
 import { IRIS_QUICK_EDIT_ENGLISH } from "./iris-quick-edit"
 import { IRIS_HIVE_SCRIPTS_ENGLISH } from "./iris-hive-scripts"
@@ -26,6 +27,7 @@ export const dict = {
   ...IRIS_OUTREACH_ENGLISH,
   ...IRIS_AUDIENCES_ENGLISH,
   ...IRIS_BRAND_KITS_ENGLISH,
+  ...IRIS_BRAND_AUDIENCE_ENGLISH,
   ...IRIS_LEXICON_AGREEMENTS_ENGLISH,
   ...IRIS_QUICK_EDIT_ENGLISH,
   ...IRIS_HIVE_SCRIPTS_ENGLISH,
