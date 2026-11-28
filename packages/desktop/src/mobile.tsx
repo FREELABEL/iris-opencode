@@ -5,7 +5,7 @@
 import "@opencode-ai/app/polyfills"
 import { render } from "solid-js/web"
 import { createSignal, Show } from "solid-js"
-import { AppBaseProviders, AppInterface, PlatformProvider, Platform, ServerConnection } from "@opencode-ai/app"
+import type { Platform, ServerConnection } from "@opencode-ai/app"
 import { basicAuthorization, engineOrigins, withEngineAuth } from "@opencode-ai/app/engine-auth"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
@@ -43,10 +43,13 @@ async function start() {
   if (!machine) return showConnect()
   const problem = await reach(machine)
   if (problem) return showConnect(machine, problem)
-  showApp(machine)
+  await showApp(machine)
 }
 
-function showApp(machine: Machine) {
+// The interface (2+ MB) loads only once a machine answers, so the connect screen never waits on it
+// and never fails because of it.
+async function showApp(machine: Machine) {
+  const { AppBaseProviders, AppInterface, PlatformProvider, ServerConnection } = await import("@opencode-ai/app")
   const engine = new URL(machine.url)
   // The IRIS panels call /iris with a bare fetch, as in the desktop window (engine-auth.ts).
   globalThis.fetch = withEngineAuth(
