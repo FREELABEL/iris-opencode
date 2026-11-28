@@ -47,6 +47,11 @@ jobs:
           IRIS_LIVE: "1"
         run: bun test src/mobile-platform.test.ts
 
+      # A new device starts with the folders of the server's recent chats (#194511, seed-projects.ts).
+      - name: Interface tests the phone depends on
+        working-directory: packages/app
+        run: bun test src/context/seed-projects.test.ts
+
       - name: Install Rust stable (iOS targets)
         uses: dtolnay/rust-toolchain@stable
         with:

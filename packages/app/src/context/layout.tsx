@@ -21,6 +21,7 @@ import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./la
 import { requireServerKey } from "@/utils/session-route"
 import { type DraftTab, useTabs } from "./tabs"
 import { closeSessionTab, openSessionTab, previewSessionTab, type SessionTabs } from "./layout-tabs"
+import { seedDirectories, shouldSeedProjects } from "./seed-projects"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
 
@@ -514,6 +515,33 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           if (project.expanded) server.projects.expand(root)
         }
       })
+    })
+
+    // A device that has never opened a project for this server (the iPhone app, a new browser)
+    // starts with the folders of the server's most recent chats, not an empty sidebar (#194511,
+    // seed-projects.ts). Once per server per launch, after the stored list has loaded.
+    const seededScopes = new Set<ReturnType<typeof serverSdk>["scope"]>()
+    createEffect(() => {
+      if (!server.ready() || !ready()) return
+      const scope = serverSdk().scope
+      if (seededScopes.has(scope)) return
+      if (!shouldSeedProjects({ projects: server.projects.list().length, recentlyClosed: server.projects.recentlyClosed().length })) return
+      seededScopes.add(scope)
+      void (async () => {
+        const page = await serverSdk()
+          .client.v2.session.list({ limit: 200, order: "desc" })
+          .catch(() => undefined)
+        // open() puts a project first, so the oldest of the seeds is opened first.
+        batch(() =>
+          seedDirectories(page?.data?.data ?? [])
+            .map(rootFor)
+            .reverse()
+            .forEach((root) => {
+              void serverSync().project.loadSessions(root)
+              server.projects.open(root)
+            }),
+        )
+      })()
     })
 
     const enriched = createMemo(() => server.projects.list().map(enrich))
