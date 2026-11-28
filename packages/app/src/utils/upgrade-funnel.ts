@@ -14,7 +14,7 @@ export const UPGRADE_EVENTS = ["upgrade.prompted", "upgrade.opened", "upgrade.ch
  * Usage as a progression (epic #194525). Sent the same way; the sidecar's list (iris/onboarding.ts)
  * forwards them, and fl-iris-api's GenesisEvent list must carry them too or they are dropped (204).
  */
-export const USAGE_EVENTS = ["usage.ring_opened", "usage.topup_started", "usage.invite_sent"] as const
+export const USAGE_EVENTS = ["usage.ring_opened", "usage.topup_started", "usage.invite_sent", "usage.invite_claimed"] as const
 export type UpgradeEvent = (typeof UPGRADE_EVENTS)[number] | (typeof USAGE_EVENTS)[number]
 
 /**

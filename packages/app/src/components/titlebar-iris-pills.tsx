@@ -26,6 +26,7 @@ import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
 import { irisPlan, refreshIrisPlan, watchIrisPlan } from "@/utils/iris-plan-store"
 import { drawingOnGrants } from "./usage/usage-model"
+import { autoClaimPendingInvite } from "./usage/invite-claim"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
 import { hivePillTarget } from "./session/iris-hive-inbox-model"
 import { openSharedRoom, sharedRooms, watchSharedRooms } from "./session/iris-shared-store"
@@ -228,7 +229,10 @@ export function TitlebarIrisPills() {
     // so it re-reads the plan itself and says what was bought.
     const stopLinks = platform.onDeepLink?.((raw) => {
       const link = parseIrisLink(raw)
-      if (link?.kind === "invite") return rememberInviteCode(link.code)
+      if (link?.kind === "invite") {
+        rememberInviteCode(link.code)
+        return claimPendingInvite()
+      }
       if (link?.kind !== "upgraded") return
       onFocus()
       void refreshIrisPlan()
@@ -339,6 +343,23 @@ export function TitlebarIrisPills() {
   })
 
   const notice = createMemo(() => authNotice(auth()))
+
+  // A friend's invite remembered while signed in — a link opened after sign-in, or a Google sign-in
+  // that could not carry it (#194575): claimed once, and the answer said as a toast.
+  const claimPendingInvite = () => {
+    const fetchJson = async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T
+    void autoClaimPendingInvite(fetchJson, auth()?.signedIn === true).then((r) => {
+      if (!r) return
+      showToast({
+        variant: r.ok ? "success" : "default",
+        title: r.ok ? "Invite applied" : "Invite code",
+        description: r.message,
+      })
+    })
+  }
+  createEffect(() => {
+    if (auth()?.signedIn === true) claimPendingInvite()
+  })
 
   const unread = createMemo(() => inboxLabel(inbox(), inbox.loading))
 
