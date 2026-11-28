@@ -7997,10 +7997,10 @@
     {
       "kind": "command",
       "name": "hive market earnings",
-      "describe": "what members have paid to run models on your listed machines — held, paid, refunded",
+      "describe": "what members have paid to run models on your listed machines, and whether usage may spend those earnings",
       "aliases": [],
       "run": "iris hive market earnings",
-      "haystack": "hive market earnings what members have paid to run models on your listed machines — held, paid, refunded json"
+      "haystack": "hive market earnings what members have paid to run models on your listed machines, and whether usage may spend those earnings allow-spending let usage spend your marketplace earnings once bought credits run out protect never let usage spend your marketplace earnings (the default) json"
     },
     {
       "kind": "command",

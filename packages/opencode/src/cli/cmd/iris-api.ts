@@ -413,7 +413,11 @@ export async function requireAuth(): Promise<string | null> {
  * Pure and exported so it can be tested without stubbing the terminal.
  */
 export function formatPaymentRequired(body: unknown): { message: string; details: string[] } {
-  const b = (body ?? {}) as {
+  // The IRIS gateway answers OpenAI-style, {error:{message, code, …}} (EARNINGS_PROTECTED, #193080);
+  // fl-api answers flat. Read both the same way rather than calling .replace on an object.
+  const raw = (body ?? {}) as Record<string, unknown>
+  const flat = raw.error && typeof raw.error === "object" ? { ...(raw.error as Record<string, unknown>), error: (raw.error as any).code } : raw
+  const b = flat as {
     error?: string
     message?: string
     cli_command?: string

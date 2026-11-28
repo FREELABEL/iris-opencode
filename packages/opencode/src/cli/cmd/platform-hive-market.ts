@@ -411,22 +411,110 @@ function toggle(command: "pause" | "resume" | "remove", describe: string) {
   })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Earnings protection (#193080). A seller's marketplace earnings are protected by default: usage —
+// buying compute here included — may spend only what is NOT earnings, and the first debit that
+// would need earnings is refused (HTTP 402, code EARNINGS_PROTECTED). fl-api holds the answer.
+
+/** fl-api GET/PUT /api/v1/marketplace/earnings/protection. Amounts are cents (= credits). */
+export interface Protection {
+  allow_spending: boolean
+  answered: boolean
+  protected_cents: number
+  spendable_cents?: number
+  wallet_cents?: number
+  cashable_cents?: number
+  asked_at?: string | null
+}
+
+export const PROTECTION_PATH = "/api/v1/marketplace/earnings/protection"
+export const ALLOW_COMMAND = "iris hive market earnings --allow-spending"
+export const PROTECT_COMMAND = "iris hive market earnings --protect"
+
+/** Pure: what the protection status says, as lines. */
+export function protectionLines(p: Partial<Protection> | null | undefined): string[] {
+  if (p?.allow_spending)
+    return [
+      `Earnings: usage may spend them   ·   spendable ${usd(p.spendable_cents ?? 0)}   ·   cashable ${usd(p.cashable_cents ?? 0)}`,
+      `Bought credits are spent first; earnings only once those run out. Protect them again: ${PROTECT_COMMAND}`,
+    ]
+  return [
+    `Earnings: Protected ${usd(p?.protected_cents ?? 0)}   ·   spendable on usage ${usd(p?.spendable_cents ?? 0)}`,
+    `Usage, buying compute here included, never spends them; you can cash them out. Let usage spend them: ${ALLOW_COMMAND}`,
+  ]
+}
+
+/** Pure: the change the flags ask for, null for none. */
+export function protectionChange(argv: Record<string, unknown>): { allow_spending: boolean } | { error: string } | null {
+  const allow = argv["allow-spending"] === true
+  const protect = argv["protect"] === true
+  if (allow && protect) return { error: "use --allow-spending or --protect, not both" }
+  if (allow) return { allow_spending: true }
+  if (protect) return { allow_spending: false }
+  return null
+}
+
+/** Read (change = null) or set the protection through fl-api. Every failure is a sentence. */
+export async function requestProtection(
+  fetcher: (path: string, init?: RequestInit) => Promise<Response>,
+  change: { allow_spending: boolean } | null,
+): Promise<Protection> {
+  let res: Response
+  try {
+    res = await fetcher(PROTECTION_PATH, change ? { method: "PUT", body: JSON.stringify(change) } : {})
+  } catch (e: any) {
+    throw new Error(`could not reach IRIS: ${e?.message ?? e}`)
+  }
+  const body: any = await res.json().catch(() => ({}))
+  if (res.status === 401) throw new Error("not signed in — run: iris auth login")
+  if (res.status === 404) throw new Error("this IRIS server doesn't have earnings protection yet")
+  if (!res.ok) throw new Error(body?.message || body?.error || `HTTP ${res.status}`)
+  return body?.data ?? body
+}
+
 const EarningsCommand = cmd({
   command: "earnings",
-  describe: "what members have paid to run models on your listed machines — held, paid, refunded",
-  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  describe: "what members have paid to run models on your listed machines, and whether usage may spend those earnings",
+  builder: (yargs) =>
+    yargs
+      .option("allow-spending", { type: "boolean", default: false, describe: "let usage spend your marketplace earnings once bought credits run out" })
+      .option("protect", { type: "boolean", default: false, describe: "never let usage spend your marketplace earnings (the default)" })
+      .option("json", { type: "boolean", default: false })
+      .example("$0 hive market earnings", "held, paid, refunded — and whether your earnings are protected")
+      .example("$0 hive market earnings --allow-spending", "let usage spend them")
+      .example("$0 hive market earnings --protect", "protect them again"),
   async handler(argv) {
+    const change = protectionChange(argv as Record<string, unknown>)
+    if (change && "error" in change) return fail("which one?", new Error(change.error))
     await requireAuth()
+
+    let protection: Protection | null = null
+    let protectionError: unknown = null
+    try {
+      protection = await requestProtection((path, init) => irisFetch(path, init), change)
+    } catch (e) {
+      if (change) return fail("could not change it", e)
+      protectionError = e
+    }
+    if (change) {
+      if (argv.json) return void (await writeJson(protection))
+      console.log(`\n${success("✓")} ${change.allow_spending ? "Usage may now spend your marketplace earnings." : "Your marketplace earnings are protected."}`)
+      for (const line of protectionLines(protection)) console.log(`  ${dim(line)}`)
+      return
+    }
+
     let data: Earnings
     try {
       data = (await market("/earnings"))?.data
     } catch (e) {
       return fail("could not load your earnings", e)
     }
-    if (argv.json) return void (await writeJson(data))
+    if (argv.json) return void (await writeJson({ ...data, protection }))
     console.log()
     for (const line of earningsLines(data)) console.log(line ? `  ${line}` : "")
     console.log()
+    if (protection) for (const line of protectionLines(protection)) console.log(`  ${line}`)
+    else console.log(dim(`  Earnings protection: ${protectionError instanceof Error ? protectionError.message : String(protectionError)}`))
     console.log(dim("  Held money is paid once IRIS's checks of the machine pass, and refunded if it fails one."))
   },
 })
@@ -522,25 +610,3 @@ export const HiveMarketCommand = cmd({
   handler: () => {},
 })
 
-// #193080 — earnings protection. Stubs so the failing tests typecheck; built in the next commit.
-export interface Protection {
-  allow_spending: boolean
-  answered: boolean
-  protected_cents: number
-  spendable_cents?: number
-  wallet_cents?: number
-  cashable_cents?: number
-  asked_at?: string | null
-}
-export function protectionLines(_p: Partial<Protection> | null | undefined): string[] {
-  return []
-}
-export function protectionChange(_argv: Record<string, unknown>): { allow_spending: boolean } | { error: string } | null {
-  return null
-}
-export async function requestProtection(
-  _fetcher: (path: string, init?: RequestInit) => Promise<Response>,
-  _change: { allow_spending: boolean } | null,
-): Promise<Protection> {
-  throw new Error("not built yet")
-}
