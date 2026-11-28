@@ -44,7 +44,7 @@ export function SessionComposerRegion(props: {
       data-chat-text
       classList={{
         "w-full shrink-0 flex flex-col justify-center items-center pb-3 pointer-events-none": true,
-        "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),
+        "bg-v2-background-bg-base max-md:bg-transparent": settings.general.newLayoutDesigns(),
         "bg-background-stronger": !settings.general.newLayoutDesigns(),
       }}
     >

@@ -478,7 +478,7 @@ function SplitColumn(props: {
   const Content = props.content
   return (
     <div
-      class="relative min-w-0 min-h-0 flex-1 basis-0 flex flex-col rounded-[10px] transition-[opacity,flex-grow] duration-200 ease-out motion-reduce:transition-none"
+      class="relative min-w-0 min-h-0 flex-1 basis-0 flex flex-col rounded-[10px] max-md:rounded-none transition-[opacity,flex-grow] duration-200 ease-out motion-reduce:transition-none"
       classList={{ "opacity-80 hover:opacity-100": !props.focused(), hidden: !!props.hidden?.() }}
       data-component="session-split-column"
       data-focused={props.focused() ? "" : undefined}

@@ -66,6 +66,7 @@ export function NewHome() {
         class={`
           m-2 min-h-0 min-w-0 flex-1 overflow-hidden rounded-[10px]
           bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
+          max-md:m-0 max-md:rounded-none max-md:shadow-none
         `}
       >
         <ScrollView

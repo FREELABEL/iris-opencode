@@ -340,7 +340,7 @@ function SessionProviders(props: ParentProps) {
 
 function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
   return (
-    <div class="relative size-full overflow-hidden flex flex-col" classList={{ "p-2": props.padded }}>
+    <div class="relative size-full overflow-hidden flex flex-col" classList={{ "p-2 max-md:p-0": props.padded }}>
       {props.children}
     </div>
   )
@@ -356,8 +356,8 @@ function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boo
         "flex-1 min-h-0 flex flex-col": true,
         "bg-v2-background-bg-base": props.newLayout,
         "bg-background-stronger": !props.newLayout,
-        "rounded-[10px] overflow-hidden": props.newLayout,
-        "shadow-[var(--v2-elevation-raised)]": props.newLayout && props.raised,
+        "rounded-[10px] max-md:rounded-none overflow-hidden": props.newLayout,
+        "shadow-[var(--v2-elevation-raised)] max-md:shadow-none": props.newLayout && props.raised,
       }}
     >
       {props.children}
@@ -2420,7 +2420,7 @@ export default function Page() {
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
         classList={{
-          "gap-2 p-2": settings.general.newLayoutDesigns(),
+          "gap-2 p-2 max-md:p-0": settings.general.newLayoutDesigns(),
         }}
       >
         <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
