@@ -483,7 +483,9 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                     variant="ghost-muted"
                     size="large"
                     class="shrink-0"
-                    icon={<IconV2 name="outline-dots" />}
+                    // Search, not "more" (#194511): it always opened the palette, which is where chats,
+                    // projects and commands are searched; the dots read as an overflow menu.
+                    icon={<IconV2 name="magnifying-glass" />}
                     onClick={() => command.trigger("command.palette")}
                     aria-label={language.t("command.palette")}
                   />

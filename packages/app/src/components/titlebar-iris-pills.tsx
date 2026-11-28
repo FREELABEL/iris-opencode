@@ -197,6 +197,13 @@ const BADGE_CLASS: Record<BadgeTone, string> = {
   danger: "bg-v2-state-bg-danger text-v2-state-fg-danger hover:opacity-90 font-semibold",
 }
 
+// On a phone every titlebar button takes one block, the size of the titlebar's own icon buttons
+// (28px, icon-button-v2 large): "⬡ 4/6" was four letters wide and "📥 2" two (#194511). The count
+// rides on the icon as a corner badge instead of widening the button. Desktop keeps the pills.
+const PHONE_BLOCK = "max-md:relative max-md:size-7 max-md:shrink-0 max-md:justify-center max-md:gap-0 max-md:p-0"
+const PHONE_BADGE =
+  "max-md:absolute max-md:-top-1 max-md:-right-1.5 max-md:min-w-3.5 max-md:rounded-full max-md:bg-v2-background-bg-base max-md:px-[3px] max-md:text-center max-md:text-[9px] max-md:leading-[13px] max-md:ring-1 max-md:ring-v2-border-border-base"
+
 export function TitlebarIrisPills() {
   const mount = useTitlebarRightMount()
   const server = useServer()
@@ -365,7 +372,7 @@ export function TitlebarIrisPills() {
               type="button"
               data-slot="iris-fleet-pill"
               data-attention={attention()}
-              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover"
+              class={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover ${PHONE_BLOCK}`}
               classList={{
                 "text-v2-state-fg-warning": attention() === "degraded",
                 "text-v2-text-text-danger": attention() === "unreachable",
@@ -383,7 +390,7 @@ export function TitlebarIrisPills() {
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
                 <path d="M8 1.8 13.4 4.9v6.2L8 14.2 2.6 11.1V4.9Z" />
               </svg>
-              <span class="font-mono tabular-nums">{attention() === "unreachable" ? "!" : fleetLabel(hive(), hive.loading)}</span>
+              <span class={`font-mono tabular-nums ${PHONE_BADGE}`}>{attention() === "unreachable" ? "!" : fleetLabel(hive(), hive.loading)}</span>
             </button>
             <Show when={fleetOpen()}>
               <div
@@ -506,7 +513,7 @@ export function TitlebarIrisPills() {
             <button
               type="button"
               data-slot="iris-inbox-pill"
-              class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+              class={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base ${PHONE_BLOCK}`}
               classList={{ "text-v2-text-text-base": !!unread() && unread() !== "—" }}
               aria-label={inboxHint(inbox(), unread())}
               onClick={() => openIrisPanel(hivePillTarget("inbox"))}
@@ -523,7 +530,7 @@ export function TitlebarIrisPills() {
               >
                 <path d="M2 9h3l1 1.75h4L11 9h3M3.5 3.5h9L14 9v3.5H2V9l1.5-5.5Z" />
               </svg>
-              <span data-slot="iris-inbox-badge" class="font-mono tabular-nums">
+              <span data-slot="iris-inbox-badge" class={`font-mono tabular-nums ${PHONE_BADGE}`}>
                 {unread()}
               </span>
             </button>
