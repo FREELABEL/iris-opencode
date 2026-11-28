@@ -1785,6 +1785,15 @@ const InviteResponse = Schema.Struct({
   ),
 })
 
+const InviteClaimResult = Schema.Struct({
+  ok: described(Schema.Boolean, "TRUE only when the invite was attributed to this account."),
+  outcome: described(
+    Schema.String,
+    "attributed | self_invite | already_attributed | too_old | invalid_code | signed_out | error | unreachable",
+  ),
+  message: described(Schema.String, "One sentence for the outcome. Show it as is."),
+}).annotate({ identifier: "IrisInviteClaimResult" })
+
 const AutoTopupResponse = Schema.Struct({
   measured: Schema.Boolean,
   reason: Schema.optional(Schema.String),
@@ -2457,6 +2466,7 @@ export const IrisPaths = {
   topupPacks: `${root}/topup/packs`,
   topup: `${root}/topup`,
   invite: `${root}/invite`,
+  inviteClaim: `${root}/invite/claim`,
   autoTopup: `${root}/auto-topup`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
@@ -2804,6 +2814,17 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.invite",
           summary: "Invite link",
           description: "The link to share, what both people get, and how many have joined through it.",
+        }),
+      ),
+      HttpApiEndpoint.post("inviteClaim", IrisPaths.inviteClaim, {
+        payload: Schema.Struct({ code: Schema.String }),
+        success: described(InviteClaimResult, "What happened to the code, as an outcome and a sentence"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.inviteClaim",
+          summary: "Claim an invite code",
+          description:
+            "Attributes a friend's invite code to the signed-in account (new accounts only, #194575). Never fails: a refused code or a dropped network is an outcome with a sentence.",
         }),
       ),
       HttpApiEndpoint.get("autoTopup", IrisPaths.autoTopup, {

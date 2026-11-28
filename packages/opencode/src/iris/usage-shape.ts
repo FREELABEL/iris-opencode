@@ -141,6 +141,63 @@ export function inviteFrom(j: any): Invite | null {
   }
 }
 
+/**
+ * An invite code (epic #194525): fl-api's own rule (UsageInviteService::normalise) — trimmed,
+ * lowercased, 4–32 letters and digits. Null when it can't be one, so nothing malformed is sent.
+ */
+export function normaliseInviteCode(v: unknown): string | null {
+  if (typeof v !== "string") return null
+  const code = v.trim().toLowerCase()
+  return /^[a-z0-9]{4,32}$/.test(code) ? code : null
+}
+
+export type InviteClaimOutcome =
+  | "attributed"
+  | "self_invite"
+  | "already_attributed"
+  | "too_old"
+  | "invalid_code"
+  | "signed_out"
+  | "error"
+  | "unreachable"
+
+export interface InviteClaim {
+  ok: boolean
+  outcome: InviteClaimOutcome
+  message: string
+}
+
+/** One sentence per outcome, shown as it is (#194575). */
+export const INVITE_CLAIM_SENTENCE: Record<InviteClaimOutcome, string> = {
+  attributed: "You're in — you'll both get +25M tokens after your first agent run.",
+  self_invite: "That's your own code.",
+  already_attributed: "This account already used an invite.",
+  too_old: "Invite codes work in your first 14 days.",
+  invalid_code: "We couldn't find that code.",
+  signed_out: "Your sign-in has expired. Sign in again, then try the code.",
+  error: "That code couldn't be checked right now. Try again later.",
+  unreachable: "Couldn't reach IRIS to check that code. Try again in a moment.",
+}
+
+const CLAIM_OUTCOMES = new Set<string>(["attributed", "self_invite", "already_attributed", "too_old", "invalid_code"])
+
+/**
+ * fl-api POST /api/v1/usage/invite/claim → {ok, outcome, message}. fl-api answers 200 with the
+ * outcome, or 422 for invalid_code; anything else is not an outcome and reads as "error".
+ */
+export function inviteClaimFrom(status: number, j: any): InviteClaim {
+  const said = typeof j?.outcome === "string" ? j.outcome : typeof j?.data?.outcome === "string" ? j.data.outcome : null
+  const outcome: InviteClaimOutcome =
+    status === 401 || status === 403
+      ? "signed_out"
+      : said && CLAIM_OUTCOMES.has(said)
+        ? (said as InviteClaimOutcome)
+        : status === 422
+          ? "invalid_code"
+          : "error"
+  return { ok: outcome === "attributed", outcome, message: INVITE_CLAIM_SENTENCE[outcome] }
+}
+
 export interface AutoTopup {
   enabled: boolean
   pack: string | null

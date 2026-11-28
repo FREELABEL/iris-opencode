@@ -24,6 +24,8 @@ import {
   type UsagePlan,
 } from "./usage-model"
 import { UsageRings } from "./usage-rings"
+import { INVITE_CODE_LOOKS_WRONG, inviteSettled, normaliseInviteCode, pendingInviteCode } from "@/utils/invite-code"
+import { afterInviteClaim, claimInviteCode, inviteRowVisible, type InviteClaim } from "./invite-claim"
 import {
   autoTopupView,
   loadAutoTopup,
@@ -85,6 +87,28 @@ export function UsagePopoverBody(props: {
   const [picking, setPicking] = createSignal(false)
 
   const low = () => (props.plan.fraction ?? 0) >= 0.9
+
+  // "Have an invite code?" (#194575) — read once per opening, so the answer stays on screen even
+  // after it hides the row for good.
+  const settledAtOpen = inviteSettled()
+  const inviteRow = createMemo(() => inviteRowVisible(props.plan, settledAtOpen))
+  const [inviteOpen, setInviteOpen] = createSignal(false)
+  const [inviteCode, setInviteCode] = createSignal("")
+  const [inviteBusy, setInviteBusy] = createSignal(false)
+  const [inviteAnswer, setInviteAnswer] = createSignal<InviteClaim | null>(null)
+  let inviteInput: HTMLInputElement | undefined
+  const submitInvite = async (e: Event) => {
+    e.preventDefault()
+    if (inviteBusy()) return
+    const code = normaliseInviteCode(inviteCode())
+    if (!code) return setInviteAnswer({ ok: false, outcome: "malformed", message: `${INVITE_CODE_LOOKS_WRONG}.` })
+    setInviteBusy(true)
+    setInviteAnswer(null)
+    const r = await claimInviteCode(props.fetchJson, code)
+    afterInviteClaim(props.fetchJson, r, "ring")
+    setInviteAnswer(r)
+    setInviteBusy(false)
+  }
 
   onMount(() => {
     trackUpgrade(props.fetchJson, "usage.ring_opened", ring()?.tone ?? "unknown")
@@ -378,6 +402,65 @@ export function UsagePopoverBody(props: {
               </div>
             )}
           </For>
+        </div>
+      </Show>
+
+      <Show when={inviteRow()}>
+        <div data-slot="usage-invite-code" data-outcome={inviteAnswer()?.outcome} class="flex flex-col gap-1.5">
+          <Show
+            when={inviteOpen()}
+            fallback={
+              <button
+                type="button"
+                data-action="usage-invite-code-open"
+                class="self-start text-[12px] text-v2-text-text-muted underline-offset-2 hover:text-v2-text-text-base hover:underline"
+                onClick={() => {
+                  setInviteOpen(true)
+                  setInviteCode(pendingInviteCode() ?? "")
+                  queueMicrotask(() => inviteInput?.focus())
+                }}
+              >
+                Have an invite code?
+              </button>
+            }
+          >
+            <Show when={!inviteAnswer()?.ok}>
+              <form class="flex items-center gap-2" onSubmit={(e) => void submitInvite(e)}>
+                <input
+                  ref={inviteInput}
+                  data-slot="usage-invite-code-input"
+                  class="h-8 min-w-0 flex-1 rounded-md border border-v2-border-border-base bg-v2-background-bg-layer-01 px-2.5 font-mono text-[12.5px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint focus:border-v2-border-border-focus"
+                  placeholder="Invite code"
+                  aria-label="Invite code"
+                  autocapitalize="none"
+                  autocomplete="off"
+                  spellcheck={false}
+                  value={inviteCode()}
+                  onInput={(e) => setInviteCode(e.currentTarget.value)}
+                />
+                <button
+                  type="submit"
+                  data-action="usage-invite-code-apply"
+                  disabled={inviteBusy() || !inviteCode().trim()}
+                  class="h-8 shrink-0 rounded-md border border-v2-border-border-base px-3 text-[12px] hover:bg-v2-background-bg-layer-02 disabled:opacity-50"
+                >
+                  {inviteBusy() ? "Checking…" : "Apply"}
+                </button>
+              </form>
+            </Show>
+            <Show when={inviteAnswer()}>
+              {(a) => (
+                <div
+                  role="status"
+                  data-slot="usage-invite-code-message"
+                  class="text-[12px]"
+                  classList={{ "text-v2-state-fg-success": a().ok, "text-v2-text-text-muted": !a().ok }}
+                >
+                  {a().message}
+                </div>
+              )}
+            </Show>
+          </Show>
         </div>
       </Show>
 

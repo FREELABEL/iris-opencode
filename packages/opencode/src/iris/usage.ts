@@ -2,10 +2,14 @@ import { FL_API, irisFetch, type PlatformResult } from "./platform"
 import {
   autoTopupBody,
   autoTopupFrom,
+  INVITE_CLAIM_SENTENCE,
+  inviteClaimFrom,
   inviteFrom,
+  normaliseInviteCode,
   topupPacksFrom,
   type AutoTopup,
   type Invite,
+  type InviteClaim,
   type TopupPack,
 } from "./usage-shape"
 
@@ -72,6 +76,25 @@ export async function fetchInvite(): Promise<PlatformResult<Invite | null>> {
     return { measured: true, data: invite }
   } catch (e) {
     return { measured: false, reason: unreachable("invites", e), data: null }
+  }
+}
+
+/**
+ * Claim a friend's invite for the signed-in account (#194575) — for accounts whose sign-up did not
+ * carry the code on login-with-code (Google, a link opened after sign-in, a code typed later).
+ * Never throws: every answer, a dropped network included, is an outcome and a sentence.
+ */
+export async function claimInvite(raw: unknown): Promise<InviteClaim> {
+  const code = normaliseInviteCode(raw)
+  if (!code) return { ok: false, outcome: "invalid_code", message: INVITE_CLAIM_SENTENCE.invalid_code }
+  try {
+    const res = await irisFetch("/api/v1/usage/invite/claim", FL_API, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    })
+    return inviteClaimFrom(res.status, await json(res))
+  } catch {
+    return { ok: false, outcome: "unreachable", message: INVITE_CLAIM_SENTENCE.unreachable }
   }
 }
 
