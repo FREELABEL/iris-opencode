@@ -11,7 +11,8 @@ import { useLayout, type LocalProject } from "@/context/layout"
 import { ServerConnection } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
-import { showToast } from "@/utils/toast"
+import { openCommandRun } from "@/components/command-action"
+import { runIris } from "@/utils/iris-run"
 import { useTabs } from "@/context/tabs"
 import { displayName, projectForSession } from "@/pages/layout/helpers"
 import { createSessionTabs } from "@/pages/session/helpers"
@@ -221,13 +222,17 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
       return
     }
     if (item.type === "cli") {
-      // COPY, not run. Executing an arbitrary CLI command from a search box needs the same care
-      // as the shell lane — arguments, a working directory, a confirmation for destructive ones —
-      // and that is the open question on #186546. Copying is useful today and decides nothing.
-      if (item.run) {
-        void navigator.clipboard?.writeText(item.run)
-        showToast(`Copied: ${item.run}`)
-      }
+      // RUN, not copy (#194581). The run flow opens with the line, so the person can fill in a
+      // value first; the engine runs only the IRIS CLI, as argv, and a write runs only after the
+      // confirm says in words what it will do. "Copy" stays in that dialog for the terminal.
+      if (item.run)
+        openCommandRun(dialog, {
+          line: item.run,
+          start: "edit",
+          describe: item.description,
+          t: language.t,
+          run: (argv, confirmed) => runIris(platform.fetch ?? fetch, serverSDK.url, argv, confirmed),
+        })
       return
     }
     if (item.type === "session") {

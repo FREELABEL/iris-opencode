@@ -1,3 +1,4 @@
+import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 /**
  * Hive › Sessions (epic #189446) — every AI session on every machine you can reach.
  *
@@ -100,14 +101,7 @@ export function summaryOf(nodes: readonly HiveSessionNode[]) {
 
 export function ago(iso: string | null | undefined, now: number): string {
   if (!iso) return "never"
-  const s = (now - Date.parse(iso)) / 1000
-  if (!Number.isFinite(s)) return "unknown"
-  if (s < 0) return "in the future"
-  if (s < 120) return "just now"
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
-  const d = Math.floor(s / 86400)
-  return d === 1 ? "yesterday" : `${d} days ago`
+  return relativeWords(iso, now) || "unknown"
 }
 
 /** One line under a machine's name: is this list a reading, or a memory? */

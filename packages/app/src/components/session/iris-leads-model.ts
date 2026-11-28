@@ -1,3 +1,4 @@
+import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 /** Desktop Leads (#190553): ELON's rules for reading a lead, with no I/O. Reference: BloqLeadsTab.vue, leadUrgency.js. */
 export type LeadTag = { id: number; name: string; color?: string | null }
 export type LeadNote = { id: number; content: string; type?: string; activity_type?: string; is_system_generated?: boolean; created_at: string }
@@ -71,14 +72,8 @@ export function urgencyOf(updatedAt: string | null | undefined, now = Date.now()
 }
 
 export function agoLine(iso: string | null | undefined, now = Date.now()): string {
-  if (!iso) return ""
-  const mins = Math.floor((now - new Date(iso).getTime()) / 60_000)
-  if (Number.isNaN(mins)) return ""
-  // Under a minute reads as "just now", not "0m ago" (#194506: a lead you just added).
-  if (mins < 1) return "just now"
-  if (mins < 60) return `${mins}m ago`
-  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
-  return `${Math.floor(mins / 1440)}d ago`
+  // The one rule (#194581): just now · 5m ago · yesterday · Nov 3. Under a minute is "just now" (#194506).
+  return relativeWords(iso, now)
 }
 
 export function humanDate(iso: string | null | undefined): string {

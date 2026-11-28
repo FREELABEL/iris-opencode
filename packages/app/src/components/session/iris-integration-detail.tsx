@@ -2,6 +2,7 @@ import { For, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { connectsBy, healthRead, usageBars } from "./iris-catalog"
 import { providerMark } from "./session-iris-tab"
+import { relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
 
 /**
  * ONE CONNECTOR, drawn the way the registry draws it (#186542).
@@ -35,13 +36,7 @@ export interface IntegrationRow {
 /** "2h ago" beats an ISO string nobody reads. Never invents precision it does not have. */
 export function ago(iso: string | undefined, now = Date.now()): string {
   if (!iso) return "never"
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return "unknown"
-  const s = Math.max(0, Math.round((now - t) / 1000))
-  if (s < 60) return `${s}s ago`
-  if (s < 3600) return `${Math.round(s / 60)}m ago`
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`
-  return `${Math.round(s / 86400)}d ago`
+  return relativeWords(iso, now) || "unknown"
 }
 
 /** Sep 17 — short enough to sit under a 5-day strip. */

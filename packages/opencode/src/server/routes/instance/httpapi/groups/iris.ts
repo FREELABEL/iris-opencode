@@ -2371,6 +2371,7 @@ export const IrisPaths = {
   onboardingWorkspace: `${root}/onboarding/workspace`,
   onboardingTrack: `${root}/onboarding/track`,
   cliCommands: `${root}/commands`,
+  cliRun: `${root}/run`,
   hivePeers: `${root}/hive/peers`,
   graph: `${root}/graph`,
   graphBoard: `${root}/graph/:bloqID`,
@@ -4678,6 +4679,40 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Search the IRIS CLI's commands",
           description:
             "Asks the INSTALLED CLI (`iris find --kind command --json`). This binary does not have them: the desktop engine carries 28 command modules and none of the platform ones, so the palette could only ever show the app's own three. measured=false with a reason when the CLI is not installed — an empty list would read as 'there are no commands'.",
+        }),
+      ),
+      HttpApiEndpoint.post("cliRun", IrisPaths.cliRun, {
+        payload: Schema.Struct({
+          argv: described(
+            Schema.Array(Schema.String),
+            "The command's words after `iris`, e.g. [\"drives\", \"list\"]. Passed to the installed CLI as argv — never through a shell.",
+          ),
+          confirmed: described(
+            Schema.optional(Schema.Boolean),
+            "The person confirmed this command. Required for anything that is not clearly a read; without it a write does not run.",
+          ),
+        }),
+        success: described(
+          Schema.Struct({
+            ran: Schema.Boolean,
+            kind: Schema.Literals(["read", "write"]),
+            needsConfirm: Schema.optional(Schema.Boolean),
+            refused: Schema.optional(Schema.String),
+            code: Schema.optional(Schema.Finite),
+            stdout: Schema.optional(Schema.String),
+            stderr: Schema.optional(Schema.String),
+            truncated: Schema.optional(Schema.Boolean),
+            timedOut: Schema.optional(Schema.Boolean),
+            ms: Schema.optional(Schema.Finite),
+          }).annotate({ identifier: "IrisCliRunResult" }),
+          "Whether it ran, and what it printed",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.cliRun",
+          summary: "Run one IRIS CLI command for a button",
+          description:
+            "#194581. Runs ONLY the installed IRIS CLI (~/.iris/bin/iris) with `argv` — no shell, stdin closed, a 120 s limit, output capped at 256 KB, ANSI stripped. Servers, UIs and the CLI replacing itself (serve, web, tui, attach, acp, upgrade, uninstall, …) are refused. A command is a READ only when its subcommand ends in a read verb (list, show, get, …) with no write word, or it only asks for --help; anything else is a WRITE and runs only with confirmed=true — otherwise ran=false, needsConfirm=true, and nothing ran.",
         }),
       ),
       HttpApiEndpoint.get("hivePeers", IrisPaths.hivePeers, {

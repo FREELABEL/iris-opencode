@@ -1,22 +1,26 @@
+import { relativeTime } from "@opencode-ai/ui/relative-time"
+
 type TimeKey =
   | "common.time.justNow"
   | "common.time.minutesAgo.short"
   | "common.time.hoursAgo.short"
   | "common.time.daysAgo.short"
+  | "common.time.yesterday"
 
 type Translate = (key: TimeKey, params?: Record<string, string | number>) => string
 
-export function getRelativeTime(dateString: string, t: Translate): string {
-  const date = new Date(dateString)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffSeconds = Math.floor(diffMs / 1000)
-  const diffMinutes = Math.floor(diffSeconds / 60)
-  const diffHours = Math.floor(diffMinutes / 60)
-  const diffDays = Math.floor(diffHours / 24)
-
-  if (diffSeconds < 60) return t("common.time.justNow")
-  if (diffMinutes < 60) return t("common.time.minutesAgo.short", { count: diffMinutes })
-  if (diffHours < 24) return t("common.time.hoursAgo.short", { count: diffHours })
-  return t("common.time.daysAgo.short", { count: diffDays })
+/**
+ * The app's translated relative time. One rule for the whole app (#194581): it is the ui
+ * `relativeTime` — just now · 5m ago · 3h ago · yesterday · 4d ago · Nov 3 — in this app's words.
+ */
+export function getRelativeTime(dateString: string, t: Translate, now = Date.now()): string {
+  return relativeTime(dateString, now, {
+    words: {
+      justNow: t("common.time.justNow"),
+      minutesAgo: (count) => t("common.time.minutesAgo.short", { count }),
+      hoursAgo: (count) => t("common.time.hoursAgo.short", { count }),
+      yesterday: t("common.time.yesterday"),
+      daysAgo: (count) => t("common.time.daysAgo.short", { count }),
+    },
+  })
 }

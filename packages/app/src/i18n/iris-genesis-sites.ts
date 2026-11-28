@@ -27,6 +27,8 @@ export const IRIS_GENESIS_SITES_ENGLISH = {
   "iris.sites.dialog.intro": "Pages in a site share its sidebar and sign-in rules, so people sign in once for all of them.",
   "iris.sites.dialog.noBoard": "Open the page's board to see its sites.",
   "iris.sites.loading": "Loading sites",
+  "iris.sites.status.published": "Published",
+  "iris.sites.status.draft": "Draft",
   "iris.sites.pageCount.one": "{{count}} page",
   "iris.sites.pageCount.other": "{{count}} pages",
   "iris.sites.new": "New site",

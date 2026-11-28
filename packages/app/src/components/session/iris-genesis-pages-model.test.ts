@@ -49,14 +49,12 @@ describe("updated, in words", () => {
   const ago = (ms: number) => relativeTime(new Date(NOW - ms).toISOString(), NOW)
   test("minutes, hours, yesterday, days, weeks, months, years", () => {
     expect(ago(20_000)).toBe("just now")
-    expect(ago(60_000)).toBe("1 minute ago")
-    expect(ago(5 * 60_000)).toBe("5 minutes ago")
-    expect(ago(3 * 3_600_000)).toBe("3 hours ago")
-    expect(ago(26 * 3_600_000)).toBe("yesterday")
-    expect(ago(3 * 86_400_000)).toBe("3 days ago")
-    expect(ago(15 * 86_400_000)).toBe("2 weeks ago")
-    expect(ago(120 * 86_400_000)).toBe("4 months ago")
-    expect(ago(800 * 86_400_000)).toBe("2 years ago")
+    expect(ago(60_000)).toBe("1m ago")
+    expect(ago(5 * 60_000)).toBe("5m ago")
+    expect(ago(3 * 3_600_000)).toBe("3h ago")
+    expect(ago(3 * 86_400_000)).toBe("3d ago")
+    // Past a week it is a date, not "2 weeks ago" — the exact time is on hover.
+    expect(ago(15 * 86_400_000)).not.toContain("ago")
   })
   test("nothing to say is undefined, never 'NaN years ago'", () => {
     expect(relativeTime(undefined, NOW)).toBeUndefined()
