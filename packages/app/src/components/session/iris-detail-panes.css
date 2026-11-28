@@ -11,21 +11,6 @@
     object-fit: contain;
     background: var(--background-base);
   }
-  [data-slot="iris-dv-chips"] {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  [data-slot="iris-dv-chip"] {
-    display: inline-flex;
-    align-items: center;
-    padding: 1px 8px;
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--text-base) 8%, transparent);
-    color: var(--text-base);
-    font-size: var(--font-size-caption);
-    line-height: var(--font-size-caption--line-height);
-  }
   [data-slot="iris-dv-note"] {
     margin: 0;
     color: var(--text-weak);
@@ -84,4 +69,24 @@
   display: flex;
   justify-content: flex-end;
   padding: 4px 8px 6px;
+}
+
+/* Chips: what a peer may do — in the detail and on the list row. */
+[data-slot="iris-dv-chips"] {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+[data-slot="iris-dv-chip"] {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-base) 8%, transparent);
+  color: var(--text-base);
+  font-size: var(--font-size-caption);
+  line-height: var(--font-size-caption--line-height);
+}
+[data-slot="list-row-secondary"] [data-slot="iris-dv-chips"] {
+  flex-wrap: nowrap;
 }

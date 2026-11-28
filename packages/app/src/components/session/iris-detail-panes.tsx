@@ -227,6 +227,7 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
                   label={t("iris.dv.int.test")}
                   describe={t("iris.dv.int.test.describe", { name: name() })}
                   variant={state() === "attention" ? "secondary" : "primary"}
+                  noCopy
                   fetch={props.doFetch}
                   base=""
                   onDone={() => props.onChanged()}
@@ -242,12 +243,19 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
                   describe={t("iris.dv.int.disconnect.describe", { name: name() })}
                   write
                   variant="ghost"
+                  noCopy
                   fetch={props.doFetch}
                   base=""
                   onDone={(x) => x.ran && x.code === 0 && props.onChanged()}
                 />
               </Show>
-              <Overflow t={t} items={r()?.id != null ? [{ label: t("iris.dv.copyId"), run: () => copy(t, String(r().id)) }] : []} />
+              <Overflow
+                t={t}
+                items={[
+                  ...(type() ? [{ label: t("command.run.copyCli"), run: () => copy(t, formatIrisLine(["integrations", "test", type()])) }] : []),
+                  ...(r()?.id != null ? [{ label: t("iris.dv.copyId"), run: () => copy(t, String(r().id)) }] : []),
+                ]}
+              />
             </>
           )
         })()}
@@ -347,7 +355,6 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
             {r()?.status === "pending" ? t("iris.dv.peer.cancelInvite") : t("iris.dv.peer.revoke")}
           </Button>
         </Show>
-        <PeerAccept doFetch={props.doFetch} onChanged={props.onChanged} variant="ghost" />
         <Overflow t={t} items={r()?.id ? [{ label: t("iris.dv.copyId"), run: () => copy(t, String(r().id)) }] : []} />
       </Match>
 
@@ -359,6 +366,7 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
             describe={t("iris.dv.schema.addRecord.describe", { name: name() })}
             editable
             icon="plus-small"
+            noCopy
             fetch={props.doFetch}
             base=""
             onDone={(x) => x.ran && x.code === 0 && props.onChanged()}
@@ -367,7 +375,17 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
         <Button size="small" variant="secondary" onClick={() => props.onTab("records")}>
           {t("iris.dv.schema.openRecords")}
         </Button>
-        <Overflow t={t} items={r()?.slug ? [{ label: t("iris.dv.copyId"), run: () => copy(t, String(r().slug)) }] : []} />
+        <Overflow
+          t={t}
+          items={
+            r()?.slug
+              ? [
+                  { label: t("command.run.copyCli"), run: () => copy(t, addRecordLine(r(), props.board)) },
+                  { label: t("iris.dv.copyId"), run: () => copy(t, String(r().slug)) },
+                ]
+              : []
+          }
+        />
       </Match>
     </Switch>
   )
@@ -399,6 +417,22 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
           facts={factsOf(detail())}
           actions={actions()}
         >
+          {/* The service's recent history, one bar per window: "has it been flapping" is a shape. */}
+          <Show when={props.pane === "integrations" && r()?.health?.bars?.length}>
+            <div data-slot="iris-dv-uptime">
+              <div class="iris-bars">
+                <For each={r().health.bars}>
+                  {(b: any) => (
+                    <span
+                      class="iris-bars__bar"
+                      classList={{ "iris-bars__bar--up": b.state === "up", "iris-bars__bar--down": b.state === "down" }}
+                      title={`${b.state}${b.from ? ` · ${b.from}` : ""}`}
+                    />
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
           <Show when={props.pane === "integrations" && props.connectNote?.message}>
             <p data-slot="iris-dv-note" data-state={props.connectNote!.state}>
               {props.connectNote!.message}
@@ -426,7 +460,9 @@ export function addRecordLine(r: any, board?: number): string {
   const fields: any[] = Array.isArray(r?.fields) ? r.fields : []
   const pick = [...fields.filter((f) => f.required === true), ...fields.filter((f) => f.required !== true)].slice(0, 4)
   const data = JSON.stringify(Object.fromEntries(pick.map((f) => [String(f.key), ""])))
-  return formatIrisLine(["atlas:datasets", "records", "add", "--schema", String(r?.slug ?? ""), ...(board != null ? ["--bloq", String(board)] : []), "--data", data])
+  const head = formatIrisLine(["atlas:datasets", "records", "add", "--schema", String(r?.slug ?? ""), ...(board != null ? ["--bloq", String(board)] : [])])
+  // Single quotes keep the JSON readable to fill in; a key with a quote in it falls back to escaping.
+  return data.includes("'") ? `${head} --data ${formatIrisLine([data]).slice(5)}` : `${head} --data '${data}'`
 }
 
 /** Accept a code someone sent: the line opens editable, CODE to replace. */

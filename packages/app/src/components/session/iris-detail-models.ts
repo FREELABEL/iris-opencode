@@ -63,7 +63,7 @@ export function plainIntegrationError(raw: string | undefined, t: T): string | u
   if (/invalid_grant|expired|revoked|unauthori[sz]ed|\b401\b|invalid[_ ]token|token.*(invalid|missing)|re-?auth/.test(e)) return t("iris.dv.int.why.expired")
   if (/forbidden|\b403\b|permission|scope|insufficient/.test(e)) return t("iris.dv.int.why.forbidden")
   if (/rate.?limit|too many requests|\b429\b|quota/.test(e)) return t("iris.dv.int.why.rateLimited")
-  if (/timeout|timed out|econn|enotfound|network|\b50[0-9]\b|unavailable|bad gateway/.test(e)) return t("iris.dv.int.why.unreachable")
+  if (/timeout|timed ?out|econn|enotfound|network|\b50[0-9]\b|unavailable|bad gateway/.test(e)) return t("iris.dv.int.why.unreachable")
   return s
 }
 
@@ -74,7 +74,7 @@ function integrationDetail(r: any, t: T): PaneDetail {
   const provider = text(r.health?.state)
   return {
     title: String(r.name ?? ""),
-    subtitle: text(r.account) ?? text(r.category),
+    subtitle: text(r.category),
     badge: { label: t(`iris.dv.int.state.${state}`), tone: INTEGRATION_TONE[state] },
     facts: [
       { label: t("iris.dv.int.why"), value: why, wide: true },

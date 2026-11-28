@@ -1087,6 +1087,11 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
     { id: "info", label: "Info" },
     { id: "json", label: "JSON" },
   ],
+  // #194582: the connection id and raw permissions live here, not in the detail's words.
+  peers: [
+    { id: "info", label: "Info" },
+    { id: "json", label: "JSON" },
+  ],
 }
 const DEFAULT_DETAIL_TABS: readonly DetailTab[] = [{ id: "info", label: "Info" }]
 
