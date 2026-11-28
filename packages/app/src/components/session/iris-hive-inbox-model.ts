@@ -268,18 +268,37 @@ export function threadOf(peer: string, rows: readonly InboxRow[], sent: readonly
 }
 
 /** The rail: every peer you have a thread with, most recent activity first, with its unread count. */
-export function peersOf(rows: readonly InboxRow[], sent: readonly SentRow[]): { peer: string; unread: number; last: number }[] {
-  const m = new Map<string, { peer: string; unread: number; last: number }>()
-  const touch = (name: string, at: number, unread: boolean) => {
+export type PeerThread = {
+  peer: string
+  unread: number
+  last: number
+  /** The newest line in the thread, in one line: what they sent, or what you sent them. */
+  lastLine?: string
+  /** The newest line is one you sent. */
+  lastMine?: boolean
+}
+
+export function peersOf(rows: readonly InboxRow[], sent: readonly SentRow[]): PeerThread[] {
+  const m = new Map<string, PeerThread>()
+  const touch = (name: string, at: number, unread: boolean, line: string | undefined, mine: boolean) => {
     const k = name.trim().toLowerCase()
     const p = m.get(k) ?? { peer: name, unread: 0, last: 0 }
-    p.last = Math.max(p.last, at)
+    if (at >= p.last) {
+      p.last = at
+      p.lastLine = oneLine(line)
+      p.lastMine = mine
+    }
     if (unread) p.unread++
     m.set(k, p)
   }
-  for (const r of rows) touch(r.from, ts(r.receivedAt), !r.read)
-  for (const s of sent) touch(s.to, ts(s.sentAt), false)
+  for (const r of rows) touch(r.from, ts(r.receivedAt), !r.read, subjectOf(r), false)
+  for (const s of sent) touch(s.to, ts(s.sentAt), false, s.text, true)
   return [...m.values()].sort((a, b) => b.last - a.last)
+}
+
+const oneLine = (s: string | undefined) => {
+  const l = (s ?? "").replace(/\s+/g, " ").trim()
+  return l ? (l.length > 90 ? `${l.slice(0, 89)}…` : l) : undefined
 }
 
 /** How many replies this panel sent to one message. */

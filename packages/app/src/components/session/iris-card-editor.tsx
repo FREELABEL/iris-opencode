@@ -7,6 +7,10 @@ import { dueLabel, dueState, type QuickField, type QuickPatch } from "./iris-atl
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Icon } from "@opencode-ai/ui/icon"
+import { Button } from "@opencode-ai/ui/button"
+import { usePrompt } from "@/context/prompt"
+import { useLanguage } from "@/context/language"
+import "./iris-card-agent.css"
 import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { renderMarkdown } from "./iris-item"
 import { absoluteTime, relativeTime as relativeWords } from "@opencode-ai/ui/relative-time"
@@ -448,6 +452,16 @@ type SideTab = "details" | "sharing" | "tasks" | "chat"
 
 export function IrisCardEditor(props: IrisCardEditorProps) {
   const dialog = useDialog()
+  const language = useLanguage()
+  // The chat's composer, when the card is opened beside one (#194583). The pop-up can be opened
+  // where there is no chat; then "Work on it in this chat" is not offered.
+  const prompt = (() => {
+    try {
+      return usePrompt()
+    } catch {
+      return undefined
+    }
+  })()
   const panel = () => props.mode === "panel"
   /** The × and "Discard and close": the panel goes back to the board; the pop-up closes. */
   const close = () => (panel() ? props.onClose?.() : dialog.close())
@@ -2389,23 +2403,49 @@ export function IrisCardEditor(props: IrisCardEditorProps) {
                       <NotConnected state={share.latest} />
                       <NoteLine note={shareNote()} />
 
-                      {/* THE COMMAND — hand this card to an agent or a terminal (#191790). A public
-                          card is named by its uuid; a private one by its id, for its signed-in owner. */}
+                      {/* HAND IT TO AN AGENT (#191790, #194583). The button puts the card in this chat's
+                          composer for IRIS to work on; the CLI line, for an agent elsewhere, is the
+                          secondary copy. A public card is named by its uuid; a private one by its id. */}
                       <div class="iris-sec">
-                        <SideHead icon="terminal">Use in a terminal or agent</SideHead>
+                        <SideHead icon="sparkle">{language.t("iris.card.agent.head")}</SideHead>
                         {(() => {
                           const command = () => {
                             const uuid = (share.latest?.publicUrl ?? doc.latest!.publicUrl)?.match(/\/n\/([0-9a-f-]{36})/i)?.[1]
                             return `iris atlas use ${uuid ?? props.itemId}`
                           }
+                          const ask = () => {
+                            if (!prompt) return
+                            const text = language.t("iris.card.agent.prompt", {
+                              title: form()?.title ?? doc.latest!.title,
+                              command: command(),
+                            })
+                            prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+                            close()
+                            requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
+                          }
                           return (
-                            <div class="iris-card__url iris-card__cmd">
-                              <code class="font-mono truncate" title={command()}>
-                                {command()}
-                              </code>
-                              <button type="button" class="iris-card__act" aria-label={`Copy the command: ${command()}`} onClick={(e) => copy(e, command())}>
-                                copy
-                              </button>
+                            <div class="iris-card__agent">
+                              <p class="iris-card__help">{language.t(prompt ? "iris.card.agent.body" : "iris.card.agent.bodyNoChat")}</p>
+                              <div class="iris-card__agent-row">
+                                <Show when={prompt}>
+                                  <Button size="small" variant="primary" icon="sparkle" data-action="card-ask-agent" onClick={ask}>
+                                    {language.t("iris.card.agent.action")}
+                                  </Button>
+                                </Show>
+                                {/* The line before its button: a refused clipboard selects it for ⌘C. */}
+                                <code class="font-mono truncate iris-card__agent-cmd" title={command()}>
+                                  {command()}
+                                </code>
+                                <button
+                                  type="button"
+                                  class="iris-card__act"
+                                  title={command()}
+                                  aria-label={`${language.t("command.run.copyCli")}: ${command()}`}
+                                  onClick={(e) => copy(e, command())}
+                                >
+                                  {language.t("command.run.copyCli")}
+                                </button>
+                              </div>
                             </div>
                           )
                         })()}

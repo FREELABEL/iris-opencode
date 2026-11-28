@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { useLanguage } from "@/context/language"
+import { CommandAction } from "@/components/command-action"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import "./iris-pulse.css"
@@ -126,7 +127,7 @@ function Route(props: { stops: PulseStop[]; picked: string | undefined; onPick: 
                 <h4>{s.label}</h4>
                 <p>{s.text}</p>
                 <Show when={s.shut && s.fix}>
-                  {(f) => <span class="pls-fix">{f().command ? <code class="hsc-mono">{f().command}</code> : f().label}</span>}
+                  {(f) => <span class="pls-fix">{f().label}</span>}
                 </Show>
               </div>
               <span class="pls-tally">
@@ -171,7 +172,7 @@ function Legend() {
 }
 
 /** The picked stop: what it picked up, where it was read from. */
-function StopDetail(props: { stop: PulseStop | undefined; index: string; now: number; children?: JSX.Element }) {
+function StopDetail(props: { stop: PulseStop | undefined; index: string; now: number; doFetch?: Fetch; onFixed?: () => void; children?: JSX.Element }) {
   const [copied, setCopied] = createSignal(false)
   const copy = async (text: string) => {
     try {
@@ -196,6 +197,21 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
             </p>
             <Show when={s().reason && !s().shut}>
               <p class="pls-caveat">{s().reason}</p>
+            </Show>
+            {/* A closed stop's fix is a button that runs it (#194583), not a command to copy. */}
+            <Show when={s().shut && s().fix?.command ? s().fix : undefined}>
+              {(f) => (
+                <div class="pls-fixrun">
+                  <CommandAction
+                    command={f().command!}
+                    label={f().label}
+                    size="small"
+                    fetch={props.doFetch}
+                    base={props.doFetch ? "" : undefined}
+                    onDone={(r) => r.ran && r.code === 0 && props.onFixed?.()}
+                  />
+                </div>
+              )}
             </Show>
             <Show when={s().items.length} fallback={<p class="hsc-muted">{s().shut ? s().text : "Nothing to itemise."}</p>}>
               <ul class="pls-items">
@@ -518,7 +534,7 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
             }}
           </Show>
         </section>
-        <StopDetail stop={pick()} index={pickIndex()} now={now()} />
+        <StopDetail stop={pick()} index={pickIndex()} now={now()} doFetch={props.doFetch} />
       </div>
     </div>
   )
@@ -709,7 +725,7 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number; on
             }}
           </Show>
         </section>
-        <StopDetail stop={pick()} index={pickIndex()} now={now()} />
+        <StopDetail stop={pick()} index={pickIndex()} now={now()} doFetch={props.doFetch} />
       </div>
     </div>
   )

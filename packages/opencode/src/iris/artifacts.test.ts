@@ -203,3 +203,25 @@ describe("Artifacts — several writers", () => {
     expect(m.author!.session).toBeUndefined()
   })
 })
+
+describe("Artifacts.history (#194583)", () => {
+  test("every chat in the store, newest first, each naming its chat; stray files are skipped", () => {
+    const r = root()
+    const a = Artifacts.write(r, { session: "ses_one", title: "Brief", kind: "markdown", content: "# a" }, new Date("2026-11-01T00:00:00Z"))
+    const b = Artifacts.write(r, { session: "ses_two", title: "Table", kind: "csv", content: "a,b" }, new Date("2026-11-03T00:00:00Z"))
+    const c = Artifacts.write(r, { session: "ses_one", title: "Page", kind: "html", content: "<p>c</p>" }, new Date("2026-11-02T00:00:00Z"))
+    writeFileSync(path.join(r, ".gitignore"), "*\n")
+    mkdirSync(path.join(r, "not a session"))
+    const h = Artifacts.history(r)
+    expect(h.map((m) => [m.id, m.session])).toEqual([
+      [b.id, "ses_two"],
+      [c.id, "ses_one"],
+      [a.id, "ses_one"],
+    ])
+    expect(Artifacts.history(r, 2)).toHaveLength(2)
+  })
+
+  test("a store that does not exist yet is an empty history, not an error", () => {
+    expect(Artifacts.history(path.join(root(), "missing"))).toEqual([])
+  })
+})

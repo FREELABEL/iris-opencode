@@ -63,7 +63,6 @@ export const IRIS_GENESIS_PAGES_ENGLISH = {
   "iris.pages.preview": "Preview",
   "iris.pages.preview.label": "Preview {{title}}",
   "iris.pages.copyLink": "Copy link",
-  "iris.pages.copyCommand": "Copy command",
   "iris.pages.openBrowser": "Open in browser",
   "iris.pages.members": "Members only",
   "iris.pages.members.title": "{{label}} — visitors must sign in",

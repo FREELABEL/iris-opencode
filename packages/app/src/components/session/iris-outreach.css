@@ -140,3 +140,4 @@
   .iris-or-members .iris-or-tr > span:nth-child(2), .iris-or-members .iris-or-tr > span:nth-child(5), .iris-or-members .iris-or-tr > span:nth-child(6), .iris-or-members .iris-or-tr > span:nth-child(7) { display: none; }
 }
 .iris-or-frow [data-unjudged] { color: var(--text-weak); font-family: inherit; }
+.iris-or-foot--run { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

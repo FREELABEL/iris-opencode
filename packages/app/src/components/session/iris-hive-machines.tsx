@@ -1,5 +1,9 @@
 import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { CommandAction } from "@/components/command-action"
+import { useLanguage } from "@/context/language"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import { ago, diskOf, SKILLS, skillsOf, type HiveNodeRow } from "./iris-hive-scripts-model"
@@ -76,6 +80,7 @@ export function IrisHiveMachines(props: {
   now?: () => number
 }) {
   const now = () => props.now?.() ?? Date.now()
+  const language = useLanguage()
   const getJson = async <T,>(path: string, fallback: T): Promise<T> => {
     try {
       const res = await props.doFetch(path)
@@ -205,13 +210,35 @@ export function IrisHiveMachines(props: {
                         <b>{step.title}</b>
                         <span class="hmc-faint">{step.where}</span>
                       </div>
-                      <div class="hmc-add-cmd">
-                        <code class="hsc-mono">{step.command}</code>
-                        <button type="button" class="hmc-btn" title="Copy" onClick={() => void copyStep(i(), step.command)}>
-                          <Ic name={copiedStep() === i() ? "check" : "copy"} />
-                          <span>{copiedStep() === i() ? "Copied" : "Copy"}</span>
-                        </button>
-                      </div>
+                      {/* A step that runs on THIS computer is a button that runs it (#194583). The
+                          first runs on the new computer, so there it is still a line to copy. */}
+                      <Show
+                        when={step.where === "On the new computer"}
+                        fallback={
+                          <div class="hmc-add-cmd hmc-add-run">
+                            <CommandAction
+                              command={step.command}
+                              label={language.t(i() === 1 ? "iris.hive.add.enroll" : "iris.hive.add.doctor")}
+                              describe={step.why}
+                              editable={step.command.includes("<")}
+                              write
+                              size="small"
+                              variant={i() === 1 ? "primary" : "secondary"}
+                              fetch={props.doFetch}
+                              base=""
+                              onDone={(r) => r.ran && r.code === 0 && void refetch()}
+                            />
+                          </div>
+                        }
+                      >
+                        <div class="hmc-add-cmd">
+                          <code class="hsc-mono">{step.command}</code>
+                          <button type="button" class="hmc-btn" title={language.t("iris.hive.add.copy")} onClick={() => void copyStep(i(), step.command)}>
+                            <Ic name={copiedStep() === i() ? "check" : "copy"} />
+                            <span>{copiedStep() === i() ? language.t("iris.hive.add.copied") : language.t("iris.hive.add.copy")}</span>
+                          </button>
+                        </div>
+                      </Show>
                       <span class="hmc-add-why">{step.why}</span>
                     </li>
                   )}
@@ -232,12 +259,12 @@ export function IrisHiveMachines(props: {
                     <span class="hmc-faint"> on {totals().agentMachines} of {totals().computers} computers that report them</span>
                   </Show>
                 </span>
-                <span>
-                  <b class="hsc-num">{totals().shellMachines ? totals().shells.toLocaleString("en-US") : "—"}</b> shells
-                  <span class="hmc-faint">
-                    {totals().shellMachines ? " · this computer only, Hive-started only" : " · not counted"}
+                <Show when={totals().shellMachines}>
+                  <span>
+                    <b class="hsc-num">{totals().shells.toLocaleString("en-US")}</b> shells
+                    <span class="hmc-faint"> · this computer only, Hive-started only</span>
                   </span>
-                </span>
+                </Show>
               </p>
               <Show when={view() === "list"}>
                 <div class="hmc-seg hmc-filter" role="tablist" aria-label="Show">
@@ -257,10 +284,18 @@ export function IrisHiveMachines(props: {
             <p class="hsc-warn">Could not read your computers{hive.latest!.reason ? ` — ${hive.latest!.reason}` : ""}</p>
           </Show>
           <Show when={hive.latest?.measured && computers().length === 0}>
-            <p class="hsc-muted hmc-empty">
-              No computers on this account yet. Use <b>Add a computer</b> above, or run{" "}
-              <code class="hsc-mono">iris hive connect</code> on one to add it.
-            </p>
+            <EmptyState
+              class="hmc-empty-state"
+              title={language.t("iris.hive.machines.empty.title")}
+              description={language.t("iris.hive.machines.empty.body")}
+              action={
+                <Show when={!adding()}>
+                  <Button size="small" variant="primary" icon="plus" onClick={() => setAdding(true)}>
+                    {language.t("iris.hive.machines.empty.action")}
+                  </Button>
+                </Show>
+              }
+            />
           </Show>
           <p class="hsc-muted hmc-here" data-action="hive-remote-access-state" data-tone={hereView().tone}>
             This computer: <b>{hereView().short}</b>
@@ -318,7 +353,9 @@ export function IrisHiveMachines(props: {
                         <span class="hmc-faint hmc-online">{c.online ? "Online" : "Offline"}</span>
                       </div>
                       <div class="hmc-counts">
-                        <Show when={filter() !== "shells"}>
+                        {/* A count the computer never sent, or one Hive cannot take from here, is not
+                            shown as a chip (#194583) — only counts and real "couldn't check"s are. */}
+                        <Show when={filter() !== "shells" && row().agents.state !== "never"}>
                           {(() => {
                             const w = () => agentWords(row().agents, now())
                             return (
@@ -329,7 +366,7 @@ export function IrisHiveMachines(props: {
                             )
                           })()}
                         </Show>
-                        <Show when={filter() !== "agents"}>
+                        <Show when={filter() !== "agents" && row().shells.state !== "elsewhere"}>
                           {(() => {
                             const w = () => shellWords(row().shells)
                             return (
@@ -350,14 +387,14 @@ export function IrisHiveMachines(props: {
                           {(c.tasksCompleted ?? 0).toLocaleString("en-US")} done
                         </span>
                       </div>
-                      <div class="hmc-disk" title={d() ? `${gb(d()!.free)} free of ${gb(d()!.total)}` : "Disk not reported"}>
-                        <Show when={d()} fallback={<span class="hmc-faint">disk not reported</span>}>
+                      <Show when={d()}>
+                        <div class="hmc-disk" title={`${gb(d()!.free)} free of ${gb(d()!.total)}`}>
                           <span class="hmc-bar" data-low={att().some((a) => a.kind === "disk") ? "1" : undefined}>
                             <i style={{ width: `${Math.max(2, 100 - d()!.pct)}%` }} />
                           </span>
                           <span class="hsc-num">{gb(d()!.free)} free</span>
-                        </Show>
-                      </div>
+                        </div>
+                      </Show>
                       <Show when={aiOf(c)}>
                         {(ai) => (
                           <div class="hmc-ai" data-serving={ai().serving.length ? "1" : undefined} title={ai().serving.join(", ")}>
@@ -464,42 +501,46 @@ export function IrisHiveMachines(props: {
                     <Ic name="arrow-right" />
                     Send a task
                   </button>
-                  <button type="button" class="hmc-btn" title={`iris hive nodes show ${c().id}`} onClick={() => void copyCli(c())}>
-                    <Ic name={copied() ? "check" : "copy"} />
-                    {copied() ? "Copied" : "CLI command"}
-                  </button>
                 </div>
+                {/* Only what this computer reported (#194583): a tile that can only say "—" or
+                    "not reported" is left out, not drawn empty. */}
                 <dl class="hmc-stats">
                   <div>
                     <dt>Tasks done</dt>
                     <dd class="hsc-num">{(c().tasksCompleted ?? 0).toLocaleString("en-US")}</dd>
                   </div>
-                  <div>
-                    <dt>Slots</dt>
-                    <dd class="hsc-num" title={st().text}>
-                      {c().online && c().maxConcurrent ? `${c().activeTasks ?? 0}/${c().maxConcurrent} busy` : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Disk</dt>
-                    <dd class="hsc-num" data-low={att().some((a) => a.kind === "disk") ? "1" : undefined}>
-                      {d() ? `${gb(d()!.free)} free` : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>GPU</dt>
-                    <dd class="hsc-num">{gpuOf(c())}</dd>
-                  </div>
-                  <div>
-                    <dt>AI models</dt>
-                    <dd class="hsc-num" title={(c().modelsServing ?? []).join(", ")}>
-                      {(c().modelsServing ?? []).length
-                        ? `${(c().modelsServing ?? []).length} serving`
-                        : (c().modelsInstalled ?? []).length
-                          ? `${(c().modelsInstalled ?? []).length} installed`
-                          : "—"}
-                    </dd>
-                  </div>
+                  <Show when={c().online && c().maxConcurrent}>
+                    <div>
+                      <dt>Slots</dt>
+                      <dd class="hsc-num" title={st().text}>
+                        {`${c().activeTasks ?? 0}/${c().maxConcurrent} busy`}
+                      </dd>
+                    </div>
+                  </Show>
+                  <Show when={d()}>
+                    <div>
+                      <dt>Disk</dt>
+                      <dd class="hsc-num" data-low={att().some((a) => a.kind === "disk") ? "1" : undefined}>
+                        {`${gb(d()!.free)} free`}
+                      </dd>
+                    </div>
+                  </Show>
+                  <Show when={c().gpu}>
+                    <div>
+                      <dt>GPU</dt>
+                      <dd class="hsc-num">{gpuOf(c())}</dd>
+                    </div>
+                  </Show>
+                  <Show when={(c().modelsServing ?? []).length || (c().modelsInstalled ?? []).length}>
+                    <div>
+                      <dt>AI models</dt>
+                      <dd class="hsc-num" title={(c().modelsServing ?? []).join(", ")}>
+                        {(c().modelsServing ?? []).length
+                          ? `${(c().modelsServing ?? []).length} serving`
+                          : `${(c().modelsInstalled ?? []).length} installed`}
+                      </dd>
+                    </div>
+                  </Show>
                   <div>
                     <dt>Last seen</dt>
                     <dd class="hsc-num">{c().online ? "now" : ago(c().lastHeartbeat, now())}</dd>
@@ -518,23 +559,31 @@ export function IrisHiveMachines(props: {
                         </span>
                         <span>{row()!.reach.detail}</span>
                       </p>
-                      <h4>Running on it</h4>
-                      <dl class="hmc-stats hmc-running">
-                        <div>
-                          <dt>Agent sessions</dt>
-                          <dd class="hsc-num">{aw()!.text}</dd>
-                          <Show when={aw()!.note}>
-                            <dd class="hmc-note">{aw()!.note}</dd>
+                      {/* A count this computer never reported, or one Hive cannot take from here,
+                          is not a number: those tiles are left out (#194583). */}
+                      <Show when={aw()!.counted || sw()!.counted || row()!.agents.state === "unmeasured"}>
+                        <h4>Running on it</h4>
+                        <dl class="hmc-stats hmc-running">
+                          <Show when={aw()!.counted || row()!.agents.state === "unmeasured"}>
+                            <div>
+                              <dt>Agent sessions</dt>
+                              <dd class="hsc-num">{aw()!.text}</dd>
+                              <Show when={aw()!.note}>
+                                <dd class="hmc-note">{aw()!.note}</dd>
+                              </Show>
+                            </div>
                           </Show>
-                        </div>
-                        <div>
-                          <dt>Shells</dt>
-                          <dd class="hsc-num">{sw()!.text}</dd>
-                          <Show when={sw()!.note}>
-                            <dd class="hmc-note">{sw()!.note}</dd>
+                          <Show when={sw()!.counted}>
+                            <div>
+                              <dt>Shells</dt>
+                              <dd class="hsc-num">{sw()!.text}</dd>
+                              <Show when={sw()!.note}>
+                                <dd class="hmc-note">{sw()!.note}</dd>
+                              </Show>
+                            </div>
                           </Show>
-                        </div>
-                      </dl>
+                        </dl>
+                      </Show>
                     </Show>
                   )
                 })()}
@@ -551,8 +600,8 @@ export function IrisHiveMachines(props: {
                     </For>
                   </ul>
                 </Show>
-                <h4>What it can do</h4>
-                <Show when={skillsOf(c(), Infinity).length} fallback={<p class="hsc-muted">Nothing reported.</p>}>
+                <Show when={skillsOf(c(), Infinity).length}>
+                  <h4>What it can do</h4>
                   <ul class="hmc-can">
                     <For each={skillsOf(c(), Infinity)}>
                       {(s) => (
@@ -566,6 +615,10 @@ export function IrisHiveMachines(props: {
                 </Show>
                 <details class="hmc-dev">
                   <summary>For developers</summary>
+                  <button type="button" class="hmc-btn hmc-dev-copy" title={`iris hive nodes show ${c().id}`} onClick={() => void copyCli(c())}>
+                    <Ic name={copied() ? "check" : "copy"} />
+                    {copied() ? language.t("iris.hive.add.copied") : language.t("command.run.copyCli")}
+                  </button>
                   <p class="hsc-mono">
                     id {c().id}
                     {c().daemonVersion ? ` · daemon ${c().daemonVersion}` : ""}

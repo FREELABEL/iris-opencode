@@ -1,5 +1,9 @@
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { openCommandRun, useIrisRunner } from "@/components/command-action"
+import { useLanguage } from "@/context/language"
+import type { IrisRunResult } from "@/utils/iris-run"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import {
   areaTag,
@@ -321,10 +325,12 @@ export function PlaybookFlowList(props: {
 /**
  * The Info tab of an open playbook — replaces the key/value table.
  *
- * "Run it" — nothing in the panel or the sidecar RUNS a playbook; what the panel has always
- * offered is the `iris playbook run` command and the real install. So Run it is install-then-run
- * through those two: when the playbook is not here yet it installs it (the existing install, same
- * endpoint), then copies the run command and shows it. It never claims to have run anything.
+ * "Run it" RUNS it (#194583): when the playbook is not here yet it installs it (the existing
+ * install, same endpoint), then `iris playbook run <name>` goes through the engine's command
+ * runner (`POST /iris/run`) — a write, so the person confirms it first, in words. A playbook that
+ * needs values opens its line to fill them in. The result (exit, output) is shown in the dialog
+ * and summarised under the button. The runner has no terminal: a step that waits for a person
+ * stops there and says so, and a run longer than its time limit is reported as timed out.
  */
 export function PlaybookFlowInfo(props: {
   row: any
@@ -338,7 +344,10 @@ export function PlaybookFlowInfo(props: {
   const steps = () => flowSteps(props.row)
   const you = () => humanSteps(props.row)
   const runCommand = () => `iris playbook run ${props.row?.name}`
-  const [runNote, setRunNote] = createSignal<"copied" | "manual" | null>(null)
+  const language = useLanguage()
+  const dialog = useDialog()
+  const runner = useIrisRunner()
+  const [runNote, setRunNote] = createSignal<IrisRunResult | null>(null)
   createEffect(
     on(
       () => props.row?.name,
@@ -361,13 +370,17 @@ export function PlaybookFlowInfo(props: {
       const ok = await props.onInstall(false)
       if (!ok) return
     }
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("no clipboard")
-      await navigator.clipboard.writeText(runCommand())
-      setRunNote("copied")
-    } catch {
-      setRunNote("manual")
-    }
+    const needsValues = neededPhrase(props.row?.args) !== "Nothing"
+    openCommandRun(dialog, {
+      line: runCommand(),
+      start: needsValues ? "edit" : "confirm",
+      describe: language.t(needsValues ? "iris.playbook.run.describeArgs" : "iris.playbook.run.describe", {
+        name: playbookTitle(props.row) || String(props.row?.name ?? ""),
+      }),
+      run: runner,
+      t: language.t,
+      onDone: (r) => setRunNote(r),
+    })
   }
 
   const devFields = (): [string, string][] => {
@@ -430,15 +443,23 @@ export function PlaybookFlowInfo(props: {
         )}
       </Show>
       <Show when={runNote()}>
-        <p class="pbf-note pbf-note--result" data-slot="pbf-run-note" data-tone={runNote() === "copied" ? "good" : undefined}>
-          <Show when={runNote() === "copied"}>
-            <Ic name="check" size={14} />
-          </Show>
-          <span>
-            {runNote() === "copied" ? "Copied — paste it into a terminal to run it: " : "Run this in a terminal: "}
-            <code>{runCommand()}</code>
-          </span>
-        </p>
+        {(r) => {
+          const ok = () => r().ran && r().code === 0 && !r().timedOut
+          return (
+            <p class="pbf-note pbf-note--result" data-slot="pbf-run-note" data-tone={ok() ? "good" : "bad"} role="status">
+              <Ic name={ok() ? "check" : "circle-x"} size={14} />
+              <span>
+                {ok()
+                  ? language.t("iris.playbook.run.ok")
+                  : r().timedOut
+                    ? language.t("iris.playbook.run.timedOut")
+                    : r().refused
+                      ? r().refused
+                      : language.t("iris.playbook.run.failed", { code: String(r().code ?? "—") })}
+              </span>
+            </p>
+          )
+        }}
       </Show>
 
       <dl class="pbf-facts">

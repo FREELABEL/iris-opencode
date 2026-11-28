@@ -1,0 +1,21 @@
+/* One artifact history for Genesis › Artifacts and Atlas › Artifacts (#194583). */
+.iris-ah { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 12px; min-height: 0; overflow-y: auto; flex: 1 1 auto; }
+.iris-ah-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.iris-ah-mark {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--surface-raised-base); color: var(--text-weak);
+}
+.iris-ah-scope { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-md); background: var(--surface-raised-base); align-self: flex-start; }
+.iris-ah-scope-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--radius-sm);
+  font-size: var(--font-size-x-small); color: var(--text-weak);
+}
+.iris-ah-scope-btn[aria-selected="true"] { background: var(--surface-base); color: var(--text-strong); font-weight: var(--font-weight-medium); }
+.iris-ah-scope-btn:focus-visible { outline: 2px solid var(--border-interactive-base, var(--text-weak)); outline-offset: 1px; }
+.iris-ah-scope-n { font-variant-numeric: tabular-nums; color: var(--text-weaker, var(--text-weak)); }
+
+/* The panes' own bits around the shared list. */
+.iris-artifacts__histhead { display: flex; flex-direction: column; gap: 6px; }
+.iris-artifacts__note--inline { margin: 0; padding: 0; }
+.iris-artifacts__histbtn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.iris-artifacts__histn { font-variant-numeric: tabular-nums; color: var(--text-weak); }

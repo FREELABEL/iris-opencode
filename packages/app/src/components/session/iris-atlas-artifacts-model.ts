@@ -48,12 +48,14 @@ export interface AtlasNote {
   source: "tool" | "shell"
   /** Higher is newer. */
   order: number
+  /** When the chat made or printed it (ms), from the tool call's own clock (#194583). */
+  at?: number
 }
 
 interface PartLike {
   type?: string
   tool?: string
-  state?: { status?: string; input?: any; output?: unknown; metadata?: any; title?: string }
+  state?: { status?: string; input?: any; output?: unknown; metadata?: any; title?: string; time?: { start?: number; end?: number } }
 }
 
 const SHELL_TOOLS = new Set(["bash", "shell"])
@@ -81,6 +83,7 @@ export function atlasNotes(parts: PartLike[]): AtlasNote[] {
         summary: typeof meta.summary === "string" ? meta.summary : undefined,
         source: "tool",
         order,
+        at: p.state.time?.end ?? p.state.time?.start,
       })
       continue
     }
@@ -89,8 +92,9 @@ export function atlasNotes(parts: PartLike[]): AtlasNote[] {
       for (const url of atlasNotesIn(text)) {
         const prev = byUrl.get(url)
         // A shell mention never demotes a named row; it only makes it newer.
-        if (prev) byUrl.set(url, { ...prev, order })
-        else byUrl.set(url, { url, title: fallbackTitle(url), source: "shell", order })
+        const at = p.state.time?.end ?? p.state.time?.start ?? prev?.at
+        if (prev) byUrl.set(url, { ...prev, order, at })
+        else byUrl.set(url, { url, title: fallbackTitle(url), source: "shell", order, at })
       }
     }
   }

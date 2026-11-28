@@ -260,3 +260,18 @@ describe("plainPeek", () => {
   })
   test("snake_case and a * b survive", () => expect(plainPeek("set max_retries to 3 * 2")).toBe("set max_retries to 3 * 2"))
 })
+
+describe("peersOf: a thread row has its last line (#194583)", () => {
+  test("the newest line wins, in or out, and says whose it is", () => {
+    const rows = [
+      { index: 1, read: true, type: "message", from: "studio-mac", receivedAt: "2026-11-28T09:00:00Z", label: "", preview: "Render finished" },
+      { index: 2, read: false, type: "message", from: "Priya", receivedAt: "2026-11-28T08:00:00Z", label: "", preview: "Here is the  list\n for spring" },
+    ]
+    const sent = [{ id: "s1", to: "studio-mac", text: "Thanks!", sentAt: "2026-11-28T10:00:00Z" }]
+    const p = peersOf(rows as any, sent as any)
+    expect(p.map((x) => [x.peer, x.lastLine, x.lastMine])).toEqual([
+      ["studio-mac", "Thanks!", true],
+      ["Priya", "Here is the list for spring", false],
+    ])
+  })
+})

@@ -1,10 +1,16 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { CommandAction } from "@/components/command-action"
+import { useLanguage } from "@/context/language"
+import { requestIrisNav } from "./iris-nav"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import "./iris-heartbeats.css"
-import { ago } from "./iris-hive-scripts-model"
+import { RelativeTime } from "@opencode-ai/ui/relative-time"
 import {
+  beatSentence,
   beatStory,
   beatSummary,
   cadenceOf,
@@ -181,7 +187,7 @@ function BeatDetail(props: { run: HeartbeatRun }) {
           <h5>Why it failed</h5>
           <p>{s().error}</p>
           <Show when={s().laundered}>
-            <p class="hbt-fine">Recorded as a success — the model call failed and its error became the reply (#189114).</p>
+            <p class="hbt-fine">Recorded as a success — the model call failed and its error became the reply.</p>
           </Show>
         </div>
       </Show>
@@ -193,13 +199,15 @@ function BeatDetail(props: { run: HeartbeatRun }) {
       <Show when={s().tools.length}>
         <div class="hbt-part">
           <h5>Tools it called{s().tools[0]?.measured ? "" : " (from its report)"}</h5>
-          <ul class="hbt-tools">
+          {/* One chip per tool (#194583): its name, whether it worked, how long; what it did on hover. */}
+          <ul class="hbt-chips">
             <For each={s().tools}>
               {(t) => (
-                <li data-ok={t.ok ? "1" : undefined}>
-                  <span class="hsc-mono">{t.name}</span> {t.did}
+                <li class="hbt-chip" data-ok={t.ok ? "1" : undefined} title={t.did || undefined}>
+                  <Icon name={t.ok ? "check-small" : "close-small"} size="small" />
+                  <span class="hbt-chip-name">{t.name}</span>
                   <Show when={t.ms != null}>
-                    <span class="hsc-num hsc-muted"> · {durationOf(t.ms)}</span>
+                    <span class="hsc-num hbt-chip-ms">{durationOf(t.ms)}</span>
                   </Show>
                 </li>
               )}
@@ -239,7 +247,6 @@ function BeatDetail(props: { run: HeartbeatRun }) {
           durationOf(x.durationMs) !== "—" ? durationOf(x.durationMs) : null,
           x.tokens != null ? `${tokensOf(x.tokens)} tokens` : null,
           x.model,
-          `run ${x.id}`,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -247,6 +254,9 @@ function BeatDetail(props: { run: HeartbeatRun }) {
     </div>
   )
 }
+
+/** The newest beat — running or finished — for the one-sentence summary. */
+const lastRunOf = (r: HeartbeatRow) => r.runs[0]
 
 function Ic(props: { name: IconName; title?: string }) {
   return (
@@ -261,6 +271,7 @@ export function IrisHeartbeats(props: {
   now?: () => number
 }) {
   const now = () => props.now?.() ?? Date.now()
+  const language = useLanguage()
   const [data, { refetch }] = createResource(async (): Promise<Payload> => {
     try {
       const res = await props.doFetch("/iris/heartbeats")
@@ -382,13 +393,19 @@ export function IrisHeartbeats(props: {
             <p class="hsc-muted hbt-loading">Reading heartbeats…</p>
           </Show>
           <Show when={data.latest?.measured && (data.latest?.heartbeats.length ?? 0) === 0}>
-            <p class="hsc-muted hmc-empty">
-              No agent has a heartbeat yet. Give one a schedule with{" "}
-              <code class="hsc-mono">iris agents update &lt;id&gt; --heartbeat-mode autonomous</code>.
-            </p>
+            <EmptyState
+              class="hbt-empty"
+              title={language.t("iris.heartbeats.empty.title")}
+              description={language.t("iris.heartbeats.empty.body")}
+              action={
+                <Button size="small" variant="primary" onClick={() => requestIrisNav({ surface: "agents", sub: "all" })}>
+                  {language.t("iris.heartbeats.empty.action")}
+                </Button>
+              }
+            />
           </Show>
           <Show when={(data.latest?.heartbeats.length ?? 0) > 0 && rows().length === 0}>
-            <p class="hsc-muted hmc-empty">Nothing matches “{q()}”.</p>
+            <EmptyState size="small" class="hbt-empty" title={language.t("iris.heartbeats.noMatch", { q: q() })} />
           </Show>
 
           <ul class="hbt-list" role="listbox" aria-label="Heartbeats">
@@ -468,11 +485,28 @@ export function IrisHeartbeats(props: {
                   >
                     {paused() ? "Resume" : "Pause"}
                   </button>
-                  <button type="button" class="hmc-btn" title={`iris monitor agent ${r().agentId}`} onClick={() => void copyCli(r())}>
-                    <Ic name={copied() ? "check" : "copy"} />
-                    {copied() ? "Copied" : "CLI"}
-                  </button>
+                  {/* Make autonomous (#194583): the mode change, run with a confirm — not a line to paste. */}
+                  <Show when={r().mode !== "autonomous"}>
+                    <CommandAction
+                      command={`iris agents update ${r().agentId} --heartbeat-mode autonomous`}
+                      label={language.t("iris.heartbeats.autonomous")}
+                      describe={language.t("iris.heartbeats.autonomous.describe", { name: r().agentName })}
+                      write
+                      size="small"
+                      variant="secondary"
+                      fetch={props.doFetch}
+                      base=""
+                      onDone={(res) => res.ran && res.code === 0 && void refetch()}
+                    />
+                  </Show>
                 </div>
+                <Show when={lastRunOf(r())}>
+                  {(x) => (
+                    <p class="hbt-sentence" data-b={kindOf(x())}>
+                      {beatSentence(x(), now())}
+                    </p>
+                  )}
+                </Show>
                 <Show when={mine()}>
                   <p class="hbt-note" data-ok={note()!.ok ? "1" : undefined} role="status">
                     {note()!.text}
@@ -502,23 +536,25 @@ export function IrisHeartbeats(props: {
                 <dl class="hmc-stats">
                   <div>
                     <dt title="The newest beat that actually ran — a recorded run">Last real beat</dt>
-                    <dd class="hsc-num" data-low={st() === "silent" ? "1" : undefined}>
-                      {lastBeatAt(r()) ? ago(lastBeatAt(r()), now()) : "never"}
+                    <dd class="hbt-when-tile" data-low={st() === "silent" ? "1" : undefined}>
+                      <RelativeTime value={lastBeatAt(r()) || undefined} now={now()} fallback="never" />
                     </dd>
                   </div>
                   <div>
                     <dt>Next beat</dt>
-                    <dd class="hsc-num" data-low={st() === "late" ? "1" : undefined}>
+                    <dd class="hbt-when-tile" data-low={st() === "late" ? "1" : undefined}>
                       {paused() ? "paused" : untilOf(nextFireAt(r()), now())}
                     </dd>
                   </div>
                   <div>
-                    <dt title="When the scheduler last woke it, whether or not it then did anything (#189113)">Last woke</dt>
-                    <dd class="hsc-num">{ago(r().lastRunAt, now())}</dd>
+                    <dt title="When the scheduler last woke it, whether or not it then did anything">Last woke</dt>
+                    <dd class="hbt-when-tile">
+                      <RelativeTime value={r().lastRunAt} now={now()} fallback="—" />
+                    </dd>
                   </div>
                   <div>
                     <dt>Reports to</dt>
-                    <dd class="hsc-num">{r().reportTo ? `${r().reportTo} ${r().reportTo === 1 ? "person" : "people"}` : "nobody"}</dd>
+                    <dd class="hbt-when-tile">{r().reportTo ? `${r().reportTo} ${r().reportTo === 1 ? "person" : "people"}` : "nobody"}</dd>
                   </div>
                 </dl>
 
@@ -567,6 +603,10 @@ export function IrisHeartbeats(props: {
                     job {r().jobId} · agent {r().agentId} · status {r().status}
                     {r().tools ? ` · ${r().tools} tools` : ""}
                   </p>
+                  <button type="button" class="hmc-btn hmc-dev-copy" title={`iris monitor agent ${r().agentId}`} onClick={() => void copyCli(r())}>
+                    <Ic name={copied() ? "check" : "copy"} />
+                    {copied() ? language.t("iris.hive.add.copied") : language.t("command.run.copyCli")}
+                  </button>
                 </details>
               </aside>
             )

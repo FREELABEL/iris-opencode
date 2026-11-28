@@ -6,6 +6,7 @@ import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { useLanguage } from "@/context/language"
+import { CommandAction } from "@/components/command-action"
 import "./iris-pane-layout.css"
 import "./iris-outreach.css"
 import type { Fetch } from "./iris-leads"
@@ -732,7 +733,20 @@ function OutreachScripts(props: { doFetch: Fetch }) {
                 </span>
               </div>
               <Steps strategy={s} />
-              <p class="iris-or-foot">{language.t("iris.outreach.readOnly")}<code>iris reachr update {s.bloq_id} {s.id}</code>.</p>
+              {/* The change runs here (#194583): the line opens for the JSON file's path, then asks first. */}
+              <div class="iris-or-foot iris-or-foot--run">
+                <span>{language.t("iris.outreach.readOnly")}</span>
+                <CommandAction
+                  command={`iris reachr update ${s.bloq_id} ${s.id} --from-json `}
+                  label={language.t("iris.outreach.change")}
+                  describe={language.t("iris.outreach.change.describe")}
+                  editable
+                  size="small"
+                  variant="secondary"
+                  fetch={props.doFetch}
+                  base=""
+                />
+              </div>
             </div>
           )}
         </Show>

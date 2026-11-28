@@ -18,6 +18,13 @@ export const IRIS_BRAND_KITS_ENGLISH = {
   "iris.brands.retry": "Try again",
   "iris.brands.empty": "No brands on this account yet.",
   "iris.brands.empty.how": "Create one with `iris brands create`, then import its tokens with `iris brands dt import <slug> --css ./tokens.css`.",
+  "iris.brands.empty.body": "A brand kit holds a brand's colours, type, logos and voice, so every page and ad IRIS makes for it looks like that brand.",
+  "iris.brands.new": "New brand kit",
+  "iris.brands.new.describe": "Creates a brand on your IRIS account with this name and slug (the slug is its short name in links: a-z, 0-9 and -). Change both, then create it; add its colours, type and logos here after.",
+  "iris.brands.usage.account": "{{n}} account",
+  "iris.brands.usage.accounts": "{{n}} accounts",
+  "iris.brands.usage.file": "{{n}} file",
+  "iris.brands.usage.files": "{{n}} files",
   "iris.brands.noMatch": "No brand matches “{{q}}”.",
 
   "iris.brands.back": "All brands",

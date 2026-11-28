@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon, type IconProps } from "@opencode-ai/ui/icon"
@@ -69,6 +69,8 @@ export function IrisArtifactPublish(props: {
   /** Present when the page can be shown in the app; toggles Draft ⇄ Live. */
   onToggleLive?: () => void
   live?: boolean
+  /** Bumped by the pane's history list (#194583): "Publish" on a row opens this artifact's modal. */
+  publishRequest?: number
 }) {
   const dialog = useDialog()
   const language = useLanguage()
@@ -462,6 +464,16 @@ export function IrisArtifactPublish(props: {
       )
     })
   }
+  createEffect(
+    on(
+      () => props.publishRequest,
+      (n) => {
+        if (n) openModal()
+      },
+      { defer: true },
+    ),
+  )
+
 
   return (
     <div class="iris-publish">

@@ -13,7 +13,10 @@
  *    `completed` with the error text as its reply. A reply that IS an error is a failed beat.
  * Both are server bugs; until they are fixed, the panel must not draw a green beat that never ran.
  */
-import { ago, shortAgo } from "./iris-hive-scripts-model"
+import { relativeTime } from "@opencode-ai/ui/relative-time"
+
+/** The app's one relative date ("1h ago", "yesterday") — the same words as Leads and Agents (#194583). */
+const ago = (iso: string | null | undefined, now: number): string => relativeTime(iso, now) || "—"
 
 export type HeartbeatRun = {
   id: number
@@ -392,14 +395,14 @@ export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
         ? r.lastSkip?.kind === "circuit_breaker"
           ? "It was paused after repeated failures. Fix the cause in its last failed beat, then Run now to resume."
           : "That is the reason the platform gave for its last skipped wake."
-        : "Its schedule moves on, but no run is recorded during its working hours: the beats are being skipped (gated, or no projects to watch). Run now shows the reason; the platform records it once #189113 lands.",
+        : "Its schedule moves on, but no run is recorded during its working hours: the beats are being skipped (gated, or no projects to watch). Run now shows the reason.",
     })
   const drift = cadenceDrift(r)
   if (drift)
     out.push({
       kind: "config",
       text: `Its settings say ${cadenceOf(drift).toLowerCase()}; it actually wakes ${cadenceOf(r.frequency).toLowerCase()}`,
-      fix: "The heartbeat editor shows one cadence and the scheduler fires on another (#189170). Save the schedule again in the editor so both agree.",
+      fix: "The heartbeat editor shows one cadence and the scheduler fires on another. Save the schedule again in the editor so both agree.",
     })
   const last = lastRun(r)
   const fails = r.runs.filter(failed).length
@@ -407,14 +410,14 @@ export function problemsOf(r: HeartbeatRow, now: number): Problem[] {
     out.push({
       kind: "stopped",
       text: "Stopped after failing",
-      fix: "fl-api gave up retrying. Read the last error, fix the cause, then Run now.",
+      fix: "The platform gave up retrying. Read the last error, fix the cause, then Run now.",
     })
   else if (last && failed(last))
     out.push({
       kind: "failing",
       text: `Last beat failed${errorOf(last) ? `: ${errorOf(last)}` : ""}`,
       fix:
-        (laundered(last) ? "It was recorded as a success — the model call failed and its error became the reply (#189114). " : "") +
+        (laundered(last) ? "It was recorded as a success — the model call failed and its error became the reply. " : "") +
         (fails > 1 ? `${fails} of the last ${r.runs.length} beats failed.` : "The beat before it worked."),
     })
   else if (!last && r.lastOk === false)
@@ -432,7 +435,7 @@ export function untilOf(iso: string | null | undefined, now: number): string {
   const at = t(iso)
   if (!Number.isFinite(at)) return "—"
   const d = at - now
-  if (d <= 0) return shortAgo(iso, now) === "now" ? "now" : `${shortAgo(iso, now)} ago`
+  if (d <= 0) return ago(iso, now)
   const m = Math.round(d / 60_000)
   if (m < 60) return `in ${Math.max(1, m)}m`
   const h = Math.round(m / 60)
@@ -750,4 +753,34 @@ export function beatStory(x: HeartbeatRun) {
   take("Tools Used")
   const rest = secs.filter((s) => !used.has(s) && s.title !== "Workflow Complete")
   return { happened, changed, did, numbers, tools: toolsOfRun(x), rest, error: errorOf(x), laundered: laundered(x), continuity: x.continuity ?? null }
+}
+
+/**
+ * The newest beat in one sentence (#194583) — what a person wants before the parts: did it work,
+ * when, and what it was about. "Worked 3h ago in 42s — Checked 12 leads, two need a reply. Called
+ * 4 tools." Built only from what the run recorded; nothing is invented when a part is missing.
+ */
+export function beatSentence(x: HeartbeatRun, now: number): string {
+  const when = ago(x.startedAt ?? x.completedAt, now)
+  const k = kindOf(x)
+  if (k === "run") return `Running now — started ${when}.`
+  const tools = toolsOfRun(x).length
+  const toolWords = tools ? ` Called ${tools} tool${tools === 1 ? "" : "s"}.` : ""
+  if (k === "fail") {
+    const e = errorOf(x)
+    return `Failed ${when}${e ? `: ${sentenceOf(e)}` : "."}${toolWords}`
+  }
+  const story = beatStory(x)
+  const gist = sentenceOf(previewOf(story.happened ?? story.did ?? story.changed ?? x.preview))
+  const took = durationOf(x.durationMs)
+  return `Worked ${when}${took !== "—" ? ` in ${took}` : ""}${gist ? ` — ${gist}` : "."}${toolWords}`
+}
+
+/** The first sentence, ending in a full stop, at most ~140 characters. */
+function sentenceOf(text: string): string {
+  const t = text.replace(/\s+/g, " ").trim()
+  if (!t) return ""
+  const m = /^(.{12,140}?[.!?])(\s|$)/.exec(t)
+  const s = m ? m[1] : t.length > 140 ? `${t.slice(0, 139).trimEnd()}…` : t
+  return /[.!?…]$/.test(s) ? s : `${s}.`
 }

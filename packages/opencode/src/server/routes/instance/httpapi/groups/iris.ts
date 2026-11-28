@@ -1038,6 +1038,8 @@ const BrandsResponse = Schema.Struct({
       logoUrl: Schema.optional(Schema.String),
       updatedAt: Schema.optional(Schema.String),
       bloqId: described(Schema.optional(Schema.Finite), "#192632. The board the brand belongs to — how a page owned by that board finds its brand."),
+      accounts: described(Schema.optional(Schema.Finite), "#194583. Connected accounts filed under the brand. Absent when the platform did not send them."),
+      files: described(Schema.optional(Schema.Finite), "#194583. Files filed under the brand. Absent when the platform did not send them."),
     }).annotate({ identifier: "IrisBrandSummary" }),
   ),
 }).annotate({ identifier: "IrisBrandsResponse" })
@@ -1973,10 +1975,18 @@ const ArtifactMeta = Schema.Struct({
     Schema.optional(ArtifactPublished),
     "The Genesis page this artifact was published to — one page, updated in place.",
   ),
+  session: described(
+    Schema.optional(Schema.String),
+    "#194583. With all=1 only: the chat the artifact belongs to — what its preview and publish ask for.",
+  ),
 }).annotate({ identifier: "IrisArtifactMeta" })
 
 const ArtifactQuery = Schema.Struct({
   session: described(Schema.String, "The session whose artifacts to read. One path segment: letters, digits, _ and -."),
+  all: described(
+    Schema.optional(Schema.String),
+    "#194583. \"1\": every chat's artifacts in this store, newest first, each with its session — the pane's history. `session` is then not read.",
+  ),
   project: described(
     Schema.optional(Schema.String),
     "The session's project directory (absolute). Absent or invalid means the home store, ~/.iris/artifacts.",

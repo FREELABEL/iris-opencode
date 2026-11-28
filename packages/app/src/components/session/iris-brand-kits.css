@@ -28,7 +28,7 @@
 /* ── list ── */
 .iris-bk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .iris-bk-row { appearance: none; border: 0; background: transparent; width: 100%; cursor: pointer; text-align: start; color: var(--text-weak);
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: var(--radius-lg); }
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: var(--radius-lg); }
 .iris-bk-row:hover { background: var(--ui-hover); }
 .iris-bk-row:focus-visible { outline: 2px solid var(--border-interactive-base, var(--text-weak)); outline-offset: 1px; }
 .iris-bk-mark { width: 28px; height: 28px; border-radius: var(--radius-md); display: grid; place-items: center; overflow: hidden; flex: none;
@@ -178,3 +178,7 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-klogo { display: inline-flex; align-items: center; border-radius: var(--radius-md); }
 .iris-bk-klogo[data-tile] { padding: 4px 6px; }
 .iris-bk-kpage nav > .iris-bk-klogo { margin-inline-end: auto; }
+
+/* #194583: what uses the brand, beside its colours. */
+.iris-bk-usage { font-size: var(--font-size-x-small); color: var(--text-weak); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.iris-bk-mark[data-logo] { background: var(--surface-base); }

@@ -13,6 +13,7 @@ import { StatusBadge } from "@opencode-ai/ui/status-badge"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { useLanguage } from "@/context/language"
 import { usePrompt } from "@/context/prompt"
+import { CommandAction } from "@/components/command-action"
 import { PaneDialog, PaneDialogActions, statusTone } from "./iris-pane-dialog"
 import "./iris-pane-layout.css"
 import "./iris-brand-kits.css"
@@ -68,7 +69,17 @@ import {
  */
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
-type BrandSummary = { id: number; name: string; slug: string; status: string; swatches: { name: string; value: string }[]; logoUrl?: string }
+type BrandSummary = {
+  id: number
+  name: string
+  slug: string
+  status: string
+  swatches: { name: string; value: string }[]
+  logoUrl?: string
+  /** Connected accounts and files under the brand (#194583). Absent when the platform did not say. */
+  accounts?: number
+  files?: number
+}
 type Tab = "colours" | "type" | "logos" | "voice" | "motion" | "preview" | "export"
 type Probe = { state: "loading" } | { state: "err"; reason: string } | { state: "ok"; src: string; light: LogoSeen; dark: LogoSeen }
 
@@ -103,6 +114,53 @@ function tryUse<T>(fn: () => T): T | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * The row's mark (#194583): the brand's logo where it has one, and its initial only when it has
+ * none or the image does not load — a broken image is never left on the row.
+ */
+function BrandMark(props: { name: string; src?: string }) {
+  const [broken, setBroken] = createSignal(false)
+  createEffect(on(() => props.src, () => setBroken(false), { defer: true }))
+  return (
+    <span class="iris-bk-mark" data-logo={props.src && !broken() ? "1" : undefined}>
+      <Show when={props.src && !broken()} fallback={<span>{props.name.slice(0, 1).toUpperCase()}</span>}>
+        <img src={props.src} alt="" loading="lazy" onError={() => setBroken(true)} />
+      </Show>
+    </span>
+  )
+}
+
+/** "2 accounts · 14 files" — only the counts the platform sent; nothing when it sent none. */
+function usageLine(t: (key: BrandsKey, params?: Record<string, string | number>) => string, b: BrandSummary): string | undefined {
+  const parts = [
+    b.accounts ? t(b.accounts === 1 ? "iris.brands.usage.account" : "iris.brands.usage.accounts", { n: String(b.accounts) }) : undefined,
+    b.files ? t(b.files === 1 ? "iris.brands.usage.file" : "iris.brands.usage.files", { n: String(b.files) }) : undefined,
+  ].filter(Boolean)
+  return parts.length ? parts.join(" · ") : undefined
+}
+
+/**
+ * New brand kit (#194583): `iris brands create`, run here. It needs a name and a slug, so the line
+ * opens to fill them in, then asks before it creates anything.
+ */
+function NewBrandKit(props: { doFetch: (path: string, init?: RequestInit) => Promise<Response>; onDone: () => void; variant?: "primary" | "secondary" }) {
+  const language = useLanguage()
+  return (
+    <CommandAction
+      command={'iris brands create --name "My brand" --slug my-brand'}
+      label={language.t("iris.brands.new" satisfies BrandsKey)}
+      describe={language.t("iris.brands.new.describe" satisfies BrandsKey)}
+      editable
+      icon="plus"
+      size="small"
+      variant={props.variant ?? "secondary"}
+      fetch={props.doFetch}
+      base=""
+      onDone={(r) => r.ran && r.code === 0 && props.onDone()}
+    />
+  )
 }
 
 /** What Use puts in the composer. Plain words first, the tokens after, nothing hidden. */
@@ -350,6 +408,7 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                 <input placeholder={t("iris.brands.search")} value={q()} onInput={(e) => setQ(e.currentTarget.value)} aria-label={t("iris.brands.search")} />
               </label>
               <span class="iris-ui-spacer" />
+              <NewBrandKit doFetch={props.doFetch} onDone={() => void reloadList()} />
               <Button variant="ghost" size="small" class="iris-bk-iconbtn" title={t("iris.brands.reload.title")} aria-label={t("iris.brands.reload")} onClick={() => void reloadList()}>
                 <Show when={!list.loading} fallback={<Spinner class="iris-ui-spin" />}>
                   <Icon name="reset" size="small" />
@@ -370,7 +429,12 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                   />
                 </Match>
                 <Match when={list()?.measured && (list()?.brands.length ?? 0) === 0}>
-                  <EmptyState size="small" title={t("iris.brands.empty")} description={rich(t("iris.brands.empty.how"))} />
+                  <EmptyState
+                    size="small"
+                    title={t("iris.brands.empty")}
+                    description={t("iris.brands.empty.body")}
+                    action={<NewBrandKit doFetch={props.doFetch} onDone={() => void reloadList()} variant="primary" />}
+                  />
                 </Match>
                 <Match when={brands().length === 0}>
                   <EmptyState size="small" title={t("iris.brands.noMatch", { q: q() })} />
@@ -381,15 +445,14 @@ export function IrisBrandKits(props: { doFetch: Fetch }) {
                   {(b) => (
                     <li>
                       <button type="button" class="iris-bk-row" data-slot="bk-row" data-slug={b.slug} onClick={() => open(b.id)}>
-                        <span class="iris-bk-mark">
-                          <Show when={b.logoUrl} fallback={<span>{b.name.slice(0, 1).toUpperCase()}</span>}>
-                            <img src={b.logoUrl} alt="" loading="lazy" />
-                          </Show>
-                        </span>
+                        <BrandMark name={b.name} src={b.logoUrl} />
                         <span class="iris-bk-rowtext">
                           <span class="iris-bk-name">{b.name}</span>
                           <span class="iris-bk-slug">{b.slug}{b.status !== "active" ? ` · ${b.status}` : ""}</span>
                         </span>
+                        <Show when={usageLine(t, b)}>
+                          {(u) => <span class="iris-bk-usage">{u()}</span>}
+                        </Show>
                         <span class="iris-bk-chips" aria-hidden="true">
                           <For each={b.swatches}>{(s) => <span style={{ background: s.value }} />}</For>
                         </span>

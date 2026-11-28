@@ -57,6 +57,9 @@ export interface BrandSummary {
   updatedAt?: string
   /** The board the brand belongs to (#192632) — how a page owned by that board finds its brand. */
   bloqId?: number
+  /** How much uses it (#194583): connected accounts and files filed under the brand. Absent = not sent. */
+  accounts?: number
+  files?: number
 }
 
 export interface BrandColor {
@@ -221,6 +224,8 @@ function summaryOf(r: any): BrandSummary {
     logoUrl: logos.icon ?? logos.primary,
     updatedAt: typeof r.updated_at === "string" ? r.updated_at : undefined,
     bloqId: typeof r.bloq_id === "number" ? r.bloq_id : undefined,
+    accounts: Array.isArray(r.integrations) ? r.integrations.length : undefined,
+    files: Array.isArray(r.assets) ? r.assets.length : undefined,
   }
 }
 

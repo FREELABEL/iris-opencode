@@ -26,6 +26,9 @@ import { clearArtifactFocus, irisArtifactFocus, setIrisOpenArtifact } from "./ir
 import { IrisArtifactPublish } from "./iris-artifact-publish"
 import { IrisFileArtifact, type FileContent } from "./iris-file-artifact"
 import { fileRevision, type PromotedFile } from "./iris-promote"
+import { HistoryScope, IrisArtifactHistory, type HistoryRow } from "./iris-artifact-history"
+import { useLanguage } from "@/context/language"
+import { showToast } from "@/utils/toast"
 
 /**
  * Agents › Artifacts (epics #186508 / #186510): what the agents in THIS session made.
@@ -45,6 +48,9 @@ import { fileRevision, type PromotedFile } from "./iris-promote"
 
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type ListPayload = { measured: boolean; reason?: string; root: string; dir: string; artifacts: ArtifactMeta[] }
+/** With `all=1` (#194583): every chat's artifacts, each naming its chat. */
+type HistoryMeta = ArtifactMeta & { session?: string }
+type HistoryPayload = { measured: boolean; reason?: string; artifacts: HistoryMeta[] }
 type DocPayload = { found: boolean; meta: ArtifactMeta | null; content: string; truncated: boolean }
 type Listen = (fn: (e: { name: string; details?: { type?: string; properties?: any } }) => void) => () => void
 
@@ -81,6 +87,27 @@ export function IrisArtifacts(props: {
     async () => (await (await props.doFetch(`/iris/artifacts?${query()}`)).json()) as ListPayload,
   )
   const artifacts = createMemo(() => list.latest?.artifacts ?? [])
+  const language = useLanguage()
+
+  // HISTORY (#194583): every chat in this project's store, not only this one. Read on the same
+  // tick as the list — one local directory walk, no network.
+  const [history] = createResource(
+    () => [props.projectParam, tick()] as const,
+    async () => {
+      try {
+        return (await (await props.doFetch(`/iris/artifacts?all=1&session=${props.projectParam ? `&${props.projectParam}` : ""}`)).json()) as HistoryPayload
+      } catch (e) {
+        return { measured: false, reason: e instanceof Error ? e.message : String(e), artifacts: [] } as HistoryPayload
+      }
+    },
+  )
+  const allArtifacts = createMemo(() => history.latest?.artifacts ?? [])
+  /** "chat": this chat's artifacts and the preview. "all": the history list. */
+  const [scope, setScope] = createSignal<"chat" | "all">("chat")
+  /** An artifact from ANOTHER chat, opened from the history: previewed and published as that chat's. */
+  const [other, setOther] = createSignal<{ session: string; meta: ArtifactMeta } | undefined>()
+  const [publishAsk, setPublishAsk] = createSignal(0)
+  const [publishFor, setPublishFor] = createSignal<string | undefined>()
   const files = createMemo(() => props.files?.() ?? [])
   const total = () => artifacts().length + files().length
 
@@ -122,8 +149,10 @@ export function IrisArtifacts(props: {
     const first = list[0]?.id ?? docs[0]?.id
     if (first) setOpenId(first)
   })
-  const open = createMemo(() => artifacts().find((m) => m.id === openId()))
-  const openFile = createMemo(() => files().find((f) => f.id === openId()))
+  const open = createMemo(() => other()?.meta ?? artifacts().find((m) => m.id === openId()))
+  const openFile = createMemo(() => (other() ? undefined : files().find((f) => f.id === openId())))
+  /** The chat whose store the open artifact is read from (and published as). */
+  const docSession = () => other()?.session ?? props.sessionId
   // Draft (the artifact, from disk) or Live (its published page, from heyiris.io). Resets to the
   // draft when another artifact is opened.
   const [live, setLive] = createSignal(false)
@@ -131,6 +160,7 @@ export function IrisArtifacts(props: {
   const liveSrc = createMemo(() => (live() ? liveUrl(open()?.published?.url) : undefined))
 
   const choose = (id: string) => {
+    setOther(undefined)
     setOpenId(id)
     setFresh((s) => {
       const n = new Set(s)
@@ -153,35 +183,106 @@ export function IrisArtifacts(props: {
   // The preview re-reads when the open artifact's REVISION changes — another agent's edit
   // reloads it by itself.
   const [doc] = createResource(
-    () => (open() ? ([open()!.id, open()!.revision, props.sessionId] as const) : undefined),
-    async ([id]) =>
-      (await (await props.doFetch(`/iris/artifacts/${encodeURIComponent(id)}?${query()}`)).json()) as DocPayload,
+    () => (open() && docSession() ? ([open()!.id, open()!.revision, docSession()!] as const) : undefined),
+    async ([id, , session]) =>
+      (await (
+        await props.doFetch(
+          `/iris/artifacts/${encodeURIComponent(id)}?session=${encodeURIComponent(session)}${props.projectParam ? `&${props.projectParam}` : ""}`,
+        )
+      ).json()) as DocPayload,
+  )
+  // "Publish" on a history row: open it, and once its content is here, open its publish modal.
+  createEffect(() => {
+    const want = publishFor()
+    if (want && doc.latest?.found && doc.latest.meta?.id === want) {
+      setPublishFor(undefined)
+      setPublishAsk((n) => n + 1)
+    }
+  })
+
+  const fromHistory = (row: HistoryRow, publish = false) => {
+    const m = allArtifacts().find((a) => `${a.session}/${a.id}` === row.key)
+    if (!m || !m.session) return
+    if (m.session === props.sessionId) choose(m.id)
+    else {
+      setOther({ session: m.session, meta: m })
+      setLive(false)
+    }
+    setScope("chat")
+    if (publish) setPublishFor(m.id)
+  }
+  const share = (row: HistoryRow) => {
+    if (!row.shareUrl) return
+    void navigator.clipboard
+      ?.writeText(row.shareUrl)
+      .then(() => showToast({ variant: "success", icon: "check", description: language.t("iris.artifacts.history.shared") }))
+      .catch(() => showToast({ description: row.shareUrl }))
+  }
+  const historyRows = createMemo<HistoryRow[]>(() =>
+    allArtifacts().map((m) => {
+      const pub = m.published
+      const behind = !!pub && pub.revision < m.revision
+      return {
+        key: `${m.session}/${m.id}`,
+        title: m.title,
+        kind: m.kind,
+        author: m.author?.agent,
+        where: m.session === props.sessionId ? language.t("iris.artifacts.history.here") : language.t("iris.artifacts.history.elsewhere"),
+        when: m.updated,
+        status: pub
+          ? behind
+            ? { label: language.t("iris.artifacts.status.behind"), tone: "warning" as const }
+            : { label: language.t(`iris.artifacts.status.${pub.visibility}`), tone: "success" as const }
+          : { label: language.t("iris.artifacts.status.draft"), tone: "neutral" as const },
+        shareUrl: pub && pub.visibility !== "private" ? pub.url : undefined,
+        canPublish: !pub || behind,
+        selected: open()?.id === m.id && docSession() === m.session,
+      }
+    }),
   )
 
   const csv = createMemo(() => (doc.latest?.meta?.kind === "csv" ? parseCsv(doc.latest.content) : []))
 
   return (
     <div class="iris-artifacts">
-      <Show when={!props.sessionId}>
-        <p class="iris-artifacts__note">Open a session — artifacts belong to the conversation that made them.</p>
-      </Show>
-      <Show when={list.latest && !list.latest.measured}>
+      <Show when={list.latest && !list.latest.measured && props.sessionId}>
         <p class="iris-artifacts__note">Could not read artifacts — {list.latest?.reason}</p>
       </Show>
-      <Show when={props.sessionId && list.latest?.measured && total() === 0}>
-        <p class="iris-artifacts__note">
-          Nothing yet. When an agent in this session makes a page, a brief or a table with the artifact tool, it appears
-          here — from subagents too — with the agent that made it. Documents the session creates (spreadsheets, PDFs,
-          Word, Markdown) show up here too.
-        </p>
+      {/* THE HISTORY (#194583): every chat's artifacts, newest first. It is also what shows when
+          this chat has none yet (or no chat is open), with an empty state only when there are none
+          anywhere. */}
+      <Show when={scope() === "all" || (!other() && total() === 0)}>
+        <IrisArtifactHistory
+          rows={historyRows()}
+          loading={history.loading && !history.latest}
+          header={
+            <div class="iris-artifacts__histhead">
+              <Show when={total() > 0 || other()}>
+                <HistoryScope value="all" onChange={setScope} counts={{ chat: total(), all: allArtifacts().length }} />
+              </Show>
+              <Show when={total() === 0 && !other() && allArtifacts().length > 0}>
+                <p class="iris-artifacts__note iris-artifacts__note--inline">
+                  {props.sessionId ? language.t("iris.artifacts.history.noneHere") : language.t("iris.artifacts.history.noChat")}
+                </p>
+              </Show>
+            </div>
+          }
+          empty={{
+            title: language.t("iris.artifacts.empty.title"),
+            body: language.t("iris.artifacts.empty.body"),
+          }}
+          onOpen={(r) => fromHistory(r)}
+          onPublish={(r) => fromHistory(r, true)}
+          onShare={share}
+        />
       </Show>
 
-      <Show when={total()}>
+      <Show when={scope() === "chat" && (total() || other())}>
         {/* ONE LINE for the artifact (#186509 nav): the list opens from "‹ All (N)", and the
             title, author and publish actions share the row. It used to be three stacked rows —
             a list, a title line repeating it, and a button bar. */}
         <div class="iris-artifacts__toolbar">
-          <div class="iris-artifacts__all">
+          <div class="iris-artifacts__all" hidden={total() === 0}>
             <button
               type="button"
               class="iris-artifacts__allbtn"
@@ -254,6 +355,10 @@ export function IrisArtifacts(props: {
               </ul>
             </Show>
           </div>
+          <button type="button" class="iris-card__linkbtn iris-artifacts__histbtn" data-action="artifacts-history" onClick={() => setScope("all")}>
+            {language.t("iris.artifacts.history.allChats")}
+            <span class="iris-artifacts__histn">{allArtifacts().length}</span>
+          </button>
           <Show when={openFile()}>
             {(f) => (
               <>
@@ -282,14 +387,16 @@ export function IrisArtifacts(props: {
                 <strong class="iris-artifacts__tbtitle">{meta().title}</strong>
                 <span class="iris-artifacts__tbmeta" data-testid="artifact-toolbar-author">
                   {authorLine(meta())}
+                  {other() ? ` · ${language.t("iris.artifacts.history.elsewhere")}` : ""}
                   {doc.latest?.truncated ? " · truncated" : ""}
                 </span>
-                <Show when={props.sessionId}>
+                <Show when={docSession()}>
                   <IrisArtifactPublish
                     meta={open() ?? meta()}
                     content={doc.latest!.content}
                     doFetch={props.doFetch}
-                    sessionId={props.sessionId!}
+                    sessionId={docSession()!}
+                    publishRequest={publishAsk()}
                     project={props.project}
                     selectedBloqId={props.selectedBloqId}
                     bloqId={props.bloqId}

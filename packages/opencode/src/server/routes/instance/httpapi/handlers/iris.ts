@@ -916,9 +916,13 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     // Artifacts (epic #186508). Local files only — no network, no token. The project comes from the
     // panel because /iris routes have no instance (memory: desktop-iris-routes-have-no-instance).
-    const artifacts = Effect.fn("IrisHttpApi.artifacts")((ctx: { query: { session: string; project?: string } }) =>
+    const artifacts = Effect.fn("IrisHttpApi.artifacts")((ctx: { query: { session: string; all?: string; project?: string } }) =>
       Effect.sync(() => {
         const where = Artifacts.rootFor(projectRoot(ctx.query.project))
+        // History (#194583): every chat in this store, each row naming its chat.
+        if (ctx.query.all === "1") {
+          return { measured: true, root: where.root, dir: where.dir, artifacts: Artifacts.history(where.dir) }
+        }
         if (!Artifacts.validSegment(ctx.query.session)) {
           return { measured: false, reason: "invalid session id", root: where.root, dir: where.dir, artifacts: [] }
         }

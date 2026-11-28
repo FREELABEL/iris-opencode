@@ -5,6 +5,9 @@ import { CommandAction } from "@/components/command-action"
 import { RelativeTime } from "@opencode-ai/ui/relative-time"
 import { Stat } from "@opencode-ai/ui/stat"
 import { useLanguage } from "@/context/language"
+import { usePlatform } from "@/context/platform"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
 import "./iris-drives.css"
 import {
   baseName,
@@ -340,7 +343,7 @@ export function IrisDrives(props: { doFetch: Fetch; openExternal?: (url: string)
       </Show>
 
       <Show when={!data.loading} fallback={<div class="iris-drv-loading"><Spinner class="iris-drv-spin" /> Reading your drives…</div>}>
-        <Show when={data()?.state === "ok" && drives().length} fallback={<TopState data={data()} retry={refetch} copy={copy} doFetch={props.doFetch} />}>
+        <Show when={data()?.state === "ok" && drives().length} fallback={<TopState data={data()} retry={refetch} doFetch={props.doFetch} />}>
           <Show when={drive()}>
             <div class="iris-drv-chips" role="tablist" aria-label="Drives">
               <For each={drives()}>
@@ -677,22 +680,69 @@ function FindingsFooter(props: {
   )
 }
 
+/** Why there is nothing to list, and the one thing to do next — the shared EmptyState. */
 function DriveState(props: { title: string; body: string; action?: string; onAction?: () => void; cta?: JSX.Element }) {
   return (
-    <div class="iris-drv-state">
-      <div class="iris-drv-state-t">{props.title}</div>
-      <p>{props.body}</p>
-      <Show
-        when={props.cta}
-        fallback={
-          <button class="iris-drv-btn" data-primary onClick={() => props.onAction?.()}>
+    <EmptyState
+      class="iris-drv-state"
+      title={props.title}
+      description={props.body}
+      action={
+        props.cta ?? (
+          <Button size="small" variant="primary" onClick={() => props.onAction?.()}>
             {props.action}
-          </button>
+          </Button>
+        )
+      }
+    />
+  )
+}
+
+/**
+ * Sign in (#194583), not "copy the sign-in command": `iris auth login` is interactive, so it is not
+ * a command a button can run. The desktop has its own sign-in window — the same one Settings ›
+ * Account opens — and the drives are read again when the person comes back to this window. Where
+ * there is no sign-in window (IRIS opened in a browser), the step says where to sign in instead.
+ */
+function SignInState(props: { retry: () => void }) {
+  const language = useLanguage()
+  const platform = usePlatform()
+  let watching = false
+  const signIn = () => {
+    platform.openSignIn?.()
+    if (watching || typeof window === "undefined") return
+    watching = true
+    window.addEventListener(
+      "focus",
+      () => {
+        watching = false
+        props.retry()
+      },
+      { once: true },
+    )
+  }
+  return (
+    <Show
+      when={platform.openSignIn}
+      fallback={
+        <DriveState
+          title={language.t("iris.drives.signIn.title")}
+          body={language.t("iris.drives.signIn.elsewhere")}
+          action={language.t("iris.drives.signIn.check")}
+          onAction={props.retry}
+        />
+      }
+    >
+      <DriveState
+        title={language.t("iris.drives.signIn.title")}
+        body={language.t("iris.drives.signIn.body")}
+        cta={
+          <Button size="small" variant="primary" data-action="drives-sign-in" onClick={signIn}>
+            {language.t("iris.drives.signIn.action")}
+          </Button>
         }
-      >
-        {props.cta}
-      </Show>
-    </div>
+      />
+    </Show>
   )
 }
 
@@ -719,7 +769,6 @@ function ScanAction(props: { drive?: Drive; doFetch: Fetch; onDone: () => void }
 function TopState(props: {
   data?: DrivesPayload & { bridge: boolean }
   retry: () => void
-  copy: (text: string, what: string) => void
   doFetch: Fetch
 }) {
   const s = () => props.data
@@ -737,12 +786,7 @@ function TopState(props: {
         }
       >
         <Show when={s()?.state === "signed_out"}>
-          <DriveState
-            title="Sign in to see your drives"
-            body="Your drive catalogue lives in your IRIS account. Sign in from a terminal, then come back."
-            action="Copy sign-in command"
-            onAction={() => props.copy("iris auth login", "the sign-in command")}
-          />
+          <SignInState retry={props.retry} />
         </Show>
         <Show when={s()?.state === "unreachable"}>
           <DriveState

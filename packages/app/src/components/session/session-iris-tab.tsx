@@ -5167,7 +5167,22 @@ export function SessionIrisTab() {
               />
             </Match>
             <Match when={pane() === "browser"}>
-              <Show when={browserPane()} fallback={<div class="iris-empty">The Browser is not available here.</div>}>
+              <Show
+                when={browserPane()}
+                fallback={
+                  // Why it is missing and what to do (#194583), not "not available here".
+                  <EmptyState
+                    data-slot="iris-browser-missing"
+                    title={language.t("iris.browser.missing.title")}
+                    description={language.t("iris.browser.missing.body")}
+                    action={
+                      <Button size="small" variant="primary" icon="refresh" onClick={() => window.location.reload()}>
+                        {language.t("iris.browser.missing.action")}
+                      </Button>
+                    }
+                  />
+                }
+              >
                 {(pane) => {
                   const Pane = pane()
                   return <Pane />
