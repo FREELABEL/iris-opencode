@@ -128,6 +128,26 @@ export async function listMachines(http: Fetch, account: Account): Promise<Node[
   return sortMachines(list)
 }
 
+/**
+ * IRIS Cloud: heyiris.io/atlas signed in as this account, no machine needed. fl-api mints a
+ * 5-minute, single-use magic link for the token's own user; heyiris.io's /login/magic spends it.
+ */
+export async function cloudUrl(http: Fetch, account: Account, intended = "/atlas") {
+  const response = await http(`${AUTH_API}/api/v1/auth/web-handoff`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${account.token}`, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ intended }),
+  }).catch(() => undefined)
+  if (!response) throw new Error("No connection. Check this phone is online.")
+  if (response.status === 401) throw new SignInExpired()
+  const { data } = await read(response)
+  if (!response.ok) throw new Error(problem(data) || `IRIS Cloud didn't open (${response.status}).`)
+  const url = data?.data?.url
+  // Only heyiris.io's own sign-in page is ever opened with this account's session.
+  if (typeof url !== "string" || !url.startsWith("https://heyiris.io/login/magic?")) throw new Error("IRIS Cloud answered with an unexpected address.")
+  return url
+}
+
 /** A machine, with the signed-in account that owns it: only that account's token can open it. */
 export type OwnedNode = Node & { owner: Account }
 
