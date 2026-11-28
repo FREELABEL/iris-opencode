@@ -165,3 +165,12 @@ describe("titlebar V2 — an item shows only when it needs you", () => {
     expect(planAttention({ measured: false } as any)).toBeNull()
   })
 })
+
+describe("drawing on a top-up is not 'out' (#194529)", () => {
+  test("past 100% with top-up tokens left: no pill, plain Upgrade", () => {
+    const s = { measured: true, plan: "free", upgradeUrl: null, fraction: 1.1, grantTokens: 52_000_000 }
+    expect(planAttention(s)).toBeNull()
+    expect(planBadge(s).tone).toBe("accent")
+    expect(planAttention({ ...s, grantTokens: 0 })).toBe("out")
+  })
+})

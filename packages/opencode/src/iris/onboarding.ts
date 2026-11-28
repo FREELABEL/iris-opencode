@@ -367,6 +367,10 @@ const APP_STEPS = new Set([
   "upgrade.prompted",
   "upgrade.opened",
   "upgrade.checkout_started",
+  // Usage as a progression (epic #194525): the ring popover opened, a top-up started, an invite copied.
+  "usage.ring_opened",
+  "usage.topup_started",
+  "usage.invite_sent",
   // The crash screen (#191430): fl-iris-api GenesisEvent::DESKTOP_APP. Carries props; see crash-report.ts.
   CRASH_EVENT,
 ])

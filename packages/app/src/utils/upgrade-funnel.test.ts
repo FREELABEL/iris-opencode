@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import {
   UPGRADE_EVENTS,
+  USAGE_EVENTS,
   resetPromptedForTest,
   trackPromptedOnce,
   trackUpgrade,
@@ -16,6 +17,11 @@ describe("upgrade funnel events", () => {
     // The server drops any other name with a silent 204, so a drift here measures nothing.
     expect([...UPGRADE_EVENTS]).toEqual(["upgrade.prompted", "upgrade.opened", "upgrade.checkout_started"])
     expect(UPGRADE_EVENTS.some((e) => e.includes("paid"))).toBe(false)
+  })
+
+  test("usage events (#194525) are their own list, and none claims a sale either", () => {
+    expect([...USAGE_EVENTS]).toEqual(["usage.ring_opened", "usage.topup_started", "usage.invite_sent"])
+    expect(USAGE_EVENTS.some((e) => e.includes("paid"))).toBe(false)
   })
 
   test("posts to the sidecar's onboarding pipe as JSON", () => {

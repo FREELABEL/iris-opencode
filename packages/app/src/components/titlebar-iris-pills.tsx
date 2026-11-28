@@ -20,9 +20,12 @@ import { useTitlebarRightMount } from "./titlebar"
 import { useCommand } from "@/context/command"
 import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
+import { rememberInviteCode } from "@/utils/invite-code"
 import { warmHomeDashboard } from "@/pages/home/home-dashboard-data"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
+import { irisPlan, refreshIrisPlan, watchIrisPlan } from "@/utils/iris-plan-store"
+import { drawingOnGrants } from "./usage/usage-model"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
 import { hivePillTarget } from "./session/iris-hive-inbox-model"
 import { openSharedRoom, sharedRooms, watchSharedRooms } from "./session/iris-shared-store"
@@ -135,12 +138,14 @@ export function inboxHint(inbox: InboxState | undefined, label: string | null): 
 
 interface PlanState {
   measured: boolean
-  plan: string | null
+  plan?: string | null
   /** From billing and licence seats (fl-iris-api dd9d0dfa). Null = could not tell. */
   paid?: boolean | null
-  upgradeUrl: string | null
+  upgradeUrl?: string | null
   /** Share of the allowance used, from the server. Null/absent = unknown, never "0%" (#190087). */
   fraction?: number | null
+  /** Top-up tokens left (epic #194525). Past 100% with these, nothing is paused. */
+  grantTokens?: number | null
 }
 
 /**
@@ -162,7 +167,7 @@ export type BadgeTone = "accent" | "warning" | "danger"
  * plain Upgrade otherwise. An unknown or unmeasured reading is never red.
  */
 export function planBadge(state: PlanState | undefined): { text: string; tone: BadgeTone } {
-  const f = state?.measured ? state.fraction : null
+  const f = state?.measured && !drawingOnGrants(state) ? state.fraction : null
   if (typeof f === "number" && Number.isFinite(f)) {
     if (f >= 1) return { text: "⚡ Upgrade · Out of tokens", tone: "danger" }
     if (f >= 0.9) return { text: "Almost out · Upgrade", tone: "warning" }
@@ -186,7 +191,8 @@ export function fleetAttention(hive: HiveState | undefined, loading = false): "d
 
 /** "low" from 90% of the allowance, "out" at 100% — both are "needs you", so both amber. */
 export function planAttention(state: PlanState | undefined): "low" | "out" | null {
-  const f = state?.measured ? state.fraction : null
+  // Drawing on top-up tokens is not "out": the ring's green label carries it (#194529).
+  const f = state?.measured && !drawingOnGrants(state) ? state.fraction : null
   if (typeof f !== "number" || !Number.isFinite(f)) return null
   return f >= 1 ? "out" : f >= 0.9 ? "low" : null
 }
@@ -222,8 +228,10 @@ export function TitlebarIrisPills() {
     // so it re-reads the plan itself and says what was bought.
     const stopLinks = platform.onDeepLink?.((raw) => {
       const link = parseIrisLink(raw)
+      if (link?.kind === "invite") return rememberInviteCode(link.code)
       if (link?.kind !== "upgraded") return
       onFocus()
+      void refreshIrisPlan()
       void announceUpgrade(link.plan)
     })
     onCleanup(() => {
@@ -293,14 +301,12 @@ export function TitlebarIrisPills() {
     if (k) warmHomeDashboard(k[0], platform.fetch ?? globalThis.fetch)
   })
 
-  // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
-  // happens mid-session, not only when someone buys. /iris/plan peeks — it never consumes the
-  // weekly allowance notice, unlike /iris/allowance — so asking more often costs nothing but a GET.
-  const planKey = createMemo(() => {
-    const b = base()
-    return b ? ([b, Math.floor(tick() / 4)] as const) : undefined
-  })
-  const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
+  // The plan is the ONE shared /iris/plan read (epic #194525) — the allowance tab and the context
+  // ring show the same numbers from the same copy. Once a minute and on focus; /iris/plan peeks, so
+  // it never consumes the weekly allowance notice (unlike /iris/allowance). An iris://upgraded link
+  // re-reads it through onFocus below.
+  watchIrisPlan(doFetch)
+  const plan = irisPlan
   const badge = createMemo(() => planBadge(plan()))
   const showPlans = (source: "pill" | "menu") => {
     const state = plan()
@@ -310,6 +316,7 @@ export function TitlebarIrisPills() {
         source={source}
         title={copy.title}
         description={copy.description}
+        usage={state}
         fetchJson={async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T}
       />
     ))

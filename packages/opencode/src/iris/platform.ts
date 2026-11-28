@@ -40,6 +40,7 @@ import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
 import { byOwnerThenBoard, findLocalPlaybook } from "./playbook-local"
+import { planUsageFrom, type PlanUsage } from "./usage-shape"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -1043,7 +1044,8 @@ export async function fetchMe(opts: { token?: string | null; signal?: AbortSigna
   }
 }
 
-export interface Plan {
+/** The usage fields (epic #194525) ride along, each optional: see usage-shape.ts. */
+export interface Plan extends PlanUsage {
   /** free | pro | business, or null for staff, who have no plan. */
   plan: string | null
   /**
@@ -1478,6 +1480,9 @@ export async function fetchPlan(
         resetsAt: typeof j.resets_at === "string" && j.resets_at ? j.resets_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
+        // Usage as a progression (#194525): cap, grants, next tier, forecast, checklist, last week.
+        // Only the keys the server sent — today's server sends none and nothing changes.
+        ...planUsageFrom(j),
       },
     }
   } catch (e) {
