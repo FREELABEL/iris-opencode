@@ -1,4 +1,4 @@
-import { Match, Show, Switch, createMemo, type ComponentProps, type JSX } from "solid-js"
+import { Match, Show, Switch, createMemo, createSignal, type ComponentProps, type JSX } from "solid-js"
 import { ProgressCircle } from "@opencode-ai/ui/progress-circle"
 import { ProgressCircleV2 } from "@opencode-ai/ui/v2/progress-circle-v2"
 import { Button } from "@opencode-ai/ui/button"
@@ -16,6 +16,15 @@ import { getSessionContext } from "@/components/session/session-context-metrics"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { useSettings } from "@/context/settings"
+import { Popover } from "@opencode-ai/ui/popover"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { usePlatform } from "@/context/platform"
+import { useServer } from "@/context/server"
+import { irisPlan, watchIrisPlan } from "@/utils/iris-plan-store"
+import { RING_COLOR, RING_TEXT, ringState } from "@/components/usage/usage-model"
+import { UsageRings } from "@/components/usage/usage-rings"
+import { UsagePopoverBody } from "@/components/usage/usage-popover"
+import { DialogUpgrade, plansDialogCopy } from "@/components/dialog-upgrade"
 
 interface SessionContextUsageProps {
   variant?: "button" | "indicator"
@@ -136,8 +145,82 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     </div>
   )
 
+  // Your week, around this chat (#194529). The week comes from the one shared /iris/plan read the
+  // title bar and the allowance tab use. Unmeasured or unknown → ring is null and everything below
+  // renders exactly as before: never a verdict on a loading state.
+  const server = useServer()
+  const platform = usePlatform()
+  const dialog = useDialog()
+  const base = createMemo(() => server.current?.http?.url?.replace(/\/$/, ""))
+  const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
+  const fetchJson = async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T
+  if (base()) watchIrisPlan(doFetch)
+  const ring = createMemo(() => (variant() === "indicator" ? null : ringState(irisPlan())))
+  const [popoverOpen, setPopoverOpen] = createSignal(false)
+
+  const openUpgrade = (paidCopy: boolean) => {
+    setPopoverOpen(false)
+    const plan = irisPlan()
+    const copy = plansDialogCopy(paidCopy ? true : plan?.measured ? plan.paid : undefined)
+    dialog.show(() => (
+      <DialogUpgrade source="ring" title={copy.title} description={copy.description} usage={plan} fetchJson={fetchJson} />
+    ))
+  }
+
+  const ringTrigger = () => (
+    <span class="flex items-center gap-1.5">
+      <UsageRings size={18} week={ring()!.week} context={context()?.usage ?? null} color={RING_COLOR[ring()!.tone]} />
+      <Show when={ring()!.label}>
+        <span data-slot="usage-ring-label" class={`whitespace-nowrap text-[12px] font-medium ${RING_TEXT[ring()!.tone]}`}>
+          {ring()!.label}
+        </span>
+      </Show>
+    </span>
+  )
+
   return (
     <Show when={params.id}>
+      <Show
+        when={ring()}
+        fallback={contextOnly()}
+      >
+        <Popover
+          open={popoverOpen()}
+          onOpenChange={setPopoverOpen}
+          triggerAs="button"
+          triggerProps={{
+            type: "button",
+            "data-slot": "usage-ring",
+            "data-tone": ring()!.tone,
+            class: "inline-flex h-7 shrink-0 items-center rounded-md px-1.5 hover:bg-v2-overlay-simple-overlay-hover",
+            "aria-label": ring()!.label ? `${ring()!.label} — your week and this chat` : "Your week and this chat",
+          } as any}
+          trigger={ringTrigger()}
+          placement={props.placement === "top" ? "top-start" : "bottom-start"}
+          gutter={6}
+          class="rounded-xl border border-v2-border-border-base bg-v2-background-bg-layer-01 shadow-lg [&_[data-slot=popover-body]]:p-0"
+        >
+          <Show when={popoverOpen() && irisPlan()}>
+            <UsagePopoverBody
+              plan={irisPlan()!}
+              context={context() ? { usage: context()!.usage } : undefined}
+              fetchJson={fetchJson}
+              onUpgrade={() => openUpgrade(false)}
+              onPlans={() => openUpgrade(true)}
+              onClose={() => setPopoverOpen(false)}
+              onContextDetails={() => {
+                setPopoverOpen(false)
+                if (!contextVisible()) openContext()
+              }}
+            />
+          </Show>
+        </Popover>
+      </Show>
+    </Show>
+  )
+
+  function contextOnly() {
+    return (
       <TooltipV2 value={tooltipValue()} placement={props.placement ?? "top"} shift={-8}>
         <Switch>
           <Match when={variant() === "indicator"}>{circle()}</Match>
@@ -164,6 +247,6 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           </Match>
         </Switch>
       </TooltipV2>
-    </Show>
-  )
+    )
+  }
 }

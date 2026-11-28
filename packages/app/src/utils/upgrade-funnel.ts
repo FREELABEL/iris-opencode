@@ -9,10 +9,20 @@
  * billing, because a public endpoint must not let a client claim a sale.
  */
 export const UPGRADE_EVENTS = ["upgrade.prompted", "upgrade.opened", "upgrade.checkout_started"] as const
-export type UpgradeEvent = (typeof UPGRADE_EVENTS)[number]
 
-/** Where the ask came from. `prompted` uses out / almost / refused; `opened` uses pill / dock / settings / menu. */
-export type UpgradeSource = "out" | "almost" | "refused" | "pill" | "dock" | "settings" | "menu"
+/**
+ * Usage as a progression (epic #194525). Sent the same way; the sidecar's list (iris/onboarding.ts)
+ * forwards them, and fl-iris-api's GenesisEvent list must carry them too or they are dropped (204).
+ */
+export const USAGE_EVENTS = ["usage.ring_opened", "usage.topup_started", "usage.invite_sent"] as const
+export type UpgradeEvent = (typeof UPGRADE_EVENTS)[number] | (typeof USAGE_EVENTS)[number]
+
+/**
+ * Where the ask came from. `prompted` uses out / almost / refused / ring (the usage popover showed
+ * Upgrade) / out-card (the three-choice card at 100%); `opened` uses pill / dock / settings / menu / ring.
+ */
+export type PromptKind = "out" | "almost" | "refused" | "ring" | "out-card"
+export type UpgradeSource = PromptKind | "pill" | "dock" | "settings" | "menu"
 
 type Post = (path: string, init?: RequestInit) => Promise<unknown>
 
@@ -42,7 +52,7 @@ export function trackUpgrade(post: Post, event: UpgradeEvent, label?: string): v
  * app run. The funnel counts distinct installs either way; this only keeps the table quiet.
  */
 const prompted = new Set<string>()
-export function trackPromptedOnce(post: Post, kind: "out" | "almost" | "refused"): boolean {
+export function trackPromptedOnce(post: Post, kind: PromptKind): boolean {
   if (prompted.has(kind)) return false
   prompted.add(kind)
   trackUpgrade(post, "upgrade.prompted", kind)
