@@ -9,7 +9,7 @@ name: iOS build (IRIS on iPhone, #194511)
 # a branch until the file is on main.
 on:
   push:
-    branches: ["wt/194511-**"]
+    branches: ["wt/194511-**", "wt/194555-**"]
     paths:
       - ".github/workflows/ios-build.yml"
       - "packages/desktop/**"
@@ -57,7 +57,7 @@ jobs:
         with:
           workspaces: packages/desktop/src-tauri -> target
           key: ios-sim
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/wt/194511-') }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/wt/194511-') || startsWith(github.ref, 'refs/heads/wt/194555-') }}
 
       - name: Toolchain
         run: |
@@ -67,6 +67,30 @@ jobs:
       - name: Generate the Xcode project
         working-directory: packages/desktop
         run: bun run tauri ios init --ci
+
+      # Sign in with Apple (#194555, guideline 4.8) needs com.apple.developer.applesignin = [Default]
+      # in the app's entitlements. `tauri ios init` generates the iOS target's .entitlements file
+      # (and points CODE_SIGN_ENTITLEMENTS at it); the key is added to that file here, because gen/
+      # is regenerated on every run. Signing: the CI App Store Connect key has the Admin role and
+      # tauri signs automatically with it, which is expected to turn the Sign in with Apple capability
+      # on for App ID io.heyiris.app when the profile is made. If it does not, it is one checkbox in
+      # the developer portal (Identifiers → io.heyiris.app → Sign in with Apple; handoff #194546).
+      - name: Sign in with Apple entitlement
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          find gen/apple -name '*.entitlements' -not -path '*/build/*'
+          ENT=$(find gen/apple -name '*.entitlements' -not -path '*/build/*' | head -1)
+          if [ -z "$ENT" ]; then
+            echo "::error::tauri ios init made no .entitlements file; create it and set CODE_SIGN_ENTITLEMENTS"
+            ls -R gen/apple | head -60; exit 1
+          fi
+          grep -rn "$(basename "$ENT")" gen/apple/project.yml gen/apple/*.xcodeproj/project.pbxproj \
+            || { echo "::error::$ENT is not wired to the target (CODE_SIGN_ENTITLEMENTS)"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.applesignin' "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.applesignin array' \
+            -c 'Add :com.apple.developer.applesignin:0 string Default' "$ENT"
+          cat "$ENT"
 
       # The repo's iOS icon set, with the alpha channel flattened: App Store Connect refuses an app
       # icon that has one.
@@ -106,6 +130,10 @@ jobs:
           [ -f "$APP/Info.plist" ] || { echo "no app at $APP"; ls -R src-tauri/gen/apple/build | head -30; exit 1; }
           echo "APP=$APP" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          # A Simulator build carries its entitlements in the binary's __entitlements section.
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          if grep -aq com.apple.developer.applesignin "$APP/$EXE"; then echo "Sign in with Apple entitlement: in the build"
+          else echo "::warning::the Simulator build does not carry com.apple.developer.applesignin"; codesign -d --entitlements - "$APP" || true; fi
 
       - name: Launch in the Simulator and take a screenshot
         run: |
@@ -164,11 +192,34 @@ jobs:
         with:
           workspaces: packages/desktop/src-tauri -> target
           key: ios-device
-          save-if: ${{ startsWith(github.ref, 'refs/heads/wt/194511-') }}
+          save-if: ${{ startsWith(github.ref, 'refs/heads/wt/194511-') || startsWith(github.ref, 'refs/heads/wt/194555-') }}
       - run: command -v xcodegen || brew install xcodegen
       - name: Generate the Xcode project
         working-directory: packages/desktop
         run: bun run tauri ios init --ci
+      # Sign in with Apple (#194555, guideline 4.8) needs com.apple.developer.applesignin = [Default]
+      # in the app's entitlements. `tauri ios init` generates the iOS target's .entitlements file
+      # (and points CODE_SIGN_ENTITLEMENTS at it); the key is added to that file here, because gen/
+      # is regenerated on every run. Signing: the CI App Store Connect key has the Admin role and
+      # tauri signs automatically with it, which is expected to turn the Sign in with Apple capability
+      # on for App ID io.heyiris.app when the profile is made. If it does not, it is one checkbox in
+      # the developer portal (Identifiers → io.heyiris.app → Sign in with Apple; handoff #194546).
+      - name: Sign in with Apple entitlement
+        working-directory: packages/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          find gen/apple -name '*.entitlements' -not -path '*/build/*'
+          ENT=$(find gen/apple -name '*.entitlements' -not -path '*/build/*' | head -1)
+          if [ -z "$ENT" ]; then
+            echo "::error::tauri ios init made no .entitlements file; create it and set CODE_SIGN_ENTITLEMENTS"
+            ls -R gen/apple | head -60; exit 1
+          fi
+          grep -rn "$(basename "$ENT")" gen/apple/project.yml gen/apple/*.xcodeproj/project.pbxproj \
+            || { echo "::error::$ENT is not wired to the target (CODE_SIGN_ENTITLEMENTS)"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.applesignin' "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.applesignin array' \
+            -c 'Add :com.apple.developer.applesignin:0 string Default' "$ENT"
+          cat "$ENT"
       - name: App icon
         working-directory: packages/desktop/src-tauri
         run: |
@@ -203,6 +254,11 @@ jobs:
           fi
           IPA=$(find src-tauri/gen/apple/build -name '*.ipa' | head -1)
           echo "IPA=$IPA"
+          # Without the signed entitlement the Apple sheet fails on the phone: never upload that.
+          rm -rf "$RUNNER_TEMP/ipa" && unzip -q "$IPA" -d "$RUNNER_TEMP/ipa"
+          codesign -d --entitlements - "$RUNNER_TEMP"/ipa/Payload/*.app 2>&1 | tee "$RUNNER_TEMP/ent.txt"
+          grep -q com.apple.developer.applesignin "$RUNNER_TEMP/ent.txt" \
+            || { echo "::error::the signed build has no Sign in with Apple entitlement"; exit 1; }
           xcrun altool --upload-app --type ios -f "$IPA" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           rm -f "$KEY"
           echo "Uploaded build ${{ github.run_number }}. It appears in TestFlight after Apple finishes processing (usually 5–20 minutes)."
@@ -236,5 +292,6 @@ jobs:
           mkdir -p sidecars && touch sidecars/iris-cli-aarch64-apple-darwin sidecars/iris-mic-aarch64-apple-darwin
           cargo check --locked --target aarch64-apple-darwin
           cargo test --locked --target aarch64-apple-darwin --no-run
-          # The phone's PKCE (RFC 7636 Appendix B) runs here: mobile-only code is not compiled for iOS tests.
-          cargo test --locked --target aarch64-apple-darwin --lib pkce_tests
+          # The phone's PKCE (RFC 7636 Appendix B) and Apple nonce hash (SHA-256 vectors) run here:
+          # mobile-only code is not compiled for iOS tests.
+          cargo test --locked --target aarch64-apple-darwin --lib -- pkce_tests nonce_tests

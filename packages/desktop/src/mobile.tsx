@@ -16,7 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
 import pkg from "../package.json"
 import { invoke } from "@tauri-apps/api/core"
-import { addAccount, engineFor, exchangeGoogle, googleCode, googleStartUrl, machinesFor, note, removeAccount, sendCode, SignInExpired, verify, type Account, type Engine, type OwnedNode } from "./mobile-platform"
+import { addAccount, engineFor, exchangeApple, exchangeGoogle, googleCode, googleStartUrl, machinesFor, note, removeAccount, sendCode, SignInExpired, verify, type Account, type Engine, type OwnedNode } from "./mobile-platform"
 
 // Platform calls go through the native HTTP plugin (`fetch` above), so no CORS rule on either
 // host can block sign-in. Calls to an engine use the webview's own fetch (`globalThis.fetch`),
@@ -150,6 +150,26 @@ function showSignIn(problem?: string, adding = false) {
     location.reload()
   }
 
+  // Sign in with Apple (#194555, guideline 4.8): Apple's native sheet signs the SHA-256 of a nonce
+  // into the identity token; fl-api checks it against the raw nonce, which never leaves this app
+  // except to fl-api. Same SDK token and account path as every other sign-in.
+  const apple = async () => {
+    setError("")
+    setBusy(true)
+    track("iphone.signin.apple_started")
+    const result = await (async () => {
+      const nonce = await invoke<{ raw: string; hashed: string }>("nonce_pair")
+      const reply = await invoke<{ identityToken: string; givenName?: string; familyName?: string }>("plugin:iris-web-auth|sign_in_with_apple", { nonce: nonce.hashed })
+      return exchangeApple(fetch, { identityToken: reply.identityToken, rawNonce: nonce.raw, givenName: reply.givenName, familyName: reply.familyName })
+    })().catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))))
+    setBusy(false)
+    if (result instanceof Error && result.message === "cancelled") return track("iphone.signin.apple_cancelled")
+    if (result instanceof Error) return (track("iphone.signin.failed", `apple: ${result.message}`), setError(result.message))
+    saveAccount(result)
+    track("iphone.signin.verified", "apple")
+    location.reload()
+  }
+
   render(
     () => (
       <Screen>
@@ -160,6 +180,10 @@ function showSignIn(problem?: string, adding = false) {
             {sent() ? `We emailed a 6-digit code to ${email().trim()}.` : "Use the email you sign in to IRIS Desktop with."}
           </p>
           <Show when={!sent()}>
+            <button style={styles.apple} type="button" disabled={busy()} onClick={apple}>
+              <AppleMark />
+              <span>Sign in with Apple</span>
+            </button>
             <button style={styles.google} type="button" disabled={busy()} onClick={google}>
               <GoogleMark />
               <span>Continue with Google</span>
@@ -398,6 +422,18 @@ function GoogleMark() {
   )
 }
 
+/** Apple's logo for the Sign in with Apple button, in the button's text colour (HIG). */
+function AppleMark() {
+  return (
+    <svg width="17" height="20" viewBox="0 0 814 1000" aria-hidden="true" style="flex:none;margin-top:-3px">
+      <path
+        fill="currentColor"
+        d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57-155.5-127C46.7 790.7 0 663 0 541.8c0-194.4 126.4-297.5 250.8-297.5 66.1 0 121.2 43.4 162.7 43.4 39.5 0 101.1-46 176.3-46 28.5 0 130.9 2.6 198.3 99.2zm-234-181.5c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 82.8-55.1 134.7 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-70.5z"
+      />
+    </svg>
+  )
+}
+
 function Screen(props: { children: JSX.Element }) {
   return <main style={styles.page}>{props.children}</main>
 }
@@ -498,6 +534,9 @@ const styles = {
   input: `font-size:17px;padding:12px 14px;border-radius:10px;border:1px solid ${line};background:${field};color:${ink}`,
   error: `font-size:14px;line-height:1.4;color:${dark ? "#f08a7e" : "#b3261e"};margin:0`,
   button: `font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:0;background:${ink};color:${paper};margin-top:6px`,
+  // Sign in with Apple, Apple's own style (HIG): black with white in light mode, white with black in
+  // dark mode. Same padding, border width, radius and type size as Google's, so the two are equal.
+  apple: `display:flex;align-items:center;justify-content:center;gap:8px;font-size:17px;font-weight:500;font-family:-apple-system,system-ui,sans-serif;padding:13px 14px;border-radius:12px;border:1px solid ${dark ? "#FFFFFF" : "#000000"};background:${dark ? "#FFFFFF" : "#000000"};color:${dark ? "#000000" : "#FFFFFF"}`,
   // Google's sign-in button colours: light #FFFFFF / border #747775 / text #1F1F1F; dark #131314 / #8E918F / #E3E3E3.
   google: `display:flex;align-items:center;justify-content:center;gap:12px;font-size:17px;font-weight:500;padding:13px 14px;border-radius:12px;border:1px solid ${dark ? "#8E918F" : "#747775"};background:${dark ? "#131314" : "#FFFFFF"};color:${dark ? "#E3E3E3" : "#1F1F1F"}`,
   or: "font-size:13px;opacity:.55;margin:0;text-align:center",

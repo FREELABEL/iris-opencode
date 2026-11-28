@@ -90,6 +90,33 @@ export async function exchangeGoogle(http: Fetch, code: string, verifier: string
   return accountFor(http, reply?.data?.sdk_token?.key, typeof reply?.data?.user?.email === "string" ? reply.data.user.email : "")
 }
 
+// Sign in with Apple (#194555, App Review guideline 4.8). The native sheet signs an identity token
+// whose nonce claim is sha256(raw); only this app holds the raw nonce (nonce_pair in lib.rs), so a
+// token lifted from somewhere else cannot be replayed here. Apple sends the name on the first
+// sign-in only, so it rides along when it is there.
+export async function exchangeApple(
+  http: Fetch,
+  apple: { identityToken: string; rawNonce: string; givenName?: string; familyName?: string },
+): Promise<Account> {
+  const reply = await post(
+    http,
+    `${AUTH_API}/api/v1/auth/apple/mobile`,
+    {
+      identity_token: apple.identityToken,
+      nonce: apple.rawNonce,
+      ...(apple.givenName ? { given_name: apple.givenName } : {}),
+      ...(apple.familyName ? { family_name: apple.familyName } : {}),
+    },
+    APPLE_ERRORS,
+  )
+  return accountFor(http, reply?.data?.sdk_token?.key, typeof reply?.data?.user?.email === "string" ? reply.data.user.email : "")
+}
+
+const APPLE_ERRORS: Record<string, string> = {
+  invalid_token: "Apple sign-in couldn't be checked. Try again, or use an email code.",
+  nonce_mismatch: "Apple sign-in didn't match this request. Try again.",
+}
+
 export async function listMachines(http: Fetch, account: Account): Promise<Node[]> {
   const reply = await hive(http, account, `/api/v6/nodes/?user_id=${account.userId}`)
   // {nodes: [...], device_totals} (fl-iris-api ComputeNodeController::index). `data` is the CLI's
@@ -166,7 +193,8 @@ async function hive(http: Fetch, account: Account, path: string, body?: unknown)
   return data
 }
 
-async function post(http: Fetch, url: string, body: unknown) {
+/** `errors`: sentences for the error codes this endpoint answers with, by code. */
+async function post(http: Fetch, url: string, body: unknown, errors?: Record<string, string>) {
   const response = await http(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -174,7 +202,7 @@ async function post(http: Fetch, url: string, body: unknown) {
   }).catch(() => undefined)
   if (!response) throw new Error("No connection. Check this phone is online.")
   const { data } = await read(response)
-  if (!response.ok) throw new Error(problem(data) || `Something went wrong (${response.status}).`)
+  if (!response.ok) throw new Error(errors?.[data?.error] || problem(data) || `Something went wrong (${response.status}).`)
   return data
 }
 
