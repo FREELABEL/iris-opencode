@@ -16,6 +16,7 @@ import { RetainedImage } from "./services/retained-image"
 import { ServiceRegistration } from "./services/service-registration"
 import { WebUi } from "./services/web-ui"
 import { databasePath } from "./database-path"
+import { HostGuard } from "@opencode/server/host-guard"
 
 export type Mode = "default" | "service" | "stdio"
 
@@ -94,6 +95,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           hostname,
           port,
           cors: options.cors ?? config.cors,
+          allowedHosts: HostGuard.parseAllowedHosts(process.env[HostGuard.ALLOWED_HOSTS_ENV]),
           password,
           pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
