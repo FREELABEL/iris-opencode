@@ -57,6 +57,32 @@ jobs:
           $shown.ToBitmap().Save((Join-Path $out 'shell-icon-for-lnk.png'), [System.Drawing.Imaging.ImageFormat]::Png)
           "shell icon for the .lnk: $($shown.Width)x$($shown.Height)"
 
+          # The LARGE icon, as Windows' shell renders it (Explorer / Start at high DPI): ask the
+          # shell itself for a 256px image of the shortcut and of the .ico. System.Drawing cannot
+          # read PNG-compressed 256px frames, so it is no evidence either way; the shell is.
+          Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+          using System; using System.Drawing; using System.Runtime.InteropServices;
+          public static class ShellImg {
+            [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            public interface IShellItemImageFactory { void GetImage(SIZE size, int flags, out IntPtr phbm); }
+            [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx; public int cy; }
+            [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+            static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItemImageFactory ppv);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+            public static Bitmap Get(string path, int size) {
+              IShellItemImageFactory f; SHCreateItemFromParsingName(path, IntPtr.Zero, typeof(IShellItemImageFactory).GUID, out f);
+              IntPtr h; f.GetImage(new SIZE { cx = size, cy = size }, 0x4 /* ICONONLY */, out h);
+              Bitmap b = Image.FromHbitmap(h); DeleteObject(h); return b;
+            }
+          }
+          '@
+          foreach ($n in 48, 256) {
+            $b = [ShellImg]::Get($lnk.FullName, $n); "shell image of the .lnk at $n -> $($b.Width)x$($b.Height)"
+            $b.Save((Join-Path $out "shell-lnk-$n.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+            $c = [ShellImg]::Get($ico, $n); "shell image of the .ico at $n -> $($c.Width)x$($c.Height)"
+            $c.Save((Join-Path $out "shell-ico-$n.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+
       - name: Remove it again
         shell: pwsh
         run: |
