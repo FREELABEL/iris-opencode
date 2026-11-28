@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Show } from "solid-js"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IrisAgentEditor } from "./iris-agent-editor"
+import { modelLabel } from "./iris-shared-rooms-model"
 import "./iris-shared-rooms.css"
 
 /**
@@ -105,7 +106,7 @@ export function RoomAgentsDrawer(props: {
                   <Show when={a.role === "lead"}>
                     <span class="sr-chip" data-tone="good">Lead</span>
                   </Show>
-                  <span class="sr-agent-card-model">{a.model ?? "default model"}</span>
+                  <span class="sr-agent-card-model">{a.model ? modelLabel(a.model) : "default model"}</span>
                   <span class="sr-agent-card-mode">{a.role === "lead" ? "gets every message" : a.autoRespond ? "answers everything" : "when @mentioned"}</span>
                 </button>
                 <Show when={open() === a.id && props.canManage}>

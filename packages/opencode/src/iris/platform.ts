@@ -1004,6 +1004,35 @@ export async function fetchAllowance(
 }
 
 /**
+ * What the model picker says about each model (#194383): what it is good for, published scores,
+ * IRIS's own test results and how much IRIS users use it. Public — no token — and cached for ten
+ * minutes, because every picker open would otherwise ask. `measured: false` means we could not
+ * ask; the picker then shows the copy bundled with the app, and no usage at all.
+ */
+let modelDetailsCache: { at: number; data: unknown } | undefined
+const MODEL_DETAILS_TTL_MS = 10 * 60 * 1000
+
+export async function fetchModelDetails(opts: { signal?: AbortSignal } = {}): Promise<PlatformResult<unknown>> {
+  if (modelDetailsCache && Date.now() - modelDetailsCache.at < MODEL_DETAILS_TTL_MS)
+    return { measured: true, data: modelDetailsCache.data }
+  try {
+    const res = await fetch(`${IRIS_API}/api/v6/openai/models/details`, {
+      headers: { Accept: "application/json" },
+      signal: opts.signal ?? AbortSignal.timeout(6000),
+    })
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: null }
+    const j = (await res.json()) as any
+    const data = j?.data ?? j
+    if (!data || typeof data !== "object" || typeof data.models !== "object")
+      return { measured: false, reason: "unexpected shape", data: null }
+    modelDetailsCache = { at: Date.now(), data }
+    return { measured: true, data }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: null }
+  }
+}
+
+/**
  * Who the app is acting as (#187966 K1). Read from /api/v1/auth/whoami, the route `iris auth whoami`
  * reads, so Settings and the CLI cannot name the same credential differently. /api/user would
  * have worked too, and it does disagree: for user 193 it says "FREELABEL", whoami says "admin".

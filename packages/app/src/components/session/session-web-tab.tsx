@@ -18,6 +18,7 @@ import { needsSystemBrowser,
 import { GithubPrView } from "./github-pr-view"
 import { NativeBrowserTabs } from "./native-browser-tabs"
 import { nativeBrowserEnabled } from "./native-browser-model"
+import { irisPageSlug, signedFrameUrl, type PageSignInAnswer } from "./iris-pinned-page-model"
 import { isGithubPrUrl } from "./github-pr-model"
 import "./session-web-tab.css"
 
@@ -127,6 +128,41 @@ function FramedWebTab() {
       return ""
     }
   })
+  // YOUR OWN IRIS PAGES OPEN SIGNED IN (#194350). A person's app opened here showed "Sign in to open
+  // it": the frame is another origin, so the page's cookie cannot ride along. The pinned-page frame
+  // already solves this with a one-time code (page-signin, #192482); the Browser tab now asks for
+  // one too when the address is an IRIS page. No code (not a member, engine away) = the plain page,
+  // exactly as before — a failed sign-in never blocks the page.
+  const [signedSrc, setSignedSrc] = createSignal<{ for: string; url: string } | undefined>()
+  // While a code is being minted the frame waits (≤ 4 s), so the page loads once, signed in, instead
+  // of flashing its sign-in card and reloading.
+  const [signing, setSigning] = createSignal<string | undefined>()
+  createEffect(
+    on(webUrl, (url) => {
+      const slug = irisPageSlug(url)
+      if (!url || !slug) {
+        setSigning(undefined)
+        return setSignedSrc(undefined)
+      }
+      setSigning(url)
+      ;(platform.fetch ?? globalThis.fetch)(`${base()}/iris/page-signin`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+        signal: AbortSignal.timeout(4000),
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<PageSignInAnswer>) : undefined))
+        .catch(() => undefined)
+        .then((a) => {
+          if (webUrl() !== url) return // a later address won the race
+          const m = signedFrameUrl(slug, a)
+          setSignedSrc(m.signed ? { for: url, url: m.url } : undefined)
+          setSigning(undefined)
+        })
+    }),
+  )
+  const frameSrc = (url: string) => (signedSrc()?.for === url ? signedSrc()!.url : url)
+
   const openOutside = () => {
     const url = webUrl()
     if (url) platform.openExternal(url)
@@ -215,11 +251,11 @@ function FramedWebTab() {
           </Match>
           <Match when={webUrl()}>
             {(url) => (
-              <Show when={`${url()}#${webReloadKey()}`} keyed>
+              <Show when={signing() !== url() && `${frameSrc(url())}#${webReloadKey()}`} keyed>
                 <iframe
                   class="session-web__frame"
                   title={host()}
-                  src={url()}
+                  src={frameSrc(url())}
                   sandbox={WEB_SANDBOX}
                   referrerpolicy="strict-origin-when-cross-origin"
                   data-testid="web-frame"

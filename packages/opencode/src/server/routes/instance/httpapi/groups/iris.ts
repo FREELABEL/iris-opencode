@@ -2452,6 +2452,7 @@ export const IrisPaths = {
   hiveTask: `${root}/hive/tasks/:taskID`,
   hiveTaskDecide: `${root}/hive/tasks/:taskID/:decision`,
   allowance: `${root}/allowance`,
+  modelDetails: `${root}/model-details`,
   plan: `${root}/plan`,
   me: `${root}/me`,
   security: `${root}/security`,
@@ -2619,6 +2620,23 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Allowance and notice policy",
           description:
             "The window, the amount, the reset instant, the threshold list and any pending notice. The thresholds travel because the client must not hold a policy the server can change without a desktop release. Fetching CONSUMES a pending notice — call it when rendering, never on a timer.",
+        }),
+      ),
+      HttpApiEndpoint.get("modelDetails", IrisPaths.modelDetails, {
+        success: described(
+          Schema.Struct({
+            measured: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            data: Schema.optional(Schema.Unknown),
+          }),
+          "What the model picker shows about each model, straight through from fl-iris-api",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.modelDetails",
+          summary: "Model picker details",
+          description:
+            "Good-for copy, published scores with their source, IRIS's own test results and IRIS usage per model (#194383). measured=false means the server could not be asked; the app falls back to the copy it ships with and shows no usage.",
         }),
       ),
       HttpApiEndpoint.get("plan", IrisPaths.plan, {
