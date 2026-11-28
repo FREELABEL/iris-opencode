@@ -85,8 +85,12 @@ export function participantPathSegment(agentId: string): string {
   return encodeURIComponent(agentId)
 }
 
-/** Roles the API accepts. Anything else is a 422 that surfaces as a validation blob. */
-export const ROLES = ["primary", "support", "observer", "participant"] as const
+/**
+ * Roles the API accepts. Anything else is a 422 that surfaces as a validation blob.
+ * `lead` (#194493): the agent that takes the person's request first, hands parts to teammates by
+ * @mention and wraps up. One per room — the server makes the previous lead a participant.
+ */
+export const ROLES = ["lead", "participant", "primary", "support", "observer"] as const
 export type Role = (typeof ROLES)[number]
 
 export function isValidRole(role: string): role is Role {

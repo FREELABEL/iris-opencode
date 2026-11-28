@@ -1,0 +1,18 @@
+{
+    "present": [
+        {
+            "user_id": 1008,
+            "name": "Flo Rivera",
+            "state": "active",
+            "typing": true,
+            "seen_at": "2026-11-28T12:00:00+00:00"
+        },
+        {
+            "user_id": 1001,
+            "name": "Alex Mayo",
+            "state": "background",
+            "typing": false,
+            "seen_at": "2026-11-28T12:00:00+00:00"
+        }
+    ]
+}

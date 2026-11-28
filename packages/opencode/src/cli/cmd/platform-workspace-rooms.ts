@@ -3,7 +3,20 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson, IRIS_API } from "./iris-api"
 import { mintShareLink, inviteWebUrl } from "./platform-bloqs"
-import { roomSessions, unseen, formatLine, openRoomBody, parseProjectId, sessionLines, HARNESS_HINT } from "./workspace-rooms-core"
+import {
+  unseen,
+  formatLine,
+  parseProjectId,
+  sessionLines,
+  HARNESS_HINT,
+  parseAgentIds,
+  createRoomBody,
+  readRoomView,
+  readRoomRow,
+  chainLine,
+  presentLine,
+  agentLines,
+} from "./workspace-rooms-core"
 
 // ============================================================================
 // iris workspace rooms|open|share|unshare|say|watch|stop|invite — shared workspaces (#194307)
@@ -14,6 +27,9 @@ import { roomSessions, unseen, formatLine, openRoomBody, parseProjectId, session
 // every member sees it as it happens. Headless by design: every command takes --json and does
 // one HTTP call, so a script, a CI job or another agent (over MCP iris_run) drives it the same
 // way a person does.
+//
+// Multi-agent rooms (#194603): `open --agents --lead` puts your IRIS agents in a room with one lead;
+// `iris agents join|leave|role` change who is in it; `watch` shows the hand-off chain and who is here.
 //
 // Endpoints (fl-iris-api): GET/POST /api/threads, GET /api/threads/{id},
 // PUT /api/threads/{id}/workspace, POST /api/threads/{id}/messages, POST /api/threads/{id}/stop.
@@ -73,21 +89,23 @@ export const WorkspaceRoomsCommand = cmd({
     if (!id) return fail(args, `"${args.project}" is not an Atlas project id.`)
     const body = await api(args, "List rooms", `/api/threads?bloq_id=${id}`)
     if (!body) return
-    const rows = (body.data ?? []).map((t: any) => ({
-      id: t.id,
-      name: t.name,
-      owner_user_id: t.user_id,
-      sessions: roomSessions(t.participants),
-      messages: t.messages_count ?? null,
-      updated_at: t.updated_at,
-    }))
+    const rows = (body.data ?? []).map((t: any) => ({ ...readRoomRow(t), owner_user_id: t.user_id, updated_at: t.updated_at }))
     if (args.json) return writeJson({ project: id, rooms: rows })
     UI.empty()
     prompts.intro(`◈  Workspace #${id} — ${rows.length} room${rows.length === 1 ? "" : "s"}`)
     if (!rows.length) console.log(`  ${dim("No rooms yet. Share a live chat: iris workspace open " + id + " --session <id>")}`)
     for (const r of rows) {
       console.log(`  ${bold(r.name || "(unnamed)")}  ${dim(r.id)}`)
-      console.log(`    ${dim(`${r.sessions.length} live session${r.sessions.length === 1 ? "" : "s"} · ${r.messages ?? 0} messages`)}`)
+      const bits = [
+        `${r.sessions.length} live session${r.sessions.length === 1 ? "" : "s"}`,
+        ...(r.agents.length ? [`${r.agents.length} agent${r.agents.length === 1 ? "" : "s"}`] : []),
+        `${r.messages ?? 0} message${r.messages === 1 ? "" : "s"}`,
+        ...(r.unread ? [`${r.unread} unread`] : []),
+        ...(r.present.length ? [`${r.present.length} here`] : []),
+        ...(r.working ? ["working"] : []),
+      ]
+      console.log(`    ${dim(bits.join(" · "))}`)
+      if (r.last) console.log(`    ${dim(r.last)}`)
     }
     prompts.outro(dim("iris workspace watch <room>"))
   },
@@ -95,18 +113,28 @@ export const WorkspaceRoomsCommand = cmd({
 
 export const WorkspaceOpenCommand = cmd({
   command: "open <project>",
-  describe: "share a live chat with the workspace — opens a room around one session (find ids with `iris hive sessions`)",
+  describe: "open a room in a workspace — around a live chat (--session) and/or a multi-agent room of your IRIS agents with a lead (--agents, --lead)",
   builder: (y) =>
     json(project(y))
-      .option("session", { describe: "the session to share (Claude Code, opencode, or an `iris acp run --keep` Codex/Gemini)", type: "string", demandOption: true })
-      .option("name", { describe: "room name", type: "string" }),
+      .option("session", { describe: "a live chat to share (Claude Code, opencode, or an `iris acp run --keep` Codex/Gemini) — ids from `iris hive sessions`", type: "string" })
+      .option("agents", { describe: "your IRIS agents to put in the room, comma-separated ids (see: iris agents list)", type: "string" })
+      .option("lead", { describe: "the agent that takes your request first and hands parts to the others (one per room)", type: "string" })
+      .option("always-on", { describe: "agents answer every message, not only when @mentioned", type: "boolean", default: false })
+      .option("name", { describe: "room name", type: "string" })
+      .example("iris workspace open 652 --session ses_abc123", "share one live chat with the team")
+      .example("iris workspace open 652 --agents 101,102,103 --lead 101 --name \"Launch plan\"", "three agents, 101 leads")
+      .example("iris workspace open 652 --session ses_abc123 --agents 101 --lead 101", "your chat and an agent, side by side"),
   async handler(args: Args) {
     const id = parseProjectId(args.project)
     if (!id) return fail(args, `"${args.project}" is not an Atlas project id.`)
-    const sid = String(args.session ?? "").trim()
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(sid)) return fail(args, `"${args.session}" is not a session id. ${HARNESS_HINT}`)
-    const name = String(args.name ?? "").trim() || `session ${sid.slice(0, 8)}`
-    const created = await api(args, "Open room", "/api/threads", { method: "POST", body: JSON.stringify(openRoomBody({ name, sessionId: sid })) })
+    const sid = args.session === undefined ? "" : String(args.session).trim()
+    if (args.session !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(sid)) return fail(args, `"${args.session}" is not a session id. ${HARNESS_HINT}`)
+    const picked = args.agents === undefined ? { ids: [] as string[] } : parseAgentIds(args.agents)
+    if ("error" in picked) return fail(args, picked.error)
+    const name = String(args.name ?? "").trim() || (sid ? `session ${sid.slice(0, 8)}` : "Agents room")
+    const roomBody = createRoomBody({ name, agents: picked.ids, lead: args.lead ?? null, sessionId: sid || null, alwaysOn: Boolean(args["always-on"]) })
+    if ("error" in roomBody) return fail(args, roomBody.error)
+    const created = await api(args, "Open room", "/api/threads", { method: "POST", body: JSON.stringify(roomBody) })
     if (!created) return
     const roomId = created.thread?.id
     const filed = await api(args, "Share with the workspace", `/api/threads/${encodeURIComponent(roomId)}/workspace`, {
@@ -114,9 +142,12 @@ export const WorkspaceOpenCommand = cmd({
       body: JSON.stringify({ bloq_id: id }),
     })
     if (!filed) return
-    if (args.json) return writeJson({ room: roomId, project: id, session: sid, name })
+    const agents = readRoomView(created).agents
+    if (args.json) return writeJson({ room: roomId, project: id, session: sid || null, name, agents })
     console.log(`  ${success("✓")} ${bold(name)} is shared with workspace #${id}`)
     console.log(`  ${dim("room")} ${roomId}`)
+    for (const line of agentLines(agents)) console.log(`  ${dim(line)}`)
+    if (agents.length) console.log(`  ${dim("ask the agents: iris workspace say " + roomId + ' --agents "…"   ·   change who leads: iris agents role ' + roomId + " lead --agent <id>")}`)
     console.log(`  ${dim("teammates: iris workspace watch " + roomId + "   ·   iris workspace say " + roomId + ' "…"')}`)
   },
 })
@@ -177,23 +208,45 @@ export const WorkspaceSayCommand = cmd({
 
 export const WorkspaceWatchCommand = cmd({
   command: "watch <room>",
-  describe: "follow a shared room as it happens (Ctrl-C to stop)",
+  describe: "follow a room as it happens — messages, its agents and who leads, agents handing work to each other, who is here (Ctrl-C to stop)",
   builder: (y) =>
     json(room(y))
       .option("interval", { describe: "seconds between reads", type: "number", default: 2 })
-      .option("once", { describe: "print what is there and exit", type: "boolean", default: false }),
+      .option("once", { describe: "print what is there and exit", type: "boolean", default: false })
+      .example("iris workspace watch <room>", "follow along")
+      .example("iris workspace watch <room> --once --json", "one JSON line per message, plus {kind:\"room\"} lines for agents, chain and who is here"),
   async handler(args: Args) {
     const seen = new Set<string>()
     const every = Math.max(1, Number(args.interval) || 2) * 1000
     let first = true
+    let lastState = ""
     while (true) {
       const body = await api(args, "Read room", `/api/threads/${encodeURIComponent(args.room)}`)
       if (!body) return
+      const view = readRoomView(body)
       if (first && !args.json) {
         UI.empty()
-        prompts.intro(`◈  ${body.thread?.name || "Room"}`)
+        prompts.intro(`◈  ${view.name}`)
         for (const line of sessionLines(body.sessions)) console.log(`  ${dim(line)}`)
+        for (const line of agentLines(view.agents)) console.log(`  ${dim(line)}`)
         first = false
+      }
+      // The hand-off chain and who is here change between polls: print them when they do.
+      const state = JSON.stringify({ chain: view.chain, present: view.present, agents: view.agents })
+      if (state !== lastState) {
+        if (args.json) console.log(JSON.stringify({ kind: "room", agents: view.agents, chain: view.chain, present: view.present }))
+        else {
+          const prev = lastState ? JSON.parse(lastState) : null
+          const changed = (k: "chain" | "present" | "agents") => !prev || JSON.stringify(prev[k]) !== JSON.stringify(view[k])
+          if (prev && changed("agents")) for (const line of agentLines(view.agents)) console.log(`  ${dim(line)}`)
+          if (changed("chain")) {
+            const talk = chainLine(view.chain)
+            if (talk) console.log(`  ${bold(talk)}`)
+            else if (prev?.chain) console.log(`  ${dim("agents finished handing off")}`)
+          }
+          if (changed("present")) console.log(`  ${dim(presentLine(view.present) ?? "nobody here right now")}`)
+        }
+        lastState = state
       }
       for (const m of unseen(seen, body.messages ?? [])) {
         if (args.json) console.log(JSON.stringify(m))

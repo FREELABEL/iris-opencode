@@ -66,7 +66,7 @@ describe("participantPathSegment — the colon must not reach the URL raw", () =
 
 describe("isValidRole", () => {
   test("accepts exactly what the API's enum accepts", () => {
-    for (const r of ["primary", "support", "observer", "participant"]) expect(isValidRole(r)).toBe(true)
+    for (const r of ["lead", "primary", "support", "observer", "participant"]) expect(isValidRole(r)).toBe(true)
   })
   test("rejects anything else, so the error is ours and not a 422 blob", () => {
     for (const r of ["admin", "owner", "watcher", "Observer", ""]) expect(isValidRole(r)).toBe(false)

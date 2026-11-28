@@ -11,7 +11,7 @@ import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { AgentsInstallCommand, AgentsPacksCommand } from "./platform-agents-packs"
-import { AgentsJoinCommand, AgentsLeaveCommand } from "./platform-agents-rooms"
+import { AgentsJoinCommand, AgentsLeaveCommand, AgentsRoleCommand } from "./platform-agents-rooms"
 import { AgentsPauseCommand, AgentsResumeCommand, AgentsStopCommand } from "./platform-agents-governance"
 import { AgentsHandBackCommand, AgentsTakeOverCommand, AgentsWatchCommand } from "./platform-agents-watch"
 import { AgentsReplayCommand, AgentsRunsCommand } from "./platform-agents-runs"
@@ -2101,6 +2101,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsThreadCommand)
       .command(AgentsJoinCommand)
       .command(AgentsLeaveCommand)
+      .command(AgentsRoleCommand)
       .command(AgentsExportCommand)
       .command(AgentsPacksCommand)
       .command(AgentsInstallCommand)

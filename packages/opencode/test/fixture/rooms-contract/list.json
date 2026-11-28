@@ -1,0 +1,204 @@
+{
+    "current_page": 1,
+    "data": [
+        {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "user_id": 1001,
+            "bloq_id": 1009,
+            "organization_id": null,
+            "name": "Launch plan",
+            "description": null,
+            "status": "active",
+            "visibility": "private",
+            "allowed_organizations": null,
+            "encrypted": 0,
+            "metadata": null,
+            "created_at": "2026-11-28T12:00:00+00:00",
+            "updated_at": "2026-11-28T12:00:00+00:00",
+            "messages_count": 1,
+            "project": {
+                "id": 1009,
+                "name": "Pricing launch"
+            },
+            "owner_name": "Alex Mayo",
+            "you": {
+                "role": "editor",
+                "can_post": true,
+                "can_stop": false,
+                "is_owner": false
+            },
+            "activity": {
+                "present": [
+                    {
+                        "user_id": 1008,
+                        "name": "Flo Rivera",
+                        "state": "active",
+                        "typing": true,
+                        "seen_at": "2026-11-28T12:00:00+00:00"
+                    },
+                    {
+                        "user_id": 1001,
+                        "name": "Alex Mayo",
+                        "state": "background",
+                        "typing": false,
+                        "seen_at": "2026-11-28T12:00:00+00:00"
+                    }
+                ],
+                "last": {
+                    "kind": "person",
+                    "name": "Alex Mayo",
+                    "is_you": false,
+                    "text": "Plan the launch",
+                    "at": "2026-11-28T12:00:00+00:00"
+                },
+                "unread": 1,
+                "working": true
+            },
+            "participants": [
+                {
+                    "id": 1002,
+                    "thread_id": "00000000-0000-4000-8000-000000000001",
+                    "participant_type": "agent",
+                    "agent_id": "1003",
+                    "agent_type": "internal",
+                    "external_agent_id": null,
+                    "role": "lead",
+                    "can_respond": true,
+                    "auto_respond": false,
+                    "response_triggers": null,
+                    "metadata": null,
+                    "created_at": "2026-11-28T12:00:00+00:00",
+                    "updated_at": "2026-11-28T12:00:00+00:00"
+                },
+                {
+                    "id": 1004,
+                    "thread_id": "00000000-0000-4000-8000-000000000001",
+                    "participant_type": "agent",
+                    "agent_id": "1005",
+                    "agent_type": "internal",
+                    "external_agent_id": null,
+                    "role": "participant",
+                    "can_respond": true,
+                    "auto_respond": true,
+                    "response_triggers": null,
+                    "metadata": null,
+                    "created_at": "2026-11-28T12:00:00+00:00",
+                    "updated_at": "2026-11-28T12:00:00+00:00"
+                },
+                {
+                    "id": 1007,
+                    "thread_id": "00000000-0000-4000-8000-000000000001",
+                    "participant_type": "agent",
+                    "agent_id": "1006",
+                    "agent_type": "internal",
+                    "external_agent_id": null,
+                    "role": "participant",
+                    "can_respond": true,
+                    "auto_respond": false,
+                    "response_triggers": null,
+                    "metadata": null,
+                    "created_at": "2026-11-28T12:00:00+00:00",
+                    "updated_at": "2026-11-28T12:00:00+00:00"
+                },
+                {
+                    "id": 1010,
+                    "thread_id": "00000000-0000-4000-8000-000000000001",
+                    "participant_type": "agent",
+                    "agent_id": "session:ses_alex",
+                    "agent_type": "internal",
+                    "external_agent_id": null,
+                    "role": "participant",
+                    "can_respond": true,
+                    "auto_respond": true,
+                    "response_triggers": null,
+                    "metadata": null,
+                    "created_at": "2026-11-28T12:00:00+00:00",
+                    "updated_at": "2026-11-28T12:00:00+00:00"
+                }
+            ],
+            "agents": [
+                {
+                    "id": 1003,
+                    "user_id": 1001,
+                    "name": "Planner",
+                    "config": {
+                        "model": "gpt-4.1-nano"
+                    },
+                    "settings": {
+                        "webAccess": true,
+                        "agentIntegrations": []
+                    },
+                    "pivot": {
+                        "role": "lead",
+                        "auto_respond": false,
+                        "can_respond": true
+                    }
+                },
+                {
+                    "id": 1005,
+                    "user_id": 1001,
+                    "name": "Researcher",
+                    "config": {
+                        "model": "gpt-4.1-nano"
+                    },
+                    "settings": {
+                        "webAccess": true,
+                        "agentIntegrations": []
+                    },
+                    "pivot": {
+                        "role": "participant",
+                        "auto_respond": true,
+                        "can_respond": true
+                    }
+                },
+                {
+                    "id": 1006,
+                    "user_id": 1001,
+                    "name": "Writer",
+                    "config": {
+                        "model": "gpt-4.1-nano"
+                    },
+                    "settings": {
+                        "webAccess": true,
+                        "agentIntegrations": []
+                    },
+                    "pivot": {
+                        "role": "participant",
+                        "auto_respond": false,
+                        "can_respond": true
+                    }
+                }
+            ]
+        }
+    ],
+    "first_page_url": "http://localhost:8000/api/threads?page=1",
+    "from": 1,
+    "last_page": 1,
+    "last_page_url": "http://localhost:8000/api/threads?page=1",
+    "links": [
+        {
+            "url": null,
+            "label": "&laquo; Previous",
+            "page": null,
+            "active": false
+        },
+        {
+            "url": "http://localhost:8000/api/threads?page=1",
+            "label": "1",
+            "page": 1,
+            "active": true
+        },
+        {
+            "url": null,
+            "label": "Next &raquo;",
+            "page": null,
+            "active": false
+        }
+    ],
+    "next_page_url": null,
+    "path": "http://localhost:8000/api/threads",
+    "per_page": 20,
+    "prev_page_url": null,
+    "to": 1,
+    "total": 1
+}
