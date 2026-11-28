@@ -1,0 +1,87 @@
+/* The five detail views with actions (#194582). Layout comes from DetailView; these are the extras. */
+[data-component="detail-view"][data-pane] {
+  [data-slot="detail-view-actions"] {
+    align-items: center;
+  }
+  [data-slot="iris-dv-logo"] {
+    display: block;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    object-fit: contain;
+    background: var(--background-base);
+  }
+  [data-slot="iris-dv-chips"] {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  [data-slot="iris-dv-chip"] {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--text-base) 8%, transparent);
+    color: var(--text-base);
+    font-size: var(--font-size-caption);
+    line-height: var(--font-size-caption--line-height);
+  }
+  [data-slot="iris-dv-note"] {
+    margin: 0;
+    color: var(--text-weak);
+    font-size: var(--font-size-small);
+    line-height: var(--font-size-small--line-height);
+  }
+  [data-slot="iris-dv-note"][data-state="failed"] {
+    color: var(--text-strong);
+  }
+}
+
+/* A schema's fields, as a table. */
+[data-slot="iris-dv-fields"] {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+
+  th {
+    padding: 0 8px 6px 0;
+    text-align: start;
+    color: var(--text-weak);
+    font-weight: var(--font-weight-regular);
+    border-bottom: 1px solid var(--border-weaker-base);
+  }
+  td {
+    padding: 7px 8px 7px 0;
+    vertical-align: top;
+    color: var(--text-base);
+    border-bottom: 1px solid var(--border-weaker-base);
+  }
+  td:first-child {
+    color: var(--text-strong);
+  }
+  td:first-child [data-component="status-badge"] {
+    margin-inline-start: 6px;
+  }
+  td:last-child {
+    color: var(--text-weak);
+  }
+  td[data-required] {
+    color: var(--text-strong);
+  }
+}
+
+/* The confirm a route write opens: the run flow's look, plus its own error line. */
+[data-slot="iris-dv-confirm"] [data-slot="iris-dv-error"] {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+}
+
+/* Hive › Peers list: the one action that belongs to the list, not to a row. */
+[data-slot="iris-peers-bar"] {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px 6px;
+}
