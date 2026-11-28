@@ -2428,6 +2428,8 @@ export interface SchemaField {
   type: string
   sortable?: boolean
   filterable?: boolean
+  /** A record cannot be saved without it (#194582: the Info tab's fields table says so). */
+  required?: boolean
   /**
    * "phi" marks a field the platform treats as protected health information.
    *
@@ -2449,6 +2451,10 @@ export interface Schema {
   fields: SchemaField[]
   /** The field a record is named by, when the schema nominates one. */
   displayField?: string
+  /** When the schema itself last changed. */
+  updatedAt?: string
+  /** Live records in it, when the platform said (#194582). Absent = not measured, never 0. */
+  recordCount?: number
 }
 
 /**
@@ -2479,6 +2485,7 @@ export function readSchemaFields(blob: unknown): SchemaField[] {
         type: String(f.type ?? "string"),
         sortable: f.sortable === true ? true : undefined,
         filterable: f.filterable === true ? true : undefined,
+        required: f.required === true || f.required === 1 ? true : undefined,
         visibility: typeof f.visibility === "string" ? f.visibility : undefined,
       }))
   }
@@ -2491,6 +2498,8 @@ export function readSchemaFields(blob: unknown): SchemaField[] {
       type: String(def?.type ?? (typeof def === "string" ? def : "?")),
     }))
 }
+
+const SCHEMA_COUNT_CAP = 40
 
 export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ schemas: Schema[] }>> {
   const userId = await resolveUserId()
@@ -2531,7 +2540,20 @@ export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ sch
         // rendered, so nothing failed; it was simply nonsense on screen for every schema.
         fields: readSchemaFields(r.fields),
         displayField: typeof r.fields?.display_field === "string" ? r.fields.display_field : undefined,
+        updatedAt: typeof r.updated_at === "string" ? r.updated_at : undefined,
       }))
+    // How many records each holds (#194582) — the list endpoint does not say; each schema's own
+    // read does. A board has a handful; capped so a huge one never fans out into hundreds of calls.
+    await Promise.all(
+      schemas.slice(0, SCHEMA_COUNT_CAP).map(async (s) => {
+        if (!s.slug) return
+        const c = await irisFetch(`/api/v1/atlas/schemas/${encodeURIComponent(s.slug)}`)
+          .then((x) => (x.ok ? x.json() : null))
+          .catch(() => null)
+        const n = (c as any)?.data?.record_count ?? (c as any)?.record_count
+        if (typeof n === "number" && Number.isFinite(n)) s.recordCount = n
+      }),
+    )
     return { measured: true, data: { schemas } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { schemas: [] } }

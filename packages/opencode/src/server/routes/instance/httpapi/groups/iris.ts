@@ -1105,6 +1105,7 @@ const SchemaFieldSchema = Schema.Struct({
   type: Schema.String,
   sortable: Schema.optional(Schema.Boolean),
   filterable: Schema.optional(Schema.Boolean),
+  required: described(Schema.optional(Schema.Boolean), "A record cannot be saved without it."),
   visibility: described(
     Schema.optional(Schema.String),
     '"phi" marks protected health information. Carried so a table can LABEL the column rather than rendering it like any other.',
@@ -1148,6 +1149,8 @@ const SchemasResponse = Schema.Struct({
       scope: Schema.Literals(["board", "account"]),
       fields: Schema.Array(SchemaFieldSchema),
       displayField: Schema.optional(Schema.String),
+      updatedAt: described(Schema.optional(Schema.String), "When the schema itself last changed."),
+      recordCount: described(Schema.optional(Schema.Finite), "Live records, from the schema's own read. Absent = not measured, never zero."),
     }).annotate({ identifier: "IrisSchema" }),
   ),
 }).annotate({ identifier: "IrisSchemasResponse" })
@@ -2381,6 +2384,10 @@ export const IrisPaths = {
   cliCommands: `${root}/commands`,
   cliRun: `${root}/run`,
   hivePeers: `${root}/hive/peers`,
+  // #194582: the detail views' writes that had no route and no CLI command.
+  hivePeerRevoke: `${root}/hive/peers/:connectionID`,
+  sitePublish: `${root}/site/:siteID/publish`,
+  mcpRemove: `${root}/mcp-remove`,
   graph: `${root}/graph`,
   graphBoard: `${root}/graph/:bloqID`,
   pageDoc: `${root}/page/:pageID`,
@@ -4734,6 +4741,51 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List Hive peer connections",
           description:
             "The other half of Hive: the panel could only ever show YOUR machines. Active connections sort first — a live one is what you act on, a pending code is a reminder.",
+        }),
+      ),
+      HttpApiEndpoint.delete("hivePeerRevoke", IrisPaths.hivePeerRevoke, {
+        params: { connectionID: Schema.String },
+        success: described(
+          Schema.Struct({ ok: Schema.Boolean, reason: Schema.optional(Schema.String) }).annotate({ identifier: "IrisHivePeerRevoke" }),
+          "Whether the connection is gone",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.hivePeerRevoke",
+          summary: "End a Hive peer connection (or cancel an unaccepted invite)",
+          description:
+            "#194582. iris-api DELETE /api/v6/nodes/connections/{id}: either side may end it; they lose access to your machines at once. The CLI has no command for this.",
+        }),
+      ),
+      HttpApiEndpoint.post("sitePublish", IrisPaths.sitePublish, {
+        params: { siteID: Schema.NumberFromString },
+        success: described(SiteActionResponse, "Whether it is live, and the site read back"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.sitePublish",
+          summary: "Publish a site",
+          description: "#194582. fl-api PUT /api/v1/sites/{id} {status: published}. The site goes live at its address; its pages keep their own status.",
+        }),
+      ),
+      HttpApiEndpoint.post("mcpRemove", IrisPaths.mcpRemove, {
+        payload: Schema.Struct({
+          name: Schema.String,
+          project: described(Schema.optional(Schema.String), "The session's project folder: its settings files are looked at first."),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            file: described(Schema.optional(Schema.String), "The settings file it was taken out of."),
+          }).annotate({ identifier: "IrisMcpRemove" }),
+          "Whether the server was taken out of the settings",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.mcpRemove",
+          summary: "Remove an MCP server from the settings",
+          description:
+            "#194582. Takes `mcp.<name>` out of the nearest settings file that defines it (project folder up to the repository root, then the global folder), keeping comments. Managed settings are never edited. Disconnect it first (POST /mcp/{name}/disconnect); the running project forgets it on its next load.",
         }),
       ),
       HttpApiEndpoint.post("agentDesktop", IrisPaths.agentDesktop, {

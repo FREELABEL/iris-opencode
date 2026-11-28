@@ -176,6 +176,8 @@ import { LeadsListRow } from "./iris-leads-list"
 import { stageTone } from "./iris-leads-list-model"
 import { rememberIrisNames } from "./iris-names"
 import { recordDetail } from "./iris-record-detail"
+import { DETAIL_PANES, INTEGRATION_TONE, integrationState, mcpRowLine, mcpStatusWord, peerPermissionWords, peerStatusWord, plainIntegrationError, schemaRecordWords } from "./iris-detail-models"
+import { IrisPaneDetail, PeerAccept, useMcpToolCounts } from "./iris-detail-panes"
 import "./iris-ad-screens.css"
 import { filterRecords, sortRecords, toCsv, type SortDir } from "./iris-records-view"
 
@@ -1085,6 +1087,11 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
     { id: "info", label: "Info" },
     { id: "json", label: "JSON" },
   ],
+  // #194582: the connection id and raw permissions live here, not in the detail's words.
+  peers: [
+    { id: "info", label: "Info" },
+    { id: "json", label: "JSON" },
+  ],
 }
 const DEFAULT_DETAIL_TABS: readonly DetailTab[] = [{ id: "info", label: "Info" }]
 
@@ -1652,6 +1659,8 @@ export function SessionIrisTab() {
     const q = mcpDirParam()
     return q ? `${path}${path.includes("?") ? "&" : "?"}${q}` : path
   }
+  // MCP servers taken out of the settings from their detail (#194582). See the MCP fetch.
+  const [removedMcp, setRemovedMcp] = createSignal<Set<string>>(new Set())
   /** Every request to the sidecar. `init` exists because this panel now WRITES (page saves). */
   const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
 
@@ -1863,7 +1872,8 @@ export function SessionIrisTab() {
         const [statusRes, configRes] = await Promise.all([doFetch(withMcpDir("/mcp")), doFetch(withMcpDir("/config"))])
         const status = statusRes.ok ? ((await statusRes.json()) as any) : {}
         const config = configRes.ok ? ((await configRes.json()) as any)?.mcp : undefined
-        const servers = mcpServerRows(config, status)
+        // A server removed here (#194582) stays out until the project reloads its settings.
+        const servers = mcpServerRows(config, status).filter((m) => !removedMcp().has(m.name))
         return {
           measured: statusRes.ok,
           reason: statusRes.ok ? undefined : `the sidecar could not read MCP status (HTTP ${statusRes.status})`,
@@ -3356,10 +3366,31 @@ export function SessionIrisTab() {
   // A record opens on its FIRST tab: Records for a dataset (#193285), Info for everything else.
   // Carrying the previous record's tab over lands you on "Records" for a page that has none,
   // which renders as a broken detail rather than a choice.
-  createEffect(() => {
-    const r = openRow()
-    setDetailTab(detailTabsFor(r?.pane ?? "")[0]?.id ?? "info")
-  })
+  // Keyed on WHICH record (#194582): the same record read again after an action keeps its tab.
+  createEffect(
+    on(
+      () => {
+        const r = openRow()
+        return r ? `${r.pane}\u0000${r.raw?.id ?? r.raw?.slug ?? r.raw?.name ?? r.title}` : ""
+      },
+      (key) => setDetailTab(detailTabsFor(key.split("\u0000")[0] ?? "")[0]?.id ?? "info"),
+    ),
+  )
+  // After Test, Publish, Turn off…: the open record is drawn from the list as it is now (#194582).
+  createEffect(
+    on(rows, (list) => {
+      const r = untrack(openRow)
+      if (!r || !DETAIL_PANES.has(r.pane ?? "")) return
+      const same = (x: any) =>
+        x && (r.raw?.id != null ? String(x.id) === String(r.raw.id) : r.raw?.slug ? x.slug === r.raw.slug : x.name === r.raw?.name)
+      const fresh = (list ?? []).find(same)
+      if (fresh && fresh !== r.raw && JSON.stringify(fresh) !== JSON.stringify(r.raw)) setOpenRow(describeRow(r.pane!, fresh))
+    }, { defer: true }),
+  )
+  const mcpToolCounts = useMcpToolCounts(() => (pane() === "mcp" ? rows() : undefined), doFetch, withMcpDir)
+  // "Add page" opens the Pages tab with the chooser open; any other tab clears it.
+  const [siteAddNow, setSiteAddNow] = createSignal(false)
+  createEffect(on(detailTab, (id) => id !== "sitepages" && setSiteAddNow(false), { defer: true }))
 
   // A dataset asked for by the agent (side_panel action=dataset), opened once the Schemas list has it.
   const [wantDataset, setWantDataset] = createSignal<string | undefined>()
@@ -4393,7 +4424,7 @@ export function SessionIrisTab() {
                   {/* THE UPTIME STRIP — the provider's recent history, one bar per window.
                     Shown above the fields because "has this been flapping" is a shape, not a
                     value, and a column of dates cannot answer it. */}
-                  <Show when={openRow()!.raw?.health?.bars?.length}>
+                  <Show when={openRow()!.pane !== "integrations" && openRow()!.raw?.health?.bars?.length}>
                     <div class="pb-3">
                       <div class="iris-bars">
                         <For each={openRow()!.raw.health.bars}>
@@ -4450,7 +4481,38 @@ export function SessionIrisTab() {
                   </Show>
                   {/* A LEAD OR AN AGENT IS READ AS A RECORD YOU ACT ON (#194363): badge, the facts that
                     matter in plain words, real buttons. Ids and scores stay in the JSON tab. */}
-                  <Show when={recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k, p) => language.t(k as any, p))}>
+                  {/* THE FIVE THAT ENDED IN A LIST OF KEYS (#194582): Integrations, Sites, MCP, Peers,
+                    Schemas. Status, the facts in words, real buttons; the raw record is the JSON tab. */}
+                  <Show when={DETAIL_PANES.has(openRow()!.pane ?? "") && openRow()!.raw}>
+                    <IrisPaneDetail
+                      pane={openRow()!.pane!}
+                      row={openRow()!.raw}
+                      doFetch={doFetch}
+                      withMcpDir={withMcpDir}
+                      project={projectDir() || undefined}
+                      board={activeBloq() != null ? Number(activeBloq()) : undefined}
+                      mcpTools={openRow()!.pane === "mcp" ? mcpToolCounts()[String(openRow()!.raw?.name)] : undefined}
+                      connectNote={
+                        connect() && connect()!.type === String(openRow()!.raw?.type ?? openRow()!.raw?.provider)
+                          ? { state: connect()!.state, message: connect()!.message }
+                          : undefined
+                      }
+                      onReconnect={(type) => void startConnect(type)}
+                      openExternal={(url) => platform.openExternal(url)}
+                      onTab={(id) => setDetailTab(id)}
+                      onAddPage={() => {
+                        setSiteAddNow(true)
+                        setDetailTab("sitepages")
+                      }}
+                      onChanged={() => void refetchSurface()}
+                      onGone={(name) => {
+                        if (openRow()?.pane === "mcp" && name) setRemovedMcp(new Set([...removedMcp(), name]))
+                        setOpenRow(null)
+                        void refetchSurface()
+                      }}
+                    />
+                  </Show>
+                  <Show when={!DETAIL_PANES.has(openRow()!.pane ?? "") && recordDetail(openRow()!.pane ?? "", openRow()!.raw, (k, p) => language.t(k as any, p))}>
                     {(d) => (
                       <DetailView
                         data-slot="iris-record-detail"
@@ -4827,6 +4889,7 @@ export function SessionIrisTab() {
                     board={ownerBoard(openRow()!.raw?.owner) ?? (activeBloq() != null ? Number(activeBloq()) : undefined)}
                     doFetch={doFetch}
                     navItems={openRow()!.raw?.navItems}
+                    startAdding={siteAddNow()}
                     onChanged={() => void refetchSurface()}
                   />
                 </Match>
@@ -5893,55 +5956,64 @@ export function SessionIrisTab() {
                 </Match>
 
                 <Match when={pane() === "mcp"}>
+                  {/* ListRow (#194582): name, how many tools or what went wrong, a status in words. */}
                   <For each={rows()}>
                     {(m) => (
-                      <button
-                        type="button"
+                      <ListRow
                         data-slot="iris-mcp-row"
-                        class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), m))}
-                      >
-                        <span
-                          class="shrink-0"
-                          classList={{
-                            "text-text-base": m.status === "connected",
-                            "text-text-weak": m.status !== "connected",
-                          }}
-                        >
-                          {m.status === "connected" ? "●" : "○"}
-                        </span>
-                        <span class="text-13-regular text-text-base min-w-0 flex-1">{m.name}</span>
-                        {/* The status is the whole point of the row — "failed" and "needs_auth" are
-                          the two a person acts on. */}
-                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                          {m.status === "connected" ? (m.type ?? "") : m.status.replace("_", " ")}
-                        </span>
-                      </button>
+                        class="border-b border-border-weaker-base last:border-0"
+                        leading={<Avatar
+                            size="small"
+                            fallback={String(m.name ?? "?").slice(0, 1).toUpperCase()}
+                            background="color-mix(in srgb, var(--text-base) 10%, transparent)"
+                            foreground="var(--text-base)"
+                          />}
+                        title={m.name}
+                        secondary={mcpRowLine(m, mcpToolCounts()[m.name], (k, p) => language.t(k as any, p as any))}
+                        status={{ ...mcpStatusWord(m.status, (k) => language.t(k as any)), mark: "dot" }}
+                        onSelect={() => setOpenRow(describeRow(pane(), m))}
+                        selectLabel={m.name}
+                      />
                     )}
                   </For>
                 </Match>
 
                 <Match when={pane() === "peers"}>
+                  {/* ListRow (#194582): who, what they may do, when an invite runs out. Codes and
+                    connection ids are in the detail (Copy invite) and the JSON tab, not on the row. */}
+                  <div data-slot="iris-peers-bar">
+                    <PeerAccept doFetch={doFetch} onChanged={() => void refetchSurface()} variant="secondary" />
+                  </div>
                   <For each={rows()}>
                     {(p) => (
-                      <button
-                        type="button"
-                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), p))}
-                      >
-                        <span class="iris-hive__dot shrink-0" data-on={p.active ? "1" : undefined} title={p.status} />
-                        <span class="min-w-0 flex-1">
-                          <span class="block text-13-regular text-text-base truncate">{p.name}</span>
-                          <span class="block text-11-regular text-text-weaker truncate">
-                            {p.inviter ? "you invited" : "invited you"}
-                            {p.permissions?.length ? ` · ${p.permissions.join(", ")}` : ""}
+                      <ListRow
+                        data-slot="iris-peer-row"
+                        class="border-b border-border-weaker-base last:border-0"
+                        leading={<Avatar
+                            size="small"
+                            fallback={String(p.name ?? "?")
+                              .split(/\s+/)
+                              .slice(0, 2)
+                              .map((w: string) => w.slice(0, 1).toUpperCase())
+                              .join("") || "?"}
+                            background="color-mix(in srgb, var(--text-base) 10%, transparent)"
+                            foreground="var(--text-base)"
+                          />}
+                        title={p.name}
+                        secondary={
+                          <span data-slot="iris-dv-chips">
+                            <For each={peerPermissionWords(p.permissions, (k) => language.t(k as any))}>{(c) => <span data-slot="iris-dv-chip">{c}</span>}</For>
                           </span>
-                        </span>
-                        {/* A pending invite is only useful WITH its code, so the code is on the row. */}
-                        <Show when={p.inviteCode}>
-                          <span class="font-mono text-11-regular text-text-weaker shrink-0">{p.inviteCode}</span>
-                        </Show>
-                      </button>
+                        }
+                        status={{ ...peerStatusWord(p, (k) => language.t(k as any)), mark: "dot" }}
+                        trailing={
+                          <Show when={p.status === "pending" && p.expiresAt}>
+                            {language.t("iris.dv.peer.expiresIn" as any, { when: relativeWords(p.expiresAt) } as any)}
+                          </Show>
+                        }
+                        onSelect={() => setOpenRow(describeRow(pane(), p))}
+                        selectLabel={p.name}
+                      />
                     )}
                   </For>
                 </Match>
@@ -6189,91 +6261,79 @@ export function SessionIrisTab() {
                 </Match>
 
                 <Match when={pane() === "integrations"}>
+                  {/* ListRow (#194582): the provider's mark, why it is failing in words, when it was
+                    last tested, and a status that says Connected / Needs attention / Never tested. */}
                   <For each={rows()}>
                     {(i) => (
-                      <button
-                        type="button"
-                        class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), i))}
-                      >
-                        {/* The provider mark carries the identity; the ring carries the state.
-                          Twenty-five identical grey dots was a list you could not scan and
-                          could not triage. */}
-                        <span
-                          class="iris-int__mark shrink-0"
-                          classList={{
-                            "iris-int__mark--live": integrationHealth(i) === "live",
-                            "iris-int__mark--error": integrationHealth(i) === "error",
-                            "iris-int__mark--off": integrationHealth(i) === "off",
-                          }}
-                          title={i.type ?? i.name}
-                        >
-                          {/* The real brand mark when the platform has one, the monogram when it
-                            does not. The monogram sits UNDERNEATH rather than being replaced:
-                            logo.dev answers 200 with its own generic glyph for an unknown name,
-                            so `onerror` fires only on a network failure — and a row that loses
-                            its mark to a dropped request should still say which service it is. */}
-                          <Show when={i.logoUrl}>
-                            <img
-                              class="iris-int__logo"
-                              src={i.logoUrl}
-                              alt=""
-                              aria-hidden="true"
-                              loading="lazy"
-                              decoding="async"
-                              onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
-                              onError={(e) => {
-                                e.currentTarget.parentElement?.removeAttribute("data-logo")
-                                e.currentTarget.remove()
-                              }}
-                            />
-                          </Show>
-                          <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
-                        </span>
-                        <span class="min-w-0 flex-1">
-                          <span class="block text-13-regular text-text-base truncate">{i.name}</span>
-                          {/* An error says WHY here. A red mark with no reason is not actionable. */}
-                          <Show when={i.lastError}>
-                            <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
-                              {i.lastError}
-                            </span>
-                          </Show>
-                        </span>
-                        <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                          {i.account || i.category || i.status}
-                        </span>
-                      </button>
+                      <ListRow
+                        data-slot="iris-integration-row"
+                        class="border-b border-border-weaker-base last:border-0"
+                        leading={
+                          <span
+                            class="iris-int__mark shrink-0"
+                            classList={{
+                              "iris-int__mark--live": integrationHealth(i) === "live",
+                              "iris-int__mark--error": integrationHealth(i) === "error",
+                              "iris-int__mark--off": integrationHealth(i) === "off",
+                            }}
+                            title={i.type ?? i.name}
+                          >
+                            {/* The monogram stays underneath the logo: logo.dev answers 200 with a
+                              generic glyph for unknown names, so onerror fires only on a network
+                              failure — and the row should still say which service it is. */}
+                            <Show when={i.logoUrl}>
+                              <img
+                                class="iris-int__logo"
+                                src={i.logoUrl}
+                                alt=""
+                                aria-hidden="true"
+                                loading="lazy"
+                                decoding="async"
+                                onLoad={(e) => e.currentTarget.parentElement?.setAttribute("data-logo", "1")}
+                                onError={(e) => {
+                                  e.currentTarget.parentElement?.removeAttribute("data-logo")
+                                  e.currentTarget.remove()
+                                }}
+                              />
+                            </Show>
+                            <span class="iris-int__fallback">{providerMark(i.type, i.name)}</span>
+                          </span>
+                        }
+                        title={i.name}
+                        secondary={plainIntegrationError(i.lastError, (k) => language.t(k as any)) ?? (i.account || i.category)}
+                        time={i.lastTested}
+                        status={{
+                          label: language.t(`iris.dv.int.state.${integrationState(i)}` as any),
+                          tone: INTEGRATION_TONE[integrationState(i)],
+                          mark: "dot",
+                        }}
+                        onSelect={() => setOpenRow(describeRow(pane(), i))}
+                        selectLabel={i.name}
+                      />
                     )}
                   </For>
                 </Match>
 
                 <Match when={pane() === "schemas"}>
+                  {/* ListRow (#194582): records and when it last changed, not "board · 7f". Scope
+                    stays on the line: account-wide schemas must not read as this board's. */}
                   <For each={rows()}>
                     {(sc) => (
-                      <button
-                        type="button"
-                        class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element"
-                        onClick={() => setOpenRow(describeRow(pane(), sc))}
-                      >
-                        <div class="flex items-baseline gap-2">
-                          <span class="text-13-regular text-text-base min-w-0 flex-1">{sc.name}</span>
-                          {/* Scope is shown because 40 of these belong to the account, not the
-                            board — hiding that would put account-wide schemas under a board
-                            heading, which is the Pages bug again. */}
-                          <span class="font-mono text-11-regular text-text-weaker shrink-0">
-                            {sc.scope === "account" ? "account" : "board"} · {sc.fields.length}f
-                          </span>
-                        </div>
-                        <Show when={sc.fields.length}>
-                          <p class="font-mono text-11-regular text-text-weak ps-2 pt-0.5 truncate">
-                            {/* `key`, not `name`. The server parse was fixed so fields arrive as
-                              {key,label,type,visibility}; this line still read f.name, and
-                              undefined joined by " · " is a row of separators with nothing
-                              between them. The fix and the regression were the same change. */}
-                            {sc.fields.map((f: any) => f.label || f.key).join(" · ")}
-                          </p>
-                        </Show>
-                      </button>
+                      <ListRow
+                        data-slot="iris-schema-row"
+                        class="border-b border-border-weaker-base last:border-0"
+                        title={sc.name}
+                        secondary={[
+                          language.t((sc.fields.length === 1 ? "iris.dv.schema.fields.one" : "iris.dv.schema.fields.other") as any, { count: String(sc.fields.length) } as any),
+                          sc.scope === "account" ? language.t("iris.dv.schema.scope.account" as any) : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        time={sc.updatedAt}
+                        trailing={schemaRecordWords(sc, (k, p) => language.t(k as any, p as any))}
+                        onSelect={() => setOpenRow(describeRow(pane(), sc))}
+                        selectLabel={sc.name}
+                      />
                     )}
                   </For>
                 </Match>

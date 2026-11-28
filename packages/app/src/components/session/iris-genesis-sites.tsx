@@ -301,6 +301,8 @@ export function SitePagesEditor(props: {
   navItems?: { label: string; url: string }[]
   openExternal?: (url: string) => void
   onChanged?: () => void
+  /** Open with the add-pages chooser already showing (a detail's "Add page", #194582). */
+  startAdding?: boolean
 }) {
   const language = useLanguage()
   const [site, { mutate, refetch }] = createResource(
@@ -358,7 +360,7 @@ export function SitePagesEditor(props: {
   }
 
   // ── adding pages ──
-  const [adding, setAdding] = createSignal(false)
+  const [adding, setAdding] = createSignal(!!props.startAdding)
   const [chosen, setChosen] = createSignal<Set<number>>(new Set())
   const [board] = createResource(
     () => (adding() && props.board != null ? props.board : undefined),

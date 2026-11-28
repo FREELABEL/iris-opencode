@@ -6,6 +6,7 @@
  */
 import type { StatusTone } from "@opencode-ai/ui/status-badge"
 import { stageTone } from "./iris-leads-list-model"
+import { DETAIL_PANES, paneDetail } from "./iris-detail-models"
 
 export type RecordFact = { label: string; value?: string; numeric?: boolean; wide?: boolean }
 export type RecordDetail = {
@@ -38,6 +39,8 @@ const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : und
 
 export function recordDetail(pane: string, r: any, t: T, now = new Date()): RecordDetail | undefined {
   if (!r) return undefined
+  // Integrations, Sites, MCP, Peers, Schemas (#194582): their own words, in iris-detail-models.ts.
+  if (DETAIL_PANES.has(pane)) return paneDetail(pane, r, t)
   if (pane === "leads") {
     const where = [text(r.city), text(r.country)].filter(Boolean).join(", ")
     const note = r.latestNote?.text

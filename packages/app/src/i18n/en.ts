@@ -1,6 +1,7 @@
 import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
 // IRIS panes (#194375 W5): each pane's English lives beside the others in its own file.
 import { IRIS_GENESIS_SITES_ENGLISH } from "./iris-genesis-sites"
+import { IRIS_DETAIL_VIEWS_ENGLISH } from "./iris-detail-views"
 import { IRIS_GENESIS_PAGES_ENGLISH } from "./iris-genesis-pages"
 import { IRIS_ARTIFACT_PUBLISH_ENGLISH } from "./iris-artifact-publish"
 import { IRIS_INBOX_ENGLISH } from "./iris-inbox"
@@ -17,6 +18,7 @@ import { IRIS_ROOM_OUTBOX_PULSE_ENGLISH } from "./iris-room-outbox-pulse"
 export const dict = {
   ...DESKTOP_NATIVE_ENGLISH,
   ...IRIS_GENESIS_SITES_ENGLISH,
+  ...IRIS_DETAIL_VIEWS_ENGLISH,
   ...IRIS_GENESIS_PAGES_ENGLISH,
   ...IRIS_ARTIFACT_PUBLISH_ENGLISH,
   ...IRIS_INBOX_ENGLISH,
