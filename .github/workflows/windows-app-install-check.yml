@@ -1,0 +1,72 @@
+# One-off real-Windows check for #194217 / #194356: does `iris pages install` put an IRIS app in
+# the Start menu with its own icon, the way Kristen would see it? Runs on push to this branch only.
+name: windows-app-install-check
+on:
+  push:
+    branches: [wt/194217-windows-app-check]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download IRIS CLI 1.5.75 for Windows
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.5.75 -R FREELABEL/iris-opencode -p iris-windows-x64.zip -D "$env:RUNNER_TEMP"
+          Expand-Archive "$env:RUNNER_TEMP\iris-windows-x64.zip" -DestinationPath "$env:RUNNER_TEMP\iris"
+          $exe = (Get-ChildItem -Recurse "$env:RUNNER_TEMP\iris" -Filter iris.exe | Select-Object -First 1).FullName
+          "IRIS_EXE=$exe" | Out-File -Append $env:GITHUB_ENV
+          & $exe --version
+
+      - name: iris pages install alex-command-center
+        shell: pwsh
+        run: |
+          & $env:IRIS_EXE pages install alex-command-center --json
+          if ($LASTEXITCODE -ne 0) { throw "install exited $LASTEXITCODE" }
+
+      - name: Read the Start-menu shortcut back with Windows' own shell
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\IRIS Apps'
+          Get-ChildItem $dir | Format-Table Name, Length
+          $lnk = Get-ChildItem $dir -Filter *.lnk | Select-Object -First 1
+          if (-not $lnk) { throw "no .lnk in IRIS Apps" }
+          $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk.FullName)
+          "Name:         $($lnk.Name)"
+          "TargetPath:   $($s.TargetPath)"
+          "Arguments:    $($s.Arguments)"
+          "IconLocation: $($s.IconLocation)"
+          $ico = $s.IconLocation -replace ',\d+$',''
+          if (-not (Test-Path $ico)) { throw "icon file missing: $ico" }
+          if ($s.TargetPath -notmatch 'msedge\.exe$') { Write-Warning "not Edge app mode: $($s.TargetPath)" }
+          if ($s.Arguments -notmatch '^--app=https://heyiris\.io/p/alex-command-center') { throw "wrong arguments: $($s.Arguments)" }
+
+          Add-Type -AssemblyName System.Drawing
+          $out = Join-Path $env:RUNNER_TEMP 'icons'; New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($n in 16, 32, 48, 256) {
+            $i = New-Object System.Drawing.Icon($ico, $n, $n)
+            $b = $i.ToBitmap(); "ico frame for $n px -> $($b.Width)x$($b.Height)"
+            $b.Save((Join-Path $out "ico-$n.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          # What Windows itself shows for the shortcut (Explorer / Start menu use the shell's icon).
+          $shown = [System.Drawing.Icon]::ExtractAssociatedIcon($lnk.FullName)
+          $shown.ToBitmap().Save((Join-Path $out 'shell-icon-for-lnk.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+          "shell icon for the .lnk: $($shown.Width)x$($shown.Height)"
+
+      - name: Remove it again
+        shell: pwsh
+        run: |
+          & $env:IRIS_EXE pages install alex-command-center --remove
+          $dir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\IRIS Apps'
+          if (Get-ChildItem $dir -Filter *.lnk -ErrorAction SilentlyContinue) { throw "shortcut not removed" }
+          "removed"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-icons
+          path: ${{ runner.temp }}/icons
