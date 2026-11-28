@@ -29,7 +29,17 @@ export type DraftTab = {
   worktree?: string
 }
 
-export type Tab = SessionTab | DraftTab
+/** A shared room (#194463): a chat with teammates and their agents, open in the main pane. */
+export type SharedTab = {
+  type: "shared"
+  server: ServerConnection.Key
+  roomId: string
+  title?: string
+}
+
+export type Tab = SessionTab | DraftTab | SharedTab
+
+export const sharedHref = (roomId: string) => `/shared/${encodeURIComponent(roomId)}`
 
 export type TabInfo = {
   title?: string
@@ -43,9 +53,10 @@ type RecentTab = {
 export const draftHref = (draftID: string) => `/new-session?draftId=${encodeURIComponent(draftID)}`
 
 export const tabHref = (tab: Tab) =>
-  tab.type === "draft" ? draftHref(tab.draftID) : sessionHref(tab.server, tab.sessionId)
+  tab.type === "draft" ? draftHref(tab.draftID) : tab.type === "shared" ? sharedHref(tab.roomId) : sessionHref(tab.server, tab.sessionId)
 
-export const tabKey = (tab: Tab) => (tab.type === "draft" ? `draft:${tab.draftID}` : `${tab.server}\n${tabHref(tab)}`)
+export const tabKey = (tab: Tab) =>
+  tab.type === "draft" ? `draft:${tab.draftID}` : tab.type === "shared" ? `shared:${tab.roomId}` : `${tab.server}\n${tabHref(tab)}`
 
 export function sessionHasOpenTab(tabs: Tab[], server: ServerConnection.Key, session: Session) {
   return tabs.some((tab) => tab.type === "session" && tab.server === server && tab.sessionId === session.id)
@@ -178,6 +189,22 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     }
 
     const actions = {
+      /** Open (or find) a shared room's tab (#194463). Its title is kept on the tab. */
+      addSharedTab: (tab: Omit<SharedTab, "type">) => {
+        const next: SharedTab = { type: "shared" as const, ...tab }
+        const index = store.findIndex((item) => tabKey(item) === tabKey(next))
+        if (index >= 0) {
+          if (tab.title && (store[index] as SharedTab).title !== tab.title) setStore(index, "title" as never, tab.title as never)
+          return store[index]
+        }
+        setStore(
+          produce((tabs) => {
+            if (tabs.some((item) => tabKey(item) === tabKey(next))) return
+            tabs.push(next)
+          }),
+        )
+        return next
+      },
       addSessionTab: (tab: Omit<SessionTab, "type">) => {
         const next = { type: "session" as const, ...tab }
         const existing = store.find((item) => tabKey(item) === tabKey(next))

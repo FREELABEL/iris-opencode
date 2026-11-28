@@ -159,7 +159,7 @@ export function SessionComposerRegion(props: {
               }}
             >
               <SessionTerminalDock />
-              <SessionAllowanceDock />
+              <SessionAllowanceDock busy={controller.busy} />
               <Show when={controller.followup()?.items.length}>
                 <SessionFollowupDock
                   items={controller.followup()!.items}

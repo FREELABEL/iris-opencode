@@ -81,6 +81,7 @@ import {
   syncLabel,
   syncOfPayload,
 } from "./iris-surface-store"
+import { IrisSharedRooms } from "./iris-shared-rooms"
 import { IrisRooms } from "./iris-rooms"
 import { IrisAgentLive } from "./iris-agent-live"
 import { IrisAgentGallery } from "./iris-agent-gallery"
@@ -145,6 +146,15 @@ import { IrisQuickEdit } from "./iris-quick-edit"
 import type { CardSchema } from "./iris-card-editor"
 import { liveLabel, readSse, type LiveState } from "./iris-atlas-live"
 import { CardBadges, type CardFace } from "./iris-card-badges"
+import {
+  BOARD_LANE_PAGE,
+  countBoard,
+  matchesFocus,
+  readSignal,
+  tidyPlan,
+  type BoardFocus,
+  type CardSignal,
+} from "./iris-atlas-signal"
 import { IrisOutboxHeld, type HeldItem } from "./iris-outbox-held"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { IrisNotifySettings } from "./iris-notify-settings"
@@ -746,6 +756,7 @@ const SCOPED_PANES = new Set(["pages", "agents"])
 const SELF_PANES = new Set([
   "agent-gallery",
   "rooms",
+  "shared-rooms",
   "artifacts",
   "atlas-artifacts",
   "agent-live",
@@ -874,6 +885,8 @@ export const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "all", label: "Agents", pane: "agent-gallery", path: () => `/iris/agents/gallery` },
     // Threaded multi-agent chat with @mention (#186511). Account-wide like Graph — a room is an
     // iris-api thread, not a board row — and it owns its pane: IrisRooms fetches for itself.
+    // Shared workspaces (#194307): live chats teammates shared with your projects.
+    { id: "shared", label: "Shared", pane: "shared-rooms", path: () => `/iris/shared-rooms` },
     { id: "rooms", label: "Rooms", pane: "rooms", path: () => `/iris/rooms` },
     // Every agent that runs on its own schedule (#189110): is it beating, did the last beat work,
     // when is the next — with Run now and Pause. Account-wide like Rooms (a heartbeat is the
@@ -1256,6 +1269,7 @@ const PANEL_HINTS: Record<string, string> = {
   "atlas/artifacts": "Atlas notes this conversation produced",
   agents: "The account's AI agents",
   "agents/all": "Every agent and person — filter, sort, open one to see it live",
+  "agents/shared": "Live chats your team shared with you — watch, type in, stop",
   "agents/rooms": "Group chats with several agents (@mention them)",
   "agents/heartbeats": "Scheduled agents: did the last run work, when is the next — run now or pause",
   "agents/running": "Every agent working right now — who started whom, and each call it makes",
@@ -2048,7 +2062,8 @@ export function SessionIrisTab() {
     lifted() && dropAt()?.listId === listId && dropAt()?.beforeId === beforeId
   /** Drag follows board order. Under another sort, "in front of this card" means nothing that
    *  survives a refresh, so the board says so instead of saving a position nobody chose. */
-  const canDrag = () => atlasView().sort === "board"
+  // A counts-strip focus reorders lanes on screen (#192839), so moving cards waits until it is cleared.
+  const canDrag = () => atlasView().sort === "board" && !boardFocus()
   /*
    * DELEGATE (#189933): the rail of agents and sessions beside the board. Open or closed is one
    * choice for every board — it is how you work, not a property of a board. Delegating does not
@@ -2171,7 +2186,8 @@ export function SessionIrisTab() {
   const [meId, setMeId] = createSignal<number | null>(null)
   let meAsked = false
   createEffect(() => {
-    if (pane() !== "atlas" || meAsked) return
+    // Shared rooms (#194307) need it too: "You" on your messages, and Stop for the turn you sent.
+    if ((pane() !== "atlas" && pane() !== "shared-rooms") || meAsked) return
     meAsked = true
     void doFetch("/iris/me")
       .then((r) => r.json())
@@ -2202,8 +2218,8 @@ export function SessionIrisTab() {
   // On a big board (#192670) the engine read only each list's first page: the next cards are read
   // by id first, then the board is re-read — it answers from the engine's copy, so nothing else moves.
   const [loadingMore, setLoadingMore] = createSignal<number>()
-  const showMoreCards = async (listId: number, loaded: number, total: number) => {
-    const next = (shownCards()[listId] ?? ATLAS_PAGE) + ATLAS_PAGE
+  const showMoreCards = async (listId: number, loaded: number, total: number, page = ATLAS_PAGE) => {
+    const next = (shownCards()[listId] ?? page) + page
     if (next > loaded && total > loaded) {
       setLoadingMore(listId)
       try {
@@ -2214,18 +2230,255 @@ export function SessionIrisTab() {
     }
     setShownCards((s) => ({ ...s, [listId]: next }))
   }
-  const MoreCards = (p: { listId: number; total: number; loaded: number }) => (
-    <Show when={moreOf(p.total, shownCards()[p.listId])}>
+  const MoreCards = (p: { listId: number; total: number; loaded: number; page?: number }) => (
+    <Show when={moreOf(p.total, shownCards()[p.listId], p.page)}>
       {(m) => (
         <button
           type="button"
           class="iris-atlas-more"
           disabled={loadingMore() === p.listId}
-          onClick={() => void showMoreCards(p.listId, p.loaded, p.total)}
+          onClick={() => void showMoreCards(p.listId, p.loaded, p.total, p.page)}
         >
           {loadingMore() === p.listId ? "Loading…" : moreLabel(m())}
         </button>
       )}
+    </Show>
+  )
+  /*
+   * THE COMMAND STRIP (#192839, direction C with B's epics). One row of live counts that double as
+   * filters — a focus DIMS everything else, it never hides a card — an Epics row, and "Tidy this
+   * board", which previews real status and priority read from titles and list names and writes
+   * nothing until a person applies it. All readings come from iris-atlas-signal.
+   */
+  const [boardFocus, setBoardFocus] = createSignal<BoardFocus>(null)
+  const [epicsOpen, setEpicsOpen] = createSignal(false)
+  const [tidyOpen, setTidyOpen] = createSignal(false)
+  const [tidyRunning, setTidyRunning] = createSignal<{ done: number; total: number; failed: number } | null>(null)
+  createEffect(
+    on(
+      activeBloq,
+      () => {
+        setBoardFocus(null)
+        setEpicsOpen(false)
+        setTidyOpen(false)
+        setTidyRunning(null)
+      },
+      { defer: true },
+    ),
+  )
+  const boardLists = () => (atlasRows() as AtlasList[]).map((l) => ({ name: l.name, items: l.items }))
+  const boardCounts = createMemo(() => countBoard(boardLists()))
+  const boardEpics = createMemo(() =>
+    (atlasRows() as AtlasList[]).flatMap((l) =>
+      l.items
+        .map((item) => ({ item, list: l.name, sig: readSignal(item, l.name) }))
+        .filter((e) => e.sig.epic),
+    ),
+  )
+  const tidyChanges = createMemo(() => tidyPlan(boardLists()))
+  const focusOn = (f: Exclude<BoardFocus, null>) => setBoardFocus((cur) => (cur === f ? null : f))
+  /**
+   * A lane's cards in the order the board draws them. Under a focus, the matches come first (in
+   * board order), so a match past the first 20 is on screen instead of every visible card dimming.
+   * Dragging pauses while a focus is on — the drawn order is then not the board's.
+   */
+  const laneItems = (list: AtlasList): AtlasItem[] => {
+    const f = boardFocus()
+    if (!f) return list.items
+    const lit: AtlasItem[] = []
+    const rest: AtlasItem[] = []
+    for (const it of list.items) (matchesFocus(sigOf(it, list.name), f) ? lit : rest).push(it)
+    return lit.length ? [...lit, ...rest] : list.items
+  }
+  async function applyTidy() {
+    const plan = tidyChanges()
+    setTidyRunning({ done: 0, total: plan.length, failed: 0 })
+    let failed = 0
+    for (const [i, c] of plan.entries()) {
+      const patch: QuickPatch = {}
+      if (c.status) patch.status = c.status
+      if (c.priority) patch.priority = c.priority
+      try {
+        const res = await doFetch(`/iris/item/${c.itemId}/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        })
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean }
+        if (!res.ok || j.ok === false) failed++
+      } catch {
+        failed++
+      }
+      setTidyRunning({ done: i + 1, total: plan.length, failed })
+    }
+    liveRefresh(false)
+    setMoveNote(
+      failed
+        ? `Tidied ${plan.length - failed} of ${plan.length} cards — ${failed} not saved; run Tidy again to retry.`
+        : `Tidied ${plan.length} cards — status and priority now match what their titles and lists said.`,
+    )
+    setTidyOpen(false)
+    setTidyRunning(null)
+  }
+  // One reading per card object. A re-read board brings new objects, so nothing goes stale.
+  const signals = new WeakMap<AtlasItem, { list: string; sig: CardSignal }>()
+  const sigOf = (item: AtlasItem, list: string): CardSignal => {
+    const hit = signals.get(item)
+    if (hit && hit.list === list) return hit.sig
+    const sig = readSignal(item, list)
+    signals.set(item, { list, sig })
+    return sig
+  }
+  const STATE_WORD = { done: "Done", in_progress: "In progress", blocked: "Blocked" } as const
+  // Colour only for exceptions (#192839 rule 1): a tinted StatusBadge, never an edge bar.
+  const STATE_TONE = { done: "success", in_progress: "accent", blocked: "critical" } as const
+  /** A progress ring — drawn only from child links recorded as data, never as a guessed 0%. */
+  const Ring = (p: { done: number; total: number; size?: number }) => {
+    const size = () => p.size ?? 30
+    const r = () => size() / 2 - 3
+    const c = () => 2 * Math.PI * r()
+    return (
+      <svg
+        class="iris-ring"
+        width={size()}
+        height={size()}
+        viewBox={`0 0 ${size()} ${size()}`}
+        role="img"
+        aria-label={`${p.done} of ${p.total} done`}
+      >
+        <circle class="iris-ring__track" cx={size() / 2} cy={size() / 2} r={r()} />
+        <circle
+          class="iris-ring__fill"
+          cx={size() / 2}
+          cy={size() / 2}
+          r={r()}
+          stroke-dasharray={`${(c() * p.done) / Math.max(1, p.total)} ${c()}`}
+          transform={`rotate(-90 ${size() / 2} ${size() / 2})`}
+        />
+      </svg>
+    )
+  }
+  /** What an epic says about its children, in words when no links are recorded. */
+  const epicProgress = (s: CardSignal) =>
+    s.progress
+      ? `${s.progress.done} of ${s.progress.total} tasks done`
+      : s.children
+        ? `${s.children} child ticket${s.children === 1 ? "" : "s"}`
+        : undefined
+  const BoardStrip = () => {
+    const c = () => boardCounts()
+    const chips = () =>
+      [
+        { id: "open" as const, label: "Open", n: c().open },
+        { id: "in_progress" as const, label: "In progress", n: c().in_progress },
+        { id: "blocked" as const, label: "Blocked", n: c().blocked },
+        // Questions need card bodies; a board read without them cannot say, so it says nothing.
+        { id: "questions" as const, label: "Open questions", n: c().questionsKnown ? c().questions : 0 },
+      ].filter((x) => x.n > 0)
+    return (
+      <div class="iris-strip" role="toolbar" aria-label="Board summary">
+        <For each={chips()}>
+          {(x) => (
+            <button
+              type="button"
+              class="iris-strip__count"
+              data-kind={x.id}
+              aria-pressed={boardFocus() === x.id}
+              title={boardFocus() === x.id ? "Show everything again" : `Dim everything except ${x.label.toLowerCase()}`}
+              onClick={() => focusOn(x.id)}
+            >
+              <span class="iris-strip__n font-mono tabular-nums">{x.n.toLocaleString("en-US")}</span>
+              <span class="iris-strip__label">{x.label}</span>
+            </button>
+          )}
+        </For>
+        <Show when={c().epics > 0}>
+          <button
+            type="button"
+            class="iris-strip__count iris-strip__epics"
+            aria-pressed={epicsOpen()}
+            aria-expanded={epicsOpen()}
+            onClick={() => {
+              setEpicsOpen((v) => !v)
+              setBoardFocus((f) => (epicsOpen() ? "epics" : f === "epics" ? null : f))
+            }}
+          >
+            <span class="iris-strip__n font-mono tabular-nums">{c().epics}</span>
+            <span class="iris-strip__label">Epics</span>
+          </button>
+        </Show>
+        <span class="iris-strip__spacer" />
+        <Show when={tidyChanges().length > 0}>
+          <button type="button" class="iris-strip__tidy" aria-expanded={tidyOpen()} onClick={() => setTidyOpen((v) => !v)}>
+            Tidy this board · {tidyChanges().length}
+          </button>
+        </Show>
+      </div>
+    )
+  }
+  const EpicsRow = () => (
+    <Show when={epicsOpen() && boardEpics().length > 0}>
+      <div class="iris-epics" aria-label="Epics on this board">
+        <For each={boardEpics()}>
+          {(e) => (
+            <button type="button" class="iris-epics__item" onClick={() => openCard(e.item.id)} title={`Open epic #${e.item.id}`}>
+              <Show when={e.sig.progress} fallback={<span class="iris-epics__dot" aria-hidden="true" />}>
+                {(p) => <Ring done={p().done} total={p().total} size={22} />}
+              </Show>
+              <span class="iris-epics__text">
+                <span class="iris-epics__title">{e.sig.title}</span>
+                <span class="iris-epics__meta">
+                  {e.list}
+                  <Show when={epicProgress(e.sig)}>{(t) => <> · {t()}</>}</Show>
+                </span>
+              </span>
+            </button>
+          )}
+        </For>
+      </div>
+    </Show>
+  )
+  const TidyPanel = () => (
+    <Show when={tidyOpen()}>
+      <div class="iris-tidy" role="dialog" aria-label="Tidy this board">
+        <div class="iris-tidy__head">
+          <strong>Tidy this board</strong>
+          <span>
+            Sets status and priority from what titles and list names already say. Fields someone set by hand are left
+            alone. Nothing is saved until you apply.
+          </span>
+        </div>
+        <ol class="iris-tidy__list">
+          <For each={tidyChanges().slice(0, 200)}>
+            {(ch) => (
+              <li>
+                <span class="iris-tidy__title">{ch.title}</span>
+                <span class="iris-tidy__what">
+                  <Show when={ch.status}>status → {ch.status!.replace("_", " ")}</Show>
+                  <Show when={ch.status && ch.priority}> · </Show>
+                  <Show when={ch.priority}>priority → {ch.priority}</Show>
+                </span>
+                <span class="iris-tidy__why">
+                  #{ch.itemId} · {ch.why}
+                </span>
+              </li>
+            )}
+          </For>
+        </ol>
+        <Show when={tidyChanges().length > 200}>
+          <p class="iris-tidy__more">…and {tidyChanges().length - 200} more, applied with the rest.</p>
+        </Show>
+        <div class="iris-tidy__actions">
+          <button type="button" class="iris-tidy__cancel" disabled={!!tidyRunning()} onClick={() => setTidyOpen(false)}>
+            Cancel
+          </button>
+          <button type="button" class="iris-tidy__apply" disabled={!!tidyRunning()} onClick={() => void applyTidy()}>
+            {tidyRunning()
+              ? `Saving ${tidyRunning()!.done} of ${tidyRunning()!.total}…`
+              : `Apply ${tidyChanges().length} change${tidyChanges().length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
     </Show>
   )
   const foldKey = () => `iris.atlas.fold.${activeBloq() ?? "none"}`
@@ -3396,6 +3649,16 @@ export function SessionIrisTab() {
   // Another product or another board: the card belonged to the one being left.
   createEffect(on([pane, activeBloq], () => setPanelCard(null), { defer: true }))
 
+  /** What the board read about an epic, for the card's Details (#192839). Undefined for other cards. */
+  const epicInfo = (itemId: number) => {
+    for (const l of atlasBoard() as AtlasList[]) {
+      const item = l.items.find((i) => i.id === itemId)
+      if (!item) continue
+      const sig = sigOf(item, l.name)
+      return sig.epic ? { progress: epicProgress(sig), next: sig.next } : undefined
+    }
+    return undefined
+  }
   function openCard(itemId: number, fromGraph?: { id: number; name: string }[], how?: CardMode) {
     const b = activeBloq()
     if (b == null) return
@@ -3425,6 +3688,7 @@ export function SessionIrisTab() {
           itemId={itemId}
           bloqId={Number(b)}
           lists={lists}
+          epic={epicInfo(itemId)}
           doFetch={doFetch}
           onChanged={() => liveRefresh(false)}
           recorderUrl={base()}
@@ -3470,7 +3734,10 @@ export function SessionIrisTab() {
       setApplied("")
       return
     }
-    const text = language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt")
+    askInChat(language.t(kind === "ask-schema" ? "iris.empty.schemas.prompt" : "iris.empty.pages.prompt"))
+  }
+  /** A sentence in the chat box, focused, for the person to finish or send. */
+  function askInChat(text: string) {
     if (!prompt) return
     prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
     requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
@@ -3639,6 +3906,7 @@ export function SessionIrisTab() {
                   mode="panel"
                   itemId={id}
                   bloqId={c().bloq}
+                  epic={epicInfo(id)}
                   lists={c().lists}
                   doFetch={doFetch}
                   onChanged={() => liveRefresh(false)}
@@ -4713,6 +4981,9 @@ export function SessionIrisTab() {
           <Switch>
             {/* Rooms own the pane, ahead of the loading/empty states: a first-time user has zero
               rooms, and "empty" must still show the New room button. */}
+            <Match when={pane() === "shared-rooms"}>
+              <IrisSharedRooms doFetch={doFetch} myId={meId()} />
+            </Match>
             <Match when={pane() === "rooms"}>
               <IrisRooms doFetch={doFetch} bloqId={activeBloq()} />
             </Match>
@@ -4733,7 +5004,7 @@ export function SessionIrisTab() {
               <IrisHeartbeats doFetch={doFetch} />
             </Match>
             <Match when={pane() === "agent-runs"}>
-              <IrisAgentRuns />
+              <IrisAgentRuns onStart={() => chooseSub("all", "agents")} />
             </Match>
             <Match when={pane() === "leads-crm"}>
               <IrisLeadsTab
@@ -4754,7 +5025,7 @@ export function SessionIrisTab() {
               />
             </Match>
             <Match when={pane() === "reachr"}>
-              <IrisReachrReview doFetch={doFetch} />
+              <IrisReachrReview doFetch={doFetch} onAsk={prompt ? askInChat : undefined} onSeeLeads={() => chooseSub("all", "leads")} />
             </Match>
             <Match when={pane() === "outreach-today" || pane() === "outreach-campaigns" || pane() === "outreach-scripts" || pane() === "outreach-audiences"}>
               <IrisOutreach
@@ -4961,7 +5232,15 @@ export function SessionIrisTab() {
                     )}
                   </Show>
                   <Show when={atlasLayout() === "board"}>
-                    <Show when={!canDrag() && !delegateOpen()}>
+                    <BoardStrip />
+                    <EpicsRow />
+                    <TidyPanel />
+                    <Show when={boardFocus() && !delegateOpen()}>
+                      <p class="px-2 pb-2 text-11-regular text-text-weak">
+                        Matching cards are shown first. Clear the filter to drag cards.
+                      </p>
+                    </Show>
+                    <Show when={!canDrag() && !boardFocus() && !delegateOpen()}>
                       <p class="px-2 pb-2 text-11-regular text-text-weak">
                         Sorted by {ATLAS_SORTS.find((o) => o.id === atlasView().sort)?.label.toLowerCase()} — switch to
                         Board order to drag cards.
@@ -4985,6 +5264,8 @@ export function SessionIrisTab() {
                               class="iris-board__col"
                               classList={{
                                 "iris-board__col--over": lifted() && dropAt()?.listId === list.id,
+                                // Folded lanes open while a card is in the air, so they stay drop targets.
+                                "iris-board__col--folded": isFolded(list) && dragging() === null,
                               }}
                               onDragOver={(e) => {
                                 if (dragging() === null || !canDrag()) return
@@ -5017,12 +5298,21 @@ export function SessionIrisTab() {
                               }}
                             >
                               <header class="iris-board__head">
-                                {/* Same heading as List view (#189764): a column title is not a card. */}
-                                <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
-                                <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
+                                {/* Same heading as List view (#189764): a column title is not a card. A lane
+                                folds from its header, shared with List view's folds (#192839 rule 4). */}
+                                <button
+                                  type="button"
+                                  class="iris-board__fold"
+                                  aria-expanded={!isFolded(list)}
+                                  title={isFolded(list) ? `Open ${list.name}` : `Fold ${list.name}`}
+                                  onClick={() => toggleFold(list)}
+                                >
+                                  <h3 class="iris-atlas-list__title min-w-0 truncate">{list.name}</h3>
+                                  <span class="iris-atlas-list__count tabular-nums">{cardCount(list.total ?? list.items.length)}</span>
+                                </button>
                               </header>
                               <div class="iris-board__cards">
-                                <For each={windowOf(list.items, shownCards()[list.id])}>
+                                <For each={windowOf(laneItems(list), shownCards()[list.id], BOARD_LANE_PAGE)}>
                                   {(item) => (
                                     <>
                                       <Show when={ghostAt(list.id, item.id)}>
@@ -5041,7 +5331,10 @@ export function SessionIrisTab() {
                                           "iris-board__card--dragging": dragging() === item.id && !lifted(),
                                           "iris-board__card--source": dragging() === item.id && lifted(),
                                           "iris-card--fileover": fileOver() === item.id,
+                                          "iris-board__card--epic": sigOf(item, list.name).epic,
+                                          "iris-board__card--dim": !matchesFocus(sigOf(item, list.name), boardFocus()),
                                         }}
+                                        data-state={sigOf(item, list.name).state ?? undefined}
                                         {...fileDropHandlers(item.id)}
                                         draggable={canDrag() || delegateOpen()}
                                         title={`${canDrag() ? "Open this card, or drag it to move it" : "Open this card"}${item.id > 0 ? ` · #${item.id}` : ""}`}
@@ -5141,17 +5434,64 @@ export function SessionIrisTab() {
                                             />
                                           )}
                                         </Show>
-                                        <span class="text-13-regular text-text-base">{item.title}</span>
+                                        <Show when={sigOf(item, list.name).epic}>
+                                          {/* No internal id on the card face (#194370): the epic id is in the tooltip. */}
+                                          <span class="iris-board__kicker" title={item.id < 0 ? undefined : `Epic #${item.id}`}>
+                                            Epic
+                                          </span>
+                                        </Show>
+                                        {/* Rule 6: the bracket prefix moves into a tag; the title clamps to 3 lines. */}
+                                        <span class="iris-board__title text-13-regular text-text-base" title={item.title}>
+                                          <Show when={sigOf(item, list.name).tag}>
+                                            {(tag) => <span class="iris-board__tag font-mono">{tag()}</span>}
+                                          </Show>
+                                          {sigOf(item, list.name).title}
+                                        </span>
+                                        {/* Rule 1: colour only for exceptions — the default state shows nothing. */}
+                                        <Show
+                                          when={
+                                            sigOf(item, list.name).state ||
+                                            (sigOf(item, list.name).loud && sigOf(item, list.name).priorityFrom === "title")
+                                          }
+                                        >
+                                          <span class="iris-board__flags">
+                                            <Show when={sigOf(item, list.name).state}>
+                                              {(st) => (
+                                                <StatusBadge tone={STATE_TONE[st()]} size="small">
+                                                  {STATE_WORD[st()]}
+                                                </StatusBadge>
+                                              )}
+                                            </Show>
+                                            <Show when={sigOf(item, list.name).loud && sigOf(item, list.name).priorityFrom === "title"}>
+                                              <StatusBadge tone={sigOf(item, list.name).loud === "urgent" ? "critical" : "warning"} size="small">
+                                                {sigOf(item, list.name).priority}
+                                              </StatusBadge>
+                                            </Show>
+                                          </span>
+                                        </Show>
                                         <CardBadges item={item} now={now()} />
+                                        {/* B's epic treatment, kept honest: a ring only from recorded child links. */}
+                                        <Show when={sigOf(item, list.name).epic && (epicProgress(sigOf(item, list.name)) || sigOf(item, list.name).next)}>
+                                          <span class="iris-board__epic">
+                                            <Show when={sigOf(item, list.name).progress}>
+                                              {(p) => <Ring done={p().done} total={p().total} size={26} />}
+                                            </Show>
+                                            <span class="iris-board__epic-text">
+                                              <Show when={epicProgress(sigOf(item, list.name))}>
+                                                {(t) => <span class="iris-board__epic-progress">{t()}</span>}
+                                              </Show>
+                                              <Show when={sigOf(item, list.name).next}>
+                                                {(n) => <span class="iris-board__epic-next">Next: {n()}</span>}
+                                              </Show>
+                                            </span>
+                                          </span>
+                                        </Show>
                                         <Show when={fileDrop()?.itemId === item.id}>
                                           <span class="iris-card__uploading" role="status">
                                             {fileDrop()!.text}
                                           </span>
                                         </Show>
                                         <span class="iris-board__meta">
-                                          <Show when={isDone(item.status)}>
-                                            <span>✓ done</span>
-                                          </Show>
                                           <Show when={item.updatedAt ?? item.createdAt}>
                                             {(ts) => (
                                               <span
@@ -5171,7 +5511,12 @@ export function SessionIrisTab() {
                                     </>
                                   )}
                                 </For>
-                                <MoreCards listId={list.id} total={list.total ?? list.items.length} loaded={list.items.length} />
+                                <MoreCards
+                                  listId={list.id}
+                                  total={list.total ?? list.items.length}
+                                  loaded={list.items.length}
+                                  page={BOARD_LANE_PAGE}
+                                />
                                 <Show when={ghostAt(list.id, null)}>
                                   <div
                                     class="iris-board__ghost"

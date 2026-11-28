@@ -1,5 +1,6 @@
 import { Show, createSignal, onMount } from "solid-js"
 import { Spinner } from "./home-first-run-art"
+import { forgetInviteCode, pendingInviteCode, withInviteCode } from "@/utils/invite-code"
 
 /**
  * Sign-in as step one of first run, inside the app (EPIC #188210).
@@ -144,14 +145,23 @@ export function SignInPanel() {
     setBusy("verify")
     setMsg({ text: "Verifying…" })
     try {
-      const data = await post("/api/v1/auth/login-with-code", {
-        email: email().trim(),
-        login_code: c,
-        generate_sdk_token: true,
-        sdk_token_name: "IRIS Desktop",
-        sdk_token_expires_days: 365,
-        generate_dashboard_url: true,
-      })
+      // A friend's invite (iris://invite?code=…, epic #194525) rides along so both get the reward.
+      const invite = pendingInviteCode()
+      const data = await post(
+        "/api/v1/auth/login-with-code",
+        withInviteCode(
+          {
+            email: email().trim(),
+            login_code: c,
+            generate_sdk_token: true,
+            sdk_token_name: "IRIS Desktop",
+            sdk_token_expires_days: 365,
+            generate_dashboard_url: true,
+          },
+          invite,
+        ),
+      )
+      if (invite) forgetInviteCode()
       // Nested: data.data.sdk_token.key. data.sdk_token is an object, and writing that would
       // save "[object Object]" as the credential.
       const token = data?.data?.sdk_token?.key

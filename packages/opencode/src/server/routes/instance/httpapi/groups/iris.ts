@@ -663,6 +663,17 @@ const InboxResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisInboxResponse" })
 
+// #194315: Home's "Today · across your projects", written from board items AND every machine's sessions.
+const HomeRecapResponse = Schema.Struct({
+  ...Measured,
+  text: described(Schema.NullOr(Schema.String), "The paragraph. NULL when nothing happened today, it is off, or the model failed — Home then keeps its counted sentence."),
+  model: Schema.NullOr(Schema.String),
+  generatedAt: Schema.NullOr(Schema.String),
+  items: described(Schema.Finite, "Board items changed today that it was written from"),
+  sessions: described(Schema.Finite, "Sessions active today that it was written from, every machine and agent"),
+  agents: described(Schema.Array(Schema.String), "The coding agents those sessions ran in"),
+})
+
 const RecentResponse = Schema.Struct({
   ...Measured,
   ...Paged,
@@ -1416,6 +1427,131 @@ const RoomMessageSchema = Schema.Struct({
   routing: Schema.optional(Schema.Literals(["mention", "room-default"])),
 }).annotate({ identifier: "IrisRoomMessage" })
 
+// ── Shared workspaces (#194307) ─────────────────────────────────────────────
+const SharedRightsSchema = Schema.Struct({
+  role: Schema.NullOr(Schema.String),
+  canPost: Schema.Boolean,
+  canStop: Schema.Boolean,
+  isOwner: Schema.Boolean,
+}).annotate({ identifier: "IrisSharedRights" })
+const SharedActivitySchema = Schema.Struct({
+  present: Schema.Array(
+    Schema.Struct({ userId: Schema.Finite, name: Schema.String, state: Schema.Literals(["active", "background"]), typing: Schema.Boolean }),
+  ),
+  last: Schema.NullOr(
+    Schema.Struct({
+      kind: Schema.Literals(["person", "event", "agent"]),
+      name: Schema.optional(Schema.String),
+      hostUserId: Schema.optional(Schema.NullOr(Schema.Finite)),
+      hostName: Schema.optional(Schema.NullOr(Schema.String)),
+      provider: Schema.optional(Schema.NullOr(Schema.String)),
+      isYou: Schema.Boolean,
+      text: Schema.String,
+      tool: Schema.optional(Schema.NullOr(Schema.String)),
+      detail: Schema.optional(Schema.NullOr(Schema.String)),
+      at: Schema.String,
+    }),
+  ),
+  unread: Schema.Finite,
+  working: Schema.Boolean,
+}).annotate({ identifier: "IrisSharedRoomActivity" })
+const SharedRoomSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  project: Schema.NullOr(Schema.Struct({ id: Schema.Finite, name: Schema.String })),
+  ownerName: Schema.NullOr(Schema.String),
+  you: SharedRightsSchema,
+  sessionIds: Schema.Array(Schema.String),
+  messageCount: Schema.optional(Schema.Finite),
+  updatedAt: Schema.optional(Schema.String),
+  activity: Schema.optional(SharedActivitySchema),
+}).annotate({ identifier: "IrisSharedRoom" })
+const SharedMessageSchema = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["person", "agent", "event"]),
+  senderId: Schema.String,
+  senderName: Schema.String,
+  text: Schema.String,
+  at: Schema.String,
+  deliveredTo: Schema.Array(Schema.String),
+}).annotate({ identifier: "IrisSharedMessage" })
+const SessionStateSchema = Schema.Struct({
+  sessionId: Schema.String,
+  provider: Schema.NullOr(Schema.String),
+  machine: Schema.NullOr(Schema.String),
+  online: Schema.Boolean,
+  lastSeen: Schema.NullOr(Schema.String),
+  hostUserId: Schema.NullOr(Schema.Finite),
+  hostName: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisSharedSessionState" })
+const PresenceSchema = Schema.Struct({
+  userId: Schema.Finite,
+  name: Schema.String,
+  state: Schema.Literals(["active", "background"]),
+  typing: Schema.Boolean,
+}).annotate({ identifier: "IrisSharedPresence" })
+const SharedPresenceResponse = Schema.Struct({ ...Measured, present: Schema.Array(PresenceSchema) }).annotate({
+  identifier: "IrisSharedPresenceResponse",
+})
+const TranscriptEntrySchema = Schema.Struct({
+  role: Schema.Literals(["user", "assistant"]),
+  kind: Schema.Literals(["text", "tool"]),
+  text: Schema.String,
+  tool: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
+  at: Schema.String,
+}).annotate({ identifier: "IrisSharedTranscriptEntry" })
+const SharedTranscriptResponse = Schema.Struct({
+  ...Measured,
+  entries: Schema.Array(TranscriptEntrySchema),
+  offset: Schema.NullOr(Schema.Finite),
+  incremental: Schema.Boolean,
+  reset: Schema.Boolean,
+  ranOn: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "IrisSharedTranscriptResponse" })
+const SharedRoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(SharedRoomSchema) }).annotate({
+  identifier: "IrisSharedRoomsResponse",
+})
+const SharedRoomResponse = Schema.Struct({
+  ...Measured,
+  room: Schema.NullOr(SharedRoomSchema),
+  messages: Schema.Array(SharedMessageSchema),
+  sessions: Schema.Array(SessionStateSchema),
+  present: Schema.Array(PresenceSchema),
+  agents: Schema.Array(
+    Schema.Struct({ id: Schema.String, name: Schema.String, model: Schema.NullOr(Schema.String), role: Schema.String, autoRespond: Schema.Boolean }),
+  ),
+  chain: Schema.NullOr(Schema.Struct({ depth: Schema.Finite, turns: Schema.Finite, maxTurns: Schema.Finite, maxHops: Schema.Finite })),
+}).annotate({ identifier: "IrisSharedRoomResponse" })
+const SharedSayResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  result: Schema.optional(
+    Schema.Struct({
+      outcome: Schema.Literals(["delivered", "parked", "held", "saved"]),
+      delivered: Schema.Finite,
+      note: Schema.NullOr(Schema.String),
+      agentsNote: Schema.NullOr(Schema.String),
+      agentsAnswered: Schema.optional(Schema.Finite),
+    }),
+  ),
+}).annotate({ identifier: "IrisSharedSayResponse" })
+const SharedActionResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+  roomId: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisSharedActionResponse" })
+const SharedJoinResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  outcome: Schema.optional(Schema.Literals(["preview", "joined", "member", "check_email"])),
+  projectId: Schema.optional(Schema.Finite),
+  projectName: Schema.optional(Schema.String),
+  ownerName: Schema.optional(Schema.NullOr(Schema.String)),
+  role: Schema.optional(Schema.NullOr(Schema.String)),
+}).annotate({ identifier: "IrisSharedJoinResponse" })
+
 const RoomsResponse = Schema.Struct({ ...Measured, rooms: Schema.Array(RoomSchema) }).annotate({
   identifier: "IrisRoomsResponse",
 })
@@ -1564,6 +1700,105 @@ const PlanResponse = Schema.Struct({
   resetsAt: Schema.optional(described(Schema.NullOr(Schema.String), "When the allowance window resets, ISO-8601.")),
   uncapped: Schema.Boolean,
   upgradeUrl: Schema.NullOr(Schema.String),
+  // Usage as a progression (epic #194525). Every one optional: absent = the server did not say.
+  capTokens: Schema.optional(described(Schema.NullOr(Schema.Finite), "This week's allowance in tokens.")),
+  grantTokens: Schema.optional(
+    described(Schema.NullOr(Schema.Finite), "Top-up and reward tokens left, spent only after the weekly allowance."),
+  ),
+  nextTier: Schema.optional(
+    described(
+      Schema.NullOr(
+        Schema.Struct({
+          slug: Schema.String,
+          label: Schema.String,
+          priceUsd: Schema.NullOr(Schema.Finite),
+          period: Schema.String,
+          capTokensWeek: Schema.NullOr(Schema.Finite),
+        }),
+      ),
+      "The plan one rung up. NULL = none (top of the ladder, or staff).",
+    ),
+  ),
+  runoutAt: Schema.optional(
+    described(Schema.NullOr(Schema.String), "When the allowance runs out at this week's pace, ISO-8601. NULL = not before the reset."),
+  ),
+  progress: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        level: Schema.NullOr(Schema.Struct({ key: Schema.String, label: Schema.String })),
+        nextLevel: Schema.NullOr(
+          Schema.Struct({ key: Schema.String, label: Schema.String, requires: Schema.NullOr(Schema.String) }),
+        ),
+        checklist: Schema.Array(
+          Schema.Struct({
+            key: Schema.String,
+            label: Schema.String,
+            done: Schema.Boolean,
+            rewardTokens: Schema.NullOr(Schema.Finite),
+          }),
+        ),
+        streakWeeks: Schema.NullOr(Schema.Finite),
+      }),
+    ),
+  ),
+  lastWeek: Schema.optional(
+    described(
+      Schema.NullOr(
+        Schema.Struct({
+          runs: Schema.NullOr(Schema.Finite),
+          tokens: Schema.NullOr(Schema.Finite),
+          agentRuns: Schema.NullOr(Schema.Finite),
+          pagesPublished: Schema.NullOr(Schema.Finite),
+        }),
+      ),
+      "What was measured last week. Only counted facts; nothing estimated.",
+    ),
+  ),
+})
+
+/** Top-ups, invites and auto top-up (epic #194525). Every failure carries a sentence in `reason`. */
+const TopupPacksResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  packs: Schema.Array(
+    Schema.Struct({ key: Schema.String, tokens: Schema.Finite, priceUsd: Schema.Finite, label: Schema.NullOr(Schema.String) }),
+  ),
+})
+
+const TopupResult = Schema.Struct({
+  ok: Schema.Boolean,
+  url: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+}).annotate({ identifier: "IrisTopupResult" })
+
+const InviteResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  invite: Schema.NullOr(
+    Schema.Struct({
+      url: Schema.String,
+      code: Schema.NullOr(Schema.String),
+      rewardTokens: Schema.NullOr(Schema.Finite),
+      invited: Schema.NullOr(Schema.Finite),
+      rewarded: Schema.NullOr(Schema.Finite),
+    }),
+  ),
+})
+
+const AutoTopupResponse = Schema.Struct({
+  measured: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  autoTopup: Schema.NullOr(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      pack: Schema.NullOr(Schema.String),
+      monthlyCapUsd: Schema.NullOr(Schema.Finite),
+      spentThisMonthUsd: Schema.NullOr(Schema.Finite),
+      lastChargedAt: Schema.NullOr(Schema.String),
+      lastError: described(Schema.NullOr(Schema.String), "Why the last automatic charge failed. Show it as is."),
+      hasSavedCard: described(Schema.NullOr(Schema.Boolean), "FALSE = no card on file; auto top-up cannot run."),
+    }),
+  ),
 })
 
 /**
@@ -2027,6 +2262,7 @@ export const IrisPaths = {
   auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
   recent: `${root}/recent`,
+  homeRecap: `${root}/home/recap`,
   inbox: `${root}/inbox`,
   inboxMessage: `${root}/inbox/:index`,
   inboxRead: `${root}/inbox/:index/read`,
@@ -2171,6 +2407,21 @@ export const IrisPaths = {
   rooms: `${root}/rooms`,
   room: `${root}/rooms/:roomID`,
   roomMessages: `${root}/rooms/:roomID/messages`,
+  // Shared workspaces (#194307): rooms filed under an Atlas project.
+  sharedRooms: `${root}/shared-rooms`,
+  sharedRoom: `${root}/shared-rooms/:roomID`,
+  sharedRoomSay: `${root}/shared-rooms/:roomID/say`,
+  sharedRoomStop: `${root}/shared-rooms/:roomID/stop`,
+  sharedRoomUnshare: `${root}/shared-rooms/:roomID/unshare`,
+  sharedRoomShare: `${root}/shared-rooms/share`,
+  sharedRoomJoin: `${root}/shared-rooms/join`,
+  sharedRoomAgentAdd: `${root}/shared-rooms/:roomID/agents`,
+  sharedRoomAgentUpdate: `${root}/shared-rooms/:roomID/agents/:agentID`,
+  sharedRoomAgentRemove: `${root}/shared-rooms/:roomID/agents/:agentID/remove`,
+  sharedRoomPresence: `${root}/shared-rooms/:roomID/presence`,
+  sharedRoomAddSession: `${root}/shared-rooms/:roomID/sessions`,
+  sharedRoomRemoveSession: `${root}/shared-rooms/:roomID/sessions/:sessionID/remove`,
+  sharedRoomTranscript: `${root}/shared-rooms/:roomID/sessions/:sessionID/transcript`,
   hive: `${root}/hive`,
   hiveSessions: `${root}/hive/sessions`,
   hiveHere: `${root}/hive/here`,
@@ -2204,6 +2455,10 @@ export const IrisPaths = {
   accountRemove: `${root}/accounts/remove`,
   plans: `${root}/plans`,
   checkout: `${root}/checkout`,
+  topupPacks: `${root}/topup/packs`,
+  topup: `${root}/topup`,
+  invite: `${root}/invite`,
+  autoTopup: `${root}/auto-topup`,
   atlasNote: `${root}/atlas-note`,
   frameCheck: `${root}/frame-check`,
   githubPr: `${root}/github/pr`,
@@ -2524,6 +2779,53 @@ export const IrisApi = HttpApi.make("iris").add(
             "Creates a Stripe Checkout session for one plan, for the signed-in account, and returns its URL. The desktop opens it directly — checkout never goes through a web app sign-in.",
         }),
       ),
+      HttpApiEndpoint.get("topupPacks", IrisPaths.topupPacks, {
+        success: described(TopupPacksResponse, "The top-up packs on sale"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.topupPacks",
+          summary: "Top-up packs",
+          description: "One-time token packs (epic #194525), spent only after the weekly allowance. Prices are fl-api's.",
+        }),
+      ),
+      HttpApiEndpoint.post("topup", IrisPaths.topup, {
+        payload: Schema.Struct({ pack: Schema.String }),
+        success: described(TopupResult, "Stripe's checkout URL for the pack, or why there is none"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.topup",
+          summary: "Start a top-up",
+          description: "Creates a Stripe Checkout session for one top-up pack on the signed-in account and returns its URL.",
+        }),
+      ),
+      HttpApiEndpoint.get("invite", IrisPaths.invite, {
+        success: described(InviteResponse, "This account's invite link and its reward"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.invite",
+          summary: "Invite link",
+          description: "The link to share, what both people get, and how many have joined through it.",
+        }),
+      ),
+      HttpApiEndpoint.get("autoTopup", IrisPaths.autoTopup, {
+        success: described(AutoTopupResponse, "Whether top-ups happen automatically"),
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "iris.autoTopup", summary: "Auto top-up", description: "Read the auto top-up setting." }),
+      ),
+      HttpApiEndpoint.put("autoTopupSave", IrisPaths.autoTopup, {
+        payload: Schema.Struct({
+          enabled: Schema.Boolean,
+          pack: Schema.optional(Schema.NullOr(Schema.String)),
+          monthlyCapUsd: Schema.optional(Schema.NullOr(Schema.Finite)),
+        }),
+        success: described(AutoTopupResponse, "The auto top-up setting as saved"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.autoTopupSave",
+          summary: "Save auto top-up",
+          description: "Turn auto top-up on or off, and choose its pack and monthly cap.",
+        }),
+      ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
         query: PageQuery,
         success: described(BloqsResponse, "The account's bloqs"),
@@ -2544,6 +2846,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Recent board items",
           description:
             "The account's most recently created or edited board items, newest first, across every board (Home › Activity). iris-api's Atlas search with an empty query.",
+        }),
+      ),
+      HttpApiEndpoint.get("homeRecap", IrisPaths.homeRecap, {
+        success: described(HomeRecapResponse, "Today across your projects, as one paragraph"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.homeRecap",
+          summary: "Today across your projects",
+          description:
+            "One paragraph about today, written by a model (IRIS_HOME_RECAP_MODEL, default claude-haiku-5-5) from today's board items and today's sessions on every machine, with their digests. Cached per day; written again at most every 15 minutes, and only when the inputs changed.",
         }),
       ),
       HttpApiEndpoint.get("inbox", IrisPaths.inbox, {
@@ -3684,6 +3996,67 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Send a message to a room; @mention addresses agents",
         }),
       ),
+      HttpApiEndpoint.get("sharedRooms", IrisPaths.sharedRooms, {
+        success: described(SharedRoomsResponse, "Rooms shared with you through your Atlas projects (#194307)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRooms", summary: "Shared rooms" })),
+      HttpApiEndpoint.get("sharedRoom", IrisPaths.sharedRoom, {
+        params: { roomID: Schema.String },
+        success: described(SharedRoomResponse, "A shared room: its thread, your rights, and where its sessions run"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoom", summary: "A shared room" })),
+      HttpApiEndpoint.post("sharedRoomSay", IrisPaths.sharedRoomSay, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ text: Schema.String }),
+        success: described(SharedSayResponse, "Typed into the room's live session(s): delivered, parked, held or saved"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomSay", summary: "Type into a shared room" })),
+      HttpApiEndpoint.post("sharedRoomStop", IrisPaths.sharedRoomStop, {
+        params: { roomID: Schema.String },
+        success: described(SharedActionResponse, "Stop what the room's sessions are doing"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomStop", summary: "Stop a shared room" })),
+      HttpApiEndpoint.post("sharedRoomUnshare", IrisPaths.sharedRoomUnshare, {
+        params: { roomID: Schema.String },
+        success: described(SharedActionResponse, "Make the room personal again"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomUnshare", summary: "Stop sharing a room" })),
+      HttpApiEndpoint.get("sharedRoomTranscript", IrisPaths.sharedRoomTranscript, {
+        params: { roomID: Schema.String, sessionID: Schema.String },
+        query: Schema.Struct({ since: Schema.optional(Schema.String) }),
+        success: described(SharedTranscriptResponse, "The agent's side of a shared chat, read from the machine that runs it"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomTranscript", summary: "A shared chat's live transcript" })),
+      HttpApiEndpoint.post("sharedRoomShare", IrisPaths.sharedRoomShare, {
+        payload: Schema.Struct({ sessionId: Schema.String, projectId: Schema.Finite, name: Schema.String }),
+        success: described(SharedActionResponse, "Share one of this computer's chats with a project"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomShare", summary: "Share a chat with your team" })),
+      HttpApiEndpoint.post("sharedRoomJoin", IrisPaths.sharedRoomJoin, {
+        payload: Schema.Struct({ invite: Schema.String, preview: Schema.optional(Schema.Boolean) }),
+        success: described(SharedJoinResponse, "Join a team's project from an invite link, as the person signed in here"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomJoin", summary: "Join a shared workspace" })),
+      HttpApiEndpoint.post("sharedRoomAgentAdd", IrisPaths.sharedRoomAgentAdd, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ agentId: Schema.Finite, role: Schema.optional(Schema.String), autoRespond: Schema.optional(Schema.Boolean) }),
+        success: described(SharedActionResponse, "Put one of your cloud agents in the room (#194496)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentAdd", summary: "Add a cloud agent to a shared room" })),
+      HttpApiEndpoint.post("sharedRoomAgentUpdate", IrisPaths.sharedRoomAgentUpdate, {
+        params: { roomID: Schema.String, agentID: Schema.String },
+        payload: Schema.Struct({ role: Schema.optional(Schema.String), autoRespond: Schema.optional(Schema.Boolean) }),
+        success: described(SharedActionResponse, "Change an agent's role, or whether it answers everything"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentUpdate", summary: "Configure a room agent" })),
+      HttpApiEndpoint.post("sharedRoomAgentRemove", IrisPaths.sharedRoomAgentRemove, {
+        params: { roomID: Schema.String, agentID: Schema.String },
+        success: described(SharedActionResponse, "Take a cloud agent out of the room"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAgentRemove", summary: "Remove a cloud agent from a room" })),
+      HttpApiEndpoint.post("sharedRoomPresence", IrisPaths.sharedRoomPresence, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ state: Schema.Literals(["active", "background"]), typing: Schema.optional(Schema.Boolean) }),
+        success: described(SharedPresenceResponse, "Check in to a shared room; answers who is here now (#194465)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomPresence", summary: "Who is in a shared room" })),
+      HttpApiEndpoint.post("sharedRoomAddSession", IrisPaths.sharedRoomAddSession, {
+        params: { roomID: Schema.String },
+        payload: Schema.Struct({ sessionId: Schema.String }),
+        success: described(SharedActionResponse, "Bring a chat from one of your computers into the room (#194466)"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomAddSession", summary: "Add your agent to a shared room" })),
+      HttpApiEndpoint.post("sharedRoomRemoveSession", IrisPaths.sharedRoomRemoveSession, {
+        params: { roomID: Schema.String, sessionID: Schema.String },
+        success: described(SharedActionResponse, "Take an agent out of the room; its chat keeps running"),
+      }).annotateMerge(OpenApi.annotations({ identifier: "iris.sharedRoomRemoveSession", summary: "Remove an agent from a shared room" })),
       HttpApiEndpoint.get("playbookDoc", IrisPaths.playbookDoc, {
         params: { name: Schema.String },
         query: Schema.Struct({
@@ -4489,14 +4862,21 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.post("leadsApi", IrisPaths.leadsApi, {
         payload: Schema.Struct({
-          op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness"]),
+          op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness", "create", "importPreview", "import"]),
           leadId: Schema.optional(Schema.Number),
           taskId: Schema.optional(Schema.Number),
           query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
           body: Schema.optional(Schema.Unknown),
         }),
         success: described(ReachrResponse, "What fl-api answered"),
-      }).annotateMerge(OpenApi.annotations({ identifier: "iris.leadsApi", summary: "Search and manage leads" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.leadsApi",
+          summary: "Search and manage leads",
+          description:
+            "#194506 adds `create` (body: name or email, company, value, status, bloqId; fl-api upserts by email and the answer says `matchedExisting`), `importPreview` (body: csv — maps the columns and checks every row; sends nothing) and `import` (body: csv, bloqId — the CLI's status mapping, 1000 rows a request; answers created, merged, skipped with reasons, warnings).",
+        }),
+      ),
       HttpApiEndpoint.get("comms", IrisPaths.comms, {
         query: {
           days: Schema.optional(Schema.NumberFromString),

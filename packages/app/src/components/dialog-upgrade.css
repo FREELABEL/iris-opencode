@@ -1,0 +1,10 @@
+/* The "allowance is used up" line in the plans summary (#194375).
+   The IRIS light theme's warning colour (--v2-state-fg-warning) is a gold for meters and borders:
+   as text on paper it measures 2.4:1. Text takes a darker step of the same yellow scale in light
+   (6.9:1) and the warning colour itself in dark (9.1:1). The bar and the border keep the gold. */
+.iris-upgrade__warn {
+  color: var(--v2-yellow-1100);
+}
+:root[data-color-scheme="dark"] .iris-upgrade__warn {
+  color: var(--v2-state-fg-warning);
+}

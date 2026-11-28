@@ -45,9 +45,11 @@ export const REPEAT_WARN = 3
 
 export function fmtSeconds(s: number | undefined): string {
   if (s === undefined || !Number.isFinite(s)) return "—"
-  if (s < 60) return `${Math.round(s)}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${Math.round(s % 60)}s`
+  // Round once, then split: rounding only the remainder printed 299.6s as "4m 60s".
+  const t = Math.round(s)
+  if (t < 60) return `${t}s`
+  const m = Math.floor(t / 60)
+  if (m < 60) return `${m}m ${t % 60}s`
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 

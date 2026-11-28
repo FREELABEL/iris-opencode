@@ -13,6 +13,9 @@
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, Show, Switch } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
+import { Tabs } from "@opencode-ai/ui/tabs"
+import { useLanguage } from "@/context/language"
 import "./iris-agent-editor.css"
 import {
   AGENT_TYPES,
@@ -111,6 +114,7 @@ function Mark(props: { name: string }) {
 }
 
 export function IrisAgentEditor(props: IrisAgentEditorProps) {
+  const language = useLanguage()
   const creating = () => props.agentId === undefined
 
   // ── reads ────────────────────────────────────────────────────────────────────────────────
@@ -406,44 +410,40 @@ export function IrisAgentEditor(props: IrisAgentEditorProps) {
         </header>
 
         {/* STEPS — ELON's pills: label, a tick when complete, a dot when changed. */}
-        <nav class="iae-steps" role="tablist" aria-label="Agent settings">
-          <For each={steps()}>
-            {(s) => (
-              <button
-                type="button"
-                role="tab"
-                class="iae-step"
-                data-step={s.id}
-                data-phase={s.phase}
-                aria-selected={step() === s.id}
-                onClick={() => setStep(s.id)}
-              >
-                {s.label}
-                <Show when={s.phase === 1 && ready() && !creating() && (s.id === "alerts" ? alertsDirty() : dirty(s.id))}>
-                  <i class="iae-dot" title="Changed" />
-                </Show>
-                <Show when={s.phase === 1 && ready() && stepComplete(s.id, draft, ctx())}>
-                  <span class="iae-tick" aria-label="complete">
-                    ✓
-                  </span>
-                </Show>
-                <Show when={s.id === "tools" && !draft.isHuman}>
-                  <span class="iae-count">{draft.tools.length}</span>
-                </Show>
-                <Show when={s.id === "memory" && counts().memory > 0}>
-                  <span class="iae-count">{counts().memory}</span>
-                </Show>
-              </button>
-            )}
-          </For>
-        </nav>
+        <div class="iae-steps">
+          <Tabs variant="pill" size="small" value={step()} onChange={(v: string) => setStep(v as StepId)}>
+            <Tabs.List aria-label={language.t("iris.agentEditor.steps.label")}>
+              <For each={steps()}>
+                {(s) => (
+                  <Tabs.Trigger value={s.id} data-step={s.id} data-phase={s.phase}>
+                    {s.label}
+                    <Show when={s.phase === 1 && ready() && !creating() && (s.id === "alerts" ? alertsDirty() : dirty(s.id))}>
+                      <i class="iae-dot" title={language.t("iris.agentEditor.steps.changed")} />
+                    </Show>
+                    <Show when={s.phase === 1 && ready() && stepComplete(s.id, draft, ctx())}>
+                      <span class="iae-tick" aria-label={language.t("iris.agentEditor.steps.complete")}>
+                        ✓
+                      </span>
+                    </Show>
+                    <Show when={s.id === "tools" && !draft.isHuman}>
+                      <span class="iae-count">{draft.tools.length}</span>
+                    </Show>
+                    <Show when={s.id === "memory" && counts().memory > 0}>
+                      <span class="iae-count">{counts().memory}</span>
+                    </Show>
+                  </Tabs.Trigger>
+                )}
+              </For>
+            </Tabs.List>
+          </Tabs>
+        </div>
 
         <div class="iae-body" data-testid={`iris-agent-step-${step()}`}>
           <Show when={loadError()}>
             <p class="iae-warn">Could not read this agent — {loadError()}.</p>
           </Show>
           <Show when={!ready() && !loadError()}>
-            <p class="iae-muted">Reading…</p>
+            <SkeletonRows rows={4} label={language.t("iris.agentEditor.loading")} />
           </Show>
           <Show when={ready()}>
             <Show when={stepErrors(step(), draft, ctx()).length && step() !== "tools"}>

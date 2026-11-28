@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createEffect, createRoot, createSignal } from "solid-js"
-import { followTerminal, TerminalMode, transcript, TRANSCRIPT_OUTPUT_LIMIT, type TerminalEntry } from "./terminal-mode"
+import { followTerminal, formatDuration, TerminalMode, transcript, TRANSCRIPT_OUTPUT_LIMIT, type TerminalEntry } from "./terminal-mode"
 
 const entry = (over: Partial<TerminalEntry>): TerminalEntry => ({
   key: "k",
@@ -174,5 +174,13 @@ describe.skipIf(!effectsRun)("leaving shell mode", () => {
     await tick()
     expect(t.sent).toEqual(["s1"])
     t.dispose()
+  })
+})
+
+describe("formatDuration", () => {
+  test("seconds that round up to a minute carry into it", () => {
+    expect(formatDuration(119_600)).toBe("2m 0s")
+    expect(formatDuration(61_200)).toBe("1m 1s")
+    expect(formatDuration(1_500)).toBe("1.5s")
   })
 })

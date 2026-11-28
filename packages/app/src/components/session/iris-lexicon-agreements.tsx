@@ -1,6 +1,18 @@
-import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { Icon, type IconProps } from "@opencode-ai/ui/icon"
+import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { Button } from "@opencode-ai/ui/button"
+import { EmptyState } from "@opencode-ai/ui/empty-state"
+import { Icon } from "@opencode-ai/ui/icon"
+import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Notice } from "@opencode-ai/ui/notice"
+import { Select } from "@opencode-ai/ui/select"
+import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { Spinner } from "@opencode-ai/ui/spinner"
+import { StatusBadge } from "@opencode-ai/ui/status-badge"
+import { Tabs } from "@opencode-ai/ui/tabs"
+import { TextField } from "@opencode-ai/ui/text-field"
+import { useLanguage } from "@/context/language"
+import { PaneDialog, PaneDialogActions, statusTone } from "./iris-pane-dialog"
+import "./iris-pane-layout.css"
 import "./iris-lexicon-agreements.css"
 import {
   AGREEMENT_TYPES,
@@ -34,22 +46,20 @@ import {
  * TWO THINGS HERE REACH SOMEONE OUTSIDE THE FIRM: Issue (emails a signing link) and Revoke (withdraws
  * access they relied on). Neither runs from one click — each opens a confirm that names who receives
  * it. Raise only ever saves a draft. There is no Sign: a signature must be the signer's own.
+ *
+ * Drawn with the ui library (#194375 W5): Button, IconButton, Tabs, StatusBadge, Notice, EmptyState,
+ * TextField, Select and PaneDialog → Dialog. The words that come from the model (states, buckets,
+ * the reasons Issue is blocked) stay there: its tests assert them.
  */
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type ListPayload = { measured: boolean; reason?: string; summary?: Record<string, number>; agreements: Agreement[] }
 type DetailPayload = { measured: boolean; reason?: string } & AgreementDetail
 type ActionPayload = { measured: boolean; reason?: string; agreement: Agreement | null }
 type Confirm = { kind: "issue" | "revoke"; a: Agreement }
-
-function Ic(props: { name: IconProps["name"]; title?: string }) {
-  return (
-    <span class="iris-lex-ic" title={props.title} aria-hidden={props.title ? undefined : "true"}>
-      <Icon name={props.name} size="small" />
-    </span>
-  )
-}
+const TYPE_OPTIONS = [...AGREEMENT_TYPES]
 
 export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: string }) {
+  const language = useLanguage()
   const [caseDraft, setCaseDraft] = createSignal(props.initialCase ?? "")
   const [caseRef, setCaseRef] = createSignal(props.initialCase ?? "")
   const [bucket, setBucket] = createSignal<Bucket>("all")
@@ -116,7 +126,7 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
         body: JSON.stringify(body ?? {}),
       })
       if (!r.measured) {
-        setError(r.reason ?? "fl-api refused")
+        setError(r.reason ?? language.t("iris.lexicon.refused"))
         return false
       }
       setNote(done(r.agreement))
@@ -138,7 +148,7 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
     const problem = raiseProblem(f)
     if (problem) return setError(problem)
     const a = await act("/iris/agreements", raisePayload(f), (x) =>
-      `Draft #${x?.id ?? "?"} raised for ${f.name.trim()}. Nothing has been sent — issue it when the wording is approved.`,
+      language.t("iris.lexicon.note.raised", { id: x?.id ?? "?", name: f.name.trim() }),
     )
     if (a === false) return
     setRaising(undefined)
@@ -154,12 +164,14 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
     if (!c) return
     const who = c.a.counterparty
     if (c.kind === "issue") {
-      const ok = await act(`/iris/agreements/${c.a.id}/issue`, {}, () => `Signing link emailed to ${who}.`)
+      const ok = await act(`/iris/agreements/${c.a.id}/issue`, {}, () => language.t("iris.lexicon.note.issued", { name: who }))
       if (ok !== false) setConfirm(undefined)
       return
     }
-    if (!reason().trim()) return setError("Say why — it is recorded on the audit chain.")
-    const ok = await act(`/iris/agreements/${c.a.id}/revoke`, { reason: reason().trim() }, () => `Revoked. Any access it authorised for ${who} is closed.`)
+    if (!reason().trim()) return setError(language.t("iris.lexicon.error.sayWhy"))
+    const ok = await act(`/iris/agreements/${c.a.id}/revoke`, { reason: reason().trim() }, () =>
+      language.t("iris.lexicon.note.revoked", { name: who }),
+    )
     if (ok !== false) setConfirm(undefined)
   }
 
@@ -169,58 +181,68 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
     setConfirm({ kind, a })
   }
 
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && confirm() && !busy()) {
-        setConfirm(undefined)
-        e.preventDefault()
-      }
-    }
-    document.addEventListener("keydown", onKey)
-    onCleanup(() => document.removeEventListener("keydown", onKey))
-  })
-
-  const setField = (k: keyof RaiseForm) => (e: { currentTarget: { value: string } }) =>
-    setRaising((f) => (f ? { ...f, [k]: e.currentTarget.value } : f))
+  const setField = (k: keyof RaiseForm) => (value: string) => setRaising((f) => (f ? { ...f, [k]: value } : f))
 
   return (
-    <div class="iris-lex" data-slot="iris-lexicon-agreements">
-      <form class="iris-lex-head" onSubmit={applyCase}>
-        <label class="iris-lex-search">
-          <Ic name="magnifying-glass" />
+    <div class="iris-ui iris-lex" data-slot="iris-lexicon-agreements">
+      <form class="iris-ui-bar iris-lex-head" onSubmit={applyCase}>
+        <label class="iris-ui-search iris-lex-search">
+          <Icon name="magnifying-glass" size="small" />
           <input
-            aria-label="Case"
-            placeholder="Every case — or a case id"
+            aria-label={language.t("iris.lexicon.case")}
+            placeholder={language.t("iris.lexicon.case.placeholder")}
             value={caseDraft()}
             onInput={(e) => setCaseDraft(e.currentTarget.value)}
             onBlur={() => caseDraft().trim() !== caseRef() && applyCase()}
           />
           <Show when={caseDraft()}>
-            <button type="button" class="iris-lex-icon-btn" title="Every case" aria-label="Clear case" onClick={() => { setCaseDraft(""); applyCase() }}>
-              <Icon name="close-small" size="small" />
-            </button>
+            <IconButton
+              type="button"
+              icon="close-small"
+              variant="ghost"
+              size="small"
+              title={language.t("iris.lexicon.case.every")}
+              aria-label={language.t("iris.lexicon.case.clear")}
+              onClick={() => {
+                setCaseDraft("")
+                applyCase()
+              }}
+            />
           </Show>
         </label>
         <span class="iris-lex-meta">
           <Show when={list.latest?.measured && list.latest.summary}>
             {(s) => (
               <>
-                {s().awaiting ?? 0} awaiting · {s().executed ?? 0} executed
-                <Show when={(s().expiringSoon ?? 0) > 0}> · <span data-tone="warn">{s().expiringSoon} expiring</span></Show>
+                {language.t("iris.lexicon.summary", { awaiting: s().awaiting ?? 0, executed: s().executed ?? 0 })}
+                <Show when={(s().expiringSoon ?? 0) > 0}>
+                  {" · "}
+                  <span data-tone="warn">{language.t("iris.lexicon.expiring", { count: s().expiringSoon ?? 0 })}</span>
+                </Show>
               </>
             )}
           </Show>
         </span>
-        <span class="iris-lex-spacer" />
-        <button type="button" class="iris-lex-icon-btn" title="Refresh" aria-label="Refresh" disabled={list.loading} onClick={() => refetchList()}>
-          <Show when={list.loading} fallback={<Icon name="refresh" size="small" />}>
-            <Spinner class="iris-lex-spin" />
-          </Show>
-        </button>
-        <button
+        <span class="iris-ui-spacer" />
+        <Button
           type="button"
-          class="iris-lex-btn"
-          data-primary
+          variant="ghost"
+          size="small"
+          class="iris-lex-iconbtn"
+          title={language.t("iris.lexicon.refresh")}
+          aria-label={language.t("iris.lexicon.refresh")}
+          disabled={list.loading}
+          onClick={() => refetchList()}
+        >
+          <Show when={list.loading} fallback={<Icon name="refresh" size="small" />}>
+            <Spinner class="iris-ui-spin" />
+          </Show>
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          size="small"
+          icon="plus-small"
           onClick={() => {
             setError(undefined)
             setNote(undefined)
@@ -228,57 +250,79 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
             setRaising(emptyRaise(caseRef()))
           }}
         >
-          <Icon name="plus-small" size="small" />
-          Raise
-        </button>
+          {language.t("iris.lexicon.raise")}
+        </Button>
       </form>
 
-      <Show when={error()}>
-        <div class="iris-lex-callout" data-tone="bad" role="alert">
-          <Ic name="warning" />
-          <span>{error()}</span>
-        </div>
+      {/* While a confirm is open its own copy of the error shows inside it: the dialog covers this one. */}
+      <Show when={error() && !confirm()}>
+        <Notice class="iris-lex-notice" tone="critical" role="alert" icon={<Icon name="warning" size="small" />}>
+          {error()}
+        </Notice>
       </Show>
       <Show when={note()}>
-        <div class="iris-lex-callout" data-tone="good" role="status">
-          <Ic name="circle-check" />
-          <span>{note()}</span>
-        </div>
+        <Notice class="iris-lex-notice" tone="success" role="status" icon={<Icon name="circle-check" size="small" />}>
+          {note()}
+        </Notice>
       </Show>
 
-      <div class="iris-lex-filters" role="toolbar" aria-label="Filter agreements">
-        <For each={BUCKETS}>
-          {(b) => (
-            <button class="iris-lex-filter" aria-pressed={bucket() === b} onClick={() => { setBucket(b); setSelected(undefined) }}>
-              {BUCKET_WORD[b]}
-              <span>{counts()[b]}</span>
-            </button>
-          )}
-        </For>
+      <div class="iris-lex-filters">
+        <Tabs
+          variant="pill"
+          size="small"
+          value={bucket()}
+          onChange={(v: string) => {
+            setBucket(v as Bucket)
+            setSelected(undefined)
+          }}
+        >
+          <Tabs.List aria-label={language.t("iris.lexicon.filter.label")}>
+            <For each={BUCKETS}>
+              {(b) => (
+                <Tabs.Trigger value={b}>
+                  {BUCKET_WORD[b]}
+                  <span class="n">{counts()[b]}</span>
+                </Tabs.Trigger>
+              )}
+            </For>
+          </Tabs.List>
+        </Tabs>
       </div>
 
       <div class="iris-lex-body">
-        <div class="iris-lex-list" role="listbox" aria-label="Agreements">
+        <div class="iris-lex-list" role="listbox" aria-label={language.t("iris.lexicon.list.label")}>
           <Show
             when={list.latest?.measured !== false}
             fallback={
-              <div class="iris-lex-empty">
-                <Ic name="warning" />
-                Couldn't read agreements: {list.latest?.reason}
-              </div>
+              <EmptyState
+                size="small"
+                icon={<Icon name="warning" size="small" />}
+                title={language.t("iris.lexicon.error.list", { reason: list.latest?.reason ?? "" })}
+              />
             }
           >
-            <Show when={!(list.loading && !list.latest)} fallback={<div class="iris-lex-empty"><Spinner class="iris-lex-spin" /></div>}>
+            <Show
+              when={!(list.loading && !list.latest)}
+              fallback={<SkeletonRows rows={5} label={language.t("iris.lexicon.loading")} />}
+            >
               <For
                 each={visible()}
                 fallback={
-                  <div class="iris-lex-empty">
-                    {caseRef() ? `No agreements on case ${caseRef()}${bucket() === "all" ? "" : ` in ${BUCKET_WORD[bucket()]}`}.` : "No case agreements yet."}
-                  </div>
+                  <EmptyState
+                    size="small"
+                    title={
+                      caseRef()
+                        ? bucket() === "all"
+                          ? language.t("iris.lexicon.empty.case", { case: caseRef() })
+                          : language.t("iris.lexicon.empty.caseIn", { case: caseRef(), bucket: BUCKET_WORD[bucket()] })
+                        : language.t("iris.lexicon.empty.none")
+                    }
+                  />
                 }
               >
                 {(a) => (
                   <button
+                    type="button"
                     class="iris-lex-row"
                     role="option"
                     data-id={a.id}
@@ -290,11 +334,13 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
                   >
                     <div class="iris-lex-row-top">
                       <span class="iris-lex-row-name">{a.counterparty}</span>
-                      <span class="iris-lex-state" data-tone={toneOf(a)}>{stateWord(a)}</span>
+                      <StatusBadge size="small" tone={statusTone(toneOf(a))}>
+                        {stateWord(a)}
+                      </StatusBadge>
                     </div>
                     <div class="iris-lex-row-sub">
                       {a.kind ?? a.type}
-                      <Show when={caseOf(a.subjectRef)}>{(c) => <> · case {c()}</>}</Show>
+                      <Show when={caseOf(a.subjectRef)}>{(c) => <> · {language.t("iris.lexicon.row.case", { case: c() })}</>}</Show>
                       <Show when={waitLine(a)}>{(w) => <> · {w()}</>}</Show>
                     </div>
                   </button>
@@ -306,14 +352,26 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
 
         <div class="iris-lex-detail">
           <Show when={!raising()} fallback={RaisePane()}>
-            <Show when={current()} fallback={<div class="iris-lex-empty">Pick an agreement</div>}>
+            <Show when={current()} fallback={<EmptyState size="small" title={language.t("iris.lexicon.pick")} />}>
               {(a) => DetailPane(a)}
             </Show>
           </Show>
         </div>
       </div>
 
-      <Show when={confirm()}>{(c) => ConfirmDialog(c)}</Show>
+      <PaneDialog
+        when={confirm()}
+        onClose={() => setConfirm(undefined)}
+        class="iris-lex-dialog"
+        id="iris-lex-confirm"
+        title={(c) =>
+          c.kind === "issue"
+            ? language.t("iris.lexicon.confirm.issue.title", { verb: issueVerb(c.a) })
+            : language.t("iris.lexicon.confirm.revoke.title")
+        }
+      >
+        {(c) => ConfirmBody(c)}
+      </PaneDialog>
     </div>
   )
 
@@ -327,39 +385,52 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
             <div class="iris-lex-name">{a().counterparty}</div>
             <div class="iris-lex-sub">{[a().kind ?? a().type, a().org].filter(Boolean).join(" · ")}</div>
           </div>
-          <span class="iris-lex-pill" data-tone={toneOf(a())}>{stateWord(a())}</span>
+          <StatusBadge size="small" tone={statusTone(toneOf(a()))}>
+            {stateWord(a())}
+          </StatusBadge>
         </div>
 
         <Show when={waitLine(a())}>
           {(w) => (
-            <div class="iris-lex-callout" data-tone={toneOf(a())}>
-              <Ic name="clock" />
-              <span>{w()}</span>
-            </div>
+            <Notice class="iris-lex-notice" tone={statusTone(toneOf(a()))} icon={<Icon name="clock" size="small" />}>
+              {w()}
+            </Notice>
           )}
         </Show>
 
         <dl class="iris-lex-fields">
-          <Show when={caseOf(a().subjectRef)}><dt>Case</dt><dd>{caseOf(a().subjectRef)}</dd></Show>
-          <dt>Between</dt>
-          <dd>{a().disclosingParty ?? "—"} and {a().counterparty}</dd>
-          <dt>Email</dt>
+          <Show when={caseOf(a().subjectRef)}>
+            <dt>{language.t("iris.lexicon.field.case")}</dt>
+            <dd>{caseOf(a().subjectRef)}</dd>
+          </Show>
+          <dt>{language.t("iris.lexicon.field.between")}</dt>
+          <dd>{language.t("iris.lexicon.field.betweenValue", { from: a().disclosingParty ?? "—", to: a().counterparty })}</dd>
+          <dt>{language.t("iris.lexicon.field.email")}</dt>
           <dd>{a().email ?? "—"}</dd>
-          <Show when={a().issuedAt}><dt>Issued</dt><dd>{a().issuedAt}</dd></Show>
-          <Show when={a().executedAt}><dt>Executed</dt><dd>{a().executedAt}</dd></Show>
-          <Show when={a().revokedAt}><dt>Revoked</dt><dd>{a().revokedAt}</dd></Show>
-          <dt>Expires</dt>
-          <dd>{a().expiryDate ?? "Runs until revoked"}</dd>
-          <dt>Seal</dt>
+          <Show when={a().issuedAt}>
+            <dt>{language.t("iris.lexicon.field.issued")}</dt>
+            <dd>{a().issuedAt}</dd>
+          </Show>
+          <Show when={a().executedAt}>
+            <dt>{language.t("iris.lexicon.field.executed")}</dt>
+            <dd>{a().executedAt}</dd>
+          </Show>
+          <Show when={a().revokedAt}>
+            <dt>{language.t("iris.lexicon.field.revoked")}</dt>
+            <dd>{a().revokedAt}</dd>
+          </Show>
+          <dt>{language.t("iris.lexicon.field.expires")}</dt>
+          <dd>{a().expiryDate ?? language.t("iris.lexicon.field.noExpiry")}</dd>
+          <dt>{language.t("iris.lexicon.field.seal")}</dt>
           <dd>
-            <Show when={d()?.seal} fallback={shortHash(a().documentHash) ?? "Unsealed"}>
+            <Show when={d()?.seal} fallback={shortHash(a().documentHash) ?? language.t("iris.lexicon.seal.unsealed")}>
               {(s) => (
                 <span data-tone={s().status === "intact" ? "good" : s().status === "mismatch" ? "bad" : undefined}>
                   {s().status === "intact"
-                    ? `Intact · ${shortHash(s().chain) ?? ""}`
+                    ? language.t("iris.lexicon.seal.intact", { hash: shortHash(s().chain) ?? "" })
                     : s().status === "mismatch"
-                      ? "MISMATCH — the stored text no longer matches what was sealed"
-                      : (s().detail ?? "Unsealed")}
+                      ? language.t("iris.lexicon.seal.mismatch")
+                      : (s().detail ?? language.t("iris.lexicon.seal.unsealed"))}
                 </span>
               )}
             </Show>
@@ -367,15 +438,21 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
         </dl>
 
         <Show when={a().partyLinks.length > 1}>
-          <div class="iris-lex-section">Parties · {a().partiesSigned}/{a().partiesTotal} signed</div>
+          <div class="iris-lex-section">
+            {language.t("iris.lexicon.parties", { signed: a().partiesSigned, total: a().partiesTotal })}
+          </div>
           <ul class="iris-lex-parties">
             <For each={a().partyLinks}>
               {(p) => (
                 <li>
-                  <Ic name={p.status === "signed" ? "circle-check" : "clock"} />
+                  <span class="iris-ui-ic" aria-hidden="true">
+                    <Icon name={p.status === "signed" ? "circle-check" : "clock"} size="small" />
+                  </span>
                   <span class="iris-lex-party-name">{p.name ?? "—"}</span>
                   <span class="iris-lex-weak">{p.role}</span>
-                  <span class="iris-lex-weak" data-tone={p.status === "signed" ? "good" : undefined}>{p.status}</span>
+                  <span class="iris-lex-weak" data-tone={p.status === "signed" ? "good" : undefined}>
+                    {p.status}
+                  </span>
                 </li>
               )}
             </For>
@@ -383,37 +460,49 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
         </Show>
 
         <Show when={detail.loading && !d()}>
-          <div class="iris-lex-empty"><Spinner class="iris-lex-spin" /></div>
+          <div class="iris-ui-center">
+            <Spinner class="iris-ui-spin" />
+          </div>
         </Show>
         <Show when={detail.latest && !detail.latest.measured && selected() === a().id}>
-          <div class="iris-lex-callout" data-tone="bad"><Ic name="warning" /><span>Couldn't read the document: {detail.latest!.reason}</span></div>
+          <Notice class="iris-lex-notice" tone="critical" icon={<Icon name="warning" size="small" />}>
+            {language.t("iris.lexicon.error.document", { reason: detail.latest!.reason ?? "" })}
+          </Notice>
         </Show>
 
         <Show when={d()?.document}>
           {(doc) => (
             <details class="iris-lex-doc">
               <summary>
-                <Ic name="open-file" />
-                {doc().reference ?? doc().title ?? "Document"}
+                <span class="iris-ui-ic" aria-hidden="true">
+                  <Icon name="open-file" size="small" />
+                </span>
+                {doc().reference ?? doc().title ?? language.t("iris.lexicon.document")}
               </summary>
-              <Show when={doc().preamble}><p class="iris-lex-doc-pre">{doc().preamble}</p></Show>
+              <Show when={doc().preamble}>
+                <p class="iris-lex-doc-pre">{doc().preamble}</p>
+              </Show>
               <ol>
                 <For each={doc().clauses}>
                   {(c) => (
                     <li>
-                      <Show when={c.heading}><strong>{c.heading}</strong> </Show>
+                      <Show when={c.heading}>
+                        <strong>{c.heading}</strong>{" "}
+                      </Show>
                       {c.body}
                     </li>
                   )}
                 </For>
               </ol>
-              <Show when={doc().recordNote}><p class="iris-lex-weak">{doc().recordNote}</p></Show>
+              <Show when={doc().recordNote}>
+                <p class="iris-lex-weak">{doc().recordNote}</p>
+              </Show>
             </details>
           )}
         </Show>
 
         <Show when={(d()?.trail.length ?? 0) > 0}>
-          <div class="iris-lex-section">Audit trail</div>
+          <div class="iris-lex-section">{language.t("iris.lexicon.trail")}</div>
           <ol class="iris-lex-trail">
             <For each={d()!.trail}>
               {(e) => (
@@ -427,21 +516,28 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
         </Show>
 
         <div class="iris-lex-actions">
-          <button
-            class="iris-lex-btn"
-            data-primary
+          <Button
+            type="button"
+            variant="primary"
+            size="small"
+            icon="send"
             disabled={busy() || !!blocked()}
-            title={blocked() ?? `Email the signing link to ${a().counterparty}`}
+            title={blocked() ?? language.t("iris.lexicon.issue.title", { name: a().counterparty })}
             onClick={() => openConfirm("issue", a())}
           >
-            <Icon name="send" size="small" />
             {issueVerb(a())}
-          </button>
+          </Button>
           <Show when={canRevoke(a())}>
-            <button class="iris-lex-btn" data-tone="bad" disabled={busy()} title="Withdraw it and close the access it authorised" onClick={() => openConfirm("revoke", a())}>
-              <Icon name="circle-ban-sign" size="small" />
-              Revoke
-            </button>
+            <Button
+              type="button"
+              size="small"
+              icon="circle-ban-sign"
+              disabled={busy()}
+              title={language.t("iris.lexicon.revoke.title")}
+              onClick={() => openConfirm("revoke", a())}
+            >
+              {language.t("iris.lexicon.revoke")}
+            </Button>
           </Show>
           <Show when={blocked() && a().status !== "executed"}>
             <span class="iris-lex-weak">{blocked()}</span>
@@ -458,108 +554,183 @@ export function IrisLexiconAgreements(props: { doFetch: Fetch; initialCase?: str
       <form class="iris-lex-form" onSubmit={submitRaise}>
         <div class="iris-lex-title">
           <div>
-            <div class="iris-lex-name">Raise an agreement</div>
-            <div class="iris-lex-sub">Saved as a draft. Nothing is sent until you issue it.</div>
+            <div class="iris-lex-name">{language.t("iris.lexicon.raise.title")}</div>
+            <div class="iris-lex-sub">{language.t("iris.lexicon.raise.sub")}</div>
           </div>
-          <button type="button" class="iris-lex-icon-btn" title="Cancel" aria-label="Cancel" onClick={() => setRaising(undefined)}>
-            <Icon name="close" size="small" />
-          </button>
+          <IconButton
+            type="button"
+            icon="close"
+            variant="ghost"
+            size="small"
+            title={language.t("common.cancel")}
+            aria-label={language.t("common.cancel")}
+            onClick={() => setRaising(undefined)}
+          />
         </div>
         <div class="iris-lex-grid">
-          <label>Case<input required value={f().case} onInput={setField("case")} placeholder="Lead id or case ref" /></label>
-          <label>
-            Type
-            <select value={f().type} onChange={setField("type")}>
-              <For each={AGREEMENT_TYPES}>{(x) => <option value={x.id}>{x.label}</option>}</For>
-            </select>
-          </label>
-          <label>Signer<input required value={f().name} onInput={setField("name")} placeholder="As named in the document" /></label>
-          <label>Signer's email<input type="email" value={f().email} onInput={setField("email")} placeholder="Needed to issue" /></label>
-          <label>Organisation<input value={f().org} onInput={setField("org")} placeholder="Optional" /></label>
-          <label>Issuing firm<input required value={f().firm} onInput={setField("firm")} placeholder="As named in the document" /></label>
-          <label>Term<input value={f().term} onInput={setField("term")} placeholder='e.g. "two years"' /></label>
-          <label>Expires<input value={f().expires} onInput={setField("expires")} placeholder="YYYY-MM-DD" /></label>
-          <label class="iris-lex-wide">Template<input value={f().template} onInput={setField("template")} placeholder="Contract template slug — or paste the wording below" /></label>
-          <label class="iris-lex-wide">
-            Wording
-            <textarea
-              value={f().body}
-              onInput={setField("body")}
-              placeholder={t()?.defaultWording ? "Optional — this type has default wording" : "The attorney-approved wording. It is sealed exactly as written."}
+          <TextField
+            required
+            label={language.t("iris.lexicon.raise.case")}
+            value={f().case}
+            onChange={setField("case")}
+            placeholder={language.t("iris.lexicon.raise.case.placeholder")}
+          />
+          <div class="iris-lex-select">
+            <span>{language.t("iris.lexicon.raise.type")}</span>
+            <Select
+              size="small"
+              options={TYPE_OPTIONS}
+              current={t()}
+              value={(x) => x.id}
+              label={(x) => x.label}
+              onSelect={(x) => x && setField("type")(x.id)}
+              aria-label={language.t("iris.lexicon.raise.type")}
             />
-          </label>
+          </div>
+          <TextField
+            required
+            label={language.t("iris.lexicon.raise.signer")}
+            value={f().name}
+            onChange={setField("name")}
+            placeholder={language.t("iris.lexicon.raise.asNamed")}
+          />
+          <TextField
+            type="email"
+            label={language.t("iris.lexicon.raise.email")}
+            value={f().email}
+            onChange={setField("email")}
+            placeholder={language.t("iris.lexicon.raise.email.placeholder")}
+          />
+          <TextField
+            label={language.t("iris.lexicon.raise.org")}
+            value={f().org}
+            onChange={setField("org")}
+            placeholder={language.t("iris.lexicon.raise.optional")}
+          />
+          <TextField
+            required
+            label={language.t("iris.lexicon.raise.firm")}
+            value={f().firm}
+            onChange={setField("firm")}
+            placeholder={language.t("iris.lexicon.raise.asNamed")}
+          />
+          <TextField
+            label={language.t("iris.lexicon.raise.term")}
+            value={f().term}
+            onChange={setField("term")}
+            placeholder={language.t("iris.lexicon.raise.term.placeholder")}
+          />
+          <TextField
+            label={language.t("iris.lexicon.raise.expires")}
+            value={f().expires}
+            onChange={setField("expires")}
+            placeholder={language.t("iris.lexicon.raise.expires.placeholder")}
+          />
+          <div class="iris-lex-wide">
+            <TextField
+              label={language.t("iris.lexicon.raise.template")}
+              value={f().template}
+              onChange={setField("template")}
+              placeholder={language.t("iris.lexicon.raise.template.placeholder")}
+            />
+          </div>
+          <div class="iris-lex-wide iris-lex-wording">
+            <TextField
+              multiline
+              label={language.t("iris.lexicon.raise.wording")}
+              value={f().body}
+              onChange={setField("body")}
+              placeholder={
+                t()?.defaultWording
+                  ? language.t("iris.lexicon.raise.wording.default")
+                  : language.t("iris.lexicon.raise.wording.placeholder")
+              }
+            />
+          </div>
         </div>
         <div class="iris-lex-actions">
-          <button class="iris-lex-btn" data-primary type="submit" disabled={busy()}>
-            <Show when={busy()} fallback={<Icon name="save" size="small" />}><Spinner class="iris-lex-spin" /></Show>
-            Raise draft
-          </button>
-          <button class="iris-lex-btn" type="button" onClick={() => setRaising(undefined)}>Cancel</button>
+          <Button type="submit" variant="primary" size="small" disabled={busy()}>
+            <Show when={busy()} fallback={<Icon name="save" size="small" />}>
+              <Spinner class="iris-ui-spin" />
+            </Show>
+            {language.t("iris.lexicon.raise.submit")}
+          </Button>
+          <Button type="button" size="small" onClick={() => setRaising(undefined)}>
+            {language.t("common.cancel")}
+          </Button>
           <Show when={raiseProblem(f())}>{(p) => <span class="iris-lex-weak">{p()}</span>}</Show>
         </div>
       </form>
     )
   }
 
-  function ConfirmDialog(c: () => Confirm) {
+  function ConfirmBody(c: () => Confirm) {
     const issue = () => c().kind === "issue"
     const who = () => recipients(c().a)
+    const kind = () => c().a.kind ?? c().a.type
     return (
-      <div class="iris-lex-scrim" onClick={(e) => e.target === e.currentTarget && !busy() && setConfirm(undefined)}>
-        <div class="iris-lex-dialog" role="alertdialog" aria-modal="true" aria-labelledby="iris-lex-dialog-title">
-          <div class="iris-lex-dialog-icon" data-tone={issue() ? undefined : "bad"}>
-            <Icon name={issue() ? "send" : "circle-ban-sign"} />
-          </div>
-          <div id="iris-lex-dialog-title" class="iris-lex-name">
-            {issue() ? `${issueVerb(c().a)} the signing link?` : "Revoke this agreement?"}
-          </div>
-          <p class="iris-lex-sub">
-            {issue()
-              ? `${c().a.kind ?? c().a.type} #${c().a.id}. This emails a signing link to:`
-              : `${c().a.kind ?? c().a.type} #${c().a.id}. Access it authorised closes for:`}
-          </p>
-          <ul class="iris-lex-recipients">
-            <For each={issue() ? who() : who().slice(0, 1)}>
-              {(r) => (
-                <li>
-                  <Ic name="at" />
-                  <span class="iris-lex-party-name">{r.name}</span>
-                  <span class="iris-lex-weak">{r.email ?? r.role}</span>
-                </li>
-              )}
-            </For>
-          </ul>
-          <Show
-            when={issue()}
-            fallback={
-              <label class="iris-lex-reason">
-                Why? Recorded on the audit chain.
-                <textarea value={reason()} onInput={(e) => setReason(e.currentTarget.value)} placeholder="engagement ended" autofocus />
-              </label>
-            }
+      <>
+        <p class="iris-lex-sub">
+          {issue()
+            ? language.t("iris.lexicon.confirm.issue.body", { kind: kind(), id: c().a.id })
+            : language.t("iris.lexicon.confirm.revoke.body", { kind: kind(), id: c().a.id })}
+        </p>
+        <ul class="iris-lex-recipients">
+          <For each={issue() ? who() : who().slice(0, 1)}>
+            {(r) => (
+              <li>
+                <span class="iris-ui-ic" aria-hidden="true">
+                  <Icon name="at" size="small" />
+                </span>
+                <span class="iris-lex-party-name">{r.name}</span>
+                <span class="iris-lex-weak">{r.email ?? r.role}</span>
+              </li>
+            )}
+          </For>
+        </ul>
+        <Show
+          when={issue()}
+          fallback={
+            <TextField
+              multiline
+              class="iris-lex-reason"
+              label={language.t("iris.lexicon.confirm.revoke.why")}
+              value={reason()}
+              onChange={(v) => setReason(v)}
+              placeholder={language.t("iris.lexicon.confirm.revoke.placeholder")}
+              autofocus
+            />
+          }
+        >
+          <Notice tone="warning" icon={<Icon name="lock" size="small" />}>
+            {language.t("iris.lexicon.confirm.issue.warning")}
+          </Notice>
+        </Show>
+        <Show when={error()}>
+          <Notice tone="critical" role="alert" icon={<Icon name="warning" size="small" />}>
+            {error()}
+          </Notice>
+        </Show>
+        <PaneDialogActions>
+          <Button type="button" size="small" disabled={busy()} onClick={() => setConfirm(undefined)} autofocus={issue()}>
+            {language.t("common.cancel")}
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="small"
+            disabled={busy() || (!issue() && !reason().trim())}
+            onClick={runConfirm}
           >
-            <div class="iris-lex-callout" data-tone="warn">
-              <Ic name="lock" />
-              <span>Anyone holding that link can sign. It goes to the address above only.</span>
-            </div>
-          </Show>
-          <div class="iris-lex-dialog-actions">
-            <button class="iris-lex-btn" disabled={busy()} onClick={() => setConfirm(undefined)} autofocus={issue()}>
-              Cancel
-            </button>
-            <button
-              class="iris-lex-btn"
-              data-primary
-              data-tone={issue() ? undefined : "bad"}
-              disabled={busy() || (!issue() && !reason().trim())}
-              onClick={runConfirm}
-            >
-              <Show when={busy()}><Spinner class="iris-lex-spin" /></Show>
-              {issue() ? `Send to ${c().a.counterparty}` : `Revoke for ${c().a.counterparty}`}
-            </button>
-          </div>
-        </div>
-      </div>
+            <Show when={busy()}>
+              <Spinner class="iris-ui-spin" />
+            </Show>
+            {issue()
+              ? language.t("iris.lexicon.confirm.issue.verb", { name: c().a.counterparty })
+              : language.t("iris.lexicon.confirm.revoke.verb", { name: c().a.counterparty })}
+          </Button>
+        </PaneDialogActions>
+      </>
     )
   }
 }

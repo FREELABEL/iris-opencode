@@ -239,16 +239,17 @@
 .iris-pubm__whosum { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: var(--font-size-x-small); line-height: 1.4; color: var(--text-weak); }
 .iris-pubm__whosum .iris-pubm__tone { margin-top: 1px; }
 .iris-pubm__whosum[data-tone="warn"] > span:last-child { color: var(--text-base); }
-.iris-pubm__chips .iris-ui-chip [data-component="icon"] { width: 12px; height: 12px; }
 .iris-pubm__who { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-2xl); }
 .iris-pubm__wholbl { font-size: var(--font-size-caption); font-weight: var(--font-weight-medium); color: var(--text-strong); }
 .iris-pubm__chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.iris-pubm__chips .iris-ui-chip { padding-right: 2px; }
-.iris-pubm__chipx { display: inline-flex; border: 0; background: none; padding: 0; color: var(--text-weak); cursor: pointer; border-radius: var(--radius-full); }
-.iris-pubm__chipx:hover { color: var(--text-strong); }
+/* An entry: the ui StatusBadge, then its ui IconButton to take it off the list. */
+.iris-pubm__chip { display: inline-flex; align-items: center; gap: 0; min-width: 0; }
+.iris-pubm__chipx { width: 20px; height: 20px; }
 .iris-pubm__whoadd { display: flex; gap: 6px; }
 .iris-pubm__whoadd input { flex: 1; min-width: 0; font-size: var(--font-size-caption); padding: 5px 8px; border: 1px solid var(--border-weak-base); border-radius: var(--radius-md); background: transparent; color: var(--text-strong); }
 .iris-pubm__whoadd input::placeholder { color: var(--text-weaker); }
 /* The icon sets its own colour; the tone wins here. */
-.iris-pubm__tone [data-component="icon"],
-.iris-pubm__chips .iris-ui-chip [data-component="icon"] { color: var(--tone, var(--ui-info)); }
+.iris-pubm__tone [data-component="icon"] { color: var(--tone, var(--ui-info)); }
+
+/* The bar above the artifact: ui IconButtons, a real link drawn as one, and a Draft | Live RadioGroup. */
+.iris-publish__open, .iris-publish__live { flex: none; }

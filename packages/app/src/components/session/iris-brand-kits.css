@@ -1,5 +1,7 @@
 /*
- * Genesis › Brand kits (#188816) — the editor (#192667). Built on iris-panel-ui.css.
+ * Genesis › Brand kits (#188816) — the editor (#192667). Built on the ui library (Button, IconButton,
+ * Tabs, RadioGroup, StatusBadge, Notice, EmptyState, PaneDialog) and iris-pane-layout.css; this file is
+ * layout and the kit-coloured previews only.
  *
  * Colour on this pane belongs to the BRAND only inside four things: swatches, contrast tiles, logo
  * tiles and the previews. Everything else — toolbar, tabs, fields, chips, callouts — is the panel's
@@ -21,7 +23,7 @@
 .iris-bk-h .n { font-weight: var(--font-weight-regular); font-variant-numeric: tabular-nums; opacity: 0.7; }
 .iris-bk-inline { display: inline-flex; align-items: center; gap: 4px; color: var(--text-base); }
 .iris-bk-pip { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.45); flex: none; }
-.iris-bk-dot { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ui-warn); }
+.iris-bk-dot { display: inline-block; margin-inline-start: 4px; vertical-align: middle; width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ui-warn); }
 
 /* ── list ── */
 .iris-bk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -38,6 +40,9 @@
 .iris-bk-chips { display: flex; gap: 2px; }
 .iris-bk-chips > span { width: 12px; height: 12px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.35); }
 .iris-bk-ident { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.iris-bk-iconbtn { padding-inline: 4px; }
+.iris-bk-tabs { padding: 6px 10px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; }
+.iris-bk-tabs [data-slot="tabs-trigger"] .n, .iris-bk-filter [data-slot="tabs-trigger"] .n { font-variant-numeric: tabular-nums; opacity: 0.7; }
 
 /* ── layout: editor + live preview side by side when there is room ── */
 .iris-bk-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -61,10 +66,10 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 10px; }
 .iris-bk-cname { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 22px; }
 .iris-bk-was { font-size: var(--font-size-x-small); color: var(--text-weak); white-space: nowrap; }
-.iris-bk-reset { width: 22px; height: 22px; margin-inline-start: auto; }
+.iris-bk-reset { margin-inline-start: auto; }
 
 /* ── colours ── */
-.iris-bk-filter { padding: 0 0 8px; border: 0; margin-bottom: 4px; }
+.iris-bk-filter { padding: 0 0 8px; margin-bottom: 4px; }
 .iris-bk-colours { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .iris-bk-colour { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; padding: 8px; border-radius: var(--radius-lg); }
 .iris-bk-colour[data-changed] { background: color-mix(in srgb, var(--ui-warn) 8%, transparent); }
@@ -105,7 +110,7 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 
 /* ── motion ── */
 .iris-bk-presets { margin-bottom: 10px; }
-.iris-bk-presets > button { text-transform: capitalize; }
+.iris-bk-presets [data-slot="radio-group-item-control"] { text-transform: capitalize; }
 .iris-bk-motion { display: grid; grid-template-columns: 120px minmax(0, 1fr); grid-template-rows: auto auto; gap: 8px 12px; align-items: center; margin-top: 14px; }
 .iris-bk-curve { grid-row: span 2; width: 120px; height: 120px; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-lg); }
 .iris-bk-axis { stroke: var(--border-weak-base); stroke-width: 0.02; fill: none; }
@@ -113,7 +118,7 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-track { position: relative; height: 36px; border-radius: var(--radius-full); box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.3); }
 .iris-bk-ball { position: absolute; top: 6px; width: 24px; height: 24px; border-radius: var(--radius-full); left: 6px; }
 .iris-bk-ball[data-at="end"] { left: calc(100% - 30px); }
-.iris-bk-motion > .iris-ui-btn { justify-self: start; }
+.iris-bk-motion > [data-component="button"] { justify-self: start; }
 
 /* ── export ── */
 .iris-bk-export { margin-bottom: 14px; }
@@ -126,8 +131,8 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-personas li { display: flex; align-items: center; gap: 6px; }
 
 /* ── the save confirm ── */
-.iris-bk-dialog { width: min(520px, 100%); max-height: calc(100% - 32px); overflow-y: auto; }
-.iris-bk-diff { list-style: none; margin: 4px 0 10px; padding: 0; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-lg); max-height: 240px; overflow-y: auto; }
+.iris-bk-confirm { display: flex; flex-direction: column; gap: 8px; }
+.iris-bk-diff { list-style: none; margin: 4px 0 2px; padding: 0; border: 1px solid var(--border-weaker-base); border-radius: var(--radius-lg); max-height: 240px; overflow-y: auto; }
 .iris-bk-diff li { display: grid; grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr); gap: 8px; align-items: center; padding: 6px 10px; font-size: var(--font-size-caption); }
 .iris-bk-diff li + li { border-top: 1px solid var(--border-weaker-base); }
 .iris-bk-dlabel { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -137,7 +142,6 @@ textarea.iris-bk-input { resize: vertical; line-height: 1.5; }
 .iris-bk-dval[data-gone] code { color: var(--text-weak); text-decoration: line-through; }
 .iris-bk-dnone { font-size: var(--font-size-x-small); color: var(--text-weak); font-style: italic; }
 .iris-bk-arrow { color: var(--text-weak); flex: none; }
-.iris-bk-dialog .iris-ui-callout { margin-top: 6px; }
 
 /* ── previews: the ONLY place outside swatches that wears the kit ── */
 .iris-bk-kitground { background: var(--k-bg); color: var(--k-text); font-family: var(--k-font); border-radius: var(--radius-2xl); padding: 16px;

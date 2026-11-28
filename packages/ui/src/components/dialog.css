@@ -124,6 +124,11 @@
     }
   }
 
+  /* A confirm or a short form (#194375 W5): a question, a sentence or two, the actions. */
+  &[data-size="small"] [data-slot="dialog-container"] {
+    width: min(calc(100vw - 32px), 440px);
+  }
+
   &[data-size="large"] [data-slot="dialog-container"] {
     width: min(calc(100vw - 32px), 800px);
     height: min(calc(100vh - 32px), 600px);

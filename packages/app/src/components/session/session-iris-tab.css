@@ -3359,6 +3359,9 @@ button.iris-scopechip__body:hover { color: var(--text-strong); background: var(-
 }
 .iris-avatar2[data-kind="agent"] {
   border-radius: var(--radius-lg);
+  /* #194375: the brand pair, like every other primary mark; no violet-to-blue gradient. */
+  background: var(--surface-brand-base);
+  color: var(--text-on-brand-base);
 }
 
 /* The picker: tick as many as you like. */
@@ -4550,5 +4553,367 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
 }
 .iris-homestrip > button {
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ───────────── ATLAS BOARD · COMMAND STRIP (#192839) ─────────────
+   Direction C without graphs, with B's epics. Colour means an exception: in progress, done,
+   blocked, urgent/high. A default card carries no colour at all, so a calm board is correct. */
+.iris-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+.iris-strip__count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-full);
+  background: var(--background-base);
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.iris-strip__count:hover {
+  border-color: var(--border-weak-base);
+}
+.iris-strip__count[aria-pressed="true"] {
+  border-color: var(--border-interactive-base);
+  background: var(--surface-interactive-weak);
+  color: var(--text-strong);
+}
+.iris-strip__n {
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+}
+.iris-strip__count[data-kind="blocked"] .iris-strip__n {
+  color: var(--icon-critical-base);
+}
+.iris-strip__count[data-kind="in_progress"] .iris-strip__n {
+  color: var(--text-interactive-base);
+}
+.iris-strip__spacer {
+  flex: 1;
+}
+.iris-strip__tidy {
+  padding: 4px 10px;
+  border: 1px dashed var(--border-weak-base);
+  border-radius: var(--radius-full);
+  color: var(--text-base);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.iris-strip__tidy:hover {
+  border-style: solid;
+}
+
+.iris-epics {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 8px 10px;
+}
+.iris-epics__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-lg);
+  background: var(--background-base);
+  text-align: start;
+  cursor: pointer;
+}
+.iris-epics__item:hover {
+  border-color: var(--border-interactive-base);
+}
+.iris-epics__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--border-interactive-base);
+}
+.iris-epics__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.iris-epics__title {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-epics__meta {
+  overflow: hidden;
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iris-tidy {
+  margin: 0 8px 10px;
+  padding: 12px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: var(--radius-lg);
+  background: var(--background-base);
+}
+.iris-tidy__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  color: var(--text-weak);
+  font-size: var(--font-size-caption);
+}
+.iris-tidy__head strong {
+  color: var(--text-strong);
+  font-size: var(--font-size-small);
+}
+.iris-tidy__list {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.iris-tidy__list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-weaker-base);
+  font-size: var(--font-size-caption);
+}
+.iris-tidy__title {
+  overflow: hidden;
+  color: var(--text-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-tidy__what {
+  color: var(--text-strong);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-x-small);
+}
+.iris-tidy__why {
+  grid-column: 1 / -1;
+  color: var(--text-weaker);
+  font-size: var(--font-size-x-small);
+}
+.iris-tidy__more {
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+}
+.iris-tidy__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.iris-tidy__actions button {
+  padding: 5px 12px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.iris-tidy__apply {
+  border-color: var(--border-interactive-base) !important;
+  background: var(--surface-interactive-base);
+  color: var(--text-strong);
+}
+.iris-tidy__actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Lanes fold from their header (rule 4), shared with List view's folds. */
+.iris-board__fold {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  text-align: start;
+  cursor: pointer;
+}
+.iris-board__col--folded {
+  flex-basis: 44px;
+  max-width: 44px;
+}
+.iris-board__col--folded .iris-board__cards {
+  display: none;
+}
+.iris-board__col--folded .iris-board__head {
+  padding: 10px 0;
+  justify-content: center;
+}
+.iris-board__col--folded .iris-board__fold {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  writing-mode: vertical-rl;
+  max-height: 260px;
+}
+
+/* The card face. */
+.iris-board__title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-small);
+  line-height: var(--font-size-small--line-height);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.iris-board__tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-sm);
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+  line-height: var(--font-size-x-small--line-height);
+  vertical-align: 1px;
+}
+.iris-board__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.iris-board__card[data-state="done"] .iris-board__title {
+  color: var(--text-weak);
+}
+.iris-board__card--dim {
+  opacity: 0.28;
+}
+.iris-board__card--dim:hover,
+.iris-board__card--dim:focus-visible {
+  opacity: 0.85;
+}
+
+/* B's epic hero, wherever the epic sits — a soft interactive glow, never a coloured stripe. */
+.iris-board__card--epic {
+  gap: 6px;
+  padding: 10px 11px;
+  border-color: var(--border-interactive-base);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-interactive-base) 35%, transparent),
+    0 6px 18px -8px color-mix(in srgb, var(--border-interactive-base) 55%, transparent);
+}
+.iris-board__card--epic .iris-board__title {
+  color: var(--text-strong);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-size-base--line-height);
+}
+.iris-board__kicker {
+  color: var(--text-interactive-base);
+  font-size: var(--font-size-x-small);
+  letter-spacing: 0.14em;
+}
+.iris-board__epic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-weaker-base);
+}
+.iris-board__epic-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.iris-board__epic-progress {
+  color: var(--text-base);
+  font-size: var(--font-size-x-small);
+}
+.iris-board__epic-next {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-weak);
+  font-size: var(--font-size-x-small);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.iris-ring {
+  flex: none;
+}
+.iris-ring__track {
+  fill: none;
+  stroke: var(--border-weaker-base);
+  stroke-width: 3;
+}
+.iris-ring__fill {
+  fill: none;
+  stroke: var(--text-interactive-base);
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+/* The epic summary in the card's Details. */
+.iris-card__epic {
+  padding: 10px 12px;
+  border: 1px solid var(--border-interactive-base);
+  border-radius: var(--radius-lg);
+}
+.iris-card__epic-type {
+  margin-bottom: 6px;
+  color: var(--text-interactive-base);
+  font-size: var(--font-size-x-small);
+  letter-spacing: 0.14em;
+}
+.iris-card__epic-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: var(--font-size-caption);
+}
+.iris-card__epic-dl dt {
+  color: var(--text-weak);
+}
+.iris-card__epic-dl dd {
+  margin: 0;
+  color: var(--text-strong);
+}
+.iris-board__col--folded .iris-atlas-list__title {
+  max-width: none;
+  max-height: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iris-board__col--folded .iris-board__head {
+  overflow: hidden;
+}
+.iris-board__col--folded .iris-board__fold {
+  width: auto;
+}
+/* Folded lane: the name reads top to bottom on the title itself, the count above it. */
+.iris-board__col--folded .iris-board__fold {
+  writing-mode: horizontal-tb;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+}
+.iris-board__col--folded .iris-atlas-list__title {
+  writing-mode: vertical-rl;
+  width: auto;
+  min-width: auto;
+}
+/* Folded lane: "N cards" reads down the lane with its name instead of wrapping in 44px. */
+.iris-board__col--folded .iris-atlas-list__count {
+  writing-mode: vertical-rl;
   white-space: nowrap;
 }

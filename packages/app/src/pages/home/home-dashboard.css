@@ -71,11 +71,12 @@
 .ihd-st { width: 22px; height: 22px; display: grid; place-items: center; }
 .ihd-st svg { width: 14px; height: 14px; }
 @keyframes ihd-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 55%, transparent); } 70% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent); } 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-state-fg-success) 0%, transparent); } }
-@keyframes ihd-spin { to { transform: rotate(360deg); } }
 .ihd-idle { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ihd-faint); display: inline-block; box-sizing: border-box; }
 .ihd-live { width: 8px; height: 8px; border-radius: 50%; background: var(--ihd-em); display: inline-block; animation: ihd-pulse 2s infinite; }
-.ihd-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--ihd-em) 25%, transparent); border-top-color: var(--ihd-em); animation: ihd-spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .ihd-live, .ihd-spin { animation: none; } }
+/* The ui Spinner (#194375 W5), sized and tinted for the dashboard rows. */
+.ihd-spin { width: 13px; height: 13px; flex: none; color: var(--ihd-em); }
+.ihd-spin--sm { width: 10px; height: 10px; }
+@media (prefers-reduced-motion: reduce) { .ihd-live { animation: none; } }
 .ihd-pager { display: flex; align-items: center; gap: 5px; justify-content: flex-end; padding-top: 8px; }
 .ihd-pager .ihd-range { margin-right: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
 .ihd-pg { min-width: 26px; height: 26px; border: 1px solid var(--ihd-line); border-radius: var(--radius-lg); display: grid; place-items: center; color: var(--ihd-mute); font-size: var(--font-size-caption); }
@@ -135,3 +136,15 @@
 .ihd-ask-plus { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ihd-btn); color: var(--text-on-brand-base); flex: none; }
 .ihd-ask-plus svg { width: 14px; height: 14px; }
 .ihd-ask kbd { margin-left: auto; font: var(--font-size-x-small) var(--ihd-mono); color: var(--ihd-faint); }
+/* #194504: every tile is a button that opens its pane; its facts are words; a zero carries its next
+   step as a second, separate button. Hover and focus change the border and ring, never an edge. */
+.ihd-stat { display: flex; flex-direction: column; transition: border-color 120ms ease; }
+.ihd-stat:hover { border-color: var(--v2-border-border-strong); }
+.ihd-stat:has(> .ihd-stat-open:focus-visible) { box-shadow: var(--shadow-xs-border-focus); }
+.ihd-stat-open { all: unset; box-sizing: border-box; display: block; width: 100%; cursor: pointer; color: inherit; text-align: left; }
+.ihd-stat-open:focus-visible { outline: none; }
+.ihd-stat-open .ihd-n, .ihd-stat-open .ihd-label { display: block; }
+.ihd-stat-open .ihd-meta { display: block; margin-top: 6px; color: var(--ihd-mute); font-size: var(--font-size-caption); line-height: var(--font-size-caption--line-height); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ihd-stat[data-zero] .ihd-n { color: var(--ihd-faint); }
+.ihd-stat-next { margin-top: 10px; }
+.ihd-stat .ihd-flag { font-weight: var(--font-weight-medium); }

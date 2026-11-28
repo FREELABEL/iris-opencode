@@ -28,4 +28,11 @@ describe("parseIrisLink (#190233)", () => {
     expect(parseIrisLink("javascript:alert(1)")).toBeNull()
     expect(parseIrisLink("not a url")).toBeNull()
   })
+
+  test("an invite link carries its code; a code that is not one is ignored (#194525)", () => {
+    expect(parseIrisLink("iris://invite?code=abc123")).toEqual({ kind: "invite", code: "abc123" })
+    expect(parseIrisLink("iris:invite?code=AB_c-9")).toEqual({ kind: "invite", code: "AB_c-9" })
+    expect(parseIrisLink("iris://invite?code=<x>")).toBeNull()
+    expect(parseIrisLink("iris://invite")).toBeNull()
+  })
 })

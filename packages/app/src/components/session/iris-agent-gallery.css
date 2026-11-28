@@ -98,3 +98,13 @@ button.iag-chip--more:hover { color: var(--hsc-ink); }
 .iag-ghost:hover { background: var(--hsc-elev); color: var(--hsc-ink); }
 .iag-ghost--live:hover { color: var(--hsc-jade); }
 .iag-btn:focus-visible, .iag-ghost:focus-visible, button.iag-chip--more:focus-visible { outline: 2px solid var(--hsc-jade); outline-offset: 1px; }
+
+/* #194505: what the agent did — last run and its result, runs this week, the next beat — then the
+   actions, each with its word. The result is a tinted StatusBadge, never a coloured edge. */
+.iag-card__activity { display: flex; flex-direction: column; gap: 3px; margin-top: auto; padding-top: 8px; }
+.iag-card__last { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--font-size-caption); color: var(--hsc-ink); }
+.iag-card__last > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iag-card__last [data-never] { color: var(--hsc-faint); }
+.iag-card__facts { font-size: var(--font-size-x-small); color: var(--hsc-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iag-card__activity + .iag-card__foot { margin-top: 8px; flex-wrap: wrap; }
+.iag-count { font-size: var(--font-size-caption); color: var(--hsc-ink2); }

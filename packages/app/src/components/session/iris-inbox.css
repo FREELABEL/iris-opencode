@@ -1,18 +1,35 @@
 /*
- * Inbox (#192688). Built from the shared Panel UI pattern (iris-panel-ui.css): its tokens, toolbar,
- * filter row, chips, empty states and confirm. Only the inbox's own layout is here — list ⇄ thread ⇄
- * the lead's card. A tone is text colour plus a wash; nothing here draws a bar down an edge.
+ * Inbox (#192688). Controls are the ui library's (Button, IconButton, Tabs, RadioGroup, StatusBadge,
+ * Notice, EmptyState, PaneDialog) on iris-pane-layout.css (#194375 W5). Only the inbox's own layout is
+ * here — list ⇄ thread ⇄ the lead's card. A tone is text colour plus a wash; nothing here draws a bar
+ * down an edge.
  */
-.iris-inb { --ui-pink: color-mix(in srgb, var(--text-interactive-base) 70%, var(--text-strong)); }
-.iris-inb [data-tone="pink"] { --tone: var(--ui-pink); }
+/* The avatar's wash, in the channel's tone (the same tones its StatusBadge uses). */
+.iris-inb-av[data-tone="info"] { --tone: var(--ui-info); }
+.iris-inb-av[data-tone="accent"] { --tone: color-mix(in srgb, var(--text-interactive-base) 70%, var(--text-strong)); }
+.iris-inb-av[data-tone="success"] { --tone: var(--ui-good); }
+.iris-inb-av[data-tone="warning"] { --tone: var(--ui-warn); }
 .iris-inb .weak { color: var(--text-weak); font-size: var(--font-size-x-small); }
 
+/* The filter row (ui Tabs, pill, small), then the channel toggles (ghost Buttons with aria-pressed). */
+.iris-inb-tabs { flex: none; padding: 6px 10px 0; min-width: 0; }
+.iris-inb-tabs .n { font-variant-numeric: tabular-nums; opacity: 0.65; margin-inline-start: 4px; }
 .iris-inb-chips { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border-weaker-base); overflow-x: auto; min-width: 0; }
-.iris-inb-chipbtn { display: inline-flex; align-items: center; gap: 4px; flex: none; border: 1px solid var(--border-weaker-base); background: none; color: var(--text-weak); border-radius: var(--radius-full); padding: 1px 9px; font-size: var(--font-size-x-small); line-height: 18px; cursor: pointer; white-space: nowrap; }
-.iris-inb-chipbtn:hover { color: var(--text-strong); }
-.iris-inb-chipbtn[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); border-color: transparent; }
+.iris-inb-chipbtn { flex: none; gap: 4px; white-space: nowrap; height: 22px; font-size: var(--font-size-caption); font-weight: var(--font-weight-regular); }
+.iris-inb-chipbtn:not([aria-pressed="true"]) { color: var(--text-weak); }
+/* A pressed toggle reads as chosen: the panel's selection tint (the ghost Button has no pressed state of its own). */
+.iris-inb-chipbtn[aria-pressed="true"] { background: var(--ui-sel); color: var(--text-strong); }
 .iris-inb-chipbtn .n { font-variant-numeric: tabular-nums; opacity: 0.65; }
 .iris-inb-chipbtn .iris-ui-svg { width: 12px; height: 12px; }
+.iris-inb-replyby { display: inline-flex; align-items: center; gap: 2px; }
+.iris-inb-iconbtn { padding: 0 4px; }
+.iris-inb-cardtoggle[aria-pressed="true"] { background: var(--ui-sel); }
+.iris-inb-ch [data-slot="status-badge-mark"] { display: inline-flex; }
+.iris-inb-ch .iris-ui-svg, .iris-inb-meta [data-slot="status-badge-mark"] .iris-ui-svg { width: 12px; height: 12px; }
+.iris-inb-list > [data-component="empty-state"], .iris-inb-msgs > [data-component="empty-state"], .iris-inb-pick > [data-component="empty-state"] { margin: auto 0; padding: 24px 16px; }
+.iris-inb-list > [data-component="skeleton-rows"] { padding: 8px 12px; }
+.iris-inb-notice { margin: 8px 10px 10px; }
+.iris-inb-confirm { display: flex; flex-direction: column; gap: 8px; }
 
 .iris-inb-body { position: relative; flex: 1 1 0; min-height: 0; display: flex; }
 .iris-inb-list { flex: 1 1 auto; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
@@ -58,7 +75,7 @@
 .iris-inb-mmeta { display: block; margin-top: 3px; font-size: var(--font-size-x-small); color: var(--text-weak); }
 .iris-inb-msg[data-dir="outbound"] .iris-inb-mmeta { text-align: end; }
 
-/* ── reply ── (no positioned box here: the send confirm covers the whole view, .iris-ui is its frame) */
+/* ── reply ── (the send confirm is the app's Dialog: PaneDialog) */
 .iris-inb-reply { border-top: 1px solid var(--border-weaker-base); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .iris-inb-rbar, .iris-inb-ract { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .iris-inb-to { font-size: var(--font-size-x-small); color: var(--text-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -75,6 +92,7 @@
 .iris-inb-draft p { margin: 2px 0 6px; font-size: var(--font-size-caption); line-height: 1.45; white-space: pre-wrap; color: var(--text-strong); }
 .iris-inb-dtone { font-size: var(--font-size-x-small); color: var(--text-weak); text-transform: capitalize; }
 .iris-inb-dact { display: flex; gap: 6px; }
+.iris-inb-drafthead > [data-component="icon-button"] { flex: none; margin-top: -3px; }
 .iris-inb-quote { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--surface-raised-base); font-size: var(--font-size-caption); line-height: 1.45; color: var(--text-strong); white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 .iris-inb-quote b { display: block; margin-bottom: 4px; }
 

@@ -1,14 +1,16 @@
-import { createResource, createSignal, For, onMount, Show } from "solid-js"
+import { createMemo, createResource, createSignal, For, onMount, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { usePlatform } from "@/context/platform"
 import { trackUpgrade } from "@/utils/upgrade-funnel"
 import { planSummary, type SummaryInput } from "./plan-summary"
-import { IRIS_COLORS, PlanMark } from "./plan-mark"
+import { PlanMark } from "./plan-mark"
+import { bestFit, fitLabel, planFits, tokenCount, usageDialogCopy, type UsagePlan } from "./usage/usage-model"
+import { loadPacks, type TopupPack } from "./usage/usage-actions"
+import { TopupPicker } from "./usage/topup-picker"
+import "./dialog-upgrade.css"
 
-const GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.fuchsia}, ${IRIS_COLORS.blue}, ${IRIS_COLORS.cyan})`
-const BUTTON_GRADIENT = `linear-gradient(90deg, ${IRIS_COLORS.violet}, #2563eb)`
 
 export interface PlanOffer {
   slug: string
@@ -97,7 +99,13 @@ export function PlanCards(props: {
   /** "rows" for a narrow panel (Settings): one full-width row per plan instead of squeezed columns. */
   layout?: "columns" | "rows"
   /** Where the plans were opened from, for the funnel (#190373). */
-  source: "pill" | "dock" | "settings" | "menu"
+  source: "pill" | "dock" | "settings" | "menu" | "ring"
+  /**
+   * This week's usage (/iris/plan), when the caller has it (#194531). Each card then shows what this
+   * week would have used of it, and the cheapest one that fits gets "Fits you best". Without it,
+   * or while it is unmeasured, the cards are exactly as before.
+   */
+  usage?: UsagePlan
 }) {
   const rows = () => props.layout === "rows"
   const platform = usePlatform()
@@ -113,6 +121,12 @@ export function PlanCards(props: {
   const [opening, setOpening] = createSignal<string | null>(null)
   const [error, setError] = createSignal<string | null>(null)
   onMount(() => trackUpgrade(props.fetchJson, "upgrade.opened", props.source))
+
+  // Never read `plans()` before it resolves outside the <Show> below (#191772).
+  const offers = () => (plans.state === "ready" && plans.latest?.measured ? plans.latest.plans : [])
+  const fits = createMemo(() => planFits(offers(), props.usage))
+  const best = createMemo(() => bestFit(offers(), props.usage))
+  const fitFor = (slug: string) => fits().find((f) => f.slug === slug)
 
   const choose = async (slug: string) => {
     if (opening()) return
@@ -154,7 +168,7 @@ export function PlanCards(props: {
               <span
                 class="tabular-nums"
                 classList={{
-                  "text-v2-state-fg-warning font-medium": summary().over,
+                  "iris-upgrade__warn font-medium": summary().over,
                   "text-v2-text-text-base": !summary().over,
                 }}
                 data-slot="iris-plan-summary-allowance"
@@ -185,13 +199,11 @@ export function PlanCards(props: {
             >
               <div
                 class="h-full rounded-full transition-[width] duration-500"
-                style={{
-                  width: `${summary().percent}%`,
-                  "background-image":
-                    (summary().percent ?? 0) >= 90
-                      ? "linear-gradient(90deg, #f59e0b, #facc15)"
-                      : GRADIENT,
+                classList={{
+                  "bg-v2-state-fg-warning": (summary().percent ?? 0) >= 90,
+                  "bg-surface-brand-base": (summary().percent ?? 0) < 90,
                 }}
+                style={{ width: `${summary().percent}%` }}
               />
             </div>
           </Show>
@@ -214,13 +226,12 @@ export function PlanCards(props: {
                   <button
                     type="button"
                     data-slot="iris-upgrade-choose"
-                    class="h-10 rounded-lg px-4 text-[14px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+                    class="h-10 rounded-lg px-4 text-[14px] font-semibold transition-colors disabled:opacity-60"
                     classList={{
-                      "text-white": !!p.popular,
+                      "bg-surface-brand-base text-text-on-brand-base hover:bg-surface-brand-hover": !!p.popular,
                       "border border-v2-border-border-base text-v2-text-text-strong hover:bg-v2-background-bg-base":
                         !p.popular,
                     }}
-                    style={p.popular ? { background: BUTTON_GRADIENT } : undefined}
                     disabled={opening() !== null}
                     onClick={() => void choose(p.slug)}
                   >
@@ -234,8 +245,7 @@ export function PlanCards(props: {
                         <li class="flex gap-2">
                           <span
                             aria-hidden="true"
-                            class="mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: [IRIS_COLORS.fuchsia, IRIS_COLORS.blue, IRIS_COLORS.cyan][i() % 3] }}
+                            class="mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full bg-surface-brand-base"
                           />
                           {f}
                         </li>
@@ -247,17 +257,25 @@ export function PlanCards(props: {
                   <div
                     data-slot="iris-upgrade-plan"
                     data-layout={rows() ? "rows" : "columns"}
+                    data-popular={p.popular ? "" : undefined}
                     class="rounded-xl border p-5"
-                    classList={{ "flex flex-col gap-3": !rows(), "grid gap-x-8 gap-y-3": rows() }}
-                    style={{
-                      "grid-template-columns": rows() ? "minmax(200px, 240px) 1fr" : undefined,
-                      "border-color": p.popular
-                        ? IRIS_COLORS.blue
-                        : "var(--v2-border-border-base, rgba(127,127,127,.25))",
-                      "box-shadow": p.popular ? `0 0 0 1px ${IRIS_COLORS.blue}33` : undefined,
+                    classList={{
+                      "flex flex-col gap-3": !rows(),
+                      "grid gap-x-8 gap-y-3": rows(),
+                      "border-surface-brand-base ring-1 ring-surface-brand-base/20": !!p.popular,
+                      "border-v2-border-border-base": !p.popular,
                     }}
+                    style={{ "grid-template-columns": rows() ? "minmax(200px, 240px) 1fr" : undefined }}
                   >
                     <div class="flex flex-col gap-3">
+                      <Show when={best()?.offer.slug === p.slug}>
+                        <span
+                          data-slot="iris-upgrade-best"
+                          class="font-mono text-[10.5px] font-semibold uppercase tracking-[0.14em] text-v2-state-fg-warning"
+                        >
+                          Fits you best
+                        </span>
+                      </Show>
                       <div class="flex items-center gap-2.5">
                         <PlanMark slug={p.slug} size={32} />
                         <span class="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-v2-text-text-strong">
@@ -265,8 +283,7 @@ export function PlanCards(props: {
                         </span>
                         <Show when={p.popular}>
                           <span
-                            class="whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-white"
-                            style={{ background: BUTTON_GRADIENT }}
+                            class="whitespace-nowrap rounded-full bg-surface-brand-base px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-text-on-brand-base"
                           >
                             Most popular
                           </span>
@@ -279,6 +296,35 @@ export function PlanCards(props: {
                       </div>
                       <Show when={p.subtitle}>
                         <div class="text-v2-text-text-weak text-[12px]">{p.subtitle}</div>
+                      </Show>
+                      <Show when={fitFor(p.slug)?.percent != null ? fitFor(p.slug) : undefined}>
+                        {(fit) => (
+                          <div data-slot="iris-upgrade-fit" class="flex flex-col gap-1.5">
+                            <Show when={fit().weekly}>
+                              <div class="text-[12px] text-v2-text-text-weak">{tokenCount(fit().weekly!)} tokens a week</div>
+                            </Show>
+                            <div
+                              role="meter"
+                              aria-label={`This week on ${p.title}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.min(100, Math.round(fit().percent!))}
+                              class="h-1.5 w-full overflow-hidden rounded-full bg-v2-border-border-base"
+                            >
+                              <div
+                                class="h-full rounded-full"
+                                classList={{
+                                  "bg-surface-brand-base": fit().percent! <= 80,
+                                  "bg-v2-state-fg-warning": fit().percent! > 80,
+                                }}
+                                style={{ width: `${Math.max(2, Math.min(100, fit().percent!))}%` }}
+                              />
+                            </div>
+                            <div class="text-[12px] text-v2-text-text-weak">
+                              This week would use <b class="text-v2-text-text-strong">{fitLabel(fit().percent!)}</b>
+                            </div>
+                          </div>
+                        )}
                       </Show>
                       <Show when={rows()}>{button}</Show>
                     </div>
@@ -308,17 +354,52 @@ export function PlanCards(props: {
 /** The plans, inside the app — not a bounce to a browser tab for someone who only wanted to look. */
 export function DialogUpgrade(props: {
   fetchJson: FetchJson
-  source: "pill" | "dock" | "menu"
+  source: "pill" | "dock" | "menu" | "ring"
   /** Defaults to the upgrade copy; pass plansDialogCopy(...) when the account is known. */
   title?: string
   description?: string
+  /** This week's usage (/iris/plan). Measured → the heading talks about the week (#194531). */
+  usage?: UsagePlan
 }) {
   const dialog = useDialog()
   const copy = plansDialogCopy(false)
+  // Someone who pays keeps "Your plan" (#189544): usageDialogCopy says nothing for a paid account.
+  const usageCopy = createMemo(() => usageDialogCopy(props.usage))
+  const [packs, setPacks] = createSignal<TopupPack[]>([])
+  const [topping, setTopping] = createSignal(false)
+  onMount(() => {
+    if (!props.usage?.measured || props.usage.uncapped) return
+    void loadPacks(props.fetchJson).then((r) => "packs" in r && setPacks(r.packs))
+  })
   return (
-    <Dialog title={props.title ?? copy.title} description={props.description ?? copy.description} size="x-large">
-      <div class="px-6 pb-5">
-        <PlanCards fetchJson={props.fetchJson} source={props.source} onChosen={() => dialog.close()} />
+    <Dialog
+      title={usageCopy()?.title ?? props.title ?? copy.title}
+      description={usageCopy()?.description ?? props.description ?? copy.description}
+      size="x-large"
+    >
+      <div class="flex flex-col gap-3 px-6 pb-5">
+        <PlanCards fetchJson={props.fetchJson} source={props.source} usage={props.usage} onChosen={() => dialog.close()} />
+        <Show when={packs().length > 0}>
+          <div data-slot="iris-upgrade-topup" class="flex flex-col items-end gap-2">
+            <Show
+              when={topping()}
+              fallback={
+                <button
+                  type="button"
+                  data-action="iris-upgrade-just-topup"
+                  class="h-9 rounded-lg border border-v2-border-border-base px-4 text-[13px] text-v2-text-text-strong hover:bg-v2-background-bg-base"
+                  onClick={() => setTopping(true)}
+                >
+                  + Just top up
+                </button>
+              }
+            >
+              <div class="w-full max-w-[320px]">
+                <TopupPicker fetchJson={props.fetchJson} packs={packs()} source="dialog" onOpened={() => dialog.close()} />
+              </div>
+            </Show>
+          </div>
+        </Show>
       </div>
     </Dialog>
   )

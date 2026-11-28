@@ -139,6 +139,11 @@ export function createSessionComposerRegionController(input: {
     dockHeight: () => Math.max(78, store.height),
     lift: () => (input.revert()?.items.length ? 18 : 36 * value()),
     setDockBodyRef: (el: HTMLDivElement) => setStore("body", el),
+    /** The chat is mid-turn (busy; a refused retry is not). The out card waits for it (#194530). */
+    busy: () => {
+      const id = input.sessionID()
+      return !!id && sync().data.session_status[id]?.type === "busy"
+    },
   }
 }
 

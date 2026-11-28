@@ -7,9 +7,17 @@
  * panel shows the change at once (the board's optimistic overlay), and if fl-api refuses, the
  * card goes back and the panel says why — a face that shows a status that did not save is the
  * one thing this must never do.
+ *
+ * Not a modal (#194375 W5): it is a small panel anchored to the card, non-modal on purpose — the
+ * board stays live behind it so a pick shows on the card at once, and it opens inside the card
+ * editor dialog (`within`) without replacing it. So it is not a ui Dialog (the dialog context's
+ * show() closes every open dialog, the card editor included); its choices are ui Buttons.
  */
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { Button } from "@opencode-ai/ui/button"
+import { useLanguage } from "@/context/language"
+import type { IRIS_QUICK_EDIT_ENGLISH } from "@/i18n/iris-quick-edit"
 import { WRITABLE_STATUSES, type SchemaOption } from "./iris-card-vocab"
 import type { QuickField, QuickPatch } from "./iris-atlas-view"
 import { floatingLayer } from "./iris-card-facts"
@@ -23,16 +31,22 @@ export interface QuickEditCard {
   labels?: string[]
 }
 
-const PRIORITY_FALLBACK: SchemaOption[] = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-  { id: "urgent", label: "Urgent" },
+type QuickKey = keyof typeof IRIS_QUICK_EDIT_ENGLISH
+
+/** Used until the board's own vocabulary arrives (or when it has none). */
+const PRIORITY_FALLBACK: { id: string; label: QuickKey }[] = [
+  { id: "low", label: "iris.quickEdit.priority.low" },
+  { id: "medium", label: "iris.quickEdit.priority.medium" },
+  { id: "high", label: "iris.quickEdit.priority.high" },
+  { id: "urgent", label: "iris.quickEdit.priority.urgent" },
 ]
-const STATUS_FALLBACK: SchemaOption[] = WRITABLE_STATUSES.filter((s) => s !== "pending" && s !== "approved" && s !== "rejected").map((id) => ({
-  id,
-  label: id === "in_progress" ? "In progress" : id[0].toUpperCase() + id.slice(1),
-}))
+const STATUS_LABEL: Partial<Record<(typeof WRITABLE_STATUSES)[number], QuickKey>> = {
+  active: "iris.quickEdit.status.active",
+  todo: "iris.quickEdit.status.todo",
+  in_progress: "iris.quickEdit.status.inProgress",
+  done: "iris.quickEdit.status.done",
+}
+const STATUS_FALLBACK = WRITABLE_STATUSES.filter((s) => s !== "pending" && s !== "approved" && s !== "rejected")
 
 /** YYYY-MM-DD for a day `days` from today, in the viewer's own calendar. */
 export function dayFrom(now: number, days: number): string {
@@ -59,11 +73,17 @@ export function IrisQuickEdit(props: {
   onSave: (patch: QuickPatch) => void
   onClose: () => void
 }) {
+  const language = useLanguage()
+  const t = (key: QuickKey, params?: Record<string, string>) => language.t(key, params)
   let el: HTMLDivElement | undefined
   const [newLabel, setNewLabel] = createSignal("")
-  const statuses = () =>
-    (props.status?.length ? props.status : STATUS_FALLBACK).filter((o) => (WRITABLE_STATUSES as readonly string[]).includes(o.id))
-  const priorities = () => (props.priority?.length ? props.priority : PRIORITY_FALLBACK)
+  const statuses = (): SchemaOption[] =>
+    (props.status?.length
+      ? props.status
+      : STATUS_FALLBACK.map((id) => ({ id, label: STATUS_LABEL[id] ? t(STATUS_LABEL[id]!) : id[0].toUpperCase() + id.slice(1) }))
+    ).filter((o) => (WRITABLE_STATUSES as readonly string[]).includes(o.id))
+  const priorities = (): SchemaOption[] =>
+    props.priority?.length ? props.priority : PRIORITY_FALLBACK.map((o) => ({ id: o.id, label: t(o.label) }))
   const labels = () => props.card.labels ?? []
   const allLabels = () => Array.from(new Set([...props.boardLabels, ...labels()])).sort((a, b) => a.localeCompare(b))
   const toggleLabel = (l: string) =>
@@ -132,7 +152,7 @@ export function IrisQuickEdit(props: {
       data-only={props.only && props.field ? "" : undefined}
       data-dismiss-first
       role="dialog"
-      aria-label={`Change ${props.card.title}`}
+      aria-label={t("iris.quickEdit.label", { title: props.card.title })}
       style={style()}
       data-prevent-autofocus
       onKeyDown={(e) => e.stopPropagation()}
@@ -142,87 +162,71 @@ export function IrisQuickEdit(props: {
       </Show>
 
       <section data-quick="status" data-active={props.field === "status" ? "" : undefined}>
-        <h4 class="iris-quick__head">Status <kbd>s</kbd></h4>
+        <h4 class="iris-quick__head">{t("iris.quickEdit.status")} <kbd>s</kbd></h4>
         <div class="iris-quick__chips">
           <For each={statuses()}>
             {(o) => (
-              <button
-                type="button"
-                class="iris-quick__chip"
-                aria-pressed={props.card.status === o.id}
-                onClick={() => props.card.status !== o.id && props.onSave({ status: o.id })}
-              >
+              <Chip pressed={props.card.status === o.id} onClick={() => props.card.status !== o.id && props.onSave({ status: o.id })}>
                 {o.label}
-              </button>
+              </Chip>
             )}
           </For>
         </div>
       </section>
 
       <section data-quick="priority" data-active={props.field === "priority" ? "" : undefined}>
-        <h4 class="iris-quick__head">Priority <kbd>p</kbd></h4>
+        <h4 class="iris-quick__head">{t("iris.quickEdit.priority")} <kbd>p</kbd></h4>
         <div class="iris-quick__chips">
           <For each={priorities()}>
             {(o) => (
-              <button
-                type="button"
-                class="iris-quick__chip"
-                aria-pressed={(props.card.priority ?? "").toLowerCase() === o.id.toLowerCase()}
-                onClick={() => props.onSave({ priority: o.id })}
-              >
+              <Chip pressed={(props.card.priority ?? "").toLowerCase() === o.id.toLowerCase()} onClick={() => props.onSave({ priority: o.id })}>
                 {o.label}
-              </button>
+              </Chip>
             )}
           </For>
           <Show when={props.card.priority}>
-            <button type="button" class="iris-quick__chip iris-quick__chip--quiet" onClick={() => props.onSave({ priority: null })}>
-              None
-            </button>
+            <Chip quiet onClick={() => props.onSave({ priority: null })}>
+              {t("iris.quickEdit.none")}
+            </Chip>
           </Show>
         </div>
       </section>
 
       <section data-quick="due" data-active={props.field === "due" ? "" : undefined}>
-        <h4 class="iris-quick__head">Due <kbd>d</kbd></h4>
+        <h4 class="iris-quick__head">{t("iris.quickEdit.due")} <kbd>d</kbd></h4>
         <div class="iris-quick__chips">
           <input
             type="date"
             class="iris-field__input iris-quick__date"
-            aria-label="Due date"
+            aria-label={t("iris.quickEdit.dueDate")}
             value={props.card.dueDate?.slice(0, 10) ?? ""}
             onChange={(e) => props.onSave({ dueDate: e.currentTarget.value || null })}
           />
-          <button type="button" class="iris-quick__chip" onClick={() => props.onSave({ dueDate: dayFrom(props.now, 0) })}>
-            Today
-          </button>
-          <button type="button" class="iris-quick__chip" onClick={() => props.onSave({ dueDate: dayFrom(props.now, 1) })}>
-            Tomorrow
-          </button>
-          <button type="button" class="iris-quick__chip" onClick={() => props.onSave({ dueDate: dayFrom(props.now, 7) })}>
-            In a week
-          </button>
+          <Chip onClick={() => props.onSave({ dueDate: dayFrom(props.now, 0) })}>{t("iris.quickEdit.today")}</Chip>
+          <Chip onClick={() => props.onSave({ dueDate: dayFrom(props.now, 1) })}>{t("iris.quickEdit.tomorrow")}</Chip>
+          <Chip onClick={() => props.onSave({ dueDate: dayFrom(props.now, 7) })}>{t("iris.quickEdit.inAWeek")}</Chip>
           <Show when={props.card.dueDate}>
-            <button type="button" class="iris-quick__chip iris-quick__chip--quiet" onClick={() => props.onSave({ dueDate: null })}>
-              Clear
-            </button>
+            <Chip quiet onClick={() => props.onSave({ dueDate: null })}>
+              {t("iris.quickEdit.clear")}
+            </Chip>
           </Show>
         </div>
       </section>
 
       <section data-quick="labels" data-active={props.field === "labels" ? "" : undefined}>
-        <h4 class="iris-quick__head">Labels <kbd>l</kbd></h4>
+        <h4 class="iris-quick__head">{t("iris.quickEdit.labels")} <kbd>l</kbd></h4>
         <div class="iris-quick__chips">
           <For each={allLabels()}>
             {(l) => (
-              <button type="button" class="iris-quick__chip" aria-pressed={labels().includes(l)} onClick={() => toggleLabel(l)}>
+              <Chip pressed={labels().includes(l)} onClick={() => toggleLabel(l)}>
                 {l}
-              </button>
+              </Chip>
             )}
           </For>
           <input
             class="iris-field__input iris-quick__date"
-            placeholder="New label…"
-            aria-label="New label"
+            placeholder={t("iris.quickEdit.newLabel.placeholder")}
+            aria-label={t("iris.quickEdit.newLabel")}
             value={newLabel()}
             onInput={(e) => setNewLabel(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -243,5 +247,23 @@ export function IrisQuickEdit(props: {
       </Show>
     </div>
     </Portal>
+  )
+}
+
+/**
+ * One choice: a small ui Button. A toggle (status, priority, a label) says so with aria-pressed and
+ * shows the picked one as the primary variant; "None" / "Clear" are ghost. No pressed prop = an action.
+ */
+function Chip(props: { pressed?: boolean; quiet?: boolean; onClick: () => void; children: JSX.Element }) {
+  return (
+    <Button
+      size="small"
+      variant={props.quiet ? "ghost" : props.pressed ? "primary" : "secondary"}
+      class="iris-quick-chip"
+      aria-pressed={props.pressed === undefined ? undefined : props.pressed}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </Button>
   )
 }

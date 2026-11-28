@@ -81,6 +81,7 @@ import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
+const SharedRoomPage = lazy(() => import("@/pages/shared-room"))
 
 const SessionRoute = () => {
   const settings = useSettings()
@@ -669,6 +670,7 @@ function Routes(props: { serverScoped?: JSX.Element }) {
           <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
           <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
           <Route path="/new-session" component={DraftRoute} />
+          <Route path="/shared/:roomId" component={SharedRoomPage} />
         </Route>
       </Show>
       <Show when={!settings.general.newLayoutDesigns()}>

@@ -62,6 +62,12 @@ export function LeadDetail(props: {
   const [tab, setTab] = createSignal<Tab>(props.initialTab ?? "Details")
   const language = useLanguage()
   const [editingValue, setEditingValue] = createSignal(false)
+  // Email (#194507): the IRIS composer in the Chat tab, so the send is logged and the reply threads.
+  const [composing, setComposing] = createSignal(0)
+  const writeEmail = () => {
+    setTab("Chat")
+    setComposing(composing() + 1)
+  }
   const platform = (() => {
     try {
       return usePlatform()
@@ -131,7 +137,13 @@ export function LeadDetail(props: {
             </select>
           </label>
           <Show when={current().email}>
-            <Button size="small" variant="secondary" onClick={() => openMail(current().email!)}>
+            <Button
+              size="small"
+              variant="secondary"
+              icon="send"
+              title={props.doFetch ? language.t("iris.lead.email.title") : undefined}
+              onClick={() => (props.doFetch ? writeEmail() : openMail(current().email!))}
+            >
               {language.t("iris.lead.email")}
             </Button>
           </Show>
@@ -216,7 +228,15 @@ export function LeadDetail(props: {
         </Show>
         <Show when={tab() === "Chat"}>
           <Show when={props.doFetch} fallback={<div class="iris-ld-empty">The conversation needs the IRIS engine.</div>}>
-            {(f) => <ChatTab doFetch={f()} leadId={id} name={displayName(current())} />}
+            {(f) => (
+              <ChatTab
+                doFetch={f()}
+                leadId={id}
+                name={displayName(current())}
+                compose={composing()}
+                onMailApp={current().email ? () => openMail(current().email!) : undefined}
+              />
+            )}
           </Show>
         </Show>
         <Show when={tab() === "Pulse"}><PulseTab call={props.call} leadId={id} /></Show>
@@ -379,15 +399,35 @@ function OutreachTab(props: { call: (o: Op) => Promise<Answer>; lead: LeadRow; d
 }
 
 /** Chat: the conversation itself, every channel, with the Inbox's reply box (drafts approve, Send asks). */
-function ChatTab(props: { doFetch: Fetch; leadId: number; name: string }) {
+function ChatTab(props: { doFetch: Fetch; leadId: number; name: string; /** Moves when Email is pressed: the composer opens on email, focused. */ compose?: number; onMailApp?: () => void }) {
+  const language = useLanguage()
   const [thread, { refetch }] = useThread(props.doFetch, () => props.leadId)
   const lastChannel = () => thread.latest?.messages.at(-1)?.channel
   return (
     <div class="iris-ui iris-inb iris-ld-chat" data-slot="iris-lead-chat">
-      <Show when={lastChannel()}>
-        <div class="iris-ld-when iris-ld-chatline">Last message on {channelLabel(lastChannel()!)}</div>
+      <Show when={lastChannel() || (props.compose && props.onMailApp)}>
+        <div class="iris-ld-when iris-ld-chatline">
+          <Show when={lastChannel()}>
+            <span>Last message on {channelLabel(lastChannel()!)}</span>
+          </Show>
+          <Show when={props.compose && props.onMailApp}>
+            <span class="iris-ui-spacer" />
+            <Button size="small" variant="ghost" icon="square-arrow-top-right" title={language.t("iris.lead.mailApp.title")} onClick={() => props.onMailApp!()}>
+              {language.t("iris.lead.mailApp")}
+            </Button>
+          </Show>
+        </div>
       </Show>
-      <ThreadBody doFetch={props.doFetch} leadId={props.leadId} name={props.name} thread={thread.latest} loading={thread.loading} refetch={refetch} preferChannel={lastChannel()} />
+      <ThreadBody
+        doFetch={props.doFetch}
+        leadId={props.leadId}
+        name={props.name}
+        thread={thread.latest}
+        loading={thread.loading}
+        refetch={refetch}
+        preferChannel={props.compose ? "email" : lastChannel()}
+        focusComposer={props.compose}
+      />
     </div>
   )
 }

@@ -86,5 +86,10 @@ describe("rows", () => {
     expect(fmtSeconds(undefined)).toBe("—")
     expect(fmtSeconds(42)).toBe("42s")
     expect(fmtSeconds(4500)).toBe("1h 15m")
+    // Seconds that round up to a whole minute carry into it (#194505: "4m 60s").
+    expect(fmtSeconds(299.6)).toBe("5m 0s")
+    expect(fmtSeconds(59.6)).toBe("1m 0s")
+    expect(fmtSeconds(3599.7)).toBe("1h 0m")
+    expect(fmtSeconds(61.2)).toBe("1m 1s")
   })
 })

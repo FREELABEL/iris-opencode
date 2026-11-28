@@ -20,11 +20,16 @@ import { useTitlebarRightMount } from "./titlebar"
 import { useCommand } from "@/context/command"
 import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
+import { rememberInviteCode } from "@/utils/invite-code"
 import { warmHomeDashboard } from "@/pages/home/home-dashboard-data"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
+import { irisPlan, refreshIrisPlan, watchIrisPlan } from "@/utils/iris-plan-store"
+import { drawingOnGrants } from "./usage/usage-model"
 import { irisInboxVersion, openIrisPanel } from "./session/iris-nav"
 import { hivePillTarget } from "./session/iris-hive-inbox-model"
+import { openSharedRoom, sharedRooms, watchSharedRooms } from "./session/iris-shared-store"
+import { pillSummary } from "./session/iris-shared-rooms-model"
 
 /**
  * Two pills in the titlebar: how many machines are up, and whether anything is waiting for you.
@@ -133,12 +138,14 @@ export function inboxHint(inbox: InboxState | undefined, label: string | null): 
 
 interface PlanState {
   measured: boolean
-  plan: string | null
+  plan?: string | null
   /** From billing and licence seats (fl-iris-api dd9d0dfa). Null = could not tell. */
   paid?: boolean | null
-  upgradeUrl: string | null
+  upgradeUrl?: string | null
   /** Share of the allowance used, from the server. Null/absent = unknown, never "0%" (#190087). */
   fraction?: number | null
+  /** Top-up tokens left (epic #194525). Past 100% with these, nothing is paused. */
+  grantTokens?: number | null
 }
 
 /**
@@ -160,7 +167,7 @@ export type BadgeTone = "accent" | "warning" | "danger"
  * plain Upgrade otherwise. An unknown or unmeasured reading is never red.
  */
 export function planBadge(state: PlanState | undefined): { text: string; tone: BadgeTone } {
-  const f = state?.measured ? state.fraction : null
+  const f = state?.measured && !drawingOnGrants(state) ? state.fraction : null
   if (typeof f === "number" && Number.isFinite(f)) {
     if (f >= 1) return { text: "⚡ Upgrade · Out of tokens", tone: "danger" }
     if (f >= 0.9) return { text: "Almost out · Upgrade", tone: "warning" }
@@ -184,7 +191,8 @@ export function fleetAttention(hive: HiveState | undefined, loading = false): "d
 
 /** "low" from 90% of the allowance, "out" at 100% — both are "needs you", so both amber. */
 export function planAttention(state: PlanState | undefined): "low" | "out" | null {
-  const f = state?.measured ? state.fraction : null
+  // Drawing on top-up tokens is not "out": the ring's green label carries it (#194529).
+  const f = state?.measured && !drawingOnGrants(state) ? state.fraction : null
   if (typeof f !== "number" || !Number.isFinite(f)) return null
   return f >= 1 ? "out" : f >= 0.9 ? "low" : null
 }
@@ -220,8 +228,10 @@ export function TitlebarIrisPills() {
     // so it re-reads the plan itself and says what was bought.
     const stopLinks = platform.onDeepLink?.((raw) => {
       const link = parseIrisLink(raw)
+      if (link?.kind === "invite") return rememberInviteCode(link.code)
       if (link?.kind !== "upgraded") return
       onFocus()
+      void refreshIrisPlan()
       void announceUpgrade(link.plan)
     })
     onCleanup(() => {
@@ -255,6 +265,12 @@ export function TitlebarIrisPills() {
   })
 
   const doFetch = (path: string, init?: RequestInit) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`, init)
+  // Shared workspaces (#194307): one app-wide read of the chats your team shares with you.
+  watchSharedRooms(doFetch)
+  const [sharedTick, setSharedTick] = createSignal(Date.now())
+  const sharedTimer = setInterval(() => setSharedTick(Date.now()), 30_000)
+  onCleanup(() => clearInterval(sharedTimer))
+  const shared = createMemo(() => pillSummary(sharedRooms(), new Date(sharedTick())))
 
   // These poll every 30s from OUTSIDE the session's error boundary, so a rejected fetch (sidecar
   // restarting, Windows resuming from sleep) used to throw straight to app.tsx and replace the whole
@@ -285,14 +301,12 @@ export function TitlebarIrisPills() {
     if (k) warmHomeDashboard(k[0], platform.fetch ?? globalThis.fetch)
   })
 
-  // Every 2 minutes (4 ticks): the pill now shows when the allowance runs OUT (#190087), which
-  // happens mid-session, not only when someone buys. /iris/plan peeks — it never consumes the
-  // weekly allowance notice, unlike /iris/allowance — so asking more often costs nothing but a GET.
-  const planKey = createMemo(() => {
-    const b = base()
-    return b ? ([b, Math.floor(tick() / 4)] as const) : undefined
-  })
-  const [plan] = createResource<PlanState | undefined, Key>(planKey, poll<PlanState>("/iris/plan"))
+  // The plan is the ONE shared /iris/plan read (epic #194525) — the allowance tab and the context
+  // ring show the same numbers from the same copy. Once a minute and on focus; /iris/plan peeks, so
+  // it never consumes the weekly allowance notice (unlike /iris/allowance). An iris://upgraded link
+  // re-reads it through onFocus below.
+  watchIrisPlan(doFetch)
+  const plan = irisPlan
   const badge = createMemo(() => planBadge(plan()))
   const showPlans = (source: "pill" | "menu") => {
     const state = plan()
@@ -302,6 +316,7 @@ export function TitlebarIrisPills() {
         source={source}
         title={copy.title}
         description={copy.description}
+        usage={state}
         fetchJson={async <T,>(path: string, init?: RequestInit) => (await (await doFetch(path, init)).json()) as T}
       />
     ))
@@ -463,6 +478,33 @@ export function TitlebarIrisPills() {
             </TooltipV2>
           </Show>
 
+          {/* Shared with your team (#194307): only when something is shared with you. Green dot when
+              a shared chat moved in the last 10 minutes. */}
+          <Show when={shared()}>
+            {(sum) => (
+              <TooltipV2 placement="bottom" value={<>{sum().hint}</>}>
+                <button
+                  type="button"
+                  data-slot="iris-shared-pill"
+                  class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                  classList={{ "text-v2-text-text-base": sum().active > 0 }}
+                  aria-label={sum().hint}
+                  onClick={() => openSharedRoom(null)}
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="6" cy="5.5" r="2.25" />
+                    <path d="M2 13c.4-2.2 2-3.5 4-3.5s3.6 1.3 4 3.5" />
+                    <circle cx="11.25" cy="6" r="1.75" />
+                    <path d="M11 9.6c1.5.1 2.6 1.2 3 3" />
+                  </svg>
+                  <Show when={sum().active > 0}>
+                    <span class="inline-block size-1.5 rounded-full bg-v2-state-fg-success" aria-hidden="true" />
+                  </Show>
+                  <span class="font-mono tabular-nums">{sum().label}</span>
+                </button>
+              </TooltipV2>
+            )}
+          </Show>
           {/* Always present (#189279): the inbox is a place, not only an alert. The badge is the
               alert — its own accent, never the fleet dot's green/red. */}
           <Show when={unread() && unread() !== "—"}>

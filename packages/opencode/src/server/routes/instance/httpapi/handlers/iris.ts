@@ -100,6 +100,7 @@ import {
 } from "@/iris/account"
 import { homedir } from "os"
 import { createRoom, fetchRoom, fetchRooms, sendRoomMessage } from "@/iris/rooms"
+import * as SharedRooms from "@/iris/shared-rooms"
 import { fetchAgentLive, handBackRun, takeOverRun } from "@/iris/agent-live"
 import { RootHttpApi } from "../api"
 import { PanelCommandPayload, PanelStatePayload } from "../groups/iris"
@@ -119,10 +120,12 @@ import { startIntegrationConnect } from "@/iris/platform"
 import { readAtlasBoardWithEdits, loadMoreCards, readBoardList, readCard } from "@/iris/atlas-board-read"
 import { createCard, moveCard, saveCard } from "@/iris/atlas-write"
 import { resolveUserId } from "@/iris/platform"
+import { homeRecap as readHomeRecap } from "@/iris/home-recap"
 import { counts as outboxCounts, replay as replayOutbox, resolve as resolveOutbox } from "@/iris/atlas-outbox"
 import { readLocalCopySettings, writeLocalCopySettings } from "@/iris/atlas-local-copy"
 import { buildCommandReport, submitCommandReport } from "@/iris/bug-report"
 import * as Onboarding from "@/iris/onboarding"
+import * as Usage from "@/iris/usage"
 import * as Capabilities from "@/iris/onboarding-capabilities"
 import { searchCliCommands } from "@/iris/cli-commands"
 import { fetchHivePeers } from "@/iris/platform"
@@ -204,6 +207,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         }),
       ),
     )
+
+    const homeRecap = Effect.fn("IrisHttpApi.homeRecap")(() => Effect.promise(() => readHomeRecap()))
 
     const recent = Effect.fn("IrisHttpApi.recent")((ctx: { query: { page?: number; perPage?: number } }) =>
       Effect.promise(() => fetchRecentItems()).pipe(
@@ -822,6 +827,80 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     const roomSend = Effect.fn("IrisHttpApi.roomSend")(
       (ctx: { params: { roomID: string }; payload: { text: string } }) =>
         Effect.promise(() => sendRoomMessage(ctx.params.roomID, ctx.payload.text)),
+    )
+    // Shared workspaces (#194307) — rooms filed under an Atlas project.
+    const sharedRooms = Effect.fn("IrisHttpApi.sharedRooms")(() =>
+      Effect.promise(() => SharedRooms.fetchSharedRooms()).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, rooms: r.data.rooms })),
+      ),
+    )
+    const sharedRoom = Effect.fn("IrisHttpApi.sharedRoom")((ctx: { params: { roomID: string } }) =>
+      Effect.promise(() => SharedRooms.fetchSharedRoom(ctx.params.roomID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data })),
+      ),
+    )
+    const sharedRoomSay = Effect.fn("IrisHttpApi.sharedRoomSay")(
+      (ctx: { params: { roomID: string }; payload: { text: string } }) =>
+        Effect.promise(() => SharedRooms.sayInRoom(ctx.params.roomID, ctx.payload.text)),
+    )
+    const sharedRoomStop = Effect.fn("IrisHttpApi.sharedRoomStop")((ctx: { params: { roomID: string } }) =>
+      Effect.promise(() => SharedRooms.stopRoom(ctx.params.roomID)),
+    )
+    const sharedRoomUnshare = Effect.fn("IrisHttpApi.sharedRoomUnshare")((ctx: { params: { roomID: string } }) =>
+      Effect.promise(() => SharedRooms.unshareRoom(ctx.params.roomID)),
+    )
+    const sharedRoomTranscript = Effect.fn("IrisHttpApi.sharedRoomTranscript")(
+      (ctx: { params: { roomID: string; sessionID: string }; query: { since?: string } }) =>
+        Effect.promise(() =>
+          SharedRooms.fetchSharedTranscript(
+            ctx.params.roomID,
+            ctx.params.sessionID,
+            ctx.query.since !== undefined && /^\d+$/.test(ctx.query.since) ? Number(ctx.query.since) : undefined,
+          ),
+        ).pipe(Effect.map((r) => ({ measured: r.measured, reason: r.reason, ...r.data }))),
+    )
+    const sharedRoomShare = Effect.fn("IrisHttpApi.sharedRoomShare")(
+      (ctx: { payload: { sessionId: string; projectId: number; name: string } }) =>
+        Effect.promise(() => SharedRooms.shareSession({ ...ctx.payload })),
+    )
+    const sharedRoomAgentAdd = Effect.fn("IrisHttpApi.sharedRoomAgentAdd")(
+      (ctx: { params: { roomID: string }; payload: { agentId: number; role?: string; autoRespond?: boolean } }) =>
+        Effect.promise(() => SharedRooms.addRoomAgent(ctx.params.roomID, ctx.payload)),
+    )
+    const sharedRoomAgentUpdate = Effect.fn("IrisHttpApi.sharedRoomAgentUpdate")(
+      (ctx: { params: { roomID: string; agentID: string }; payload: { role?: string; autoRespond?: boolean } }) =>
+        Effect.promise(() => SharedRooms.updateRoomAgent(ctx.params.roomID, ctx.params.agentID, ctx.payload)),
+    )
+    const sharedRoomAgentRemove = Effect.fn("IrisHttpApi.sharedRoomAgentRemove")(
+      (ctx: { params: { roomID: string; agentID: string } }) =>
+        Effect.promise(() => SharedRooms.removeRoomAgent(ctx.params.roomID, ctx.params.agentID)),
+    )
+    const sharedRoomPresence = Effect.fn("IrisHttpApi.sharedRoomPresence")(
+      (ctx: { params: { roomID: string }; payload: { state: "active" | "background"; typing?: boolean } }) =>
+        Effect.promise(() => SharedRooms.checkInToRoom(ctx.params.roomID, ctx.payload.state, ctx.payload.typing === true)).pipe(
+          Effect.map((r) => ({ measured: r.measured, reason: r.reason, present: r.data })),
+        ),
+    )
+    const sharedRoomAddSession = Effect.fn("IrisHttpApi.sharedRoomAddSession")(
+      (ctx: { params: { roomID: string }; payload: { sessionId: string } }) =>
+        Effect.promise(() => SharedRooms.addSessionToRoom(ctx.params.roomID, ctx.payload.sessionId)),
+    )
+    const sharedRoomRemoveSession = Effect.fn("IrisHttpApi.sharedRoomRemoveSession")(
+      (ctx: { params: { roomID: string; sessionID: string } }) =>
+        Effect.promise(() => SharedRooms.removeSessionFromRoom(ctx.params.roomID, ctx.params.sessionID)),
+    )
+    const sharedRoomJoin = Effect.fn("IrisHttpApi.sharedRoomJoin")(
+      (ctx: { payload: { invite: string; preview?: boolean } }) =>
+        Effect.promise(async () => {
+          const token = SharedRooms.parseInviteToken(ctx.payload.invite)
+          if (!token) return { ok: false, reason: "That does not look like an invite link." }
+          if (ctx.payload.preview) {
+            const p = await SharedRooms.previewInvite(token)
+            if (!p.measured || !p.data) return { ok: false, reason: p.reason ?? "That invite could not be read." }
+            return { ok: true, outcome: "preview" as const, ...p.data }
+          }
+          return SharedRooms.joinInvite(token)
+        }),
     )
 
     const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")(
@@ -1549,6 +1628,34 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    // Top-ups, invites, auto top-up (epic #194525). Thin: the calls and their sentences are in iris/usage.ts.
+    const topupPacks = Effect.fn("IrisHttpApi.topupPacks")(() =>
+      Effect.promise(() => Usage.fetchTopupPacks()).pipe(
+        Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), packs: r.data })),
+      ),
+    )
+    const topup = Effect.fn("IrisHttpApi.topup")((ctx: { payload: { pack: string } }) =>
+      Effect.promise(() => Usage.createTopup(ctx.payload.pack)).pipe(
+        Effect.map((r) => (r.ok ? { ok: true, url: r.url } : { ok: false, reason: r.reason })),
+      ),
+    )
+    const invite = Effect.fn("IrisHttpApi.invite")(() =>
+      Effect.promise(() => Usage.fetchInvite()).pipe(
+        Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), invite: r.data })),
+      ),
+    )
+    const autoTopup = Effect.fn("IrisHttpApi.autoTopup")(() =>
+      Effect.promise(() => Usage.fetchAutoTopup()).pipe(
+        Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), autoTopup: r.data })),
+      ),
+    )
+    const autoTopupSave = Effect.fn("IrisHttpApi.autoTopupSave")(
+      (ctx: { payload: { enabled: boolean; pack?: string | null; monthlyCapUsd?: number | null } }) =>
+        Effect.promise(() => Usage.saveAutoTopup(ctx.payload)).pipe(
+          Effect.map((r) => ({ measured: r.measured, ...(r.reason ? { reason: r.reason } : {}), autoTopup: r.data })),
+        ),
+    )
+
     const plan = Effect.fn("IrisHttpApi.plan")(() =>
       Effect.promise(() => fetchPlan()).pipe(
         Effect.map((r) => ({
@@ -1563,6 +1670,12 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
           resetsAt: r.data.resetsAt,
           uncapped: r.data.uncapped,
           upgradeUrl: r.data.upgradeUrl,
+          ...(r.data.capTokens !== undefined ? { capTokens: r.data.capTokens } : {}),
+          ...(r.data.grantTokens !== undefined ? { grantTokens: r.data.grantTokens } : {}),
+          ...(r.data.nextTier !== undefined ? { nextTier: r.data.nextTier } : {}),
+          ...(r.data.runoutAt !== undefined ? { runoutAt: r.data.runoutAt } : {}),
+          ...(r.data.progress !== undefined ? { progress: r.data.progress } : {}),
+          ...(r.data.lastWeek !== undefined ? { lastWeek: r.data.lastWeek } : {}),
         })),
       ),
     )
@@ -1719,7 +1832,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("frameCheck", frameCheck).handle("githubPr", githubPr).handle("pageSignIn", pageSignIn).handle("pagePin", pagePin).handle("pageAddress", pageAddress).handle("campaignBoards", campaignBoards).handle("campaignSetup", campaignSetup).handle("marketingPins", marketingPins).handle("marketingPinsSave", marketingPinsSave).handle("marketingBrand", marketingBrand).handle("marketingLanding", marketingLanding).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("modelDetails", modelDetails).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGate", securityGate).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("auth", auth).handle("bloqs", bloqs).handle("recent", recent).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("inboxState", inboxState).handle("inboxSend", inboxSend).handle("inboxSent", inboxSent).handle("atlas", atlas).handle("atlasMore", atlasMore).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("atlasOutboxResolve", atlasOutboxResolve).handle("atlasOutboxSend", atlasOutboxSend).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("pageInfo", pageInfo).handle("pageVersions", pageVersions).handle("pageVersion", pageVersion).handle("pagePublish", pagePublish).handle("pageVisibility", pageVisibility).handle("pageRollback", pageRollback).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("artifactGate", artifactGate).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("agentEditorAgent", agentEditorAgent).handle("agentEditorSave", agentEditorSave).handle("agentEditorHeartbeat", agentEditorHeartbeat).handle("agentEditorPolicy", agentEditorPolicy).handle("agentEditorPolicySave", agentEditorPolicySave).handle("agentEditorTools", agentEditorTools).handle("agentEditorToolsSave", agentEditorToolsSave).handle("agentEditorModels", agentEditorModels).handle("agentEditorToolCatalog", agentEditorToolCatalog).handle("agentEditorAlerts", agentEditorAlerts).handle("agentEditorAlertsSave", agentEditorAlertsSave).handle("agentEditorAlertsTest", agentEditorAlertsTest).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("leadsApi", leadsApi).handle("comms", comms).handle("commsThread", commsThread).handle("commsDraft", commsDraft).handle("commsSend", commsSend).handle("reachrBatches", reachrBatches).handle("reachrBatch", reachrBatch).handle("reachrAction", reachrAction).handle("outreachCampaigns", outreachCampaigns).handle("outreachAudience", outreachAudience).handle("outreachStrategies", outreachStrategies).handle("outreachSegments", outreachSegments).handle("outreachSegmentDraft", outreachSegmentDraft).handle("outreachSegmentDraftChange", outreachSegmentDraftChange).handle("outreachSegmentDraftSave", outreachSegmentDraftSave).handle("outreachSegmentPreview", outreachSegmentPreview).handle("outreachSegmentMembers", outreachSegmentMembers).handle("outreachSegmentFind", outreachSegmentFind).handle("outreachCampaignTarget", outreachCampaignTarget).handle("agreements", agreements).handle("agreement", agreement).handle("agreementRaise", agreementRaise).handle("agreementIssue", agreementIssue).handle("agreementRevoke", agreementRevoke).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("agentDesktop", agentDesktop).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("site", site).handle("siteCreate", siteCreate).handle("sitePageAdd", sitePageAdd).handle("sitePageRemove", sitePageRemove).handle("siteReorder", siteReorder).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("brandLogoUpload", brandLogoUpload).handle("brandLogoProbe", brandLogoProbe).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveHere", hiveHere).handle("hiveRemoteAccess", hiveRemoteAccess).handle("hiveRemoteAccessSave", hiveRemoteAccessSave).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveSessionAnswer", hiveSessionAnswer).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall).handle("hiveSharedScripts", hiveSharedScripts).handle("hiveScriptAccess", hiveScriptAccess).handle("drives", drives).handle("driveFindings", driveFindings)
+    return handlers.handle("frameCheck", frameCheck).handle("githubPr", githubPr).handle("pageSignIn", pageSignIn).handle("pagePin", pagePin).handle("pageAddress", pageAddress).handle("campaignBoards", campaignBoards).handle("campaignSetup", campaignSetup).handle("marketingPins", marketingPins).handle("marketingPinsSave", marketingPinsSave).handle("marketingBrand", marketingBrand).handle("marketingLanding", marketingLanding).handle("atlasNote", atlasNote).handle("panel", panel).handle("panelState", panelState).handle("panelCommand", panelCommand).handle("allowance", allowance).handle("modelDetails", modelDetails).handle("plan", plan).handle("me", me).handle("security", security).handle("securityGate", securityGate).handle("securityGateReport", securityGateReport).handle("signOut", signOut).handle("accounts", accounts).handle("accountSwitch", accountSwitch).handle("accountRemove", accountRemove).handle("plans", plans).handle("checkout", checkout).handle("topupPacks", topupPacks).handle("topup", topup).handle("invite", invite).handle("autoTopup", autoTopup).handle("autoTopupSave", autoTopupSave).handle("auth", auth).handle("bloqs", bloqs).handle("recent", recent).handle("homeRecap", homeRecap).handle("inbox", inbox).handle("inboxMessage", inboxMessage).handle("inboxRead", inboxRead).handle("inboxState", inboxState).handle("inboxSend", inboxSend).handle("inboxSent", inboxSent).handle("atlas", atlas).handle("atlasMore", atlasMore).handle("atlasLive", atlasLive).handle("atlasItemCreate", atlasItemCreate).handle("atlasListCreate", atlasListCreate).handle("atlasMembers", atlasMembers).handle("atlasMemberInvite", atlasMemberInvite).handle("atlasMemberSave", atlasMemberSave).handle("atlasMemberRemove", atlasMemberRemove).handle("itemComment", itemComment).handle("notifySettings", notifySettingsRead).handle("notifySettingsSave", notifySettingsSave).handle("atlasLocalCopy", atlasLocalCopyRead).handle("atlasLocalCopySave", atlasLocalCopySave).handle("atlasOutboxResolve", atlasOutboxResolve).handle("atlasOutboxSend", atlasOutboxSend).handle("meLive", meLive).handle("agentsMine", agentsMine).handle("itemActivity", itemActivity).handle("itemAssignees", itemAssignees).handle("itemAssign", itemAssign).handle("itemUnassign", itemUnassign).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("graph", graph).handle("graphBoard", graphBoard).handle("catalog", catalog).handle("integrationConnect", integrationConnect).handle("onboardingState", onboardingState).handle("onboardingMail", onboardingMail).handle("onboardingGround", onboardingGround).handle("onboardingCapabilities", onboardingCapabilities).handle("onboardingWorkspace", onboardingWorkspace).handle("onboardingTrack", onboardingTrack).handle("cliCommands", cliCommands).handle("hivePeers", hivePeers).handle("pageDoc", pageDoc).handle("pageSave", pageSave).handle("pageInfo", pageInfo).handle("pageVersions", pageVersions).handle("pageVersion", pageVersion).handle("pagePublish", pagePublish).handle("pageVisibility", pageVisibility).handle("pageRollback", pageRollback).handle("item", item).handle("itemSave", itemSave).handle("itemMove", itemMove).handle("itemTaskAdd", itemTaskAdd).handle("itemTaskSave", itemTaskSave).handle("itemTaskDelete", itemTaskDelete).handle("cardSchema", cardSchema).handle("itemShare", itemShare).handle("itemShareVisibility", itemShareVisibility).handle("itemShareAllowlist", itemShareAllowlist).handle("itemShareInvite", itemShareInvite).handle("itemSharePermission", itemSharePermission).handle("itemShareRevoke", itemShareRevoke).handle("itemShareLink", itemShareLink).handle("itemShareLinkRevoke", itemShareLinkRevoke).handle("itemLabels", itemLabels).handle("itemAttachments", itemAttachments).handle("itemAttachmentUpload", itemAttachmentUpload).handle("itemAttachmentDelete", itemAttachmentDelete).handle("itemEvents", itemEvents).handle("itemEventAdd", itemEventAdd).handle("itemAsks", itemAsks).handle("itemAskAdd", itemAskAdd).handle("itemAskAnswer", itemAskAnswer).handle("itemChat", itemChat).handle("itemChatSend", itemChatSend).handle("rooms", rooms).handle("roomCreate", roomCreate).handle("room", room).handle("roomSend", roomSend).handle("sharedRooms", sharedRooms).handle("sharedRoom", sharedRoom).handle("sharedRoomSay", sharedRoomSay).handle("sharedRoomStop", sharedRoomStop).handle("sharedRoomUnshare", sharedRoomUnshare).handle("sharedRoomShare", sharedRoomShare).handle("sharedRoomJoin", sharedRoomJoin).handle("sharedRoomPresence", sharedRoomPresence).handle("sharedRoomAgentAdd", sharedRoomAgentAdd).handle("sharedRoomAgentUpdate", sharedRoomAgentUpdate).handle("sharedRoomAgentRemove", sharedRoomAgentRemove).handle("sharedRoomAddSession", sharedRoomAddSession).handle("sharedRoomRemoveSession", sharedRoomRemoveSession).handle("sharedRoomTranscript", sharedRoomTranscript).handle("playbookDoc", playbookDoc).handle("artifacts", artifacts).handle("artifactDoc", artifactDoc).handle("artifactPublish", artifactPublish).handle("artifactGate", artifactGate).handle("playbookInstall", playbookInstall).handle("bugReport", bugReport).handle("agentTasks", agentTasks).handle("heartbeats", heartbeats).handle("heartbeatRun", heartbeatRun).handle("heartbeatPause", heartbeatPause).handle("agentEditorAgent", agentEditorAgent).handle("agentEditorSave", agentEditorSave).handle("agentEditorHeartbeat", agentEditorHeartbeat).handle("agentEditorPolicy", agentEditorPolicy).handle("agentEditorPolicySave", agentEditorPolicySave).handle("agentEditorTools", agentEditorTools).handle("agentEditorToolsSave", agentEditorToolsSave).handle("agentEditorModels", agentEditorModels).handle("agentEditorToolCatalog", agentEditorToolCatalog).handle("agentEditorAlerts", agentEditorAlerts).handle("agentEditorAlertsSave", agentEditorAlertsSave).handle("agentEditorAlertsTest", agentEditorAlertsTest).handle("pulseTopic", pulseTopic).handle("pulseTopicStream", pulseTopicStream).handle("leadsApi", leadsApi).handle("comms", comms).handle("commsThread", commsThread).handle("commsDraft", commsDraft).handle("commsSend", commsSend).handle("reachrBatches", reachrBatches).handle("reachrBatch", reachrBatch).handle("reachrAction", reachrAction).handle("outreachCampaigns", outreachCampaigns).handle("outreachAudience", outreachAudience).handle("outreachStrategies", outreachStrategies).handle("outreachSegments", outreachSegments).handle("outreachSegmentDraft", outreachSegmentDraft).handle("outreachSegmentDraftChange", outreachSegmentDraftChange).handle("outreachSegmentDraftSave", outreachSegmentDraftSave).handle("outreachSegmentPreview", outreachSegmentPreview).handle("outreachSegmentMembers", outreachSegmentMembers).handle("outreachSegmentFind", outreachSegmentFind).handle("outreachCampaignTarget", outreachCampaignTarget).handle("agreements", agreements).handle("agreement", agreement).handle("agreementRaise", agreementRaise).handle("agreementIssue", agreementIssue).handle("agreementRevoke", agreementRevoke).handle("pulseContacts", pulseContacts).handle("pulseContact", pulseContact).handle("agentLive", agentLive).handle("agentDesktop", agentDesktop).handle("runTakeOver", runTakeOver).handle("runHandBack", runHandBack).handle("sites", sites).handle("site", site).handle("siteCreate", siteCreate).handle("sitePageAdd", sitePageAdd).handle("sitePageRemove", sitePageRemove).handle("siteReorder", siteReorder).handle("brands", brands).handle("brandKit", brandKit).handle("brandSave", brandSave).handle("brandLogoUpload", brandLogoUpload).handle("brandLogoProbe", brandLogoProbe).handle("records", records).handle("integrations", integrations).handle("hive", hive).handle("hiveSessions", hiveSessions).handle("hiveHere", hiveHere).handle("hiveRemoteAccess", hiveRemoteAccess).handle("hiveRemoteAccessSave", hiveRemoteAccessSave).handle("hiveSessionTranscript", hiveSessionTranscript).handle("hiveSessionReply", hiveSessionReply).handle("hiveSessionAnswer", hiveSessionAnswer).handle("hiveScripts", hiveScripts).handle("hiveScript", hiveScript).handle("hiveScriptDoctor", hiveScriptDoctor).handle("hiveScriptSave", hiveScriptSave).handle("hiveScriptRun", hiveScriptRun).handle("hiveTask", hiveTask).handle("hiveTaskDecide", hiveTaskDecide).handle("hiveScriptTags", hiveScriptTags).handle("hiveMarket", hiveMarket).handle("hiveMarketScript", hiveMarketScript).handle("hiveMarketInstall", hiveMarketInstall).handle("hiveSharedScripts", hiveSharedScripts).handle("hiveScriptAccess", hiveScriptAccess).handle("drives", drives).handle("driveFindings", driveFindings)
   }),
 )
 

@@ -26,6 +26,7 @@
  * reader has to change with it. Noted here rather than discovered later.
  */
 
+import { importLeads, matchedExisting, newLeadPayload, previewImport, type NewLead } from "./leads-import"
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, readSync, closeSync, fstatSync } from "fs"
 // Aliased: this file already exports GraphNode/GraphEdge for the BOARD-TO-BOARD graph (numeric ids).
 // Same names, different graphs — importing them bare silently retyped graphRows.
@@ -40,6 +41,7 @@ import { homedir } from "os"
 import path from "path"
 import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
 import { byOwnerThenBoard, findLocalPlaybook } from "./playbook-local"
+import { planUsageFrom, type PlanUsage } from "./usage-shape"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -1072,7 +1074,8 @@ export async function fetchMe(opts: { token?: string | null; signal?: AbortSigna
   }
 }
 
-export interface Plan {
+/** The usage fields (epic #194525) ride along, each optional: see usage-shape.ts. */
+export interface Plan extends PlanUsage {
   /** free | pro | business, or null for staff, who have no plan. */
   plan: string | null
   /**
@@ -1507,6 +1510,9 @@ export async function fetchPlan(
         resetsAt: typeof j.resets_at === "string" && j.resets_at ? j.resets_at : null,
         uncapped: Boolean(j.uncapped),
         upgradeUrl: typeof j.upgrade_url === "string" ? j.upgrade_url : null,
+        // Usage as a progression (#194525): cap, grants, next tier, forecast, checklist, last week.
+        // Only the keys the server sent — today's server sends none and nothing changes.
+        ...planUsageFrom(j),
       },
     }
   } catch (e) {
@@ -5476,7 +5482,7 @@ export async function runReachrAction(a: ReachrAction): Promise<PlatformResult<u
 // ─── Leads, the way ELON works them (#190553) ────────────────────────────────
 
 export type LeadsOp = {
-  op: "list" | "get" | "meta" | "update" | "addNote" | "tasks" | "addTask" | "saveTask" | "messages" | "steps" | "readiness"
+  op: "list" | "get" | "meta" | "update" | "addNote" | "tasks" | "addTask" | "saveTask" | "messages" | "steps" | "readiness" | "create" | "importPreview" | "import"
   leadId?: number
   taskId?: number
   query?: Record<string, string>
@@ -5498,6 +5504,7 @@ async function leadsCall(path: string, init?: RequestInit): Promise<PlatformResu
 export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
   const send = (method: string) => ({ method, body: JSON.stringify(a.body ?? {}) })
   const lead = `/api/v1/leads/${a.leadId}`
+  if (a.op === "create" || a.op === "importPreview" || a.op === "import") return runLeadsWrite(a.op, (a.body ?? {}) as Record<string, unknown>)
   if (a.op !== "list" && a.op !== "meta" && !a.leadId) return { measured: false, reason: `${a.op} needs a lead`, data: null }
   switch (a.op) {
     case "list": {
@@ -5528,4 +5535,33 @@ export async function runLeadsOp(a: LeadsOp): Promise<PlatformResult<unknown>> {
     case "readiness":
       return leadsCall(`${lead}/readiness`)
   }
+}
+
+// ─── New lead and Import, from the Leads tab (#194506) ─────────────────────────
+
+/**
+ * `create`: one lead, `{ name?, email?, company?, value?, status?, bloqId }` — name or email.
+ * `importPreview`: `{ csv }` — the columns as mapped, the first rows and every skip/warning. Reads
+ * nothing and writes nothing. `import`: `{ csv, bloqId }` — the same rows, sent.
+ */
+export async function runLeadsWrite(op: "create" | "importPreview" | "import", body: Record<string, unknown>): Promise<PlatformResult<unknown>> {
+  if (op === "importPreview") {
+    const r = previewImport(String(body.csv ?? ""))
+    return r.ok ? { measured: true, data: r.preview } : { measured: false, reason: r.reason, data: null }
+  }
+  const bloqId = Number(body.bloqId ?? body.bloq_id) || undefined
+  if (op === "create") {
+    const made = newLeadPayload({ ...(body as NewLead), bloqId })
+    if (!made.ok) return { measured: false, reason: made.reason, data: null }
+    const r = await leadsCall("/api/v1/leads", { method: "POST", body: JSON.stringify(made.body) })
+    if (!r.measured) return r
+    const lead = (r.data as any)?.data ?? r.data
+    return { measured: true, data: { lead, matchedExisting: matchedExisting(made.body, lead) } }
+  }
+  if (!bloqId) return { measured: false, reason: "Pick a board first: leads are imported into one.", data: null }
+  const r = await importLeads(String(body.csv ?? ""), async (leads) => {
+    const res = await leadsCall("/api/v1/leads/import", { method: "POST", body: JSON.stringify({ bloq_id: bloqId, dry_run: false, leads }) })
+    return { ok: res.measured, body: res.data, reason: res.reason }
+  })
+  return r.ok ? { measured: true, data: r.result } : { measured: false, reason: r.reason, data: null }
 }
