@@ -259,12 +259,12 @@ export function IrisHiveMachines(props: {
                     <span class="hmc-faint"> on {totals().agentMachines} of {totals().computers} computers that report them</span>
                   </Show>
                 </span>
-                <span>
-                  <b class="hsc-num">{totals().shellMachines ? totals().shells.toLocaleString("en-US") : "—"}</b> shells
-                  <span class="hmc-faint">
-                    {totals().shellMachines ? " · this computer only, Hive-started only" : " · not counted"}
+                <Show when={totals().shellMachines}>
+                  <span>
+                    <b class="hsc-num">{totals().shells.toLocaleString("en-US")}</b> shells
+                    <span class="hmc-faint"> · this computer only, Hive-started only</span>
                   </span>
-                </span>
+                </Show>
               </p>
               <Show when={view() === "list"}>
                 <div class="hmc-seg hmc-filter" role="tablist" aria-label="Show">
@@ -353,7 +353,9 @@ export function IrisHiveMachines(props: {
                         <span class="hmc-faint hmc-online">{c.online ? "Online" : "Offline"}</span>
                       </div>
                       <div class="hmc-counts">
-                        <Show when={filter() !== "shells"}>
+                        {/* A count the computer never sent, or one Hive cannot take from here, is not
+                            shown as a chip (#194583) — only counts and real "couldn't check"s are. */}
+                        <Show when={filter() !== "shells" && row().agents.state !== "never"}>
                           {(() => {
                             const w = () => agentWords(row().agents, now())
                             return (
@@ -364,7 +366,7 @@ export function IrisHiveMachines(props: {
                             )
                           })()}
                         </Show>
-                        <Show when={filter() !== "agents"}>
+                        <Show when={filter() !== "agents" && row().shells.state !== "elsewhere"}>
                           {(() => {
                             const w = () => shellWords(row().shells)
                             return (
@@ -385,14 +387,14 @@ export function IrisHiveMachines(props: {
                           {(c.tasksCompleted ?? 0).toLocaleString("en-US")} done
                         </span>
                       </div>
-                      <div class="hmc-disk" title={d() ? `${gb(d()!.free)} free of ${gb(d()!.total)}` : "Disk not reported"}>
-                        <Show when={d()} fallback={<span class="hmc-faint">disk not reported</span>}>
+                      <Show when={d()}>
+                        <div class="hmc-disk" title={`${gb(d()!.free)} free of ${gb(d()!.total)}`}>
                           <span class="hmc-bar" data-low={att().some((a) => a.kind === "disk") ? "1" : undefined}>
                             <i style={{ width: `${Math.max(2, 100 - d()!.pct)}%` }} />
                           </span>
                           <span class="hsc-num">{gb(d()!.free)} free</span>
-                        </Show>
-                      </div>
+                        </div>
+                      </Show>
                       <Show when={aiOf(c)}>
                         {(ai) => (
                           <div class="hmc-ai" data-serving={ai().serving.length ? "1" : undefined} title={ai().serving.join(", ")}>
@@ -598,8 +600,8 @@ export function IrisHiveMachines(props: {
                     </For>
                   </ul>
                 </Show>
-                <h4>What it can do</h4>
-                <Show when={skillsOf(c(), Infinity).length} fallback={<p class="hsc-muted">Nothing reported.</p>}>
+                <Show when={skillsOf(c(), Infinity).length}>
+                  <h4>What it can do</h4>
                   <ul class="hmc-can">
                     <For each={skillsOf(c(), Infinity)}>
                       {(s) => (

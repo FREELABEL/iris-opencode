@@ -131,8 +131,9 @@
 .hbt-sentence { margin: 2px 0 4px; font-size: var(--font-size-small); line-height: 1.5; color: var(--hsc-ink); }
 .hbt-sentence[data-b="fail"] { color: var(--hsc-amber); }
 .hbt-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
-.hbt-chip {
-  display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px 1px 4px; border-radius: var(--radius-full);
+.hbt-chip,
+.hbt-runs li.hbt-chip {
+  flex-direction: row; display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 4px; border-radius: var(--radius-full);
   background: var(--hsc-elev); color: var(--hsc-ink2); font-size: var(--font-size-x-small);
 }
 .hbt-chip [data-component="icon"] { color: var(--hsc-amber); }
@@ -140,3 +141,4 @@
 .hbt-chip-name { font-family: var(--font-family-mono); }
 .hbt-chip-ms { color: var(--hsc-faint); }
 .hbt-empty { margin: 8px 0; }
+.hbt .hmc-acts { align-items: center; }
