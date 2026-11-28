@@ -371,6 +371,8 @@ const APP_STEPS = new Set([
   "usage.ring_opened",
   "usage.topup_started",
   "usage.invite_sent",
+  // A friend's invite code claimed on this account (#194575) — sent only on outcome "attributed".
+  "usage.invite_claimed",
   // The crash screen (#191430): fl-iris-api GenesisEvent::DESKTOP_APP. Carries props; see crash-report.ts.
   CRASH_EVENT,
 ])

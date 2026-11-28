@@ -1,6 +1,15 @@
 import { Show, createSignal, onMount } from "solid-js"
 import { Spinner } from "./home-first-run-art"
-import { forgetInviteCode, pendingInviteCode, withInviteCode } from "@/utils/invite-code"
+import {
+  INVITE_CODE_LOOKS_WRONG,
+  forgetInviteCode,
+  inviteCodeProblem,
+  normaliseInviteCode,
+  pendingInviteCode,
+  rememberInviteCode,
+  signInInvite,
+  withInviteCode,
+} from "@/utils/invite-code"
 
 /**
  * Sign-in as step one of first run, inside the app (EPIC #188210).
@@ -65,8 +74,17 @@ export function SignInPanel() {
   const [promo, setPromo] = createSignal("")
   const [showPromo, setShowPromo] = createSignal(false)
   const [code, setCode] = createSignal("")
+  // A friend's invite code (#194575). Open from the start when a link already brought one, so the
+  // person can see it is being used; typed or not, it never holds up sign-in.
+  const [showInvite, setShowInvite] = createSignal(!!pendingInviteCode())
+  const [inviteText, setInviteText] = createSignal(pendingInviteCode() ?? "")
+  const [inviteTouched, setInviteTouched] = createSignal(false)
+  const inviteHint = () => (inviteTouched() ? inviteCodeProblem(inviteText()) : null)
+  /** The invite chosen when the code was sent — what verify carries as invite_code. */
+  let sendingInvite: string | null = null
   let codeInput: HTMLInputElement | undefined
   let promoInput: HTMLInputElement | undefined
+  let inviteInput: HTMLInputElement | undefined
 
   onMount(() => {
     // Tell the shell this screen owns sign-in, so it doesn't open the window over it.
@@ -90,6 +108,9 @@ export function SignInPanel() {
     if (!invoke) return setMsg({ text: "Sign-in needs the IRIS desktop app.", kind: "err" })
     setBusy("google")
     track("onboarding.signin_method", "google")
+    // Google's sign-in can't carry invite_code: keep a typed code, and the signed-in app claims it.
+    const typed = showInvite() ? normaliseInviteCode(inviteText()) : null
+    if (typed) rememberInviteCode(typed)
     setMsg({ text: "Finish signing in in your browser…" })
     try {
       const r = await invoke("google_sign_in")
@@ -107,6 +128,9 @@ export function SignInPanel() {
     const to = email().trim()
     if (!to) return setMsg({ text: "Enter your email address.", kind: "err" })
     const key = promo().trim().toUpperCase()
+    const inv = signInInvite({ open: showInvite(), typed: inviteText(), remembered: pendingInviteCode() })
+    sendingInvite = inv.code
+    setInviteTouched(true)
     setBusy("send")
     setMsg({ text: "Sending…" })
     track("onboarding.signin_method", "code")
@@ -129,7 +153,8 @@ export function SignInPanel() {
           ? t?.error || "That code could not be applied."
           : ""
       setStage("code")
-      setMsg(note ? { text: note, kind: /applied/.test(note) ? "ok" : "err" } : { text: "" })
+      const said = [note, inv.note].filter(Boolean).join(" ")
+      setMsg(said ? { text: said, kind: /applied/.test(note) && !inv.note ? "ok" : "err" } : { text: "" })
       queueMicrotask(() => codeInput?.focus())
     } catch (err: any) {
       setMsg({ text: err.message, kind: "err" })
@@ -145,8 +170,9 @@ export function SignInPanel() {
     setBusy("verify")
     setMsg({ text: "Verifying…" })
     try {
-      // A friend's invite (iris://invite?code=…, epic #194525) rides along so both get the reward.
-      const invite = pendingInviteCode()
+      // A friend's invite — typed here, or from an iris://invite link (#194525, #194575) — rides
+      // along so both get the reward.
+      const invite = sendingInvite
       const data = await post(
         "/api/v1/auth/login-with-code",
         withInviteCode(
@@ -221,23 +247,63 @@ export function SignInPanel() {
               Without one you still sign in and use IRIS on the free allowance.
             </p>
           </Show>
+          <Show when={showInvite()}>
+            <input
+              ref={inviteInput}
+              data-slot="signin-invite-code"
+              class="fr-input fr-mono"
+              placeholder="Invite code"
+              aria-label="Invite code"
+              autocapitalize="none"
+              autocomplete="off"
+              spellcheck={false}
+              value={inviteText()}
+              onInput={(e) => setInviteText(e.currentTarget.value)}
+              onBlur={() => setInviteTouched(true)}
+            />
+            <p
+              data-slot="signin-invite-hint"
+              class="-mt-1 text-[12px]"
+              classList={{ "fr-err": !!inviteHint(), "text-v2-text-text-muted": !inviteHint() }}
+            >
+              {inviteHint()
+                ? `${INVITE_CODE_LOOKS_WRONG} — fix it, or carry on without it.`
+                : "From a friend — you both get extra tokens after your first agent run."}
+            </p>
+          </Show>
           <button class="fr-primary" type="submit" disabled={!!busy()}>
             {busy() === "send" ? "Sending…" : "Send code"}
           </button>
         </form>
 
-        <Show when={!showPromo()}>
-          <button
-            class="fr-link mx-auto"
-            type="button"
-            onClick={() => {
-              setShowPromo(true)
-              queueMicrotask(() => promoInput?.focus())
-            }}
-          >
-            Have a trial code or licence key?
-          </button>
-        </Show>
+        <div class="flex flex-col items-center gap-1.5">
+          <Show when={!showPromo()}>
+            <button
+              class="fr-link mx-auto"
+              type="button"
+              onClick={() => {
+                setShowPromo(true)
+                queueMicrotask(() => promoInput?.focus())
+              }}
+            >
+              Have a trial code or licence key?
+            </button>
+          </Show>
+          <Show when={!showInvite()}>
+            <button
+              class="fr-link mx-auto"
+              type="button"
+              data-action="signin-invite-open"
+              onClick={() => {
+                setShowInvite(true)
+                if (!inviteText()) setInviteText(pendingInviteCode() ?? "")
+                queueMicrotask(() => inviteInput?.focus())
+              }}
+            >
+              Have an invite code?
+            </button>
+          </Show>
+        </div>
       </Show>
 
       <Show when={stage() === "code"}>
