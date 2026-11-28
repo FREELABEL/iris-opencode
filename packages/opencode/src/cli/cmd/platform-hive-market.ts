@@ -521,3 +521,26 @@ export const HiveMarketCommand = cmd({
       .command(CashoutCommand),
   handler: () => {},
 })
+
+// #193080 — earnings protection. Stubs so the failing tests typecheck; built in the next commit.
+export interface Protection {
+  allow_spending: boolean
+  answered: boolean
+  protected_cents: number
+  spendable_cents?: number
+  wallet_cents?: number
+  cashable_cents?: number
+  asked_at?: string | null
+}
+export function protectionLines(_p: Partial<Protection> | null | undefined): string[] {
+  return []
+}
+export function protectionChange(_argv: Record<string, unknown>): { allow_spending: boolean } | { error: string } | null {
+  return null
+}
+export async function requestProtection(
+  _fetcher: (path: string, init?: RequestInit) => Promise<Response>,
+  _change: { allow_spending: boolean } | null,
+): Promise<Protection> {
+  throw new Error("not built yet")
+}
