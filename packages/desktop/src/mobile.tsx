@@ -335,7 +335,14 @@ function note(node: Node) {
 
 async function sendCode(email: string) {
   if (!email.includes("@")) throw new Error("Enter your email address.")
-  await post(`${AUTH_API}/api/v1/auth/send-login-code`, { email: email.trim() })
+  // Exactly Desktop's payload (public/login.html): `email` alone is a 422, and auto_create is what
+  // lets an account that has never signed in get a code at all.
+  await post(`${AUTH_API}/api/v1/auth/send-login-code`, {
+    email: email.trim(),
+    method: "with_login_code",
+    expiration_minutes: 30,
+    auto_create: true,
+  })
 }
 
 async function verify(email: string, code: string) {
@@ -396,7 +403,8 @@ async function post(url: string, body: unknown) {
   }).catch(() => undefined)
   if (!response) throw new Error("No connection. Check this phone is online.")
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data?.message || data?.error || `Something went wrong (${response.status}).`)
+  const detail = data?.errors ? Object.values(data.errors).flat().join(" ") : ""
+  if (!response.ok) throw new Error(detail || data?.message || data?.error || `Something went wrong (${response.status}).`)
   return data
 }
 
