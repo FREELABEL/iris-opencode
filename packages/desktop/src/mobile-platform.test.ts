@@ -11,6 +11,9 @@ import {
   HIVE_API,
   SignInExpired,
   engineFor,
+  exchangeGoogle,
+  googleCode,
+  googleStartUrl,
   listMachines,
   note,
   problem,
@@ -211,5 +214,45 @@ describe.if(process.env.IRIS_LIVE === "1")("live: production agrees with the sha
   test("Hive answers a bad token with 401, which the phone treats as an expired sign-in", async () => {
     await expect(listMachines(fetch, { ...account, token: "not-a-real-token" })).rejects.toBeInstanceOf(SignInExpired)
     await expect(engineFor(fetch, { ...account, token: "not-a-real-token" }, "x")).rejects.toBeInstanceOf(SignInExpired)
+  })
+})
+
+// "Continue with Google" (ADR-04 on #194511): the sheet opens fl-api's mobile start with only the
+// PKCE challenge; fl-api ends at iris://auth/google?code=… (or ?error=…); the code plus the verifier
+// only this app holds buys an SDK token at the exchange Desktop already uses.
+describe("Continue with Google", () => {
+  test("the sheet opens the mobile start with the challenge, for iOS", () => {
+    expect(googleStartUrl("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")).toBe(
+      `${AUTH_API}/api/v1/auth/google/mobile/start?code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&app=ios`,
+    )
+  })
+
+  test("the callback's code is taken from iris://auth/google, and nothing else is accepted", () => {
+    expect(googleCode("iris://auth/google?code=abc123")).toBe("abc123")
+    expect(() => googleCode("iris://pair?code=abc123")).toThrow("unexpected")
+    expect(() => googleCode("https://evil.example/auth/google?code=abc123")).toThrow("unexpected")
+    expect(() => googleCode("iris://auth/google")).toThrow("no code")
+  })
+
+  test("each error fl-api can end with reads as a sentence", () => {
+    expect(() => googleCode("iris://auth/google?error=access_denied")).toThrow("cancelled")
+    expect(() => googleCode("iris://auth/google?error=email_not_verified")).toThrow("isn't verified")
+    expect(() => googleCode("iris://auth/google?error=sign_in_failed")).toThrow("didn't work")
+    expect(() => googleCode("iris://auth/google?error=something_new")).toThrow("something_new")
+  })
+
+  test("the exchange sends code + verifier and returns the account (Desktop's reply shape)", async () => {
+    const { http, asked } = network({
+      [`${AUTH_API}/api/v1/auth/google/desktop/exchange`]: () =>
+        json(200, { success: true, data: { sdk_token: { key: "g".repeat(64) }, user: { email: "owner@example.com", is_new: false } } }),
+      [`${AUTH_API}/api/v1/auth/whoami`]: () => json(200, { data: { id: 2945, email: "owner@example.com" } }),
+    })
+    expect(await exchangeGoogle(http, "abc123", "v".repeat(43))).toEqual({ token: "g".repeat(64), userId: 2945, email: "owner@example.com" })
+    expect(asked[0]!.body).toEqual({ code: "abc123", code_verifier: "v".repeat(43) })
+  })
+
+  test("an exchange refusal (expired or reused code) says what happened", async () => {
+    const { http } = network({ [AUTH_API]: () => json(400, { success: false, error: "That sign-in code expired. Try again." }) })
+    await expect(exchangeGoogle(http, "old", "v".repeat(43))).rejects.toThrow("expired")
   })
 })

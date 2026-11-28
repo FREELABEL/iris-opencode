@@ -55,6 +55,10 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 listeners = "0.3"
 
+# The iPhone's "Continue with Google" sheet (#194511): ASWebAuthenticationSession, iOS only.
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri-plugin-iris-web-auth = { path = "plugins/web-auth" }
+
 # #189477: free disk space before copying history (statvfs / GetDiskFreeSpaceExW). Both were
 # already in the tree transitively.
 [target.'cfg(unix)'.dependencies]

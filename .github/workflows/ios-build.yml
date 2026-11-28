@@ -236,3 +236,5 @@ jobs:
           mkdir -p sidecars && touch sidecars/iris-cli-aarch64-apple-darwin sidecars/iris-mic-aarch64-apple-darwin
           cargo check --locked --target aarch64-apple-darwin
           cargo test --locked --target aarch64-apple-darwin --no-run
+          # The phone's PKCE (RFC 7636 Appendix B) runs here: mobile-only code is not compiled for iOS tests.
+          cargo test --locked --target aarch64-apple-darwin --lib pkce_tests

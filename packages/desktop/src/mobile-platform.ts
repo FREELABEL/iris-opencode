@@ -48,12 +48,46 @@ export async function verify(http: Fetch, email: string, code: string): Promise<
   if (!/^\d{6}$/.test(code)) throw new Error("The code is 6 digits.")
   const reply = await post(http, `${AUTH_API}/api/v1/auth/login-with-code`, verifyBody(email, code))
   // Nested (fl-api LoginController::loginWithCode): {success, message, data: {user, sdk_token: {key}}}.
-  const token = reply?.data?.sdk_token?.key
+  return accountFor(http, reply?.data?.sdk_token?.key, email.trim())
+}
+
+/** The account behind a freshly issued SDK token: one path after the credential, email or Google. */
+async function accountFor(http: Fetch, token: unknown, fallbackEmail: string): Promise<Account> {
   if (typeof token !== "string" || !token) throw new Error("Signed in, but no token came back. Try again.")
   const who = await read(await http(`${AUTH_API}/api/v1/auth/whoami`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }))
   const user = who.data?.data
   if (!who.response.ok || typeof user?.id !== "number") throw new Error("Signed in, but your account could not be read. Try again.")
-  return { token, userId: user.id, email: typeof user.email === "string" ? user.email : email.trim() }
+  return { token, userId: user.id, email: typeof user.email === "string" ? user.email : fallbackEmail }
+}
+
+// "Continue with Google" (ADR-04): Apple's sign-in sheet opens this with only the PKCE challenge.
+export function googleStartUrl(challenge: string) {
+  return `${AUTH_API}/api/v1/auth/google/mobile/start?code_challenge=${encodeURIComponent(challenge)}&app=ios`
+}
+
+/** The single-use code from fl-api's redirect to iris://auth/google, or the reason it sent instead. */
+export function googleCode(callback: string) {
+  const url = URL.canParse(callback) ? new URL(callback) : undefined
+  // iris://auth/google parses as host "auth", path "/google".
+  if (!url || url.protocol !== "iris:" || url.host !== "auth" || url.pathname !== "/google") throw new Error("Google sign-in came back to an unexpected address.")
+  const error = url.searchParams.get("error")
+  if (error) throw new Error(GOOGLE_ERRORS[error] ?? `Google sign-in didn't work (${error}).`)
+  const code = url.searchParams.get("code")
+  if (!code) throw new Error("Google sign-in came back with no code. Try again.")
+  return code
+}
+
+const GOOGLE_ERRORS: Record<string, string> = {
+  access_denied: "Google sign-in was cancelled.",
+  email_not_verified: "That Google account's email isn't verified. Use an email code instead.",
+  no_code: "Google sign-in didn't work. Try again.",
+  sign_in_failed: "Google sign-in didn't work. Try again, or use an email code.",
+}
+
+/** Code + the verifier only this app holds → an SDK token, at the exchange Desktop already uses. */
+export async function exchangeGoogle(http: Fetch, code: string, verifier: string): Promise<Account> {
+  const reply = await post(http, `${AUTH_API}/api/v1/auth/google/desktop/exchange`, { code, code_verifier: verifier })
+  return accountFor(http, reply?.data?.sdk_token?.key, typeof reply?.data?.user?.email === "string" ? reply.data.user.email : "")
 }
 
 export async function listMachines(http: Fetch, account: Account): Promise<Node[]> {

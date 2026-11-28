@@ -1375,6 +1375,8 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_iris_web_auth::init())
+        .invoke_handler(tauri::generate_handler![pkce_pair])
         .setup(|app| {
             // No initialization_script port: window.__OPENCODE__.mobile tells the frontend to
             // load the mobile entry, which asks which machine to connect to.
@@ -1385,4 +1387,43 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// A PKCE pair for "Continue with Google" on the phone (RFC 7636, S256): the verifier stays in the
+/// app, only the challenge goes to the server. Same construction as Desktop's google_signin.rs.
+#[cfg(mobile)]
+#[tauri::command]
+fn pkce_pair() -> Result<serde_json::Value, String> {
+    let verifier = pkce_verifier()?;
+    Ok(serde_json::json!({ "challenge": pkce_challenge(&verifier), "verifier": verifier }))
+}
+
+#[cfg_attr(not(mobile), allow(dead_code))]
+fn pkce_verifier() -> Result<String, String> {
+    use base64::Engine as _;
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg_attr(not(mobile), allow(dead_code))]
+fn pkce_challenge(verifier: &str) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
+}
+
+#[cfg(test)]
+mod pkce_tests {
+    #[test]
+    fn challenge_is_rfc7636_appendix_b() {
+        assert_eq!(super::pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn verifier_is_43_url_safe_characters() {
+        let v = super::pkce_verifier().unwrap();
+        assert_eq!(v.len(), 43);
+        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
 }

@@ -3,14 +3,14 @@
   "identifier": "mobile",
   "description": "The iPhone build (#194511): no shell, updater, process or window state.",
   "platforms": [
-    "iOS",
-    "android"
+    "iOS"
   ],
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
+    "iris-web-auth:default",
     "opener:default",
     "store:default",
     "os:default",

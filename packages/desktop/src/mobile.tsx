@@ -15,7 +15,8 @@ import { fetch } from "@tauri-apps/plugin-http"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
 import pkg from "../package.json"
-import { engineFor, listMachines, note, sendCode, SignInExpired, verify, type Account, type Engine, type Node } from "./mobile-platform"
+import { invoke } from "@tauri-apps/api/core"
+import { engineFor, exchangeGoogle, googleCode, googleStartUrl, listMachines, note, sendCode, SignInExpired, verify, type Account, type Engine, type Node } from "./mobile-platform"
 
 // Platform calls go through the native HTTP plugin (`fetch` above), so no CORS rule on either
 // host can block sign-in. Calls to an engine use the webview's own fetch (`globalThis.fetch`),
@@ -124,6 +125,25 @@ function showSignIn(problem?: string) {
     location.reload()
   }
 
+  // Apple's sign-in sheet (plugins/web-auth) → fl-api → Google → iris://auth/google?code=… → the
+  // exchange with the PKCE verifier that never left this app (ADR-04).
+  const google = async () => {
+    setError("")
+    setBusy(true)
+    track("iphone.signin.google_started")
+    const result = await (async () => {
+      const pair = await invoke<{ challenge: string; verifier: string }>("pkce_pair")
+      const callback = await invoke<string>("plugin:iris-web-auth|authenticate", { url: googleStartUrl(pair.challenge), callbackScheme: "iris" })
+      return exchangeGoogle(fetch, googleCode(callback), pair.verifier)
+    })().catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))))
+    setBusy(false)
+    if (result instanceof Error && result.message === "cancelled") return track("iphone.signin.google_cancelled")
+    if (result instanceof Error) return (track("iphone.signin.failed", `google: ${result.message}`), setError(result.message))
+    localStorage.setItem(ACCOUNT_KEY, JSON.stringify(result))
+    track("iphone.signin.verified", "google")
+    location.reload()
+  }
+
   render(
     () => (
       <Screen>
@@ -133,6 +153,12 @@ function showSignIn(problem?: string) {
           <p style={styles.lead}>
             {sent() ? `We emailed a 6-digit code to ${email().trim()}.` : "Use the email you sign in to IRIS Desktop with."}
           </p>
+          <Show when={!sent()}>
+            <button style={styles.google} type="button" disabled={busy()} onClick={google}>
+              Continue with Google
+            </button>
+            <p style={styles.or}>or</p>
+          </Show>
           <Show
             when={sent()}
             fallback={
@@ -416,6 +442,8 @@ const styles = {
   input: `font-size:17px;padding:12px 14px;border-radius:10px;border:1px solid ${line};background:${field};color:${ink}`,
   error: `font-size:14px;line-height:1.4;color:${dark ? "#f08a7e" : "#b3261e"};margin:0`,
   button: `font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:0;background:${ink};color:${paper};margin-top:6px`,
+  google: `font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:1px solid ${line};background:${field};color:${ink}`,
+  or: "font-size:13px;opacity:.55;margin:0;text-align:center",
   link: `font-size:15px;padding:6px;border:0;background:none;color:${ink};opacity:.7`,
   list: `display:flex;flex-direction:column;border:1px solid ${line};border-radius:12px;overflow:hidden;background:${field}`,
   row: `display:flex;align-items:center;gap:12px;padding:14px;border:0;border-bottom:1px solid ${line};background:none;color:${ink};text-align:left;font:inherit`,
