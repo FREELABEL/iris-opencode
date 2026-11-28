@@ -6,7 +6,7 @@ import { DetailView, type DetailFact } from "@opencode-ai/ui/detail-view"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { IconButton } from "@opencode-ai/ui/icon-button"
-import { RelativeTime } from "@opencode-ai/ui/relative-time"
+import { absoluteTime, RelativeTime } from "@opencode-ai/ui/relative-time"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { StatusBadge } from "@opencode-ai/ui/status-badge"
 import { CommandAction } from "@/components/command-action"
@@ -242,7 +242,7 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
                   label={t("iris.dv.int.disconnect")}
                   describe={t("iris.dv.int.disconnect.describe", { name: name() })}
                   write
-                  variant="ghost"
+                  variant="secondary"
                   noCopy
                   fetch={props.doFetch}
                   base=""
@@ -417,21 +417,27 @@ export function IrisPaneDetail(props: IrisPaneDetailProps) {
           facts={factsOf(detail())}
           actions={actions()}
         >
-          {/* The service's recent history, one bar per window: "has it been flapping" is a shape. */}
+          {/* The service's recent checks, oldest on the left: "has it been flapping" is a shape. */}
           <Show when={props.pane === "integrations" && r()?.health?.bars?.length}>
-            <div data-slot="iris-dv-uptime">
-              <div class="iris-bars">
+            <figure data-slot="iris-dv-uptime">
+              <div class="iris-bars" role="img" aria-label={t("iris.dv.int.checks", { count: String(r().health.bars.length) })}>
                 <For each={r().health.bars}>
                   {(b: any) => (
                     <span
                       class="iris-bars__bar"
                       classList={{ "iris-bars__bar--up": b.state === "up", "iris-bars__bar--down": b.state === "down" }}
-                      title={`${b.state}${b.from ? ` · ${b.from}` : ""}`}
+                      title={[b.from ? absoluteTime(b.from) : undefined, b.state === "up" ? t("iris.dv.int.check.up") : b.state === "down" ? t("iris.dv.int.check.down") : t("iris.dv.int.check.unknown")]
+                        .filter(Boolean)
+                        .join(" — ")}
                     />
                   )}
                 </For>
               </div>
-            </div>
+              <figcaption data-slot="iris-dv-uptime-caption">
+                <span>{t("iris.dv.int.checks", { count: String(r().health.bars.length) })}</span>
+                <span>{t("iris.dv.int.checks.direction")}</span>
+              </figcaption>
+            </figure>
           </Show>
           <Show when={props.pane === "integrations" && props.connectNote?.message}>
             <p data-slot="iris-dv-note" data-state={props.connectNote!.state}>

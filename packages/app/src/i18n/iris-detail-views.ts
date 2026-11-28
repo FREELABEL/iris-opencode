@@ -34,6 +34,11 @@ export const IRIS_DETAIL_VIEWS_ENGLISH = {
   "iris.dv.int.test": "Test",
   "iris.dv.int.test.describe": "Makes one real call to {{name}} to check this connection works, and records the result. Nothing is sent or changed in {{name}}.",
   "iris.dv.int.reconnect": "Reconnect",
+  "iris.dv.int.checks": "The service's last {{count}} checks",
+  "iris.dv.int.checks.direction": "Oldest on the left, newest on the right",
+  "iris.dv.int.check.up": "Up",
+  "iris.dv.int.check.down": "Down",
+  "iris.dv.int.check.unknown": "Not checked",
   "iris.dv.int.disconnect": "Disconnect",
   "iris.dv.int.disconnect.describe": "Disconnects {{name}}. Agents and automations that use it stop working until you connect it again.",
 
