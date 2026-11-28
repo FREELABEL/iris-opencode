@@ -400,7 +400,8 @@ async function hive(account: Account, path: string, body?: unknown) {
     localStorage.removeItem(ACCOUNT_KEY)
     throw new Error("Your sign-in has expired. Sign in again.")
   }
-  const data = await response.json().catch(() => ({}))
+  const data = await response.json().catch((e: Error) => (response.ok ? new Error(`could not read the reply (${e.message}).`) : {}))
+  if (data instanceof Error) throw data
   if (response.status === 409) throw new Error("phone access is not turned on for this machine yet.")
   if (!response.ok) throw new Error(data?.message || data?.error || `the server answered ${response.status}.`)
   return data
@@ -413,7 +414,10 @@ async function post(url: string, body: unknown) {
     body: JSON.stringify(body),
   }).catch(() => undefined)
   if (!response) throw new Error("No connection. Check this phone is online.")
-  const data = await response.json().catch(() => ({}))
+  // An unreadable body on a 2xx is a fault in the app, not an empty answer: build 11 turned the
+  // HTTP plugin's failed body read (JS 2.5.9 against Rust 2.5.4) into "no token came back".
+  const data = await response.json().catch((e: Error) => (response.ok ? new Error(`Could not read the server's reply (${e.message}).`) : {}))
+  if (data instanceof Error) throw data
   // The auth API puts validation messages under `details` ({field: [messages]}); Laravel under `errors`.
   const fields = data?.details ?? data?.errors
   const detail = fields && typeof fields === "object" ? Object.values(fields).flat().join(" ") : ""
