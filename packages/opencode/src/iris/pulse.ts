@@ -303,7 +303,7 @@ export type ContactPulse = {
   ms: number
   score: ContactScore
   stops: PulseStop[]
-  owed: Array<{ what: string; amount?: string; since?: string }>
+  owed: Array<{ what: string; amount?: string; since?: string; due?: string }>
   /** Channels read / channels on the route. */
   channels: { read: number; total: number }
 }
@@ -404,7 +404,7 @@ export function contactRoute(input: ContactInputs, opts: { days: number; now: nu
     const overdue = ts
       .filter((t) => !t.is_completed && Number.isFinite(dateOf(t.due_date)) && dateOf(t.due_date) < now)
       .sort((a, b) => dateOf(a.due_date) - dateOf(b.due_date))
-    for (const t of overdue.slice(0, 3)) owed.push({ what: `Overdue: ${String(t.title).slice(0, 90)}`, since: `${Math.round((now - dateOf(t.due_date)) / DAY)} d` })
+    for (const t of overdue.slice(0, 3)) owed.push({ what: `Overdue: ${String(t.title).slice(0, 90)}`, since: `${Math.round((now - dateOf(t.due_date)) / DAY)} d`, due: String(t.due_date) })
     const open = ts.length - doneN
     stops.push({
       id: "tasks",

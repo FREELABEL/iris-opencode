@@ -4378,6 +4378,10 @@ a.iris-file__name:hover { color: var(--text-interactive-base); text-decoration: 
   border-color: var(--border-warning-base);
   font-weight: var(--font-weight-semibold);
 }
+/* Edits waiting to be sent, with Send now (#194509). */
+.iris-outbox-waiting {
+  margin: 0 0 8px;
+}
 .iris-held {
   display: flex;
   flex-direction: column;

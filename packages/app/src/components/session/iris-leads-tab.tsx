@@ -73,6 +73,8 @@ export function IrisLeadsTab(props: {
   onNeedsApproval: () => void
   /** Moves when the agent in this chat changed IRIS data (#194361): the list and stats re-read. */
   refreshKey?: () => unknown
+  /** A lead's "Open in Pulse": Pulse › Contact on that lead. */
+  onOpenPulse?: (leadId: number) => void
 }) {
   const language = useLanguage()
   const call = leadsCall(props.doFetch)
@@ -466,7 +468,7 @@ export function IrisLeadsTab(props: {
                   <Icon d={CLOSE} />
                 </button>
                 <div class="iris-ld" data-slot="iris-leads">
-                  <LeadDetail call={call} doFetch={props.doFetch} row={lead} initialTab={openTab()} onBack={() => setOpen(undefined)} onSaved={refresh} hideBack />
+                  <LeadDetail call={call} doFetch={props.doFetch} row={lead} initialTab={openTab()} onBack={() => setOpen(undefined)} onSaved={refresh} onOpenPulse={props.onOpenPulse} hideBack />
                 </div>
               </section>
             )}

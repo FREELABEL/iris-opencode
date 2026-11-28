@@ -1,10 +1,13 @@
-import { createMemo, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
+import { Button } from "@opencode-ai/ui/button"
+import { useLanguage } from "@/context/language"
 import "./iris-hive-scripts.css"
 import "./iris-hive-machines.css"
 import "./iris-pulse.css"
 import {
   bandWord,
   blindLine,
+  dueOf,
   pinsOf,
   priorLine,
   PROVENANCE_WORD,
@@ -32,6 +35,28 @@ import {
 type Fetch = (path: string, init?: RequestInit) => Promise<Response>
 type Payload<T> = { measured: boolean; reason?: string | null; data: T }
 const WINDOWS = [7, 30, 90] as const
+
+/**
+ * "Open in Pulse" from a lead's panel (#194509): the contact Pulse › Contact should read. Held here
+ * until that pane mounts and takes it, like requestLeadOpen the other way.
+ */
+const [contactJump, setContactJump] = createSignal<number>()
+export const requestPulseContact = (leadId: number) => setContactJump(leadId)
+
+/** A due date as words, with its tone — "due tomorrow", "3 days overdue". */
+function Due(props: { iso: string | undefined; now: number; fallback?: string }) {
+  const language = useLanguage()
+  const d = () => dueOf(props.iso, props.now)
+  return (
+    <Show when={d()} fallback={props.fallback ?? ""}>
+      {(w) => (
+        <span class="pls-due" data-overdue={w().overdue ? "" : undefined}>
+          {language.t(w().key as any, { count: w().count ?? 0, date: w().date ?? "" } as any)}
+        </span>
+      )}
+    </Show>
+  )
+}
 
 function remember(key: string, value?: string): string | undefined {
   try {
@@ -181,7 +206,12 @@ function StopDetail(props: { stop: PulseStop | undefined; index: string; now: nu
                       <Show when={it.where && it.text}>
                         <span class="pls-it">{it.text}</span>
                       </Show>
-                      <span class="hsc-muted pls-iwhen">{whenOf(it.when, props.now)}</span>
+                      <span class="hsc-muted pls-iwhen">
+                        {/* A task's `when` is when it is due, not when it happened. */}
+                        <Show when={s().id === "tasks"} fallback={whenOf(it.when, props.now)}>
+                          <Due iso={it.when} now={props.now} />
+                        </Show>
+                      </span>
                     </li>
                   )}
                 </For>
@@ -496,7 +526,8 @@ export function IrisPulseTopic(props: { doFetch: Fetch; project?: string; now?: 
 
 // ── contact ──────────────────────────────────────────────────────────────────
 
-export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) {
+export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number; onOpenLead?: (leadId: number) => void }) {
+  const language = useLanguage()
   const now = () => props.now?.() ?? Date.now()
   const [q, setQ] = createSignal("")
   const [term, setTerm] = createSignal("")
@@ -534,6 +565,13 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
     setTerm("")
     setLeadId(id)
   }
+  createEffect(
+    on(contactJump, (id) => {
+      if (!id) return
+      setContactJump(undefined)
+      choose(id)
+    }),
+  )
 
   return (
     <div class="hsc-wrap">
@@ -621,6 +659,11 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
                       <Ico d={LOCK} rect={{ x: 3, y: 11, w: 18, h: 11 }} />
                     </span>
                     <Again at={readAt()} now={now} onRun={again} />
+                    <Show when={props.onOpenLead}>
+                      <Button type="button" size="small" variant="ghost" data-slot="pls-open-lead" onClick={() => props.onOpenLead?.(d().lead.id)}>
+                        {language.t("iris.pulse.openLead")}
+                      </Button>
+                    </Show>
                   </div>
                   <div class="pls-sum">
                     <span>
@@ -651,7 +694,9 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
                           {(o) => (
                             <li>
                               <span>{o.what}</span>
-                              <span class="hsc-num">{[o.amount, o.since].filter(Boolean).join(" · ")}</span>
+                              <Show when={o.due} fallback={<span class="hsc-num">{[o.amount, o.since].filter(Boolean).join(" · ")}</span>}>
+                                <Due iso={o.due} now={now()} fallback={o.since} />
+                              </Show>
                             </li>
                           )}
                         </For>
@@ -664,16 +709,7 @@ export function IrisPulseContact(props: { doFetch: Fetch; now?: () => number }) 
             }}
           </Show>
         </section>
-        <StopDetail stop={pick()} index={pickIndex()} now={now()}>
-          <Show when={data()}>
-            {(d) => (
-              <p class="hsc-muted pls-cli">
-                In a terminal: <code class="hsc-mono">iris leads pulse {d().lead.id}</code> — also reads iMessage, WhatsApp,
-                Mail and the calendar on a Mac.
-              </p>
-            )}
-          </Show>
-        </StopDetail>
+        <StopDetail stop={pick()} index={pickIndex()} now={now()} />
       </div>
     </div>
   )

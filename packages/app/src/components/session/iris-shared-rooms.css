@@ -792,6 +792,13 @@
   padding-top: 18px;
   align-items: center;
 }
+/* Stop sharing (#194509): level with Stop, whose pill is taller than a small Button. */
+.sr-room-head [data-slot="sr-unshare"] {
+  margin-top: 8px;
+}
+.sr-room[data-layout="pane"] .sr-room-head [data-slot="sr-unshare"] {
+  margin-top: 0;
+}
 .sr-room[data-layout="pane"] .sr-compose-wrap {
   border-top: 0;
   padding-bottom: 16px;

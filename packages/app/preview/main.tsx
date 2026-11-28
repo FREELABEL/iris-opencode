@@ -81,14 +81,6 @@ const json = (body: unknown, ms = 0) =>
     const rest = (["reply", "catchup", "admin", "leads"] as const).filter((k) => k !== body.id).flatMap((k) => (cat[k] as any[]).filter((c) => c.source === "catalog").map((c) => ({ ...c, primary: false })))
     return json({ measured: true, capabilities: [...own, ...rest].slice(0, 3) }, 400)
   }
-  if (path === "/iris/onboarding/ground" && step === "alex") return json({ measured: false, reason: "fixture", choices: [] })
-  if (path === "/iris/onboarding/ground")
-    return json({
-      measured: true,
-      industry: "Dental practice",
-      line: "You run a busy dental practice — three patients and a supplier are waiting on you this week.",
-      choices: ["Reply to the patients waiting on me", "Chase the overdue supplier invoice", "Resend Dev's insurance claim"],
-    }, 400)
   if (path === "/iris/onboarding/workspace") return json({ measured: true, path: "/Users/you/IRIS/dental-practice" }, 600000)
   return json({ ok: true })
 }
