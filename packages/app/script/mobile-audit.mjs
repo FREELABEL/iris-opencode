@@ -304,11 +304,6 @@ async function openPanel(page) {
   await panelToggle(page).click()
   await ready(panel(page).getByRole("tablist").first())
 }
-async function closePanel(page) {
-  if (!(await panel(page).isVisible())) return
-  await panel(page).getByRole("button", { name: "Close the panel" }).click()
-  await panel(page).waitFor({ state: "detached" })
-}
 async function home(page) {
   const newChat = page.getByRole("button", { name: "New chat", exact: true })
   // On Home the Home button goes back to the last chat; press it only from somewhere else.
@@ -317,6 +312,20 @@ async function home(page) {
 }
 
 step("home", async (page) => home(page))
+// The way people reach the panel on a phone: a Home number or a titlebar pill, not the toggle.
+// A "New" callout waiting for its moment shows now; the panel's close must still take one tap.
+step("panel-via-pill", async (page) => {
+  await page.getByRole("button", { name: /^Hive machines/ }).click()
+  await ready(panel(page).getByRole("tablist").first())
+  await page
+    .locator(".iris-callout[data-ready]")
+    .waitFor({ timeout: 4_000 })
+    .catch(() => {})
+})
+step("panel-via-pill-closed", async (page) => {
+  await panel(page).getByRole("button", { name: "Close the panel" }).click({ timeout: 5_000 })
+  await panel(page).waitFor({ state: "detached" })
+})
 step("sidebar-open", async (page) => {
   await page.getByRole("button", { name: "All chats" }).first().click()
   await ready(page.locator('[role="dialog"]').first())
@@ -375,9 +384,13 @@ step("panel-add-menu", async (page) => {
   await panel(page).getByRole("button", { name: "Add a tab" }).click()
   await ready(page.getByRole("menu"))
 })
+// One tap on the panel's own close, with nothing in the way. Not Escape first: Escape also
+// dismisses a "New" callout, which on a phone sat over this very button (#194511).
 step("panel-closed", async (page) => {
-  await page.keyboard.press("Escape")
-  await closePanel(page)
+  await panel(page).getByRole("button", { name: "Add a tab" }).click()
+  await page.getByRole("menu").waitFor({ state: "hidden" })
+  await panel(page).getByRole("button", { name: "Close the panel" }).click({ timeout: 5_000 })
+  await panel(page).waitFor({ state: "detached" })
 })
 step("settings", async (page) => {
   await home(page)
