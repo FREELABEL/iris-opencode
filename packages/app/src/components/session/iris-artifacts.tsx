@@ -282,7 +282,7 @@ export function IrisArtifacts(props: {
             title, author and publish actions share the row. It used to be three stacked rows —
             a list, a title line repeating it, and a button bar. */}
         <div class="iris-artifacts__toolbar">
-          <div class="iris-artifacts__all">
+          <div class="iris-artifacts__all" hidden={total() === 0}>
             <button
               type="button"
               class="iris-artifacts__allbtn"
