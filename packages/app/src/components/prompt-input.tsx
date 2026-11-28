@@ -1780,6 +1780,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                           >
                             <Button
                               data-action="prompt-model"
+                              data-callout="model-picker"
                               as="div"
                               variant="ghost"
                               size="normal"
@@ -1821,6 +1822,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                                 style={control()}
                                 class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
                                 data-action="prompt-model"
+                                data-callout="model-picker"
                               >
                                 <Show when={props.controls.model.selection.current()?.provider?.id}>
                                   <ProviderIcon

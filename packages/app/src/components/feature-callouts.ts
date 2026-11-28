@@ -21,6 +21,14 @@ export type Callout = {
 
 export const CALLOUTS: Callout[] = [
   {
+    id: "2026-11-model-details",
+    title: "See what each model is good at",
+    body: "Open the model menu and point at a model: what it's good for, what it costs, how fast it is, its public score and how people use it on IRIS.",
+    targets: ["model-picker"],
+    minVersion: "1.18.231",
+    until: "2027-03-01",
+  },
+  {
     id: "2026-11-tab-search",
     title: "Find any tab by typing",
     body: "Open + in the IRIS panel and start typing. Terminal, MCP, Drives and every other tab are a few letters away.",
