@@ -22,6 +22,9 @@ import pkg from "../package.json"
 // pass a check the app then fails.
 const AUTH_API = "https://raichu.heyiris.io"
 const HIVE_API = "https://freelabel.net"
+// The same public endpoint IRIS Desktop's onboarding events go to (src-tauri/src/onboarding.rs).
+const EVENTS_API = "https://heyiris.io/api/v1/genesis/events"
+const VISITOR_KEY = "iris.mobile.visitor"
 
 // localStorage, not the Keychain: the Keychain (behind Face ID) is step 5 of the epic.
 const ACCOUNT_KEY = "iris.mobile.account"
@@ -59,6 +62,7 @@ const platform: Platform = {
 }
 
 async function start() {
+  track("iphone.launch")
   const choice = read<Choice>(MACHINE_KEY)
   const account = read<Account>(ACCOUNT_KEY)
   if (choice?.kind === "address") return openEngine({ url: choice.url, username: "opencode", password: choice.password }, () => showAddress(choice))
@@ -116,10 +120,13 @@ function showSignIn(problem?: string) {
     event.preventDefault()
     setError("")
     setBusy(true)
+    const step = sent() ? "verify" : "send_code"
+    if (step === "send_code") track("iphone.signin.code_requested")
     const result = await (sent() ? verify(email(), code()) : sendCode(email())).catch((e: Error) => e)
     setBusy(false)
-    if (result instanceof Error) return setError(result.message)
-    if (!sent()) return setSent(true)
+    if (result instanceof Error) return (track("iphone.signin.failed", `${step}: ${result.message}`), setError(result.message))
+    if (!sent()) return (track("iphone.signin.code_sent"), setSent(true))
+    track("iphone.signin.verified")
     location.reload()
   }
 
@@ -187,18 +194,22 @@ function showMachines(account: Account, problem?: string) {
 
   const load = () =>
     listMachines(account)
-      .then((list) => setNodes(list))
-      .catch((e: Error) => setError(e.message))
+      .then((list) => {
+        track("iphone.machines.loaded", `${list.length} machines, ${list.filter((n) => n.connection_status === "online" && n.phone?.enabled).length} ready`)
+        setNodes(list)
+      })
+      .catch((e: Error) => (track("iphone.machines.failed", e.message), setError(e.message)))
   void load()
 
   const choose = async (node: Node) => {
     setError("")
     setBusy(node.id)
     const engine = await engineFor(account, node.id).catch((e: Error) => e)
-    if (engine instanceof Error) return (setBusy(""), setError(`${node.name}: ${engine.message}`))
+    if (engine instanceof Error) return (track("iphone.connect.failed", `token: ${engine.message}`), setBusy(""), setError(`${node.name}: ${engine.message}`))
     const problem = await reach(engine)
     setBusy("")
-    if (problem) return setError(`${node.name}: ${problem}`)
+    if (problem) return (track("iphone.connect.failed", `reach: ${problem}`), setError(`${node.name}: ${problem}`))
+    track("iphone.connect.ok")
     localStorage.setItem(MACHINE_KEY, JSON.stringify({ kind: "hive", nodeId: node.id, name: node.name } satisfies Choice))
     location.reload()
   }
@@ -403,7 +414,9 @@ async function post(url: string, body: unknown) {
   }).catch(() => undefined)
   if (!response) throw new Error("No connection. Check this phone is online.")
   const data = await response.json().catch(() => ({}))
-  const detail = data?.errors ? Object.values(data.errors).flat().join(" ") : ""
+  // The auth API puts validation messages under `details` ({field: [messages]}); Laravel under `errors`.
+  const fields = data?.details ?? data?.errors
+  const detail = fields && typeof fields === "object" ? Object.values(fields).flat().join(" ") : ""
   if (!response.ok) throw new Error(detail || data?.message || data?.error || `Something went wrong (${response.status}).`)
   return data
 }
@@ -422,6 +435,32 @@ async function reach(engine: Engine) {
   if (response.status === 503) return "IRIS Desktop is not open on it."
   if (!response.ok) return `it answered with an error (${response.status}).`
   return ""
+}
+
+/**
+ * One event to the same funnel IRIS Desktop reports to. Never awaited, never throws: telemetry must
+ * not be able to break sign-in. The label carries what failed and the server's own words, never an
+ * email address, a code or a token.
+ */
+function track(event: string, label?: string) {
+  // randomUUID exists only in a secure context; whether WKWebView counts tauri:// as one is not
+  // something sign-in should depend on.
+  const visitor =
+    localStorage.getItem(VISITOR_KEY) ??
+    (typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `ios-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+  localStorage.setItem(VISITOR_KEY, visitor)
+  const account = read<Account>(ACCOUNT_KEY)
+  void fetch(EVENTS_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...(account ? { Authorization: `Bearer ${account.token}` } : {}) },
+    body: JSON.stringify({
+      event,
+      visitor_id: visitor,
+      path: "iphone",
+      ...(label ? { label: label.replace(/[^\s@]+@[^\s@]+/g, "<email>").slice(0, 191) } : {}),
+      props: { app_version: pkg.version, os: "ios" },
+    }),
+  }).catch(() => undefined)
 }
 
 function read<T>(key: string): T | undefined {
