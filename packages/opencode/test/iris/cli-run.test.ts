@@ -21,6 +21,9 @@ describe("classifyIrisArgv (#194581)", () => {
       ["drives", "list", "--json"],
       ["iris", "pages", "search", "pricing"],
       ["integrations", "status"],
+      ["whoami"],
+      ["status"],
+      ["version"],
     ])
       expect(classifyIrisArgv(line)).toBe("read")
   })
@@ -36,6 +39,14 @@ describe("classifyIrisArgv (#194581)", () => {
       ["leads"], // a bare noun: not clearly a read
       ["playbook", "run", "this-week"],
       ["leads", "search", "update"], // a write word anywhere in the path: ask first
+      // A read-looking noun with a verb that changes something after it: the verb position decides.
+      ["status", "raise", "Checkout is down"],
+      ["hive", "tasks", "dispatch", "42"],
+      ...["resolve", "toggle", "rerun", "retry", "promote", "enrich", "score", "remind", "recover", "verify", "claim", "submit", "generate", "flush", "prune", "dispatch"].flatMap((v) =>
+        ["status", "tasks", "sessions", "peers", "machines", "nodes", "logs", "history"].map((noun) => ["hive", noun, v]),
+      ),
+      ["status", "raise"],
+      ["leads", "list", "purge"],
     ])
       expect(classifyIrisArgv(line)).toBe("write")
   })
@@ -83,6 +94,15 @@ describe("runIrisArgv", () => {
     expect(s.calls).toHaveLength(0)
     const r2 = await runIrisArgv({ argv: ["hive", "connect"], confirmed: "yes" as any }, { cli: "/bin/iris", exec: s.exec })
     expect(r2.ran).toBe(false)
+    expect(s.calls).toHaveLength(0)
+  })
+
+  test("a write that only LOOKS like a read does not run unconfirmed", async () => {
+    const s = stub()
+    for (const argv of [["status", "raise", "Checkout is down"], ["hive", "tasks", "dispatch", "42"]]) {
+      const r = await runIrisArgv({ argv }, { cli: "/bin/iris", exec: s.exec })
+      expect(r).toEqual({ ran: false, kind: "write", needsConfirm: true })
+    }
     expect(s.calls).toHaveLength(0)
   })
 

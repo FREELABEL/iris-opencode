@@ -15,8 +15,9 @@ import { irisCliPath } from "./playbook-install"
  *   - stdin closed (a prompt cannot hang it), a time limit, output capped;
  *   - not the commands that start a server or a UI, or replace the CLI itself (`BLOCKED`).
  *
- * READ OR WRITE: a command is a READ only when it is clearly one — its subcommand has a read verb
- * (`list`, `show`, `get`, …) and no part of it is a write word, or it only asks for `--help`.
+ * READ OR WRITE: a command is a READ only when it is clearly one — the LAST word of its subcommand
+ * is a read verb (`list`, `show`, `get`, …), or one plain value follows a lookup verb (`search x`),
+ * no part of it is a write word, or it only asks for `--help`.
  * Everything else is a WRITE, and a write runs only with `confirmed: true` — the app asks the
  * person first, in words, and the engine refuses an unconfirmed write even if the app forgot.
  */
@@ -24,6 +25,9 @@ import { irisCliPath } from "./playbook-install"
 /** Subcommand words that only look. A read has one of these after its group (`leads list`), and no write word. */
 const READ_VERB =
   /^(list|ls|show|get|view|search|find|status|info|whoami|help|version|stats|count|describe|inspect|preview|history|logs|tail|peek|query|sessions|tasks|peers|machines|nodes|inventory)$/
+
+/** Verbs whose next word is a value to look up, not a subcommand: `pages search pricing`. */
+const LOOKUP_VERB = /^(search|find|query|get|show|view|info|describe|inspect)$/
 
 /** Any of these in the subcommand path makes it a write, whatever it ends in. Matched per hyphen-part. */
 const WRITE_WORD =
@@ -52,8 +56,16 @@ export function classifyIrisArgv(argv: readonly string[]): CommandKind {
   const path = subcommandPath(words)
   if (path.some((w) => w.split("-").some((p) => WRITE_WORD.test(p)))) return asksHelp ? "read" : "write"
   if (asksHelp) return "read"
-  // A plain word after the verb is a value (`pages search pricing`), so the verb may not be last.
-  return path.some((w) => READ_VERB.test(w)) ? "read" : "write"
+  // The VERB POSITION decides, not any word in the path: `status raise` and `hive tasks dispatch`
+  // carry a read-looking noun but end in a verb that changes something. A list of write words can
+  // never be complete, so reads are allow-listed: the last word is a read verb, or it is one plain
+  // value after a search-like verb (`pages search pricing`). Everything else asks first.
+  const last = path[path.length - 1]
+  if (!last) return "write"
+  if (READ_VERB.test(last)) return "read"
+  const before = path[path.length - 2]
+  if (path.length >= 3 && before && LOOKUP_VERB.test(before)) return "read"
+  return "write"
 }
 
 /** Why this argv must not run at all, or undefined. */
