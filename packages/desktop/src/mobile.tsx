@@ -464,18 +464,14 @@ function Screen(props: { children: JSX.Element }) {
 }
 
 /**
- * The iOS web view draws edge to edge, so the interface ran under the clock and battery (Alex's
- * first connected screenshots). viewport-fit=cover makes iOS report the insets; the body is then
- * padded by them and the app root fills what is left. The sign-in screens pad themselves.
+ * The iOS web view draws edge to edge. The interface already pads itself by the safe area
+ * (app/src/pages/layout-new.tsx: env(safe-area-inset-top/bottom)), but iOS reports those insets
+ * only once the page declares viewport-fit=cover — without it they read 0 and Home ran under the
+ * clock (builds 13–22). Build 28 also padded the body itself and got the inset twice (too much
+ * space above and below); the declaration alone is the whole fix.
  */
 function keepInsideSafeArea() {
   document.querySelector('meta[name="viewport"]')?.setAttribute("content", "width=device-width, initial-scale=1, viewport-fit=cover")
-  const style = document.createElement("style")
-  style.textContent = `
-    body { box-sizing: border-box; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-    #root { height: 100% !important; }
-  `
-  document.head.append(style)
 }
 
 /** Why this engine cannot be used, in words a person can act on — or nothing when it can. */

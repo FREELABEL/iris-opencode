@@ -3,7 +3,7 @@
 // The sidebar's project list is kept per device (context/server.tsx). IRIS Desktop fills it as you
 // open folders; a phone or a new browser pointed at the same engine starts with nothing, and since
 // chats are listed per project, it showed "Nothing here yet" while the engine was returning every
-// chat. So an empty list starts from the folders of the server's most recent chats instead.
+// chat. So the folders of the server's most recent chats are added to the list on each launch.
 
 export const SEED_PROJECT_LIMIT = 5
 
@@ -17,7 +17,11 @@ export function seedDirectories(sessions: SessionLike[], max = SEED_PROJECT_LIMI
     .slice(0, max)
 }
 
-/** Only a list that is empty because nothing was ever opened here — not one the person emptied. */
-export function shouldSeedProjects(input: { projects: number; recentlyClosed: number }) {
-  return input.projects === 0 && input.recentlyClosed === 0
+/**
+ * The recent folders this device does not list yet, minus any the person closed here. Not only for
+ * an empty list: build 28 had a stray "Desktop" project, so "Work" (all 63 chats) never appeared.
+ */
+export function missingSeeds(seeds: string[], device: { listed: string[]; closed: string[] }) {
+  const skip = new Set([...device.listed, ...device.closed])
+  return seeds.filter((directory) => !skip.has(directory))
 }

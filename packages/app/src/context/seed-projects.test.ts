@@ -3,7 +3,7 @@
 // /Users/siralexmayo/Documents/Work, which IRIS Desktop had open and the phone did not, so the
 // phone's sidebar said "Nothing here yet" while the engine was returning every chat.
 import { describe, expect, test } from "bun:test"
-import { seedDirectories, shouldSeedProjects } from "./seed-projects"
+import { missingSeeds, seedDirectories } from "./seed-projects"
 
 const session = (directory: string | undefined, updated: number) => ({ location: { directory }, time: { created: updated - 10, updated } })
 
@@ -29,10 +29,16 @@ describe("seedDirectories", () => {
   })
 })
 
-describe("shouldSeedProjects", () => {
-  test("only an empty list that the person did not empty themselves", () => {
-    expect(shouldSeedProjects({ projects: 0, recentlyClosed: 0 })).toBe(true)
-    expect(shouldSeedProjects({ projects: 1, recentlyClosed: 0 })).toBe(false)
-    expect(shouldSeedProjects({ projects: 0, recentlyClosed: 2 })).toBe(false)
+describe("missingSeeds", () => {
+  test("adds the recent folders that are not listed yet — even when some project already is (build 28: 'Desktop' blocked 'Work')", () => {
+    expect(missingSeeds(["/Users/me/Documents/Work", "/Users/me/Desktop"], { listed: ["/Users/me/Desktop"], closed: [] })).toEqual(["/Users/me/Documents/Work"])
+  })
+
+  test("never re-adds a folder the person closed on this device", () => {
+    expect(missingSeeds(["/a", "/b"], { listed: [], closed: ["/a"] })).toEqual(["/b"])
+  })
+
+  test("nothing to add when everything is already listed", () => {
+    expect(missingSeeds(["/a"], { listed: ["/a"], closed: [] })).toEqual([])
   })
 })
