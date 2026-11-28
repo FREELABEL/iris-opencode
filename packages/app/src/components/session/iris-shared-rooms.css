@@ -1116,7 +1116,7 @@
 .sr-room .sr-bubble {
   font-size: var(--font-size-base);
   line-height: 1.65;
-  border-radius: 14px;
+  border-radius: var(--radius-2xl);
   padding: 10px 14px;
   background: var(--sr-softer);
 }
@@ -1149,7 +1149,7 @@
   width: 28px;
   height: 28px;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   color: hsl(var(--sr-hue, 160) 45% 36%);
   background: hsl(var(--sr-hue, 160) 60% 90%);
@@ -1172,7 +1172,7 @@
   padding-top: 4px;
 }
 .sr-room .sr-compose {
-  border-radius: 14px;
+  border-radius: var(--radius-2xl);
   box-shadow: none;
   padding: 8px 8px 8px 16px;
 }
