@@ -7,6 +7,7 @@ import { EmptyState } from "@opencode-ai/ui/empty-state"
 import { SkeletonRows } from "@opencode-ai/ui/skeleton"
 import { displayName, readList, type LeadRow } from "./iris-leads-model"
 import { LeadsListRow, LeadsPipeline } from "./iris-leads-list"
+import { ImportLeadsDialog, NewLeadDialog } from "./iris-leads-add"
 import { pipeline } from "./iris-leads-list-model"
 import { rememberIrisNames } from "./iris-names"
 import {
@@ -206,6 +207,10 @@ export function IrisLeadsTab(props: {
   const allChecked = () => rows().length > 0 && rows().every((r) => checked().has(r.id))
   const toggleAll = () => setChecked(allChecked() ? new Set<number>() : new Set(rows().map((r) => r.id)))
   const [bulkNote, setBulkNote] = createSignal<string>()
+  // New lead and Import (#194506): both go through the engine's leads route; the list re-reads after.
+  const [adding, setAdding] = createSignal(false)
+  const [importing, setImporting] = createSignal(false)
+  const noBoard = () => (props.bloqId === undefined ? language.t("iris.leads.new.noBoard") : undefined)
   async function bulkStatus(status: string) {
     const ids = [...checked()]
     if (!status || !ids.length) return
@@ -269,6 +274,12 @@ export function IrisLeadsTab(props: {
             <For each={STATUSES}>{(s) => <option value={s}>{s}</option>}</For>
           </select>
         </Show>
+        <Button size="small" icon="cloud-upload" disabled={!!noBoard()} title={noBoard()} onClick={() => setImporting(true)}>
+          {language.t("iris.leads.import")}
+        </Button>
+        <Button size="small" variant="primary" icon="plus" disabled={!!noBoard()} title={noBoard()} data-slot="iris-lt-new" onClick={() => setAdding(true)}>
+          {language.t("iris.leads.new")}
+        </Button>
         <button type="button" class="iris-lt-btn" aria-pressed={filtersOpen()} onClick={() => setFiltersOpen(!filtersOpen())}>
           <Icon d={FILTER} />
           Filters
@@ -432,6 +443,20 @@ export function IrisLeadsTab(props: {
               </Show>
             </div>
           </div>
+
+          <Show when={props.bloqId !== undefined}>
+            <NewLeadDialog
+              open={adding()}
+              bloqId={props.bloqId!}
+              call={call}
+              onClose={() => setAdding(false)}
+              onAdded={(lead, openIt) => {
+                refresh()
+                if (openIt && lead?.id) (setOpenTab(undefined), setOpen(lead))
+              }}
+            />
+            <ImportLeadsDialog open={importing()} bloqId={props.bloqId!} call={call} onClose={() => setImporting(false)} onImported={() => refresh()} />
+          </Show>
 
           {/* ── The lead's panel, sliding in over the table (LeadSidePanel) ── */}
           <Show when={open()} keyed>

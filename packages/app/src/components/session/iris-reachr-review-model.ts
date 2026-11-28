@@ -131,3 +131,14 @@ export function nextId(visible: ReviewMessage[], currentId: number | undefined, 
   if (at === -1) return visible[0]!.id
   return visible[Math.min(visible.length - 1, Math.max(0, at + step))]!.id
 }
+
+/** The first words of a draft, on one line, for the queue's row (#194508). Greeting lines are skipped. */
+export function previewLine(body: string | null | undefined, max = 110): string {
+  const lines = String(body ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const text = (lines.length > 1 && /^(hi|hello|hey|dear)\b[^.!?]{0,40}[,!]?$/i.test(lines[0]) ? lines.slice(1) : lines).join(" ").replace(/\s+/g, " ")
+  return text.length > max ? text.slice(0, max - 1).trimEnd() + "…" : text
+}

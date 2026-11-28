@@ -4844,14 +4844,21 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.post("leadsApi", IrisPaths.leadsApi, {
         payload: Schema.Struct({
-          op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness"]),
+          op: Schema.Literals(["list", "get", "meta", "update", "addNote", "tasks", "addTask", "saveTask", "messages", "steps", "readiness", "create", "importPreview", "import"]),
           leadId: Schema.optional(Schema.Number),
           taskId: Schema.optional(Schema.Number),
           query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
           body: Schema.optional(Schema.Unknown),
         }),
         success: described(ReachrResponse, "What fl-api answered"),
-      }).annotateMerge(OpenApi.annotations({ identifier: "iris.leadsApi", summary: "Search and manage leads" })),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.leadsApi",
+          summary: "Search and manage leads",
+          description:
+            "#194506 adds `create` (body: name or email, company, value, status, bloqId; fl-api upserts by email and the answer says `matchedExisting`), `importPreview` (body: csv — maps the columns and checks every row; sends nothing) and `import` (body: csv, bloqId — the CLI's status mapping, 1000 rows a request; answers created, merged, skipped with reasons, warnings).",
+        }),
+      ),
       HttpApiEndpoint.get("comms", IrisPaths.comms, {
         query: {
           days: Schema.optional(Schema.NumberFromString),

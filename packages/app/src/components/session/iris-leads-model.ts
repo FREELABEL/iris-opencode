@@ -74,7 +74,9 @@ export function agoLine(iso: string | null | undefined, now = Date.now()): strin
   if (!iso) return ""
   const mins = Math.floor((now - new Date(iso).getTime()) / 60_000)
   if (Number.isNaN(mins)) return ""
-  if (mins < 60) return `${Math.max(mins, 0)}m ago`
+  // Under a minute reads as "just now", not "0m ago" (#194506: a lead you just added).
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
   if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
   return `${Math.floor(mins / 1440)}d ago`
 }
