@@ -35,6 +35,10 @@ export type BrandKit = {
   tone?: string
   personas: { name: string; isDefault: boolean; tone?: string }[]
   sections: Record<string, string>
+  /** brand.metadata.audience as stored — audience.v1 (#194611). */
+  audience?: unknown
+  /** The audience as read; echoed back when saving it. */
+  audienceRead?: string
 }
 
 import { logoFor, type ResolvedLogo } from "./iris-brand-logo"
@@ -268,8 +272,10 @@ export type DiffLine = {
   /** The token section this line writes. */
   section: string
   /** Which editor tab owns it. */
-  part: "colours" | "type" | "logos" | "voice" | "motion"
+  part: "colours" | "type" | "logos" | "voice" | "motion" | "audience"
   label: string
+  /** Shown instead of before → after (the audience says what changed in words, #194611). */
+  note?: string
   before?: string
   after?: string
   /** For a colour, so the confirm can draw both. */
@@ -410,9 +416,10 @@ export function buildSave(kit: BrandKit, draft: Draft): { changes: Record<string
 }
 
 /** The confirm, in plain words: what changes, and that every page using the kit changes with it. */
-export function saveConfirm(kit: BrandKit, draft: Draft): { title: string; body: string[]; warn: string[] } {
+export function saveConfirm(kit: BrandKit, draft: Draft, more = 0): { title: string; body: string[]; warn: string[] } {
   const lines = diffKit(kit, draft)
-  const n = lines.length
+  // `more`: changes outside the tokens (the audience, #194611) — counted in the title too.
+  const n = lines.length + more
   const name = kit.brand.name
   const body = [
     `This changes every page that uses ${name}. Genesis pages, campaign pages and renders that read the ${name} kit pick up the change the next time they load.`,
