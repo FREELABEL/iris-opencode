@@ -10,6 +10,7 @@ import {
   AUTH_API,
   HIVE_API,
   SignInExpired,
+  cloudUrl,
   engineFor,
   exchangeApple,
   exchangeGoogle,
@@ -382,5 +383,34 @@ describe("Sign in with Apple", () => {
   test("a 200 without a token is named", async () => {
     const { http } = network({ [AUTH_API]: () => json(200, { success: true, data: { user: { id: 1 } } }) })
     await expect(exchangeApple(http, { identityToken: "t", rawNonce: "n" })).rejects.toThrow("no token came back")
+  })
+})
+
+// IRIS Cloud (Alex: "we can offer it as IRIS CLOUD"): heyiris.io/atlas, signed in as the phone's
+// account, for anyone without a machine. fl-api mints a 5-minute single-use magic link for the
+// token's own user (POST /api/v1/auth/web-handoff); heyiris.io's /login/magic redeems it.
+describe("IRIS Cloud", () => {
+  const handoff = "https://heyiris.io/login/magic?token=" + "a".repeat(64) + "&user=2945&intended=%2Fatlas"
+
+  test("asks for a handoff with the account's token and returns the signed-in link", async () => {
+    const asked: { url: string; auth?: string; body: unknown }[] = []
+    const http = async (url: string, init?: RequestInit) => {
+      asked.push({ url, auth: (init?.headers as Record<string, string>).Authorization, body: JSON.parse(String(init?.body)) })
+      return json(200, { success: true, data: { url: handoff, expires_at: "2026-11-28T07:00:00Z" } })
+    }
+    expect(await cloudUrl(http, account)).toBe(handoff)
+    expect(asked).toEqual([{ url: `${AUTH_API}/api/v1/auth/web-handoff`, auth: "Bearer t0ken", body: { intended: "/atlas" } }])
+  })
+
+  test("only ever opens heyiris.io's own sign-in page", async () => {
+    const elsewhere = network({ [AUTH_API]: () => json(200, { success: true, data: { url: "https://evil.example/login/magic?token=x" } }) })
+    await expect(cloudUrl(elsewhere.http, account)).rejects.toThrow("unexpected")
+    const noUrl = network({ [AUTH_API]: () => json(200, { success: true, data: {} }) })
+    await expect(cloudUrl(noUrl.http, account)).rejects.toThrow("unexpected")
+  })
+
+  test("a refused token is an expired sign-in", async () => {
+    const { http } = network({ [AUTH_API]: () => json(401, { message: "Unauthenticated." }) })
+    await expect(cloudUrl(http, account)).rejects.toBeInstanceOf(SignInExpired)
   })
 })

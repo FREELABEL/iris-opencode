@@ -16,7 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
 import pkg from "../package.json"
 import { invoke } from "@tauri-apps/api/core"
-import { addAccount, engineFor, exchangeApple, exchangeGoogle, googleCode, googleStartUrl, machinesFor, note, removeAccount, sendCode, SignInExpired, verify, type Account, type Engine, type OwnedNode } from "./mobile-platform"
+import { addAccount, cloudUrl, engineFor, exchangeApple, exchangeGoogle, googleCode, googleStartUrl, machinesFor, note, removeAccount, sendCode, SignInExpired, verify, type Account, type Engine, type OwnedNode } from "./mobile-platform"
 
 // Platform calls go through the native HTTP plugin (`fetch` above), so no CORS rule on either
 // host can block sign-in. Calls to an engine use the webview's own fetch (`globalThis.fetch`),
@@ -280,6 +280,20 @@ function showMachines(signedIn: Account[], problem?: string) {
     location.reload()
   }
 
+  // IRIS Cloud: heyiris.io/atlas signed in as the first account, in the sign-in sheet, which
+  // doubles as an in-app browser — its Done button brings the person back to this screen.
+  const openCloud = async () => {
+    const account = signedIn[0]!
+    setError("")
+    setBusy("cloud")
+    const url = await cloudUrl(fetch, account).catch((e: Error) => e)
+    if (url instanceof SignInExpired) return (signOut(account), location.reload())
+    if (url instanceof Error) return (setBusy(""), track("iphone.cloud.failed", url.message), setError(url.message))
+    track("iphone.cloud.opened")
+    await invoke("plugin:iris-web-auth|authenticate", { url, callbackScheme: "iris" }).catch(() => undefined)
+    setBusy("")
+  }
+
   render(
     () => (
       <Screen>
@@ -289,13 +303,23 @@ function showMachines(signedIn: Account[], problem?: string) {
           <Show when={error()}>
             <p style={styles.error}>{error()}</p>
           </Show>
+          <div style={styles.list}>
+            <button style={styles.row} type="button" disabled={!!busy()} onClick={openCloud}>
+              <span style={`${styles.dot};background:#4285F4`} />
+              <span style={styles.rowText}>
+                <span style={styles.rowName}>IRIS Cloud</span>
+                <span style={styles.rowNote}>{busy() === "cloud" ? "Opening…" : "Chat, boards and your agents. No computer needed."}</span>
+              </span>
+              <span style={styles.chevron}>›</span>
+            </button>
+          </div>
           <Show when={nodes()} fallback={<p style={styles.lead}>Loading your machines…</p>}>
             <Show
               when={nodes()!.length}
               fallback={
                 <p style={styles.lead}>
-                  No machines on {several ? "these accounts" : "this account"} yet. If your computers are signed in to IRIS with another email, add
-                  that account below.
+                  No machines on {several ? "these accounts" : "this account"} yet. Use IRIS Cloud above, or, if your computers are signed in to
+                  IRIS with another email, add that account below.
                 </p>
               }
             >
