@@ -13,6 +13,7 @@ import { Global } from "../../global"
 import { Plugin } from "../../plugin"
 import { Instance } from "../../project/instance"
 import type { Hooks } from "@opencode-ai/plugin"
+import { MAX_CODE_TRIES, codeTriesLeftLine, isWrongCodeFailure, loginCodeError } from "./login-code"
 import {
   describeAccount,
   findAccount,
@@ -587,35 +588,45 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
     return false
   }
 
-  // Code input
-  const code = await prompts.text({
-    message: "Enter the 6-digit code from your email",
-    validate: (v) => {
-      if (!v || !/^\d{4,8}$/.test(v.trim())) return "Enter the numeric code from your email"
-    },
-  })
-  if (prompts.isCancel(code)) throw new UI.CancelledError()
-
-  // Verify code and get SDK token
-  const verifySpinner = prompts.spinner()
-  verifySpinner.start("Verifying…")
-  try {
-    const trimmedCode = String(code).trim().replace(/\s/g, "")
-    const loginRes = await fetch(`${IRIS_AUTH_API}/api/v1/auth/login-with-code`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        email,
-        login_code: trimmedCode,
-        generate_sdk_token: true,
-        sdk_token_name: "IRIS CLI",
-        sdk_token_expires_days: 365,
-        generate_dashboard_url: true,
-      }),
-      signal: AbortSignal.timeout(15_000),
+  // Code input — three tries at the same emailed code (#194577)
+  let loginData: any
+  for (let tries = 1; ; tries++) {
+    const code = await prompts.text({
+      message: "Enter the 6-digit code from your email",
+      validate: (v) => loginCodeError(v),
     })
+    if (prompts.isCancel(code)) throw new UI.CancelledError()
+
+    // Verify code and get SDK token
+    const verifySpinner = prompts.spinner()
+    verifySpinner.start("Verifying…")
+    let loginRes: Response
+    try {
+      const trimmedCode = String(code).trim().replace(/\s/g, "")
+      loginRes = await fetch(`${IRIS_AUTH_API}/api/v1/auth/login-with-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          email,
+          login_code: trimmedCode,
+          generate_sdk_token: true,
+          sdk_token_name: "IRIS CLI",
+          sdk_token_expires_days: 365,
+          generate_dashboard_url: true,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      })
+    } catch (e) {
+      verifySpinner.stop("Failed", 1)
+      const msg = e instanceof Error ? e.message : String(e)
+      prompts.log.error(
+        msg.includes("abort") || msg.includes("timeout")
+          ? "Verification timed out. Try again — your code is still valid for 30 minutes."
+          : `Network error: ${msg}`,
+      )
+      return false
+    }
     const loginBody = await loginRes.text()
-    let loginData: any
     try {
       loginData = JSON.parse(loginBody)
     } catch {
@@ -624,19 +635,27 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       return false
     }
     const loginOk = loginData?.success === true || loginData?.success === "True" || loginData?.success === "true"
-    if (!loginOk) {
-      verifySpinner.stop("Failed", 1)
-      const detail = loginData?.error || loginData?.message || `HTTP ${loginRes.status}`
-      prompts.log.error(`Login failed: ${detail}`)
-      return false
+    if (loginOk) {
+      verifySpinner.stop("Authenticated!")
+      break
     }
+    if (isWrongCodeFailure(loginRes.status, loginData) && tries < MAX_CODE_TRIES) {
+      verifySpinner.stop(codeTriesLeftLine(tries), 1)
+      continue
+    }
+    verifySpinner.stop("Failed", 1)
+    const detail = loginData?.error || loginData?.message || `HTTP ${loginRes.status}`
+    prompts.log.error(`Login failed: ${detail}`)
+    if (isWrongCodeFailure(loginRes.status, loginData)) prompts.log.info("Run iris auth login again for a new code.")
+    return false
+  }
 
+  try {
     const sdkToken = loginData?.data?.sdk_token?.key
     const userId = loginData?.data?.user?.id
     const dashboard = loginData?.data?.dashboard_url
 
     if (!sdkToken || !userId) {
-      verifySpinner.stop("Failed", 1)
       prompts.log.error("Auth succeeded but token wasn't generated. Try again or visit https://web.heyiris.io")
       return false
     }
@@ -678,14 +697,12 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       }
     } catch { /* non-critical */ }
 
-    verifySpinner.stop("Authenticated!")
     if (dashboard) {
       prompts.log.info(`Dashboard: ${UI.Style.TEXT_HIGHLIGHT}${dashboard}${UI.Style.TEXT_NORMAL}`)
     }
     await healNodeKeyAfterLogin(userId)
     return true
   } catch (e) {
-    verifySpinner.stop("Failed", 1)
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes("abort") || msg.includes("timeout")) {
       prompts.log.error("Verification timed out. Try again — your code is still valid for 30 minutes.")
