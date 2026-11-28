@@ -76,3 +76,8 @@ export function fileProblem(f: { name: string; size: number; type?: string }): "
   if (!/\.csv$/i.test(f.name) && f.type !== "text/csv") return "iris.leads.import.notCsv"
   return undefined
 }
+
+/** Columns that hold a deal value. The platform's import takes people, not values, so the dialog says so. */
+export function valueColumns(columns: { column: string; field: string | null }[]): string[] {
+  return columns.filter((c) => !c.field && /value|amount|price|bid|deal|mrr|revenue/i.test(c.column)).map((c) => c.column)
+}

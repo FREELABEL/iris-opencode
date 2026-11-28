@@ -20,6 +20,7 @@ import {
   newLeadBody,
   newLeadProblem,
   rowState,
+  valueColumns,
   type ImportPreview,
   type ImportResult,
   type NewLeadForm,
@@ -279,6 +280,12 @@ export function ImportLeadsDialog(props: {
                     )}
                   </For>
                 </div>
+                <div class="iris-la-scroll">
+                <Show when={valueColumns(p().columns).length > 0}>
+                  <Notice tone="info" data-slot="import-novalue">
+                    {language.t("iris.leads.import.noValue", { columns: valueColumns(p().columns).join(", ") })}
+                  </Notice>
+                </Show>
                 <table class="iris-la-table">
                   <thead>
                     <tr>
@@ -298,7 +305,7 @@ export function ImportLeadsDialog(props: {
                           <td>{r.lead?.name ?? "—"}</td>
                           <td>{r.lead?.email ?? ""}</td>
                           <td>{r.lead?.company ?? ""}</td>
-                          <td>{r.lead?.status ?? (r.lead ? language.t("iris.leads.import.defaultStage") : "")}</td>
+                          <td>{r.error ? "" : (r.lead?.status ?? language.t("iris.leads.import.defaultStage"))}</td>
                           <td>
                             <StatusBadge size="small" tone={rowState(r).tone} title={rowState(r).text}>
                               {r.error ? language.t("iris.leads.import.skip") : r.warning ? language.t("iris.leads.import.note") : language.t("iris.leads.import.ready")}
@@ -314,6 +321,7 @@ export function ImportLeadsDialog(props: {
                 </Show>
                 <Reasons list={p().skipped} head={language.t("iris.leads.import.skippedHead")} tone="critical" />
                 <Reasons list={p().warnings} head={language.t("iris.leads.import.notesHead")} tone="warning" />
+                </div>
                 <PaneDialogActions>
                   <Button size="small" onClick={close}>
                     {language.t("common.cancel")}

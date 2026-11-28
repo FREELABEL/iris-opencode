@@ -387,8 +387,17 @@ export function IrisReachrReview(props: {
                               <kbd>H</kbd>
                             </Button>
                           </Show>
-                          <Show when={canRelease(m())}><button class="iris-rr-btn" disabled={busy()} onClick={() => act("release", { messageId: m().id }, {}, "Back in review. It needs approving again.")}>Back to review</button></Show>
-                          <Show when={canEdit(m())}><button class="iris-rr-btn" disabled={busy()} onClick={() => setEditing({ subject: m().subject ?? "", body: m().body ?? "" })}>Edit<kbd>E</kbd></button></Show>
+                          <Show when={canRelease(m())}>
+                            <Button size="small" variant="secondary" disabled={busy()} onClick={() => act("release", { messageId: m().id }, {}, "Back in review. It needs approving again.")}>
+                              Back to review
+                            </Button>
+                          </Show>
+                          <Show when={canEdit(m())}>
+                            <Button size="small" variant="ghost" icon="edit" disabled={busy()} onClick={() => setEditing({ subject: m().subject ?? "", body: m().body ?? "" })}>
+                              Edit
+                              <kbd>E</kbd>
+                            </Button>
+                          </Show>
                         </div>
                       </>
                     }

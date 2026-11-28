@@ -158,3 +158,10 @@
   color: var(--text-weak);
   font-size: var(--font-size-x-small);
 }
+.iris-la-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(40vh, 340px);
+  overflow: auto;
+}

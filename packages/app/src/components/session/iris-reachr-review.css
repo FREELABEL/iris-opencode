@@ -64,6 +64,7 @@
 }
 .iris-rr-intro {
   margin: 0 0 8px;
+  padding: 0 12px;
   color: var(--text-weak);
   font-size: var(--font-size-x-small);
 }

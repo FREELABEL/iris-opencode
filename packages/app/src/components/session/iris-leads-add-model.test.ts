@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { EMPTY_FORM, fileProblem, groupReasons, newLeadBody, newLeadProblem, rowState } from "./iris-leads-add-model"
+import { EMPTY_FORM, fileProblem, groupReasons, newLeadBody, newLeadProblem, rowState, valueColumns } from "./iris-leads-add-model"
+import { agoLine } from "./iris-leads-model"
 
 describe("New lead form (#194506)", () => {
   test("a name or an email is enough", () => {
@@ -32,5 +33,16 @@ describe("Import (#194506)", () => {
     expect(fileProblem({ name: "leads.csv", size: 100 })).toBeUndefined()
     expect(fileProblem({ name: "leads.xlsx", size: 100 })).toBe("iris.leads.import.notCsv")
     expect(fileProblem({ name: "leads.csv", size: 6_000_000 })).toBe("iris.leads.import.tooBig")
+  })
+})
+
+describe("Import says what it leaves out (#194506)", () => {
+  test("a value column that nothing reads is named, so the dialog can say why", () => {
+    expect(valueColumns([{ column: "Full name", field: "name" }, { column: "Deal value", field: null }, { column: "Notes2", field: null }])).toEqual(["Deal value"])
+  })
+  test("a lead added a moment ago reads as just now", () => {
+    const now = Date.parse("2026-11-27T12:00:30Z")
+    expect(agoLine("2026-11-27T12:00:00Z", now)).toBe("just now")
+    expect(agoLine("2026-11-27T11:58:00Z", now)).toBe("2m ago")
   })
 })

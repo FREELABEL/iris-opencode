@@ -1399,6 +1399,7 @@ export const dict = {
   "iris.leads.import.summary": "{{total}} rows · {{ready}} ready · {{skipped}} skipped · {{noted}} with a note",
   "iris.leads.import.columns": "How the columns map",
   "iris.leads.import.notImported": "not imported",
+  "iris.leads.import.noValue": "{{columns}} won't come in: an import adds people, not deal values. Set the value on each lead afterwards, or add the lead with New lead.",
   "iris.leads.import.row": "Row",
   "iris.leads.import.what": "Comes in as",
   "iris.leads.import.defaultStage": "Prospected",
