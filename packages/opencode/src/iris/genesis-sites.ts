@@ -183,3 +183,22 @@ export async function createSite(input: { name: string; description?: string; bl
     return { ok: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }
+
+/**
+ * Publish a site (#194582): fl-api PUT /api/v1/sites/{id} with status "published" — the site goes
+ * live at its address. Its pages keep their own status; this does not publish a draft page.
+ * Answers with the site as the platform holds it after the write.
+ */
+export async function publishSite(siteId: number): Promise<SiteActionResult> {
+  if (!positive(siteId)) return { ok: false, reason: "no site" }
+  if (!(await sitesDeps.userId())) return notSignedIn()
+  try {
+    const res = await sitesDeps.fetch(`/api/v1/sites/${siteId}`, { method: "PUT", body: JSON.stringify({ status: "published" }) })
+    if (!res.ok) return { ok: false, reason: await failure(res, "Publishing the site") }
+    const site = await readBack(res)
+    if (site && site.status !== "published") return { ok: false, reason: `the platform answered, but the site is still ${site.status}`, site }
+    return { ok: true, site }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
