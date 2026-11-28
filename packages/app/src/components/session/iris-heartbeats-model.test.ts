@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import {
+  beatSentence,
   beatStory,
   beatSummary,
   cadenceOf,
@@ -358,5 +359,42 @@ describe("#192251 resting — skipping by choice, under the planner's limit", ()
   })
   test("no wake ledger means no claim either way", () => {
     expect(restOf({ ...base, wakes: null }, NOW)).toBeNull()
+  })
+})
+
+describe("beatSentence (#194583): the newest beat in one sentence", () => {
+  const T = Date.parse("2026-11-28T12:00:00Z")
+  const base = { id: 1, startedAt: "2026-11-28T09:00:00Z", completedAt: "2026-11-28T09:00:42Z", durationMs: 42000, tokens: null, model: null, preview: null, error: null }
+  test("worked: when, how long, the first sentence of its status, how many tools", () => {
+    const s = beatSentence(
+      {
+        ...base,
+        status: "completed",
+        response: "**Status** — Checked 14 leads; two replied. Drafted both replies.",
+        toolCalls: [
+          { tool: "leads_search", ok: true, durationMs: 800, args: null, error: null },
+          { tool: "draft_reply", ok: true, durationMs: 900, args: null, error: null },
+        ],
+      },
+      T,
+    )
+    expect(s).toStartWith("Worked 3")
+    expect(s).toContain("in 42s — Checked 14 leads; two replied.")
+    expect(s).toEndWith("Called 2 tools.")
+    expect(s).not.toMatch(/#\d{5,}/)
+  })
+  test("failed: says why, never claims it worked", () => {
+    const s = beatSentence({ ...base, status: "failed", error: "Provider returned 402", response: null }, T)
+    expect(s).toStartWith("Failed 3")
+    expect(s).toContain("Provider returned 402.")
+  })
+  test("running: says so", () => {
+    expect(beatSentence({ ...base, status: "running", completedAt: null, response: null }, T)).toStartWith("Running now")
+  })
+})
+
+describe("problem copy names no tickets (#194583)", () => {
+  test("no #123456 in any fix text", () => {
+    for (const r of snap.heartbeats ?? []) for (const p of problemsOf(r, NOW)) expect(`${p.text} ${p.fix}`).not.toMatch(/#\d{5,}/)
   })
 })
