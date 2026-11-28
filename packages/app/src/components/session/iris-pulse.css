@@ -177,7 +177,7 @@
 }
 .pls-cmd:hover { color: var(--hsc-ink); }
 .pls-due { color: var(--hsc-ink2); white-space: nowrap; }
-.pls-due[data-overdue] { color: var(--hsc-coral); font-weight: var(--font-weight-medium); }
+.pls-due[data-overdue], .pls-owed li .pls-due[data-overdue] { color: var(--hsc-coral); font-weight: var(--font-weight-medium); }
 
 @media (max-width: 720px) {
   .hmc.pls { grid-template-columns: minmax(0, 1fr); }
