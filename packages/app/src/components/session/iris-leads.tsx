@@ -57,6 +57,8 @@ export function LeadDetail(props: {
   /** The engine fetch, for the conversation routes (#192688). Without it, Outreach and Chat show the leads route only. */
   doFetch?: Fetch
   initialTab?: Tab
+  /** Pulse › Contact on this lead (#194509): the full route behind the score this tab shows. */
+  onOpenPulse?: (leadId: number) => void
 }) {
   const id = props.row.id
   const [tab, setTab] = createSignal<Tab>(props.initialTab ?? "Details")
@@ -239,7 +241,7 @@ export function LeadDetail(props: {
             )}
           </Show>
         </Show>
-        <Show when={tab() === "Pulse"}><PulseTab call={props.call} leadId={id} /></Show>
+        <Show when={tab() === "Pulse"}><PulseTab call={props.call} leadId={id} onOpen={props.onOpenPulse ? () => props.onOpenPulse!(id) : undefined} /></Show>
       </div>
     </>
   )
@@ -432,16 +434,28 @@ function ChatTab(props: { doFetch: Fetch; leadId: number; name: string; /** Move
   )
 }
 
-function PulseTab(props: { call: (o: Op) => Promise<Answer>; leadId: number }) {
+/**
+ * The lead's score only. Pulse › Contact reads the same score and the route behind it (deal,
+ * tasks, checks, email), so this links there rather than drawing a second copy (#194509).
+ */
+function PulseTab(props: { call: (o: Op) => Promise<Answer>; leadId: number; onOpen?: () => void }) {
+  const language = useLanguage()
   const [pulse] = createResource(() => props.call({ op: "readiness", leadId: props.leadId }))
   const data = () => pulse()?.data?.data ?? pulse()?.data
   const score = () => data()?.score ?? data()?.readiness_score ?? data()?.overall_score
   return (
     <Show when={!pulse.loading} fallback={<div class="iris-ld-empty">Loading…</div>}>
-      <Show when={pulse()?.measured && score() != null} fallback={<div class="iris-ld-empty">{pulse()?.reason ?? "No readiness score yet"}</div>}>
-        <div class="iris-ld-score">{score()}</div>
-        <div class="iris-ld-when">Readiness</div>
-      </Show>
+      <div class="iris-ld-pulse" data-slot="iris-ld-pulse">
+        <Show when={pulse()?.measured && score() != null} fallback={<div class="iris-ld-empty">{pulse()?.reason ?? "No readiness score yet"}</div>}>
+          <div class="iris-ld-score">{score()}</div>
+          <div class="iris-ld-when">Readiness</div>
+        </Show>
+        <Show when={props.onOpen}>
+          <Button type="button" size="small" variant="secondary" data-slot="iris-ld-open-pulse" onClick={() => props.onOpen?.()}>
+            {language.t("iris.pulse.openInPulse")}
+          </Button>
+        </Show>
+      </div>
     </Show>
   )
 }

@@ -93,7 +93,7 @@ import { IrisHiveSessions } from "./iris-hive-sessions"
 import { IrisHeartbeats } from "./iris-heartbeats"
 import { IrisAgentEditor } from "./iris-agent-editor"
 import type { StepId } from "./iris-agent-editor-model"
-import { IrisPulseContact, IrisPulseTopic } from "./iris-pulse"
+import { IrisPulseContact, IrisPulseTopic, requestPulseContact } from "./iris-pulse"
 import { watchOutreachBadge, watchOutreachTodayBadge } from "./iris-outreach-badge"
 import { IrisPinnedPage } from "./iris-pinned-page"
 import { IrisMarketing } from "./iris-marketing"
@@ -155,7 +155,7 @@ import {
   type BoardFocus,
   type CardSignal,
 } from "./iris-atlas-signal"
-import { IrisOutboxHeld, type HeldItem } from "./iris-outbox-held"
+import { IrisOutboxHeld, IrisOutboxWaiting, type HeldItem, type OutboxSendResult } from "./iris-outbox-held"
 import { IrisBoardMembers, readMembers } from "./iris-board-members"
 import { IrisNotifySettings } from "./iris-notify-settings"
 import { IrisLocalCopySettings } from "./iris-local-copy-settings"
@@ -2127,6 +2127,23 @@ export function SessionIrisTab() {
     // the note used to stay up until that was settled, saying "will be sent" about sent work (#191003).
     if (d?.__pane === "atlas" && !(d.outbox?.waiting > 0) && moveNote() === QUEUED_NOTE) setMoveNote(null)
   })
+  /** How many offline edits still wait to go out — "Send now" sends them at once (#194509). */
+  const outboxWaiting = createMemo(() => {
+    const d = current() as any
+    return d?.__pane === "atlas" ? Number(d.outbox?.waiting ?? 0) : 0
+  })
+  async function sendOutbox(): Promise<OutboxSendResult> {
+    try {
+      const res = await doFetch(`/iris/atlas-outbox/send`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+      const r = (await res.json().catch(() => null)) as { sent?: number; held?: number; waiting?: number; offline?: boolean } | null
+      void refetchSurface()
+      if (!res.ok || !r) return { error: `HTTP ${res.status}` }
+      if (!r.offline && moveNote() === QUEUED_NOTE && !(r.waiting! > 0)) setMoveNote(null)
+      return { sent: r.sent ?? 0, held: r.held ?? 0, waiting: r.waiting ?? 0, offline: !!r.offline }
+    } catch (e: any) {
+      return { error: e?.message ?? String(e) }
+    }
+  }
   async function resolveHeld(opId: string, choice: "mine" | "theirs"): Promise<string | undefined> {
     try {
       const res = await doFetch(`/iris/atlas-outbox/${encodeURIComponent(opId)}/resolve`, {
@@ -5012,6 +5029,11 @@ export function SessionIrisTab() {
                 refreshKey={agentWriteTick}
                 bloqId={activeBloq() != null ? Number(activeBloq()) : undefined}
                 onNeedsApproval={() => chooseSub("review", "leads")}
+                onOpenPulse={(id) => {
+                  requestPulseContact(id)
+                  chooseSurface("pulse")
+                  chooseSub("contact", "pulse")
+                }}
               />
             </Match>
             <Match when={pane() === "comms-inbox"}>
@@ -5100,7 +5122,14 @@ export function SessionIrisTab() {
               <IrisPulseTopic doFetch={doFetch} project={projectDir()} />
             </Match>
             <Match when={pane() === "pulse-contact"}>
-              <IrisPulseContact doFetch={doFetch} />
+              <IrisPulseContact
+                doFetch={doFetch}
+                onOpenLead={(id) => {
+                  requestLeadOpen(id)
+                  chooseSurface("leads")
+                  chooseSub("all", "leads")
+                }}
+              />
             </Match>
             <Match when={pane() === "hive-scripts"}>
               <IrisHiveScripts
@@ -5215,13 +5244,15 @@ export function SessionIrisTab() {
                       </button>
                     </p>
                   </Show>
+                  <IrisOutboxWaiting waiting={outboxWaiting()} send={sendOutbox} />
                   <IrisOutboxHeld
                     items={heldItems()}
                     cardTitle={(id) => (rows() as AtlasList[]).flatMap((l) => l.items).find((i) => i.id === id)?.title}
                     listName={(id) => (rows() as AtlasList[]).find((l) => l.id === id)?.name}
                     resolve={resolveHeld}
                   />
-                  <Show when={moveNote()}>
+                  {/* The waiting notice above already says this, with Send now beside it. */}
+                  <Show when={moveNote() !== QUEUED_NOTE || outboxWaiting() === 0 ? moveNote() : null}>
                     {(note) => (
                       <p class="px-2 pb-2 text-13-regular text-text-weak" role="status">
                         {note()}{" "}

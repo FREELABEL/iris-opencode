@@ -45,7 +45,7 @@ export type ContactPulse = {
   ms: number
   score: { score: number | null; band: string | null; previous: number | null; history: Array<{ at: string; score: number }>; coverage: number | null }
   stops: PulseStop[]
-  owed: Array<{ what: string; amount?: string; since?: string }>
+  owed: Array<{ what: string; amount?: string; since?: string; due?: string }>
   channels: { read: number; total: number }
 }
 
@@ -145,6 +145,31 @@ export function whenOf(iso: string | undefined, now: number): string {
   if (d === 0) return `today ${new Date(t).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}`
   if (d === 1) return "yesterday"
   return d < 14 ? `${d} days ago` : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+/**
+ * A due date, relative to today, and whether it has passed (#194509) — "due tomorrow", "3 days
+ * overdue". Counted in calendar days, so a task due today is not overdue until tomorrow. As an
+ * i18n key and its count, so the words live in the dictionary and this stays testable.
+ */
+export type DueWords = { key: string; count?: number; date?: string; overdue: boolean }
+export function dueOf(iso: string | undefined, now: number): DueWords | null {
+  if (!iso) return null
+  const raw = iso.trim().replace(" ", "T")
+  // A bare date is that day, local — not midnight UTC, which is yesterday evening west of London.
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T00:00:00`).getTime() : Date.parse(raw)
+  if (!Number.isFinite(t)) return null
+  const day = (ms: number) => {
+    const d = new Date(ms)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  }
+  const days = Math.round((day(t) - day(now)) / 86_400_000)
+  if (days === 0) return { key: "iris.pulse.due.today", overdue: false }
+  if (days === 1) return { key: "iris.pulse.due.tomorrow", overdue: false }
+  if (days > 1 && days < 14) return { key: "iris.pulse.due.days", count: days, overdue: false }
+  if (days > 1) return { key: "iris.pulse.due.date", date: new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" }), overdue: false }
+  if (days === -1) return { key: "iris.pulse.overdue.day", overdue: true }
+  return { key: "iris.pulse.overdue.days", count: -days, overdue: true }
 }
 
 /** "read just now" / "read 4 min ago" / "read 2 h ago" — how old the numbers on screen are. */

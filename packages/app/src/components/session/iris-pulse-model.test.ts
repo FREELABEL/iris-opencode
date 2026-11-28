@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { blindLine, pinsOf, readAgo, priorLine, runsLine, sparkOf, tallyOf, topicLine, touchedLine, type PulseStop } from "./iris-pulse-model"
+import { blindLine, dueOf, pinsOf, readAgo, priorLine, runsLine, sparkOf, tallyOf, topicLine, touchedLine, type PulseStop } from "./iris-pulse-model"
 
 const stop = (o: Partial<PulseStop>): PulseStop => ({
   id: "git",
@@ -56,4 +56,23 @@ test("readAgo: how old the numbers on screen are", () => {
   expect(readAgo(T - 4 * 60_000, T)).toBe("read 4 min ago")
   expect(readAgo(T - 2 * 3_600_000, T)).toBe("read 2 h ago")
   expect(readAgo(T - 3 * 86_400_000, T)).toBe("read 3 d ago")
+})
+
+describe("dueOf (#194509)", () => {
+  // Noon, local, so "today" is the same calendar day whatever the zone.
+  const now = new Date(2026, 10, 28, 12, 0, 0).getTime()
+  test("words a due date relative to today, in calendar days", () => {
+    expect(dueOf("2026-11-28", now)).toEqual({ key: "iris.pulse.due.today", overdue: false })
+    expect(dueOf("2026-11-29", now)).toEqual({ key: "iris.pulse.due.tomorrow", overdue: false })
+    expect(dueOf("2026-12-02 00:00:00", now)).toEqual({ key: "iris.pulse.due.days", count: 4, overdue: false })
+  })
+  test("a past due date is overdue, counted in days", () => {
+    expect(dueOf("2026-11-27", now)).toEqual({ key: "iris.pulse.overdue.day", overdue: true })
+    expect(dueOf("2026-11-20T09:00:00", now)).toEqual({ key: "iris.pulse.overdue.days", count: 8, overdue: true })
+  })
+  test("far off says the date; nothing or garbage says nothing", () => {
+    expect(dueOf("2027-01-15", now)).toMatchObject({ key: "iris.pulse.due.date", overdue: false })
+    expect(dueOf(undefined, now)).toBeNull()
+    expect(dueOf("soon", now)).toBeNull()
+  })
 })
