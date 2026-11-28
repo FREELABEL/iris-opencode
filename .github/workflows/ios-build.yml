@@ -78,16 +78,22 @@ jobs:
         run: bun run build
 
       - name: Build for the Simulator
-        working-directory: packages/desktop/src-tauri
+        # Through `tauri ios build`, not xcodebuild: the project's "Build Rust Code" phase calls back
+        # into the tauri CLI that started it, and fails when nothing did. The interface is already
+        # built (step above), so beforeBuildCommand is skipped.
+        working-directory: packages/desktop
         run: |
           set -euo pipefail
-          PROJ=$(ls -d gen/apple/*.xcodeproj | head -1)
-          SCHEME=$(xcodebuild -list -json -project "$PROJ" | jq -r '.project.schemes[] | select(endswith("_iOS"))' | head -1)
-          echo "project=$PROJ scheme=$SCHEME"
-          xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration debug \
-            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/dd" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build | tail -60
-          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name '*.app' -maxdepth 2 | head -1)
+          LOG="$RUNNER_TEMP/ios-build.log"
+          if ! ./node_modules/.bin/tauri ios build --target aarch64-sim --debug --ci \
+               --config '{"build":{"beforeBuildCommand":""}}' > "$LOG" 2>&1; then
+            grep -nE 'error(\[E[0-9]+\])?:|error:|Error:|failed|panicked' "$LOG" | head -80
+            echo "----- last 120 lines -----"; tail -120 "$LOG"
+            exit 1
+          fi
+          tail -30 "$LOG"
+          APP=$(find src-tauri/gen/apple/build src-tauri/target "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -path '*simulator*' -maxdepth 8 2>/dev/null | head -1)
+          [ -n "$APP" ] || APP=$(find src-tauri/gen/apple/build -name '*.app' -maxdepth 6 | head -1)
           echo "APP=$APP" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
 
