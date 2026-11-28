@@ -82,6 +82,7 @@ async function openEngine(engine: Engine, back: (problem: string) => void) {
 // The interface (2+ MB) loads only once a machine answers, so the first screens never wait on it.
 async function showApp(engine: Engine) {
   const { AppBaseProviders, AppInterface, PlatformProvider, ServerConnection } = await import("@opencode-ai/app")
+  keepInsideSafeArea()
   const url = new URL(engine.url)
   // The IRIS panels call /iris with a bare fetch, as in the desktop window (engine-auth.ts).
   globalThis.fetch = withEngineAuth(
@@ -400,6 +401,21 @@ function GoogleMark() {
 
 function Screen(props: { children: JSX.Element }) {
   return <main style={styles.page}>{props.children}</main>
+}
+
+/**
+ * The iOS web view draws edge to edge, so the interface ran under the clock and battery (Alex's
+ * first connected screenshots). viewport-fit=cover makes iOS report the insets; the body is then
+ * padded by them and the app root fills what is left. The sign-in screens pad themselves.
+ */
+function keepInsideSafeArea() {
+  document.querySelector('meta[name="viewport"]')?.setAttribute("content", "width=device-width, initial-scale=1, viewport-fit=cover")
+  const style = document.createElement("style")
+  style.textContent = `
+    body { box-sizing: border-box; height: 100dvh; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    #root { height: 100% !important; }
+  `
+  document.head.append(style)
 }
 
 /** Why this engine cannot be used, in words a person can act on — or nothing when it can. */
