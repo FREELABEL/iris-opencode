@@ -1376,7 +1376,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_iris_web_auth::init())
-        .invoke_handler(tauri::generate_handler![pkce_pair])
+        .invoke_handler(tauri::generate_handler![pkce_pair, nonce_pair])
         .setup(|app| {
             // No initialization_script port: window.__OPENCODE__.mobile tells the frontend to
             // load the mobile entry, which asks which machine to connect to.
@@ -1425,5 +1425,41 @@ mod pkce_tests {
         let v = super::pkce_verifier().unwrap();
         assert_eq!(v.len(), 43);
         assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+}
+
+/// A nonce for Sign in with Apple (#194555): Apple signs `hashed` into the identity token, and the
+/// raw value goes only to fl-api, which checks sha256(raw) == the token's nonce claim. A token
+/// taken from another app or an earlier sign-in carries some other nonce and is refused.
+#[cfg(mobile)]
+#[tauri::command]
+fn nonce_pair() -> Result<serde_json::Value, String> {
+    // Same 32 random bytes, base64url without padding, as the PKCE verifier.
+    let raw = pkce_verifier()?;
+    Ok(serde_json::json!({ "hashed": nonce_hash(&raw), "raw": raw }))
+}
+
+/// Lowercase hex SHA-256: what Apple's examples put in ASAuthorizationAppleIDRequest.nonce, and
+/// what fl-api compares the token's nonce claim against.
+#[cfg_attr(not(mobile), allow(dead_code))]
+fn nonce_hash(raw: &str) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(raw.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod nonce_tests {
+    #[test]
+    fn hash_is_lowercase_hex_sha256() {
+        // FIPS 180-2 "abc", and the empty string.
+        assert_eq!(super::nonce_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(super::nonce_hash(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    #[test]
+    fn hash_of_a_fresh_nonce_is_64_hex_characters() {
+        let h = super::nonce_hash(&super::pkce_verifier().unwrap());
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
     }
 }

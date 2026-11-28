@@ -1,5 +1,5 @@
 "$schema" = "schemas/schema.json"
 
 [default]
-description = "Lets the app open Apple's sign-in sheet for a sign-in URL and receive the callback URL."
-permissions = ["allow-authenticate"]
+description = "Lets the app open Apple's sign-in sheet for a sign-in URL and receive the callback URL, and open Sign in with Apple."
+permissions = ["allow-authenticate", "allow-sign-in-with-apple"]

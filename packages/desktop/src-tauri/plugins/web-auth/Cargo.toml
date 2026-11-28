@@ -1,7 +1,7 @@
 [package]
 name = "tauri-plugin-iris-web-auth"
 version = "0.1.0"
-description = "Apple's system sign-in sheet (ASWebAuthenticationSession) for the IRIS iPhone app (#194511)"
+description = "Apple's system sign-in sheet (ASWebAuthenticationSession) and Sign in with Apple for the IRIS iPhone app (#194511, #194555)"
 edition = "2021"
 publish = false
 links = "tauri-plugin-iris-web-auth"

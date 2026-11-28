@@ -11,6 +11,7 @@ import {
   HIVE_API,
   SignInExpired,
   engineFor,
+  exchangeApple,
   exchangeGoogle,
   googleCode,
   googleStartUrl,
@@ -318,5 +319,68 @@ describe("several accounts", () => {
     const result = await machinesFor(http, [alex, admin])
     expect(result.machines).toHaveLength(1)
     expect(result.failures).toEqual(["alex@example.com: Server Error"])
+  })
+})
+
+// Sign in with Apple (#194555, guideline 4.8): the native sheet signs an identity token whose nonce
+// claim is sha256(raw); fl-api checks it against the raw nonce only this app holds, and answers
+// in login-with-code's shape, so the account is read the same way as every other sign-in.
+describe("Sign in with Apple", () => {
+  const signedIn = { success: true, message: "Login successful", data: { user: { id: 2945, email: "x7@privaterelay.appleid.com" }, sdk_token: { id: 350, name: "IRIS iPhone", key: "a".repeat(64) } } }
+
+  test("the identity token, the RAW nonce and the name go to /auth/apple/mobile, nothing else", async () => {
+    const { http, asked } = network({
+      [`${AUTH_API}/api/v1/auth/apple/mobile`]: () => json(200, signedIn),
+      [`${AUTH_API}/api/v1/auth/whoami`]: () => json(200, { data: { id: 2945, email: "x7@privaterelay.appleid.com" } }),
+    })
+    await exchangeApple(http, { identityToken: "eyJ.id.tok", rawNonce: "raw-nonce", givenName: "Alex", familyName: "Mayo" })
+    expect(asked[0]!.url).toBe(`${AUTH_API}/api/v1/auth/apple/mobile`)
+    expect(asked[0]!.body).toEqual({ identity_token: "eyJ.id.tok", nonce: "raw-nonce", given_name: "Alex", family_name: "Mayo" })
+  })
+
+  test("Apple sends the name only on the first sign-in: without it, no name fields are sent", async () => {
+    const { http, asked } = network({
+      [`${AUTH_API}/api/v1/auth/apple/mobile`]: () => json(200, signedIn),
+      [`${AUTH_API}/api/v1/auth/whoami`]: () => json(200, { data: { id: 2945, email: "owner@example.com" } }),
+    })
+    await exchangeApple(http, { identityToken: "eyJ.id.tok", rawNonce: "raw-nonce" })
+    expect(asked[0]!.body).toEqual({ identity_token: "eyJ.id.tok", nonce: "raw-nonce" })
+  })
+
+  test("success is the account from data.sdk_token.key and whoami (a relay email is a real address)", async () => {
+    const { http, asked } = network({
+      [`${AUTH_API}/api/v1/auth/apple/mobile`]: () => json(200, signedIn),
+      [`${AUTH_API}/api/v1/auth/whoami`]: () => json(200, { data: { id: 2945, email: "x7@privaterelay.appleid.com" } }),
+    })
+    expect(await exchangeApple(http, { identityToken: "t", rawNonce: "n" })).toEqual({ token: "a".repeat(64), userId: 2945, email: "x7@privaterelay.appleid.com" })
+    expect(asked[1]!.url).toBe(`${AUTH_API}/api/v1/auth/whoami`)
+  })
+
+  // fl-api#346's error codes, each as {success: false, error: "<code>"}.
+  test.each([
+    [401, "invalid_token", "Apple sign-in couldn't be verified. Try again."],
+    [401, "nonce_mismatch", "Apple sign-in couldn't be verified. Try again."],
+    [409, "email_in_use", "That email is already on an IRIS account. Sign in with your email code instead, then add Apple later."],
+    [503, "apple_unavailable", "Apple's sign-in service didn't answer. Try again in a minute."],
+  ])("%i %s reads as a sentence, not a code", async (status, code, sentence) => {
+    const { http } = network({ [AUTH_API]: () => json(status, { success: false, error: code }) })
+    const error = await exchangeApple(http, { identityToken: "t", rawNonce: "n" }).catch((e: Error) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(sentence)
+  })
+
+  test("a 422 shows the server's own words", async () => {
+    const { http } = network({ [AUTH_API]: () => json(422, { success: false, errors: { identity_token: ["The identity token field is required."] } }) })
+    await expect(exchangeApple(http, { identityToken: "", rawNonce: "n" })).rejects.toThrow("The identity token field is required.")
+  })
+
+  test("an unreadable reply is an error that says so", async () => {
+    const { http } = network({ [AUTH_API]: () => new Response("<html>not json", { status: 200 }) })
+    await expect(exchangeApple(http, { identityToken: "t", rawNonce: "n" })).rejects.toThrow("Could not read the server's reply")
+  })
+
+  test("a 200 without a token is named", async () => {
+    const { http } = network({ [AUTH_API]: () => json(200, { success: true, data: { user: { id: 1 } } }) })
+    await expect(exchangeApple(http, { identityToken: "t", rawNonce: "n" })).rejects.toThrow("no token came back")
   })
 })
