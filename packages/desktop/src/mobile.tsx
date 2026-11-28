@@ -16,7 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification"
 import pkg from "../package.json"
 import { invoke } from "@tauri-apps/api/core"
-import { engineFor, exchangeGoogle, googleCode, googleStartUrl, listMachines, note, sendCode, SignInExpired, verify, type Account, type Engine, type Node } from "./mobile-platform"
+import { addAccount, engineFor, exchangeGoogle, googleCode, googleStartUrl, machinesFor, note, removeAccount, sendCode, SignInExpired, verify, type Account, type Engine, type OwnedNode } from "./mobile-platform"
 
 // Platform calls go through the native HTTP plugin (`fetch` above), so no CORS rule on either
 // host can block sign-in. Calls to an engine use the webview's own fetch (`globalThis.fetch`),
@@ -27,11 +27,14 @@ const EVENTS_API = "https://heyiris.io/api/v1/genesis/events"
 const VISITOR_KEY = "iris.mobile.visitor"
 
 // localStorage, not the Keychain: the Keychain (behind Face ID) is step 5 of the epic.
-const ACCOUNT_KEY = "iris.mobile.account"
+// Several accounts (Desktop keeps the same list in ~/.iris/accounts.json, #189321). Builds 9–13
+// kept one account under "iris.mobile.account"; accounts() moves it into the list on first read.
+const ACCOUNTS_KEY = "iris.mobile.accounts"
+const LEGACY_ACCOUNT_KEY = "iris.mobile.account"
 const MACHINE_KEY = "iris.mobile.machine"
 
 // A Hive machine is remembered by id; its address and token are asked for on every launch.
-type Choice = { kind: "hive"; nodeId: string; name: string } | { kind: "address"; url: string; password: string }
+type Choice = { kind: "hive"; nodeId: string; name: string; userId?: number } | { kind: "address"; url: string; password: string }
 
 const root = document.getElementById("root")!
 
@@ -55,14 +58,16 @@ const platform: Platform = {
 async function start() {
   track("iphone.launch")
   const choice = read<Choice>(MACHINE_KEY)
-  const account = read<Account>(ACCOUNT_KEY)
+  const signedIn = accounts()
   if (choice?.kind === "address") return openEngine({ url: choice.url, username: "opencode", password: choice.password }, () => showAddress(choice))
-  if (!account) return showSignIn()
-  if (!choice) return showMachines(account)
+  if (!signedIn.length) return showSignIn()
+  if (!choice) return showMachines(signedIn)
+  // The account that owns the remembered machine; a choice saved before several accounts had none.
+  const account = signedIn.find((a) => a.userId === choice.userId) ?? signedIn[0]!
   const engine = await engineFor(fetch, account, choice.nodeId).catch((e: Error) => e)
-  if (engine instanceof SignInExpired) return (forget(), showSignIn(engine.message))
-  if (engine instanceof Error) return showMachines(account, `${choice.name}: ${engine.message}`)
-  return openEngine(engine, () => showMachines(account))
+  if (engine instanceof SignInExpired) return (signOut(account), location.reload())
+  if (engine instanceof Error) return showMachines(signedIn, `${choice.name}: ${engine.message}`)
+  return openEngine(engine, () => showMachines(signedIn))
 }
 
 /** Reach the engine, then hand the screen to the interface. On failure, `back` shows why. */
@@ -101,7 +106,8 @@ async function showApp(engine: Engine) {
   )
 }
 
-function showSignIn(problem?: string) {
+/** `adding`: another account on top of the ones already signed in (from the machines screen). */
+function showSignIn(problem?: string, adding = false) {
   const [email, setEmail] = createSignal("")
   const [code, setCode] = createSignal("")
   const [sent, setSent] = createSignal(false)
@@ -115,7 +121,7 @@ function showSignIn(problem?: string) {
     const step = sent() ? "verify" : "send_code"
     if (step === "send_code") track("iphone.signin.code_requested")
     const result = await (sent()
-      ? verify(fetch, email(), code()).then((account) => localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account)))
+      ? verify(fetch, email(), code()).then(saveAccount)
       : sendCode(fetch, email())
     ).catch((e: Error) => e)
     setBusy(false)
@@ -139,7 +145,7 @@ function showSignIn(problem?: string) {
     setBusy(false)
     if (result instanceof Error && result.message === "cancelled") return track("iphone.signin.google_cancelled")
     if (result instanceof Error) return (track("iphone.signin.failed", `google: ${result.message}`), setError(result.message))
-    localStorage.setItem(ACCOUNT_KEY, JSON.stringify(result))
+    saveAccount(result)
     track("iphone.signin.verified", "google")
     location.reload()
   }
@@ -149,7 +155,7 @@ function showSignIn(problem?: string) {
       <Screen>
         <form style={styles.card} onSubmit={submit}>
           <img src="/favicon.svg" alt="" width="44" height="44" />
-          <h1 style={styles.title}>Sign in to IRIS</h1>
+          <h1 style={styles.title}>{adding ? "Add an account" : "Sign in to IRIS"}</h1>
           <p style={styles.lead}>
             {sent() ? `We emailed a 6-digit code to ${email().trim()}.` : "Use the email you sign in to IRIS Desktop with."}
           </p>
@@ -197,9 +203,18 @@ function showSignIn(problem?: string) {
               Use a different email
             </button>
           </Show>
-          <button style={styles.link} type="button" onClick={() => showAddress()}>
-            Connect by address instead
-          </button>
+          <Show
+            when={adding}
+            fallback={
+              <button style={styles.link} type="button" onClick={() => showAddress()}>
+                Connect by address instead
+              </button>
+            }
+          >
+            <button style={styles.link} type="button" onClick={() => location.reload()}>
+              Back to your machines
+            </button>
+          </Show>
         </form>
       </Screen>
     ),
@@ -207,41 +222,35 @@ function showSignIn(problem?: string) {
   )
 }
 
-function showMachines(account: Account, problem?: string) {
-  const [nodes, setNodes] = createSignal<Node[]>()
+function showMachines(signedIn: Account[], problem?: string) {
+  const [nodes, setNodes] = createSignal<OwnedNode[]>()
   const [error, setError] = createSignal(problem ?? "")
   const [busy, setBusy] = createSignal("")
+  const several = signedIn.length > 1
 
-  const load = () =>
-    listMachines(fetch, account)
-      .then((list) => {
-        track("iphone.machines.loaded", `${list.length} machines, ${list.filter((n) => n.connection_status === "online" && n.phone?.enabled).length} ready`)
-        setNodes(list)
-      })
-      .catch((e: Error) => {
-        track("iphone.machines.failed", e.message)
-        if (e instanceof SignInExpired) return (forget(), showSignIn(e.message))
-        setError(e.message)
-      })
+  const load = async () => {
+    const result = await machinesFor(fetch, signedIn)
+    track("iphone.machines.loaded", `${signedIn.length} accounts, ${result.machines.length} machines, ${result.machines.filter((n) => n.connection_status === "online" && n.phone?.enabled).length} ready`)
+    // An expired sign-in drops only that account; the others' machines stay on screen.
+    result.expired.forEach(signOut)
+    const notes = [...result.expired.map((a) => `Your sign-in for ${a.email} expired. Add it again to see its machines.`), ...result.failures]
+    if (notes.length) (track("iphone.machines.failed", notes.join(" | ")), setError(notes.join(" ")))
+    if (result.expired.length === signedIn.length) return showSignIn(notes.join(" "))
+    setNodes(result.machines)
+  }
   void load()
 
-  const choose = async (node: Node) => {
+  const choose = async (node: OwnedNode) => {
     setError("")
     setBusy(node.id)
-    const engine = await engineFor(fetch, account, node.id).catch((e: Error) => e)
-    if (engine instanceof SignInExpired) return (forget(), showSignIn(engine.message))
+    const engine = await engineFor(fetch, node.owner, node.id).catch((e: Error) => e)
+    if (engine instanceof SignInExpired) return (signOut(node.owner), location.reload())
     if (engine instanceof Error) return (track("iphone.connect.failed", `token: ${engine.message}`), setBusy(""), setError(`${node.name}: ${engine.message}`))
     const problem = await reach(engine)
     setBusy("")
     if (problem) return (track("iphone.connect.failed", `reach: ${problem}`), setError(`${node.name}: ${problem}`))
     track("iphone.connect.ok")
-    localStorage.setItem(MACHINE_KEY, JSON.stringify({ kind: "hive", nodeId: node.id, name: node.name } satisfies Choice))
-    location.reload()
-  }
-
-  const signOut = () => {
-    localStorage.removeItem(ACCOUNT_KEY)
-    localStorage.removeItem(MACHINE_KEY)
+    localStorage.setItem(MACHINE_KEY, JSON.stringify({ kind: "hive", nodeId: node.id, name: node.name, userId: node.owner.userId } satisfies Choice))
     location.reload()
   }
 
@@ -250,12 +259,20 @@ function showMachines(account: Account, problem?: string) {
       <Screen>
         <div style={styles.card}>
           <h1 style={styles.title}>Your machines</h1>
-          <p style={styles.lead}>Signed in as {account.email}. Pick the computer whose IRIS you want on this phone.</p>
+          <p style={styles.lead}>Signed in as {signedIn.map((a) => a.email).join(" and ")}. Pick the computer whose IRIS you want on this phone.</p>
           <Show when={error()}>
             <p style={styles.error}>{error()}</p>
           </Show>
           <Show when={nodes()} fallback={<p style={styles.lead}>Loading your machines…</p>}>
-            <Show when={nodes()!.length} fallback={<p style={styles.lead}>No machines yet. Install IRIS Desktop on a computer and sign in there.</p>}>
+            <Show
+              when={nodes()!.length}
+              fallback={
+                <p style={styles.lead}>
+                  No machines on {several ? "these accounts" : "this account"} yet. If your computers are signed in to IRIS with another email, add
+                  that account below.
+                </p>
+              }
+            >
               <div style={styles.list}>
                 <For each={nodes()}>
                   {(node) => {
@@ -266,7 +283,7 @@ function showMachines(account: Account, problem?: string) {
                         <span style={`${styles.dot};background:${online ? "#2f9e5b" : "#9c9c92"}`} />
                         <span style={styles.rowText}>
                           <span style={styles.rowName}>{node.name}</span>
-                          <span style={styles.rowNote}>{busy() === node.id ? "Connecting…" : note(node)}</span>
+                          <span style={styles.rowNote}>{busy() === node.id ? "Connecting…" : several ? `${note(node)} · ${node.owner.email}` : note(node)}</span>
                         </span>
                         <Show when={ready}>
                           <span style={styles.chevron}>›</span>
@@ -281,12 +298,19 @@ function showMachines(account: Account, problem?: string) {
           <button style={styles.link} type="button" onClick={() => (setNodes(undefined), setError(""), load())}>
             Refresh
           </button>
+          <button style={styles.link} type="button" onClick={() => showSignIn(undefined, true)}>
+            Add another account
+          </button>
           <button style={styles.link} type="button" onClick={() => showAddress()}>
             Connect by address instead
           </button>
-          <button style={styles.link} type="button" onClick={signOut}>
-            Sign out
-          </button>
+          <For each={signedIn}>
+            {(account) => (
+              <button style={styles.link} type="button" onClick={() => (signOut(account), location.reload())}>
+                Sign out{several ? ` of ${account.email}` : ""}
+              </button>
+            )}
+          </For>
         </div>
       </Screen>
     ),
@@ -390,7 +414,7 @@ function track(event: string, label?: string) {
     localStorage.getItem(VISITOR_KEY) ??
     (typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `ios-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
   localStorage.setItem(VISITOR_KEY, visitor)
-  const account = read<Account>(ACCOUNT_KEY)
+  const account = accounts()[0]
   void fetch(EVENTS_API, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json", ...(account ? { Authorization: `Bearer ${account.token}` } : {}) },
@@ -404,10 +428,26 @@ function track(event: string, label?: string) {
   }).catch(() => undefined)
 }
 
-/** The account's token was refused: forget it, and the machine chosen with it. */
-function forget() {
-  localStorage.removeItem(ACCOUNT_KEY)
-  localStorage.removeItem(MACHINE_KEY)
+/** Every signed-in account; moves the single account builds 9–13 saved into the list. */
+function accounts(): Account[] {
+  const list = read<Account[]>(ACCOUNTS_KEY)
+  if (Array.isArray(list)) return list
+  const legacy = read<Account>(LEGACY_ACCOUNT_KEY)
+  if (!legacy) return []
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify([legacy]))
+  localStorage.removeItem(LEGACY_ACCOUNT_KEY)
+  return [legacy]
+}
+
+function saveAccount(account: Account) {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(addAccount(accounts(), account)))
+}
+
+/** Forget one account, and the remembered machine if that account owned it. */
+function signOut(account: Account) {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(removeAccount(accounts(), account.userId)))
+  const choice = read<Choice>(MACHINE_KEY)
+  if (choice?.kind === "hive" && (choice.userId === undefined || choice.userId === account.userId)) localStorage.removeItem(MACHINE_KEY)
 }
 
 function read<T>(key: string): T | undefined {

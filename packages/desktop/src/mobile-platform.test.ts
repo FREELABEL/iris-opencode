@@ -15,6 +15,9 @@ import {
   googleCode,
   googleStartUrl,
   listMachines,
+  machinesFor,
+  addAccount,
+  removeAccount,
   note,
   problem,
   sendCode,
@@ -254,5 +257,66 @@ describe("Continue with Google", () => {
   test("an exchange refusal (expired or reused code) says what happened", async () => {
     const { http } = network({ [AUTH_API]: () => json(400, { success: false, error: "That sign-in code expired. Try again." }) })
     await expect(exchangeGoogle(http, "old", "v".repeat(43))).rejects.toThrow("expired")
+  })
+})
+
+// Several accounts on one phone (Alex: alex@ is personal, admin@ owns the Hive machines). Desktop
+// keeps the same list in ~/.iris/accounts.json (#189321). Every machine carries the account that
+// owns it, because only that account's token can get it a phone token.
+describe("several accounts", () => {
+  const alex = { token: "a-token", userId: 2945, email: "alex@example.com" }
+  const admin = { token: "b-token", userId: 193, email: "admin@example.com" }
+  const machine = (id: string, online: boolean, ready: boolean): Node => ({
+    id,
+    name: id,
+    connection_status: online ? "online" : "offline",
+    phone: ready ? { enabled: true, engine: "running" } : null,
+  })
+  const byToken = (lists: Record<string, Response | (() => Response)>) => async (url: string, init?: RequestInit) => {
+    const token = String((init?.headers as Record<string, string>)?.Authorization ?? "").replace("Bearer ", "")
+    const reply = lists[token]
+    if (!reply) throw new Error(`unexpected token for ${url}`)
+    return typeof reply === "function" ? reply() : reply
+  }
+
+  test("adding an account keeps the others; signing in again replaces only that account's token", () => {
+    const both = addAccount(addAccount([], alex), admin)
+    expect(both.map((a) => a.userId)).toEqual([2945, 193])
+    expect(addAccount(both, { ...alex, token: "new" })).toEqual([{ ...alex, token: "new" }, admin])
+    expect(removeAccount(both, 2945)).toEqual([admin])
+  })
+
+  test("the machine list is every account's machines, each tagged with its owner, ready ones first", async () => {
+    const http = byToken({
+      "a-token": () => json(200, { nodes: [machine("laptop", true, false)], device_totals: {} }),
+      "b-token": () => json(200, { nodes: [machine("iris-hive-002", true, true), machine("old-box", false, false)], device_totals: {} }),
+    })
+    const result = await machinesFor(http, [alex, admin])
+    expect(result.machines.map((m) => [m.name, m.owner.userId])).toEqual([
+      ["iris-hive-002", 193],
+      ["laptop", 2945],
+      ["old-box", 193],
+    ])
+    expect(result.expired).toEqual([])
+  })
+
+  test("one account's expired sign-in does not hide the other account's machines", async () => {
+    const http = byToken({
+      "a-token": () => json(401, { error: "Invalid token" }),
+      "b-token": () => json(200, { nodes: [machine("iris-hive-002", true, true)], device_totals: {} }),
+    })
+    const result = await machinesFor(http, [alex, admin])
+    expect(result.machines.map((m) => m.name)).toEqual(["iris-hive-002"])
+    expect(result.expired.map((a) => a.userId)).toEqual([2945])
+  })
+
+  test("a failure on one account is reported with its email, and the rest still load", async () => {
+    const http = byToken({
+      "a-token": () => json(500, { message: "Server Error" }),
+      "b-token": () => json(200, { nodes: [machine("iris-hive-002", true, true)], device_totals: {} }),
+    })
+    const result = await machinesFor(http, [alex, admin])
+    expect(result.machines).toHaveLength(1)
+    expect(result.failures).toEqual(["alex@example.com: Server Error"])
   })
 })

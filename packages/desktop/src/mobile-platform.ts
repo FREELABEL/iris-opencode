@@ -98,6 +98,40 @@ export async function listMachines(http: Fetch, account: Account): Promise<Node[
   return sortMachines(list)
 }
 
+/** A machine, with the signed-in account that owns it: only that account's token can open it. */
+export type OwnedNode = Node & { owner: Account }
+
+/** Add or refresh an account (same user → new token, same place in the list). */
+export function addAccount(accounts: Account[], account: Account) {
+  return accounts.some((a) => a.userId === account.userId)
+    ? accounts.map((a) => (a.userId === account.userId ? account : a))
+    : [...accounts, account]
+}
+
+export function removeAccount(accounts: Account[], userId: number) {
+  return accounts.filter((a) => a.userId !== userId)
+}
+
+/**
+ * Every signed-in account's machines in one list. One account failing never hides another's
+ * machines: an expired sign-in is returned in `expired`, anything else in `failures`.
+ */
+export async function machinesFor(http: Fetch, accounts: Account[]) {
+  const results = await Promise.all(
+    accounts.map((owner) =>
+      listMachines(http, owner).then(
+        (list) => ({ owner, list: list.map((node): OwnedNode => ({ ...node, owner })) }),
+        (error: Error) => ({ owner, error }),
+      ),
+    ),
+  )
+  return {
+    machines: sortMachines(results.flatMap((r) => ("list" in r ? r.list : []))) as OwnedNode[],
+    expired: results.flatMap((r) => ("error" in r && r.error instanceof SignInExpired ? [r.owner] : [])),
+    failures: results.flatMap((r) => ("error" in r && !(r.error instanceof SignInExpired) ? [`${r.owner.email}: ${r.error.message}`] : [])),
+  }
+}
+
 /** Ready first, then online, then by name: the machine you can tap is at the top. */
 export function sortMachines(list: Node[]) {
   const rank = (n: Node) => (n.connection_status === "online" ? (n.phone?.enabled ? 0 : 1) : 2)
