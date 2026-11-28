@@ -20,6 +20,7 @@ import { useTitlebarRightMount } from "./titlebar"
 import { useCommand } from "@/context/command"
 import { DialogUpgrade, plansDialogCopy } from "./dialog-upgrade"
 import { parseIrisLink } from "@/utils/iris-deep-link"
+import { rememberInviteCode } from "@/utils/invite-code"
 import { warmHomeDashboard } from "@/pages/home/home-dashboard-data"
 import { showToast } from "@/utils/toast"
 import { trackPromptedOnce } from "@/utils/upgrade-funnel"
@@ -227,6 +228,7 @@ export function TitlebarIrisPills() {
     // so it re-reads the plan itself and says what was bought.
     const stopLinks = platform.onDeepLink?.((raw) => {
       const link = parseIrisLink(raw)
+      if (link?.kind === "invite") return rememberInviteCode(link.code)
       if (link?.kind !== "upgraded") return
       onFocus()
       void refreshIrisPlan()

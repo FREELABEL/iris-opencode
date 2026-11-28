@@ -1789,7 +1789,15 @@ const AutoTopupResponse = Schema.Struct({
   measured: Schema.Boolean,
   reason: Schema.optional(Schema.String),
   autoTopup: Schema.NullOr(
-    Schema.Struct({ enabled: Schema.Boolean, pack: Schema.NullOr(Schema.String), monthlyCapUsd: Schema.NullOr(Schema.Finite) }),
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      pack: Schema.NullOr(Schema.String),
+      monthlyCapUsd: Schema.NullOr(Schema.Finite),
+      spentThisMonthUsd: Schema.NullOr(Schema.Finite),
+      lastChargedAt: Schema.NullOr(Schema.String),
+      lastError: described(Schema.NullOr(Schema.String), "Why the last automatic charge failed. Show it as is."),
+      hasSavedCard: described(Schema.NullOr(Schema.Boolean), "FALSE = no card on file; auto top-up cannot run."),
+    }),
   ),
 })
 

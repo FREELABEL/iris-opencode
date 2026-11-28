@@ -24,6 +24,20 @@ export interface AutoTopup {
   enabled: boolean
   pack: string | null
   monthlyCapUsd: number | null
+  spentThisMonthUsd?: number | null
+  lastChargedAt?: string | null
+  /** Why the last automatic charge failed (fl-api's words). */
+  lastError?: string | null
+  /** False = no card on file: auto top-up cannot run, so the switch is disabled. */
+  hasSavedCard?: boolean | null
+}
+
+/** The auto top-up switch: whether it can be used, and what to say under it. */
+export function autoTopupView(a: AutoTopup | null | undefined): { usable: boolean; note: string | null } | null {
+  if (!a) return null
+  if (a.hasSavedCard === false)
+    return { usable: false, note: "Auto top-up needs a saved card — top up once and your card is kept for next time." }
+  return { usable: true, note: a.lastError ? `Last automatic top-up failed: ${a.lastError}` : null }
 }
 
 const why = (what: string, e: unknown) => `${what}: ${e instanceof Error ? e.message : String(e)}`

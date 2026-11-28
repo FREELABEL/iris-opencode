@@ -14,6 +14,7 @@ import { UsageRings } from "@/components/usage/usage-rings"
 import { RING_COLOR, packLabel, type Offer } from "@/components/usage/usage-model"
 import { loadPacks, type TopupPack } from "@/components/usage/usage-actions"
 import { TopupPicker } from "@/components/usage/topup-picker"
+import { announceAsk } from "@/components/usage/usage-asks"
 import { CTA_GRADIENT } from "@/components/usage/usage-popover"
 import { rearmResetReminder, reminderAt, scheduleResetReminder } from "@/components/usage/usage-reminder"
 
@@ -92,7 +93,7 @@ export function SessionAllowanceDock(props: {
     ),
   )
   createEffect(() => {
-    if (out() && open() && card()?.upgrade) trackPromptedOnce(doFetch, "out-card")
+    if (out() && open() && card()) announceAsk(doFetch, "out-card", irisPlan(), offers())
   })
   const [picking, setPicking] = createSignal(false)
   const [checkoutError, setCheckoutError] = createSignal<string | null>(null)

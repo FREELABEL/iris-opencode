@@ -82,8 +82,26 @@ describe("fl-api usage bodies", () => {
     expect(inviteFrom(inv)).toEqual({ url: inv.url, code: "abc", rewardTokens: 10_000_000, invited: 2, rewarded: 1 })
     expect(inviteFrom({ data: inv })?.url).toBe(inv.url)
     expect(inviteFrom({ code: "abc" })).toBeNull()
-    expect(autoTopupFrom({ enabled: true, pack: "70m", monthly_cap_usd: 50 })).toEqual({ enabled: true, pack: "70m", monthlyCapUsd: 50 })
-    expect(autoTopupFrom({ data: { enabled: false } })).toEqual({ enabled: false, pack: null, monthlyCapUsd: null })
+    expect(
+      autoTopupFrom({
+        enabled: true,
+        pack: "small",
+        monthly_cap_usd: 50,
+        spent_this_month_usd: 10,
+        last_charged_at: "2026-11-20T10:00:00Z",
+        last_error: "Your card was declined.",
+        has_saved_card: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      pack: "small",
+      monthlyCapUsd: 50,
+      spentThisMonthUsd: 10,
+      lastChargedAt: "2026-11-20T10:00:00Z",
+      lastError: "Your card was declined.",
+      hasSavedCard: true,
+    })
+    expect(autoTopupFrom({ data: { enabled: false } })).toMatchObject({ enabled: false, pack: null, hasSavedCard: null, lastError: null })
     expect(autoTopupFrom({})).toBeNull()
   })
 })
@@ -122,6 +140,9 @@ describe("the calls — every failure is a sentence", () => {
     expect(await createTopup("70m")).toEqual({ ok: false, reason: "Your sign-in has expired. Sign in again, then try again." })
     answer(422, { message: "Unknown pack" })
     expect(await createTopup("70m")).toEqual({ ok: false, reason: "Top-up was refused (422): Unknown pack" })
+    // fl-api#342's real refusal shape
+    answer(422, { ok: false, error: "No such pack: huge" })
+    expect(await createTopup("huge")).toEqual({ ok: false, reason: "Top-up was refused (422): No such pack: huge" })
     answer(200, { ok: true })
     expect(await createTopup("70m")).toEqual({ ok: false, reason: "Top-up checkout didn't open. Try again." })
     globalThis.fetch = mock(async () => {
@@ -148,6 +169,6 @@ describe("the calls — every failure is a sentence", () => {
     const r = await saveAutoTopup({ enabled: true, pack: "70m", monthlyCapUsd: 40 })
     expect(calls[0].method).toBe("PUT")
     expect(JSON.parse(String(calls[0].body))).toEqual({ enabled: true, pack: "70m", monthly_cap_usd: 40 })
-    expect(r).toEqual({ measured: true, data: { enabled: true, pack: "70m", monthlyCapUsd: 40 } })
+    expect(r).toMatchObject({ measured: true, data: { enabled: true, pack: "70m", monthlyCapUsd: 40, hasSavedCard: null } })
   })
 })

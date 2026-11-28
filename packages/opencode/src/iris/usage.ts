@@ -19,7 +19,8 @@ import {
 function refusal(what: string, status: number, body: any): string {
   if (status === 401) return "Your sign-in has expired. Sign in again, then try again."
   if (status === 404) return `${what} isn't available on this account yet.`
-  const message = typeof body?.message === "string" && body.message.trim() ? `: ${body.message.trim()}` : ""
+  const said = [body?.error, body?.message, body?.reason].find((v) => typeof v === "string" && v.trim())
+  const message = said ? `: ${said.trim()}` : ""
   return `${what} was refused (${status})${message}`
 }
 
@@ -53,8 +54,8 @@ export async function createTopup(pack: string): Promise<TopupResult> {
     })
     const body = await json(res)
     const url = body?.url ?? body?.data?.url
-    if (res.ok && typeof url === "string" && url) return { ok: true, url }
-    if (res.ok) return { ok: false, reason: "Top-up checkout didn't open. Try again." }
+    if (res.ok && body?.ok !== false && typeof url === "string" && url) return { ok: true, url }
+    if (res.ok) return { ok: false, reason: typeof body?.error === "string" && body.error ? body.error : "Top-up checkout didn't open. Try again." }
     return { ok: false, reason: refusal("Top-up", res.status, body) }
   } catch (e) {
     return { ok: false, reason: unreachable("top-up checkout", e) }
@@ -100,7 +101,15 @@ export async function saveAutoTopup(v: {
     const body = await json(res)
     if (!res.ok) return { measured: false, reason: refusal("Auto top-up", res.status, body), data: null }
     // Some servers answer 204 / an empty body to a PUT: what we sent is then what is saved.
-    const value = autoTopupFrom(body) ?? { enabled: v.enabled, pack: v.pack ?? null, monthlyCapUsd: v.monthlyCapUsd ?? null }
+    const value = autoTopupFrom(body) ?? {
+      enabled: v.enabled,
+      pack: v.pack ?? null,
+      monthlyCapUsd: v.monthlyCapUsd ?? null,
+      spentThisMonthUsd: null,
+      lastChargedAt: null,
+      lastError: null,
+      hasSavedCard: null,
+    }
     return { measured: true, data: value }
   } catch (e) {
     return { measured: false, reason: unreachable("auto top-up", e), data: null }

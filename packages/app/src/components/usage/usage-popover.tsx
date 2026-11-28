@@ -2,7 +2,8 @@ import { For, Show, createMemo, createSignal, onMount } from "solid-js"
 import { Switch as SwitchV2 } from "@opencode-ai/ui/v2/switch-v2"
 import type { FetchJson } from "@/components/dialog-upgrade"
 import { IRIS_COLORS, PlanMark } from "@/components/plan-mark"
-import { trackPromptedOnce, trackUpgrade } from "@/utils/upgrade-funnel"
+import { trackUpgrade } from "@/utils/upgrade-funnel"
+import { announceAsk } from "./usage-asks"
 import { refreshIrisPlan } from "@/utils/iris-plan-store"
 import { TopupPicker } from "./topup-picker"
 import {
@@ -24,6 +25,7 @@ import {
 } from "./usage-model"
 import { UsageRings } from "./usage-rings"
 import {
+  autoTopupView,
   loadAutoTopup,
   loadInvite,
   loadPacks,
@@ -88,7 +90,7 @@ export function UsagePopoverBody(props: {
     trackUpgrade(props.fetchJson, "usage.ring_opened", ring()?.tone ?? "unknown")
     if (ask() === "none") return
     // The popover IS an ask to pay when it shows Upgrade (#191267 — it was never recorded).
-    if (ask() === "upgrade") trackPromptedOnce(props.fetchJson, "ring")
+    announceAsk(props.fetchJson, "ring", props.plan)
     void props.fetchJson<{ measured?: boolean; plans?: Offer[] }>("/iris/plans")
       .then((r) => setOffers(r?.measured && Array.isArray(r.plans) ? r.plans : []))
       .catch(() => undefined)
@@ -295,11 +297,30 @@ export function UsagePopoverBody(props: {
               />
             </Show>
           </Show>
-          <Show when={auto()}>
-            {(a) => (
-              <SwitchV2 checked={a().enabled} onChange={(v: boolean) => void toggleAuto(v)} class="text-[12.5px] text-v2-text-text-base">
-                Top up automatically when I run low
-              </SwitchV2>
+          <Show when={auto() && autoTopupView(auto())}>
+            {(view) => (
+              <div data-slot="usage-auto-topup" class="flex flex-col gap-1">
+                <SwitchV2
+                  checked={auto()!.enabled && view().usable}
+                  disabled={!view().usable}
+                  onChange={(v: boolean) => void toggleAuto(v)}
+                  class="text-[12.5px] text-v2-text-text-base"
+                >
+                  Top up automatically when I run low
+                </SwitchV2>
+                <Show when={view().note}>
+                  <div
+                    data-slot="usage-auto-topup-note"
+                    class="text-[11.5px]"
+                    classList={{
+                      "text-v2-state-fg-danger": !!auto()!.lastError && view().usable,
+                      "text-v2-text-text-muted": !auto()!.lastError || !view().usable,
+                    }}
+                  >
+                    {view().note}
+                  </div>
+                </Show>
+              </div>
             )}
           </Show>
           <Show when={autoError()}>

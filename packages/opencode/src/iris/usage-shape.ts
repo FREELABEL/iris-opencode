@@ -145,13 +145,27 @@ export interface AutoTopup {
   enabled: boolean
   pack: string | null
   monthlyCapUsd: number | null
+  spentThisMonthUsd: number | null
+  lastChargedAt: string | null
+  /** Why the last automatic charge failed, in fl-api's words. Shown as is. */
+  lastError: string | null
+  /** False = no card on file, so auto top-up cannot run; the toggle is disabled. Null = not said. */
+  hasSavedCard: boolean | null
 }
 
 /** fl-api GET/PUT /api/v1/usage/auto-topup. Null when the body is not an auto top-up at all. */
 export function autoTopupFrom(j: any): AutoTopup | null {
   const b = j?.data && typeof j.data === "object" && !("enabled" in (j ?? {})) ? j.data : j
   if (!b || typeof b.enabled !== "boolean") return null
-  return { enabled: b.enabled, pack: text(b.pack), monthlyCapUsd: num(b.monthly_cap_usd) }
+  return {
+    enabled: b.enabled,
+    pack: text(b.pack),
+    monthlyCapUsd: num(b.monthly_cap_usd),
+    spentThisMonthUsd: num(b.spent_this_month_usd),
+    lastChargedAt: text(b.last_charged_at),
+    lastError: text(b.last_error),
+    hasSavedCard: typeof b.has_saved_card === "boolean" ? b.has_saved_card : null,
+  }
 }
 
 /** What fl-api's PUT expects, from the app's casing. Only the keys the caller set. */
