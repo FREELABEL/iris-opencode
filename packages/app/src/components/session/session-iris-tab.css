@@ -341,6 +341,13 @@
   border-bottom-color: var(--text-interactive-base);
 }
 
+/* On a phone (#194511) a view tab is a thumb target: at least 32 px tall. */
+@media (max-width: 767px) {
+  .iris-subnav__item {
+    min-height: 32px;
+  }
+}
+
 /*
  * LEVEL 3 — the tabs inside a record.
  *

@@ -588,7 +588,9 @@ function PromptInputV2ModelControl(props: {
   )
   return (
     <Show when={!props.loading}>
+      {/* The model's name gives way first in a phone-width chat box; nothing runs under Send (#194511). */}
       <TooltipV2
+        class="min-w-0"
         placement="top"
         gutter={4}
         value={
