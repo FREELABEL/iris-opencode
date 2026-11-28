@@ -7,6 +7,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
 import { pairLines, parseLinkArg } from "./brand-links"
 import { draftPersonaFromVoice } from "./brand-persona-draft"
+import { BrandsAudienceGroup } from "./platform-brands-audience"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
 import { firstArray } from "../../util/array"
@@ -46,7 +47,7 @@ function printBrand(b: Record<string, unknown>): void {
   const meta = b.metadata as Record<string, unknown> | undefined
   const tokenGroups = meta?.design_tokens && typeof meta.design_tokens === "object" ? Object.keys(meta.design_tokens).length : 0
   const parts: string[] = []
-  if (personas > 0) parts.push(`personas=${personas}`)
+  if (personas > 0) parts.push(`voices=${personas}`)
   if (integrations > 0) parts.push(`integrations=${integrations}`)
   if (assets > 0) parts.push(`assets=${assets}`)
   if (tokenGroups > 0) parts.push(`tokens=${tokenGroups}`)
@@ -125,7 +126,7 @@ const BrandsListCommand = cmd({
 const BrandsShowCommand = cmd({
   command: "show <id>",
   aliases: ["get"],
-  describe: "show brand details with personas, integrations, assets",
+  describe: "show brand details with voices, integrations, assets",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "brand ID", type: "number", demandOption: true })
@@ -159,7 +160,7 @@ const BrandsShowCommand = cmd({
       console.log()
 
       if (Array.isArray(b.personas) && b.personas.length > 0) {
-        console.log(bold("Personas:"))
+        console.log(bold("Voices:"))
         for (const p of b.personas) {
           const star = p.is_default ? "★ " : "  "
           console.log(`  ${star}${bold(p.name)}  ${dim(`#${p.id}`)}${p.archetype ? dim(` [${p.archetype}]`) : ""}`)
@@ -487,7 +488,7 @@ const BrandsDetachCommand = cmd({
 const PersonasListCommand = cmd({
   command: "list <brandId>",
   aliases: ["ls"],
-  describe: "list personas for a brand",
+  describe: "list a brand's voices",
   builder: (yargs) =>
     yargs.positional("brandId", { describe: "brand ID", type: "number", demandOption: true }),
   async handler(args) {
@@ -530,7 +531,7 @@ const PersonasListCommand = cmd({
 const PersonasAddCommand = cmd({
   command: "add <brandId>",
   aliases: ["create"],
-  describe: "add a persona to a brand (--from-voice drafts one from the kit's voice/tone for you to approve)",
+  describe: "add a voice to a brand (--from-voice drafts one from the kit's voice/tone for you to approve)",
   builder: (yargs) =>
     yargs
       .positional("brandId", { describe: "brand ID", type: "number", demandOption: true })
@@ -665,7 +666,7 @@ async function addPersonaFromVoice(args: {
 
 const PersonasUpdateCommand = cmd({
   command: "update <brandId> <personaId>",
-  describe: "update a persona",
+  describe: "update a voice",
   builder: (yargs) =>
     yargs
       .positional("brandId", { describe: "brand ID", type: "number", demandOption: true })
@@ -708,7 +709,7 @@ const PersonasUpdateCommand = cmd({
 const PersonasDeleteCommand = cmd({
   command: "delete <brandId> <personaId>",
   aliases: ["rm"],
-  describe: "delete a persona",
+  describe: "delete a voice",
   builder: (yargs) =>
     yargs
       .positional("brandId", { describe: "brand ID", type: "number", demandOption: true })
@@ -735,7 +736,7 @@ const PersonasDeleteCommand = cmd({
 
 const PersonasDefaultCommand = cmd({
   command: "default <brandId> <personaId>",
-  describe: "set the default persona for a brand",
+  describe: "set a brand's default voice",
   builder: (yargs) =>
     yargs
       .positional("brandId", { describe: "brand ID", type: "number", demandOption: true })
@@ -760,9 +761,13 @@ const PersonasDefaultCommand = cmd({
   },
 })
 
+// Shown to people as VOICES (#194612): these are the brand's AI voice. The customer profiles that
+// "personas" usually means live in `brands audience` (audience.v1). The command keeps its name, so
+// scripts and agents that call `brands personas` keep working; `voices` is the same command.
 const PersonasGroup = cmd({
   command: "personas",
-  describe: "manage brand personas (voice / tone / AI config)",
+  aliases: ["voices"],
+  describe: "Voices (the brand's AI voice: tone, system prompt, hashtags)",
   builder: (yargs) =>
     yargs
       .command(PersonasListCommand)
@@ -2131,7 +2136,7 @@ const BrandsLogoCommand = cmd({
 export const PlatformBrandsCommand = cmd({
   command: "brands",
   aliases: ["brand"],
-  describe: "manage first-class brands (personas, integrations, assets)",
+  describe: "manage first-class brands (voices, audience, integrations, assets)",
   builder: (yargs) =>
     yargs
       .command(BrandsListCommand)
@@ -2144,6 +2149,7 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsAttachCommand)
       .command(BrandsDetachCommand)
       .command(PersonasGroup)
+      .command(BrandsAudienceGroup)
       .command(DesignTokensGroup)
       .command(GlossaryGroup)
       .command(TreatmentsGroup)
