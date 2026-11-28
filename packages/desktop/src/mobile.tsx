@@ -163,15 +163,21 @@ function normalize(value: string) {
   return /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`
 }
 
+// Explicit colours from the phone's own light/dark setting: the app's theme variables are not
+// loaded on this screen, and the first build drew light text on a light page.
+const dark = matchMedia("(prefers-color-scheme: dark)").matches
+const ink = dark ? "#efede8" : "#16140f"
+const paper = dark ? "#16140f" : "#efede8"
+
 const styles = {
-  page: "min-height:100dvh;display:grid;place-items:center;padding:24px;padding-top:max(24px,env(safe-area-inset-top));background:var(--v2-background-bg-deep,#16140f);color:var(--v2-text-base,#efede8);font-family:Inter,system-ui,sans-serif",
+  page: `min-height:100dvh;display:grid;place-items:center;padding:24px;padding-top:max(24px,env(safe-area-inset-top));background:${paper};color:${ink};font-family:Inter,system-ui,sans-serif`,
   card: "width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px",
   title: "font-size:24px;font-weight:600;margin:8px 0 0",
-  lead: "font-size:15px;line-height:1.45;opacity:.75;margin:0",
-  label: "display:flex;flex-direction:column;gap:6px;font-size:13px;opacity:.9",
-  input: "font-size:17px;padding:12px 14px;border-radius:10px;border:1px solid rgba(156,156,146,.35);background:transparent;color:inherit",
-  error: "font-size:14px;color:#f08a7e;margin:0",
-  button: "font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:0;background:#efede8;color:#16140f;margin-top:6px",
+  lead: "font-size:15px;line-height:1.45;opacity:.7;margin:0",
+  label: "display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500",
+  input: `font-size:17px;padding:12px 14px;border-radius:10px;border:1px solid ${dark ? "rgba(239,237,232,.25)" : "rgba(22,20,15,.2)"};background:${dark ? "#211e18" : "#ffffff"};color:${ink}`,
+  error: `font-size:14px;color:${dark ? "#f08a7e" : "#b3261e"};margin:0`,
+  button: `font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:0;background:${ink};color:${paper};margin-top:6px`,
 }
 
 // Last, after `styles` and every helper exist: the connect screen uses them synchronously.
