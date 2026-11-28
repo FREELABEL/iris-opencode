@@ -112,9 +112,12 @@ export async function exchangeApple(
   return accountFor(http, reply?.data?.sdk_token?.key, typeof reply?.data?.user?.email === "string" ? reply.data.user.email : "")
 }
 
+// fl-api#346 answers {success: false, error: "<code>"}; a 422 falls through to problem().
 const APPLE_ERRORS: Record<string, string> = {
-  invalid_token: "Apple sign-in couldn't be checked. Try again, or use an email code.",
-  nonce_mismatch: "Apple sign-in didn't match this request. Try again.",
+  invalid_token: "Apple sign-in couldn't be verified. Try again.",
+  nonce_mismatch: "Apple sign-in couldn't be verified. Try again.",
+  email_in_use: "That email is already on an IRIS account. Sign in with your email code instead, then add Apple later.",
+  apple_unavailable: "Apple's sign-in service didn't answer. Try again in a minute.",
 }
 
 export async function listMachines(http: Fetch, account: Account): Promise<Node[]> {

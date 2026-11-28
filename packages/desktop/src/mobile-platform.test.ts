@@ -356,11 +356,17 @@ describe("Sign in with Apple", () => {
     expect(asked[1]!.url).toBe(`${AUTH_API}/api/v1/auth/whoami`)
   })
 
-  test("401 invalid_token and nonce_mismatch read as sentences, not codes", async () => {
-    const invalid = network({ [AUTH_API]: () => json(401, { error: "invalid_token" }) })
-    await expect(exchangeApple(invalid.http, { identityToken: "t", rawNonce: "n" })).rejects.toThrow("Apple sign-in couldn't be checked")
-    const mismatch = network({ [AUTH_API]: () => json(401, { error: "nonce_mismatch" }) })
-    await expect(exchangeApple(mismatch.http, { identityToken: "t", rawNonce: "n" })).rejects.toThrow("Apple sign-in didn't match this request")
+  // fl-api#346's error codes, each as {success: false, error: "<code>"}.
+  test.each([
+    [401, "invalid_token", "Apple sign-in couldn't be verified. Try again."],
+    [401, "nonce_mismatch", "Apple sign-in couldn't be verified. Try again."],
+    [409, "email_in_use", "That email is already on an IRIS account. Sign in with your email code instead, then add Apple later."],
+    [503, "apple_unavailable", "Apple's sign-in service didn't answer. Try again in a minute."],
+  ])("%i %s reads as a sentence, not a code", async (status, code, sentence) => {
+    const { http } = network({ [AUTH_API]: () => json(status, { success: false, error: code }) })
+    const error = await exchangeApple(http, { identityToken: "t", rawNonce: "n" }).catch((e: Error) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(sentence)
   })
 
   test("a 422 shows the server's own words", async () => {
