@@ -48,9 +48,11 @@ jobs:
           Add-Type -AssemblyName System.Drawing
           $out = Join-Path $env:RUNNER_TEMP 'icons'; New-Item -ItemType Directory -Force $out | Out-Null
           foreach ($n in 16, 32, 48, 256) {
-            $i = New-Object System.Drawing.Icon($ico, $n, $n)
-            $b = $i.ToBitmap(); "ico frame for $n px -> $($b.Width)x$($b.Height)"
-            $b.Save((Join-Path $out "ico-$n.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+            try {
+              $i = New-Object System.Drawing.Icon($ico, $n, $n)
+              $b = $i.ToBitmap(); "ico frame for $n px -> $($b.Width)x$($b.Height)"
+              $b.Save((Join-Path $out "ico-$n.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+            } catch { "ico frame for $n px -> System.Drawing cannot decode it (PNG frame): $($_.Exception.Message)" }
           }
           # What Windows itself shows for the shortcut (Explorer / Start menu use the shell's icon).
           $shown = [System.Drawing.Icon]::ExtractAssociatedIcon($lnk.FullName)
