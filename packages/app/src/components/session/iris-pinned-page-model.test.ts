@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pageSessionState, pageVerdict, pinnedPageUrl, signedFrameUrl } from "./iris-pinned-page-model"
+import { irisPageSlug, pageSessionState, pageVerdict, pinnedPageUrl, signedFrameUrl } from "./iris-pinned-page-model"
 
 describe("a pinned Genesis page (#192480)", () => {
   test("the slug becomes a heyiris.io/p/ address — IRIS never sends people to freelabel.net (#188508)", () => {
@@ -121,5 +121,20 @@ describe("the member's address (Marketing shows a member's own page whatever its
   })
   test("no sign-in leaves the member's address as it is", () => {
     expect(signedMemberUrl(`https://heyiris.io/p/${UUID}`, { url: "https://heyiris.io/p/x", signed: false })).toBe(`https://heyiris.io/p/${UUID}`)
+  })
+})
+
+describe("the Browser tab opens your own IRIS pages signed in (#194350)", () => {
+  test("only a plain IRIS page address, and only its slug", () => {
+    expect(irisPageSlug("https://heyiris.io/p/my-command-center-yya5")).toBe("my-command-center-yya5")
+    expect(irisPageSlug("https://heyiris.io/p/my-app/")).toBe("my-app")
+    // Never another host, never http, never an address that carries more than the slug.
+    expect(irisPageSlug("https://evil.example/p/my-app")).toBeNull()
+    expect(irisPageSlug("http://heyiris.io/p/my-app")).toBeNull()
+    expect(irisPageSlug("https://heyiris.io/p/my-app?preview=true")).toBeNull()
+    expect(irisPageSlug("https://heyiris.io/p/my-app#atlas_code=x")).toBeNull()
+    expect(irisPageSlug("https://heyiris.io/p/a/b")).toBeNull()
+    expect(irisPageSlug("https://heyiris.io/atlas")).toBeNull()
+    expect(irisPageSlug(undefined)).toBeNull()
   })
 })
