@@ -1095,7 +1095,21 @@ const BrandKitSchema = Schema.Struct({
     Schema.Record(Schema.String, Schema.String),
     "Each editable section exactly as read. Echo it back as `expected` when saving.",
   ),
+  audience: described(
+    Schema.optional(Schema.Unknown),
+    "#194611. brand.metadata.audience as stored — audience.v1 (packages/opencode/src/iris/brand-audience.ts). Absent when the brand has none.",
+  ),
+  audienceRead: described(
+    Schema.optional(Schema.String),
+    "#194611. The audience as read (keys sorted; `null` when none). Echo it back as `expected` on an audience save.",
+  ),
 }).annotate({ identifier: "IrisBrandKit" })
+
+const AudienceIssueSchema = Schema.Struct({
+  path: described(Schema.String, 'Where: "segments[0].demographics.age_band[1]".'),
+  message: Schema.String,
+  code: described(Schema.String, "required · type · enum · range · date · url · unknown · reference · schema · language"),
+}).annotate({ identifier: "IrisAudienceIssue" })
 
 const BrandKitResponse = Schema.Struct({ ...Measured, kit: Schema.optional(BrandKitSchema) }).annotate({
   identifier: "IrisBrandKitResponse",
@@ -2326,6 +2340,8 @@ export const IrisPaths = {
   brands: `${root}/brands`,
   brandKit: `${root}/brands/:brandID`,
   brandSave: `${root}/brands/:brandID/save`,
+  brandAudience: `${root}/brands/:brandID/audience`,
+  brandAudienceSave: `${root}/brands/:brandID/audience/save`,
   brandLogoUpload: `${root}/brands/:brandID/logo`,
   brandLogoProbe: `${root}/brand-logo/probe`,
   agentTasks: `${root}/agents/:agentID/tasks`,
@@ -5296,6 +5312,51 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Save a brand kit's changed sections",
           description:
             "#192667. Every changed section in ONE PATCH design-tokens (the `iris brands dt push` call), PINNED to what was read: fl-api replaces whole sections with no version check, so a second editor would silently win. This re-reads and refuses the whole save when any section moved since `expected`, then writes and reads back.",
+        }),
+      ),
+      HttpApiEndpoint.get("brandAudience", IrisPaths.brandAudience, {
+        params: { brandID: Schema.NumberFromString },
+        success: described(
+          Schema.Struct({
+            ...Measured,
+            audience: described(Schema.optional(Schema.Unknown), "audience.v1 as stored. Absent when the brand has none."),
+            expected: described(Schema.String, "Echo back as `expected` when saving."),
+            summary: described(Schema.Array(Schema.String), "One line per segment — what an agent reads first."),
+            errors: described(Schema.Array(AudienceIssueSchema), "What the stored audience gets wrong, if anything."),
+            warnings: Schema.Array(AudienceIssueSchema),
+          }).annotate({ identifier: "IrisBrandAudience" }),
+          "Who the brand sells to",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandAudience",
+          summary: "Read a brand's audience",
+          description:
+            "#194611. brand.metadata.audience (audience.v1): segments with demographics, firmographics, psychographics, a day in their life, use cases, buying, interests, messaging, evidence and example personas; brand-level use cases, not-for and positioning. Checked with the shared validator.",
+        }),
+      ),
+      HttpApiEndpoint.post("brandAudienceSave", IrisPaths.brandAudienceSave, {
+        params: { brandID: Schema.NumberFromString },
+        payload: Schema.Struct({
+          audience: described(Schema.Unknown, "The whole audience.v1. Empty fields and rows are dropped before it is checked."),
+          expected: described(Schema.String, "kit.audienceRead (or the audience read's `expected`) — what this replaces."),
+        }),
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            reason: Schema.optional(Schema.String),
+            errors: described(Schema.optional(Schema.Array(AudienceIssueSchema)), "Why it was refused, each with its path. Nothing was written."),
+            warnings: Schema.optional(Schema.Array(AudienceIssueSchema)),
+            kit: Schema.optional(BrandKitSchema),
+          }).annotate({ identifier: "IrisBrandAudienceSaveResult" }),
+          "Whether the audience landed, and the kit as the server now holds it",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.brandAudienceSave",
+          summary: "Save a brand's audience",
+          description:
+            "#194611. Validated first (audience.v1). fl-api PATCH /brands/{id} replaces metadata whole, so this re-reads the brand, refuses when its audience moved since `expected`, sends the metadata it read with only `audience` replaced (design tokens, glossary and treatments kept), then reads back.",
         }),
       ),
       HttpApiEndpoint.post("brandLogoUpload", IrisPaths.brandLogoUpload, {
