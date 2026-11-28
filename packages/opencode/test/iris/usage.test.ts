@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { fetchPlan } from "../../src/iris/platform"
-import { createTopup, fetchAutoTopup, fetchInvite, fetchTopupPacks, saveAutoTopup } from "../../src/iris/usage"
-import { autoTopupFrom, inviteFrom, planUsageFrom, topupPacksFrom } from "../../src/iris/usage-shape"
+import { claimInvite, createTopup, fetchAutoTopup, fetchInvite, fetchTopupPacks, saveAutoTopup } from "../../src/iris/usage"
+import {
+  INVITE_CLAIM_SENTENCE,
+  autoTopupFrom,
+  inviteClaimFrom,
+  inviteFrom,
+  normaliseInviteCode,
+  planUsageFrom,
+  topupPacksFrom,
+} from "../../src/iris/usage-shape"
 
 /**
  * Epic #194525 — usage as a progression. The bodies below are the contract the backend agents are
@@ -170,5 +178,58 @@ describe("the calls — every failure is a sentence", () => {
     expect(calls[0].method).toBe("PUT")
     expect(JSON.parse(String(calls[0].body))).toEqual({ enabled: true, pack: "70m", monthly_cap_usd: 40 })
     expect(r).toMatchObject({ measured: true, data: { enabled: true, pack: "70m", monthlyCapUsd: 40, hasSavedCard: null } })
+  })
+})
+
+describe("invite claim (#194575)", () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  test("normalise: fl-api's rule — trimmed, lowercased, 4–32 letters and digits", () => {
+    expect(normaliseInviteCode("  FrIeNd42 ")).toBe("friend42")
+    expect(normaliseInviteCode("abcd")).toBe("abcd")
+    expect(normaliseInviteCode("a".repeat(32))).toBe("a".repeat(32))
+    for (const bad of ["abc", "a".repeat(33), "friend-42", "fri end", "", null, 42])
+      expect(normaliseInviteCode(bad)).toBeNull()
+  })
+
+  test("each fl-api outcome maps to its sentence", () => {
+    expect(inviteClaimFrom(200, { ok: true, outcome: "attributed" })).toEqual({
+      ok: true,
+      outcome: "attributed",
+      message: "You're in — you'll both get +25M tokens after your first agent run.",
+    })
+    expect(inviteClaimFrom(200, { ok: false, outcome: "self_invite" }).message).toBe("That's your own code.")
+    expect(inviteClaimFrom(200, { ok: false, outcome: "already_attributed" }).message).toBe("This account already used an invite.")
+    expect(inviteClaimFrom(200, { ok: false, outcome: "too_old" }).message).toBe("Invite codes work in your first 14 days.")
+    expect(inviteClaimFrom(422, { ok: false, outcome: "invalid_code" }).message).toBe("We couldn't find that code.")
+    expect(inviteClaimFrom(422, { message: "The code field is required." }).outcome).toBe("invalid_code")
+    expect(inviteClaimFrom(200, { data: { outcome: "too_old" } }).outcome).toBe("too_old")
+    expect(inviteClaimFrom(401, {}).outcome).toBe("signed_out")
+    expect(inviteClaimFrom(500, null)).toEqual({ ok: false, outcome: "error", message: INVITE_CLAIM_SENTENCE.error })
+    // An outcome fl-api does not have is not believed.
+    expect(inviteClaimFrom(200, { ok: true, outcome: "jackpot" }).ok).toBe(false)
+  })
+
+  test("claimInvite POSTs the normalised code; a dropped network is a sentence", async () => {
+    const calls: { url: string; init: RequestInit }[] = []
+    globalThis.fetch = mock(async (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      return new Response(JSON.stringify({ ok: true, outcome: "attributed" }), { status: 200 })
+    }) as any
+    expect((await claimInvite(" FRIEND42")).outcome).toBe("attributed")
+    expect(calls[0].url).toEndWith("/api/v1/usage/invite/claim")
+    expect(calls[0].init.method).toBe("POST")
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ code: "friend42" })
+
+    expect(await claimInvite("no")).toEqual({ ok: false, outcome: "invalid_code", message: "We couldn't find that code." })
+    expect(calls).toHaveLength(1)
+
+    globalThis.fetch = mock(async () => {
+      throw new Error("offline")
+    }) as any
+    expect(await claimInvite("friend42")).toEqual({ ok: false, outcome: "unreachable", message: INVITE_CLAIM_SENTENCE.unreachable })
   })
 })

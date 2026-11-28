@@ -20,7 +20,7 @@ describe("upgrade funnel events", () => {
   })
 
   test("usage events (#194525) are their own list, and none claims a sale either", () => {
-    expect([...USAGE_EVENTS]).toEqual(["usage.ring_opened", "usage.topup_started", "usage.invite_sent"])
+    expect([...USAGE_EVENTS]).toEqual(["usage.ring_opened", "usage.topup_started", "usage.invite_sent", "usage.invite_claimed"])
     expect(USAGE_EVENTS.some((e) => e.includes("paid"))).toBe(false)
   })
 
