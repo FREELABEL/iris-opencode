@@ -12,7 +12,7 @@ import { ServerConnection } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { openCommandRun } from "@/components/command-action"
-import { runIris } from "@/utils/iris-run"
+import { plainHelp, runIris } from "@/utils/iris-run"
 import { useTabs } from "@/context/tabs"
 import { displayName, projectForSession } from "@/pages/layout/helpers"
 import { createSessionTabs } from "@/pages/session/helpers"
@@ -103,6 +103,21 @@ export function createCommandPaletteFileOpener(onOpenFile?: (path: string) => vo
     onOpenFile?.(path)
     tabs().setActive(value)
   }
+}
+
+/**
+ * What the confirm says about a palette command. The commands the panes also run get the same
+ * curated sentence as their buttons; any other command gets its CLI help, as a sentence.
+ */
+export function describeFor(
+  run: string,
+  help: string | undefined,
+  t: (key: "iris.hive.sessions.empty.describe" | "iris.drives.scan.describe") => string,
+): string | undefined {
+  const line = run.replace(/^\s*iris\s+/, "")
+  if (/^hive connect\b/.test(line)) return t("iris.hive.sessions.empty.describe")
+  if (/^drives scan\b/.test(line)) return t("iris.drives.scan.describe")
+  return plainHelp(help)
 }
 
 export function createCommandPaletteModel(props: { filesOnly?: () => boolean; onOpenFile?: (path: string) => void }) {
@@ -229,7 +244,7 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
         openCommandRun(dialog, {
           line: item.run,
           start: "edit",
-          describe: item.description,
+          describe: describeFor(item.run, item.description, language.t),
           t: language.t,
           run: (argv, confirmed) => runIris(platform.fetch ?? fetch, serverSDK.url, argv, confirmed),
         })

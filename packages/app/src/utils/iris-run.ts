@@ -107,3 +107,14 @@ export function lastLine(text: string | undefined, max = 160): string {
   const line = lines[lines.length - 1] ?? ""
   return line.length > max ? line.slice(0, max - 1) + "…" : line
 }
+
+/** Words CLI help shouts for emphasis ("bring THIS machine online"). Acronyms (SSH, VPN) stay. */
+const SHOUTED = new Set(["THIS", "ONLY", "NOT", "NEVER", "ALL", "ANY", "ONE", "EVERY", "NO", "YOUR"])
+
+/** CLI help as a sentence a person reads: first letter capital, no shouted words. */
+export function plainHelp(help: string | undefined): string | undefined {
+  const text = (help ?? "").trim()
+  if (!text) return undefined
+  const calm = text.replace(/\b[A-Z]{2,}\b/g, (w) => (SHOUTED.has(w) ? w.toLowerCase() : w))
+  return calm.charAt(0).toUpperCase() + calm.slice(1)
+}

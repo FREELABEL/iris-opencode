@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { firstLine, formatIrisLine, hasUnquotedSeparator, lastLine, outcomeOf, parseIrisLine, runIris } from "./iris-run"
+import { firstLine, plainHelp, formatIrisLine, hasUnquotedSeparator, lastLine, outcomeOf, parseIrisLine, runIris } from "./iris-run"
 
 describe("parseIrisLine (#194581)", () => {
   test("an iris line becomes argv, quotes kept as one word", () => {
@@ -65,5 +65,15 @@ describe("runIris", () => {
     const r = await runIris(async () => Promise.reject(new Error("ECONNREFUSED")), "", ["leads", "list"], false)
     expect(r.ran).toBe(false)
     expect(r.refused).toBeTruthy()
+  })
+})
+
+describe("plainHelp", () => {
+  test("CLI help reads as a sentence; acronyms stay", () => {
+    expect(plainHelp("bring THIS machine online as a Hive node — outbound, no SSH or VPN required")).toBe(
+      "Bring this machine online as a Hive node — outbound, no SSH or VPN required",
+    )
+    expect(plainHelp("  ")).toBeUndefined()
+    expect(plainHelp(undefined)).toBeUndefined()
   })
 })
