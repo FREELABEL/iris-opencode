@@ -36,7 +36,6 @@ const platform: Platform = {
   },
 }
 
-void start()
 
 async function start() {
   const machine = readMachine()
@@ -174,3 +173,6 @@ const styles = {
   error: "font-size:14px;color:#f08a7e;margin:0",
   button: "font-size:17px;font-weight:600;padding:14px;border-radius:12px;border:0;background:#efede8;color:#16140f;margin-top:6px",
 }
+
+// Last, after `styles` and every helper exist: the connect screen uses them synchronously.
+void start()
