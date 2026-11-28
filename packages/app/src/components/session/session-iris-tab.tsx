@@ -5923,7 +5923,14 @@ export function SessionIrisTab() {
                       <ListRow
                         data-slot="iris-site-row"
                         class="border-b border-border-weaker-base last:border-0"
-                        leading={<Avatar size="small" fallback={String(st.name ?? "?").slice(0, 1).toUpperCase()} />}
+                        leading={
+                          <Avatar
+                            size="small"
+                            fallback={String(st.name ?? "?").slice(0, 1).toUpperCase()}
+                            background="color-mix(in srgb, var(--text-base) 10%, transparent)"
+                            foreground="var(--text-base)"
+                          />
+                        }
                         title={st.name}
                         secondary={`/${st.slug}${st.requiresAuth ? ` · ${language.t("iris.sites.signIn")}` : ""}`}
                         time={st.updatedAt}
@@ -6315,7 +6322,11 @@ export function SessionIrisTab() {
             summary={
               pane() === "atlas"
                 ? undefined
-                : pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })
+                : pageSummary({
+                    shown: rows().length,
+                    env: current() as PageEnvelope | undefined,
+                    noun: pane() === "sites" ? (rows().length === 1 ? "site" : "sites") : undefined,
+                  })
             }
             loading={data.loading}
             hasMore={(current() as PageEnvelope | undefined)?.hasMore}

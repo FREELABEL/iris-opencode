@@ -1,4 +1,4 @@
-import { createSignal, Match, Show, Switch, type JSX } from "solid-js"
+import { createEffect, createSignal, Match, on, Show, Switch, type JSX } from "solid-js"
 import { Button, type ButtonProps } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -200,6 +200,15 @@ function CommandRunDialog(props: CommandRunOptions & { close: () => void }) {
   const [stage, setStage] = createSignal<Stage>(props.start)
   const [error, setError] = createSignal<string>()
   const [result, setResult] = createSignal<IrisRunResult>()
+  // Each stage puts focus on its main button, so Enter runs it and Escape (which the dialog hears
+  // only while focus is inside it) closes it — the stage swap would otherwise drop focus to <body>.
+  let root: HTMLDivElement | undefined
+  createEffect(
+    on(stage, (s) => {
+      if (s === "edit" || s === "running") return
+      requestAnimationFrame(() => root?.querySelector<HTMLElement>("[data-autofocus]")?.focus())
+    }),
+  )
   const parsed = () => parseIrisLine(line())
   const shown = () => {
     const p = parsed()
@@ -226,7 +235,7 @@ function CommandRunDialog(props: CommandRunOptions & { close: () => void }) {
 
   return (
     <Dialog fit size="normal" title={title()} class="command-run-dialog">
-      <div data-component="command-run" data-stage={stage()}>
+      <div ref={root} data-component="command-run" data-stage={stage()}>
         <Switch>
           <Match when={stage() === "edit"}>
             <form
@@ -279,7 +288,7 @@ function CommandRunDialog(props: CommandRunOptions & { close: () => void }) {
                 <Button type="button" variant="secondary" onClick={props.close}>
                   {t("command.run.dialog.cancel")}
                 </Button>
-                <Button type="button" variant="primary" icon="play" autofocus onClick={() => void go(true)}>
+                <Button type="button" variant="primary" icon="play" data-autofocus onClick={() => void go(true)}>
                   {t("command.run.confirm.run")}
                 </Button>
               </div>
@@ -309,7 +318,7 @@ function CommandRunDialog(props: CommandRunOptions & { close: () => void }) {
                   <Button type="button" variant="secondary" onClick={() => setStage("edit")}>
                     {t("command.run.result.edit")}
                   </Button>
-                  <Button type="button" variant="primary" onClick={props.close}>
+                  <Button type="button" variant="primary" data-autofocus onClick={props.close}>
                     {t("command.run.result.close")}
                   </Button>
                 </div>
