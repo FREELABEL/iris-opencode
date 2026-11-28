@@ -1,0 +1,26 @@
+/*
+ * The chat drawer and the IRIS panel sheet move in from the side their button is on, so a person
+ * sees where they came from (#194511): the drawer from the left (the IRIS cube), the panel sheet
+ * from the right (its toggle). The backdrop fades. Closing plays the drawer back out before it
+ * unmounts. No motion for anyone who asked the system for less.
+ */
+@keyframes iris-fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes iris-fade-out { from { opacity: 1 } to { opacity: 0 } }
+@keyframes iris-from-left { from { transform: translateX(-100%) } to { transform: translateX(0) } }
+@keyframes iris-to-left { from { transform: translateX(0) } to { transform: translateX(-100%) } }
+@keyframes iris-from-right { from { transform: translateX(100%) } to { transform: translateX(0) } }
+
+[data-component="sessions-drawer"] [data-slot="sessions-drawer-backdrop"] { animation: iris-fade-in 200ms ease-out both; }
+[data-component="sessions-drawer"] [data-slot="sessions-drawer-sheet"] { animation: iris-from-left 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+[data-component="sessions-drawer"][data-closing] [data-slot="sessions-drawer-backdrop"] { animation: iris-fade-out 180ms ease-in both; }
+[data-component="sessions-drawer"][data-closing] [data-slot="sessions-drawer-sheet"] { animation: iris-to-left 180ms ease-in both; }
+
+/* The IRIS panel as a phone sheet (iris-shell.tsx, data-overlay): it is hidden, never unmounted,
+   so the animation runs each time it is shown again. */
+[data-component="iris-shell-panel"][data-overlay]:not(.hidden) { animation: iris-from-right 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="sessions-drawer"] [data-slot],
+  [data-component="sessions-drawer"][data-closing] [data-slot],
+  [data-component="iris-shell-panel"][data-overlay] { animation: none; }
+}

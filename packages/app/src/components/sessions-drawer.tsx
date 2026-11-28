@@ -1,4 +1,8 @@
-import { Show, createEffect, createMemo, on, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { Icon } from "@opencode-ai/ui/v2/icon"
+import { useLanguage } from "@/context/language"
+import "./sessions-drawer.css"
 import { sessionsDrawerOpen, setSessionsDrawerOpen } from "./sessions-drawer-state"
 import { useLocation } from "@solidjs/router"
 import { useTabs } from "@/context/tabs"
@@ -17,8 +21,10 @@ import { HomeSessions } from "@/pages/home/home-sessions"
  * controllers and the same view, so a fix to one is a fix to both, and folders (next) land in
  * both at once.
  *
- * Opened by the IRIS cube in the title bar. Closes on Esc, a click outside, or when a chat is
- * opened from it (the route changes).
+ * Opened by the IRIS cube in the title bar. Closes on Esc, a click outside, its ✕, or when a chat
+ * is opened from it (the route changes). On a phone it is a full-screen sheet with a ✕ you can
+ * reach: "outside" was a few pixels beside it (#194511). It slides in from the cube's side and
+ * back out again (sessions-drawer.css).
  */
 const open = sessionsDrawerOpen
 const setOpen = setSessionsDrawerOpen
@@ -46,6 +52,15 @@ export function SessionsDrawer() {
 
 /** Mounted only while open: the controllers subscribe to the session index for as long as they live. */
 function SessionsDrawerBody() {
+  const language = useLanguage()
+  // Play the slide out, then unmount; at once when the system asks for less motion.
+  const [closing, setClosing] = createSignal(false)
+  const close = () => {
+    if (closing()) return
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return setOpen(false)
+    setClosing(true)
+    setTimeout(() => setOpen(false), 180)
+  }
   const page = createHomeController()
   // ALWAYS every project. The Home page's project filter is shared state; following it made the
   // drawer show one project's chats to someone who had once clicked that project on Home.
@@ -74,18 +89,34 @@ function SessionsDrawerBody() {
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(groups)
   return (
-    <div class="absolute inset-x-0 bottom-0 top-[var(--titlebar-height,44px)] z-40" data-component="sessions-drawer">
-      <div class="absolute inset-0 bg-black/20" aria-hidden onClick={() => setOpen(false)} />
+    <div
+      class="absolute inset-x-0 bottom-0 top-[var(--titlebar-height,44px)] z-40"
+      data-component="sessions-drawer"
+      data-closing={closing() ? "" : undefined}
+    >
+      <div data-slot="sessions-drawer-backdrop" class="absolute inset-0 bg-black/20" aria-hidden onClick={close} />
       <div
         role="dialog"
         aria-label="All chats"
+        data-slot="sessions-drawer-sheet"
         class={`
-          absolute bottom-2 left-2 top-0 w-[min(440px,calc(100vw-16px))] overflow-hidden rounded-[10px]
+          absolute bottom-2 left-2 top-0 flex w-[min(440px,calc(100vw-16px))] flex-col overflow-hidden rounded-[10px]
           bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
+          max-md:inset-0 max-md:w-full max-md:rounded-none max-md:shadow-none
         `}
       >
+        <div class="flex shrink-0 justify-end px-2 pt-2">
+          <IconButtonV2
+            type="button"
+            variant="ghost-muted"
+            size="large"
+            icon={<Icon name="outline-xmark" />}
+            onClick={close}
+            aria-label={language.t("common.close")}
+          />
+        </div>
         <ScrollView
-          class="h-full [container-type:size]"
+          class="min-h-0 flex-1 [container-type:size]"
           thumbContainer={scroll.viewport.thumbTrack}
           thumbHoverTarget={scroll.viewport.hoverTarget}
           viewportRef={scroll.viewport.setViewport}
