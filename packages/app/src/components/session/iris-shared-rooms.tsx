@@ -13,6 +13,7 @@ import {
   facepile,
   mergeRoomTimeline,
   chainLine,
+  modelLabel,
   type Chain,
   sayNote,
   typingLine,
@@ -441,7 +442,10 @@ export function SharedRoomView(props: {
     typingSent = 0
     void checkIn(false)
     const tone = r.result.outcome === "delivered" ? "good" : "warn"
-    setNote({ tone, text: sayNote(r.result, room()?.ownerName ?? null) + (r.result.agentsNote ? ` ${r.result.agentsNote}` : "") })
+    const shown = { tone, text: sayNote(r.result, room()?.ownerName ?? null) + (r.result.agentsNote ? ` ${r.result.agentsNote}` : "") } as const
+    setNote(shown)
+    // A confirmation is a moment, not a fixture (#194566): it clears itself once read.
+    if (tone === "good" || (r.result.agentsAnswered ?? 0) > 0) setTimeout(() => setNote((cur) => (cur === shown ? null : cur)), 4000)
     void load()
   }
 
@@ -528,7 +532,7 @@ export function SharedRoomView(props: {
             Agents{cloud().length ? ` · ${cloud().length}` : ""}
           </button>
         </Show>
-        <Show when={stopVisible() || (chain() && (room()?.you.canStop || room()?.you.isOwner))}>
+        <Show when={(sessions().length > 0 && stopVisible()) || (chain() && (room()?.you.canStop || room()?.you.isOwner))}>
           <button class="sr-stop" disabled={busy() === "stop"} onClick={() => void stop()} title="Stop what the agents in this room are doing right now">
             <Icon name="stop" size="small" />
             {busy() === "stop" ? "Stopping…" : "Stop"}
@@ -577,11 +581,11 @@ export function SharedRoomView(props: {
             <div class="sr-session sr-agent" data-tone="live">
               <span class="sr-dot" />
               <span class="sr-agent-name" style={{ "--sr-hue": laneHue(`cloud:${a.id}`) }}>{a.name}</span>
-              <Show when={a.role === "lead"}>
+              <Show when={a.role === "lead" && a.name.trim().toLowerCase() !== "lead"}>
                 <span class="sr-chip" data-tone="good">Lead</span>
               </Show>
               <span class="sr-session-detail">
-                {a.model ?? "cloud agent"} · {a.role === "lead" ? "gets every message" : a.autoRespond ? "answers everything" : "when @mentioned"}
+                {a.model ? modelLabel(a.model) : "cloud agent"} · {a.role === "lead" ? "gets every message" : a.autoRespond ? "answers everything" : "when @mentioned"}
               </span>
             </div>
           )}
@@ -646,10 +650,7 @@ export function SharedRoomView(props: {
                     <Show when={!grouped()} fallback={<span class="sr-avatar-gap" />}>
                       <Show when={m.kind === "agent"} fallback={<Avatar name={m.speaker} size="sm" />}>
                         <span class="sr-agent-mark" aria-hidden="true">
-                          <span />
-                          <span />
-                          <span />
-                          <span />
+                          {initials(m.speaker).slice(0, 1)}
                         </span>
                       </Show>
                     </Show>
@@ -658,7 +659,7 @@ export function SharedRoomView(props: {
                         <div class="sr-msg-head">
                           <span class="sr-msg-name">{m.speaker}</span>
                           <Show when={m.kind === "agent" && modelOf(m.lane)}>
-                            <span class="sr-model-tag">{modelOf(m.lane)}</span>
+                            <span class="sr-model-tag">{modelLabel(modelOf(m.lane))}</span>
                           </Show>
                           <Show when={m.kind === "person" && (m as { viaRoom?: boolean }).viaRoom}>
                             <span class="sr-delivered">in the room</span>
@@ -719,7 +720,7 @@ export function SharedRoomView(props: {
                     }}
                   >
                     <span>@{a.name}</span>
-                    <span class="sr-mention-model">{cloud().find((c) => c.id === a.id)?.model ?? ""}</span>
+                    <span class="sr-mention-model">{modelLabel(cloud().find((c) => c.id === a.id)?.model)}</span>
                   </button>
                 )}
               </For>
