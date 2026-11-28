@@ -12,6 +12,7 @@ import {
   sessionIdFromParticipant,
   ROLES,
 } from "./rooms-participants"
+import { readParticipant, roleUpdateBody } from "./workspace-rooms-core"
 
 /**
  * Room membership, including for MACHINES — S1 of #185277 (epic #503, list #1688).
@@ -28,10 +29,11 @@ import {
 
 async function changeMembership(
   args: any,
-  mode: "join" | "leave",
+  mode: "join" | "leave" | "role",
 ): Promise<void> {
   const isJoin = mode === "join"
-  if (!args.json) { UI.empty(); prompts.intro(isJoin ? "◈  Join Room" : "◈  Leave Room") }
+  const isRole = mode === "role"
+  if (!args.json) { UI.empty(); prompts.intro(isJoin ? "◈  Join Room" : isRole ? "◈  Room Role" : "◈  Leave Room") }
 
   const fail = async (msg: string) => {
     if (args.json) await writeJson({ error: msg })
@@ -40,7 +42,7 @@ async function changeMembership(
   }
 
   // Validate the role OURSELVES so a typo is a sentence, not a 422 validation blob.
-  if (isJoin && !isValidRole(String(args.role))) {
+  if ((isJoin || isRole) && !isValidRole(String(args.role))) {
     return fail(`Unknown role "${args.role}". Use one of: ${ROLES.join(", ")}.`)
   }
 
@@ -62,7 +64,19 @@ async function changeMembership(
   // IRIS_API explicitly: irisFetch defaults to FL_API, and the thread endpoints live on
   // iris-api. Omitting it returns 404 WITH valid auth — which reads as "no such room or
   // participant" when it means "wrong host". Cost a wrong diagnosis before it was spotted.
-  const res = isJoin
+  const res = isRole
+    ? await irisFetch(
+        `/api/threads/${thread}/agents/${participantPathSegment(who.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            roleUpdateBody({ role: String(args.role), alwaysOn: typeof args["auto-respond"] === "boolean" ? args["auto-respond"] : null }),
+          ),
+        },
+        IRIS_API,
+      )
+    : isJoin
     ? await irisFetch(
         `/api/threads/${thread}/agents`,
         {
@@ -84,7 +98,8 @@ async function changeMembership(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    return fail(`Could not ${mode}: HTTP ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`)
+    if (isRole && res.status === 404) return fail(`That ${who.id.includes(":") ? "member" : "agent"} is not in this room — add it with \`iris agents join ${args.thread} --agent <id> --role ${args.role}\`.`)
+    return fail(`Could not ${isRole ? "change the role" : mode}: HTTP ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`)
   }
 
   const body = await res.json().catch(() => ({}))
@@ -95,9 +110,18 @@ async function changeMembership(
     : isNodeParticipant(who.id)
       ? `machine ${nodeIdFromParticipant(who.id)}`
       : `agent ${who.id}`
-  if (isJoin) {
-    console.log(`  ${success("✓")} ${dim("added")} ${kind} ${dim(`as ${args.role}`)}`)
-    if (!args["auto-respond"]) {
+  const now = readParticipant(body)
+  const leadNote = () => {
+    if ((now?.role ?? args.role) === "lead")
+      console.log(`  ${dim("it takes your request first and hands parts to the others · one lead per room — any previous lead is now a participant")}`)
+  }
+  if (isRole) {
+    console.log(`  ${success("✓")} ${kind} ${dim("is now")} ${now?.role ?? args.role}${now ? dim(now.alwaysOn ? " · answers everything" : " · answers when @mentioned") : ""}`)
+    leadNote()
+  } else if (isJoin) {
+    console.log(`  ${success("✓")} ${dim("added")} ${kind} ${dim(`as ${now?.role ?? args.role}`)}`)
+    leadNote()
+    if (!args["auto-respond"] && (now?.role ?? args.role) !== "lead") {
       console.log(`  ${dim("@mention it in the room to reach it — pass --auto-respond for always-on")}`)
     }
     if (isNodeParticipant(who.id)) {
@@ -127,11 +151,11 @@ const selectors = (yargs: any) =>
 
 export const AgentsJoinCommand = cmd({
   command: "join <thread>",
-  describe: "add a participant to a room — an agent, or a machine",
+  describe: "add a participant to a room — an agent (optionally as its lead), a live session, or a machine",
   builder: (yargs: any) =>
     selectors(yargs)
       .option("role", {
-        describe: `participant role (${ROLES.join(" | ")})`,
+        describe: "participant role: lead | participant | primary | support | observer (lead = takes requests first; one per room)",
         type: "string",
         default: "participant",
       })
@@ -139,7 +163,9 @@ export const AgentsJoinCommand = cmd({
         describe: "respond without being @mentioned",
         type: "boolean",
         default: false,
-      }),
+      })
+      .example("iris agents join <room> --agent 101 --role lead", "add agent 101 as the room's lead")
+      .example("iris agents join <room> --session ses_abc123 --auto-respond", "a live chat that receives every message"),
   async handler(args: any) {
     await changeMembership(args, "join")
   },
@@ -147,9 +173,26 @@ export const AgentsJoinCommand = cmd({
 
 export const AgentsLeaveCommand = cmd({
   command: "leave <thread>",
-  describe: "remove a participant from a room",
-  builder: (yargs: any) => selectors(yargs),
+  describe: "remove a participant from a room — an agent, a live session, or a machine",
+  builder: (yargs: any) => selectors(yargs).example("iris agents leave <room> --agent 102", "take agent 102 out of the room"),
   async handler(args: any) {
     await changeMembership(args, "leave")
+  },
+})
+
+export const AgentsRoleCommand = cmd({
+  command: "role <thread> <role>",
+  describe: "change a room member's role — make an agent the lead (one per room), or whether it answers everything",
+  builder: (yargs: any) =>
+    selectors(yargs)
+      .positional("role", {
+        describe: "lead | participant | primary | support | observer",
+        type: "string",
+      })
+      .option("auto-respond", { describe: "answer every message (--no-auto-respond: only when @mentioned); unchanged if omitted", type: "boolean" })
+      .example("iris agents role <room> lead --agent 101", "agent 101 leads; the previous lead becomes a participant")
+      .example("iris agents role <room> participant --agent 102 --auto-respond", "102 answers every message"),
+  async handler(args: any) {
+    await changeMembership(args, "role")
   },
 })

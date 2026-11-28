@@ -7,6 +7,14 @@ import {
   parseProjectId,
   HARNESS_HINT,
   sessionLines,
+  parseAgentIds,
+  createRoomBody,
+  readRoomChain,
+  chainLine,
+  presentLine,
+  agentLines,
+  roleUpdateBody,
+  readRoomRow,
 } from "./workspace-rooms-core"
 
 describe("workspace rooms — shared workspaces on Atlas projects (#194307)", () => {
@@ -75,5 +83,80 @@ describe("workspace rooms — shared workspaces on Atlas projects (#194307)", ()
       "a session no computer reports right now",
     ])
     expect(sessionLines(undefined, now)).toEqual(["no live session in this room"])
+  })
+})
+
+describe("multi-agent rooms — a lead, teammates, hand-offs (#194603)", () => {
+  test("agent ids are the numbers `iris agents list` shows; anything else is refused in words", () => {
+    expect(parseAgentIds("101, 102,101")).toEqual({ ids: ["101", "102"] })
+    expect(parseAgentIds(["101", "103"])).toEqual({ ids: ["101", "103"] })
+    expect(parseAgentIds("101,abc")).toEqual({ error: expect.stringContaining('"abc" is not an agent id') })
+  })
+
+  test("a room with agents has exactly one lead, and a lead named on its own joins too", () => {
+    expect(createRoomBody({ name: "Launch", agents: ["101", "102"], lead: "102" })).toEqual({
+      name: "Launch",
+      agent_ids: ["101", "102"],
+      agent_roles: ["participant", "lead"],
+      auto_respond: [false, false],
+    })
+    expect(createRoomBody({ name: "Launch", agents: ["102"], lead: "101", alwaysOn: true })).toEqual({
+      name: "Launch",
+      agent_ids: ["101", "102"],
+      agent_roles: ["lead", "participant"],
+      auto_respond: [true, true],
+    })
+  })
+
+  test("a live chat and agents side by side: the chat always receives, agents wait for @mentions", () => {
+    expect(createRoomBody({ name: "x", agents: ["101"], lead: "101", sessionId: "ses_1" })).toEqual({
+      name: "x",
+      agent_ids: ["session:ses_1", "101"],
+      agent_roles: ["participant", "lead"],
+      auto_respond: [true, false],
+    })
+    // The session-only room is exactly what `open --session` always sent.
+    expect(createRoomBody({ name: "pricing-page", sessionId: "ses_1" })).toEqual(openRoomBody({ name: "pricing-page", sessionId: "ses_1" }))
+  })
+
+  test("an empty room, or a lead that is not an id, is refused before any call", () => {
+    expect(createRoomBody({ name: "x" })).toEqual({ error: expect.stringContaining("--agents") })
+    expect(createRoomBody({ name: "x", agents: ["1"], lead: "planner" })).toEqual({ error: '"planner" is not an agent id.' })
+  })
+
+  test("the chain reads as agents talking, N of the room's limit; no chain, no line", () => {
+    expect(chainLine(readRoomChain({ depth: 1, turns: 3, max_turns: 6, max_hops: 3 }))).toBe("agents are talking · 3 of 6")
+    expect(chainLine(readRoomChain(null))).toBeNull()
+    expect(readRoomChain({ turns: "3" })).toEqual({ depth: 0, turns: 0, maxTurns: 0, maxHops: 0 })
+  })
+
+  test("who is here: typing beats away; nobody is no line", () => {
+    expect(presentLine([{ name: "Flo", away: true, typing: true }, { name: "Mo", away: true, typing: false }, { name: "Al", away: false, typing: false }]))
+      .toBe("here: Flo (typing…), Mo (away), Al")
+    expect(presentLine([])).toBeNull()
+  })
+
+  test("the lead is listed first; other roles are named", () => {
+    expect(agentLines([
+      { id: "1", name: "Ana", role: "participant", alwaysOn: true },
+      { id: "2", name: "Ben", role: "lead", alwaysOn: false },
+      { id: "3", name: "Cy", role: "observer", alwaysOn: false },
+    ])).toEqual([
+      "Ben — lead (takes your request first, hands parts to the others)",
+      "Ana — answers everything",
+      "Cy — answers when @mentioned · observer",
+    ])
+  })
+
+  test("a role change sends only what was asked for", () => {
+    expect(roleUpdateBody({ role: "lead" })).toEqual({ role: "lead" })
+    expect(roleUpdateBody({ role: "participant", alwaysOn: false })).toEqual({ role: "participant", auto_respond: false })
+    expect(roleUpdateBody({ alwaysOn: null })).toEqual({})
+  })
+
+  test("a list row from a server without activity still reads: nothing here, nothing unread", () => {
+    expect(readRoomRow({ id: "r", name: "old", participants: [{ agent_id: "session:s1" }] })).toEqual({
+      id: "r", name: "old", sessions: ["s1"], agents: [], messages: null, present: [], unread: 0, working: false, last: null,
+    })
   })
 })

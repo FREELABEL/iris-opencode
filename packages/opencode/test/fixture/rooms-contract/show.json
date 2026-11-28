@@ -1,0 +1,202 @@
+{
+    "project": {
+        "id": 1009,
+        "name": "Pricing launch"
+    },
+    "owner_name": "Alex Mayo",
+    "you": {
+        "role": "owner",
+        "can_post": true,
+        "can_stop": true,
+        "is_owner": true
+    },
+    "thread": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "user_id": 1001,
+        "bloq_id": 1009,
+        "organization_id": null,
+        "name": "Launch plan",
+        "description": null,
+        "status": "active",
+        "visibility": "private",
+        "allowed_organizations": null,
+        "encrypted": 0,
+        "metadata": null,
+        "created_at": "2026-11-28T12:00:00+00:00",
+        "updated_at": "2026-11-28T12:00:00+00:00",
+        "participants": [
+            {
+                "id": 1002,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "1003",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "lead",
+                "can_respond": true,
+                "auto_respond": false,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            },
+            {
+                "id": 1004,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "1005",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "participant",
+                "can_respond": true,
+                "auto_respond": true,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            },
+            {
+                "id": 1007,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "1006",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "participant",
+                "can_respond": true,
+                "auto_respond": false,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            },
+            {
+                "id": 1010,
+                "thread_id": "00000000-0000-4000-8000-000000000001",
+                "participant_type": "agent",
+                "agent_id": "session:ses_alex",
+                "agent_type": "internal",
+                "external_agent_id": null,
+                "role": "participant",
+                "can_respond": true,
+                "auto_respond": true,
+                "response_triggers": null,
+                "metadata": null,
+                "created_at": "2026-11-28T12:00:00+00:00",
+                "updated_at": "2026-11-28T12:00:00+00:00"
+            }
+        ],
+        "agents": [
+            {
+                "id": 1003,
+                "user_id": 1001,
+                "name": "Planner",
+                "config": {
+                    "model": "gpt-4.1-nano"
+                },
+                "settings": {
+                    "webAccess": true,
+                    "agentIntegrations": []
+                },
+                "pivot": {
+                    "role": "lead",
+                    "auto_respond": false,
+                    "can_respond": true
+                }
+            },
+            {
+                "id": 1005,
+                "user_id": 1001,
+                "name": "Researcher",
+                "config": {
+                    "model": "gpt-4.1-nano"
+                },
+                "settings": {
+                    "webAccess": true,
+                    "agentIntegrations": []
+                },
+                "pivot": {
+                    "role": "participant",
+                    "auto_respond": true,
+                    "can_respond": true
+                }
+            },
+            {
+                "id": 1006,
+                "user_id": 1001,
+                "name": "Writer",
+                "config": {
+                    "model": "gpt-4.1-nano"
+                },
+                "settings": {
+                    "webAccess": true,
+                    "agentIntegrations": []
+                },
+                "pivot": {
+                    "role": "participant",
+                    "auto_respond": false,
+                    "can_respond": true
+                }
+            }
+        ]
+    },
+    "messages": [
+        {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "sender_type": "user",
+            "sender_id": "1001",
+            "sender_name": "Alex Mayo",
+            "sender_avatar": null,
+            "content": "Plan the launch",
+            "metadata": {
+                "routing": "room-default",
+                "addressees": [],
+                "provenance": {
+                    "via": "room",
+                    "sender_type": "user",
+                    "posted_by_user_id": 1001
+                },
+                "delivered_to": [
+                    "ses_alex"
+                ]
+            },
+            "in_reply_to": null,
+            "created_at": "2026-11-28T12:00:00+00:00"
+        }
+    ],
+    "sessions": [
+        {
+            "session_id": "ses_alex",
+            "provider": "claude-code",
+            "machine": "alex-mbp",
+            "online": true,
+            "last_seen": null,
+            "host_user_id": 1001,
+            "host_name": "Alex Mayo"
+        }
+    ],
+    "present": [
+        {
+            "user_id": 1008,
+            "name": "Flo Rivera",
+            "state": "active",
+            "typing": true,
+            "seen_at": "2026-11-28T12:00:00+00:00"
+        },
+        {
+            "user_id": 1001,
+            "name": "Alex Mayo",
+            "state": "background",
+            "typing": false,
+            "seen_at": "2026-11-28T12:00:00+00:00"
+        }
+    ],
+    "chain": {
+        "root": "root-message",
+        "depth": 2,
+        "turns": 3,
+        "max_turns": 5,
+        "max_hops": 2,
+        "at": "2026-11-28T12:00:00+00:00"
+    }
+}
