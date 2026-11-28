@@ -20,6 +20,7 @@ import {
   mixHome,
   liveRooms,
   chainLine,
+  modelLabel,
 } from "./iris-shared-rooms-model"
 
 const room = (over: Partial<SharedRoom>): SharedRoom => ({
@@ -305,4 +306,13 @@ test("in a room with cloud agents a person's line is the conversation, not 'only
 test("when the room's agents take a message, the note says so (#194496)", () => {
   expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null, agentsAnswered: 1 }, "Alex")).toBe("The room's agent is on it.")
   expect(sayNote({ outcome: "saved", delivered: 0, note: null, agentsNote: null }, "Alex")).toBe("Saved here. No live chat is connected right now.")
+})
+
+test("model ids read as names (#194566)", () => {
+  expect(modelLabel("iris/gpt-6-luna")).toBe("GPT-6 Luna")
+  expect(modelLabel("iris/deepseek-v4-pro")).toBe("DeepSeek V4 Pro")
+  expect(modelLabel("iris/glm-5.3-flash")).toBe("GLM 5.3 Flash")
+  expect(modelLabel("iris/gemini-4-hydrogen")).toBe("Gemini 4 Hydrogen")
+  expect(modelLabel("gpt-4.1-nano")).toBe("GPT-4.1 Nano")
+  expect(modelLabel(null)).toBe("")
 })

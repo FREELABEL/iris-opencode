@@ -1084,3 +1084,125 @@
   font-size: var(--font-size-x-small);
   color: var(--text-weak);
 }
+
+/* ── minimal, flat room (#194566) ─────────────────────────────────────────────
+   Agent replies are the content: plain text, no box. Only what people type gets a soft fill.
+   One quiet line per speaker ("Lead · GPT-6 Luna"), times on hover, room to breathe, a hairline composer. */
+.sr-room .sr-timeline {
+  gap: 0;
+  padding-top: 28px;
+  padding-bottom: 20px;
+}
+.sr-room .sr-msg {
+  gap: 14px;
+  padding-top: 28px;
+}
+.sr-room .sr-msg:first-child {
+  padding-top: 0;
+}
+.sr-room .sr-msg[data-grouped] {
+  padding-top: 8px;
+}
+.sr-room .sr-msg-body {
+  max-width: min(68ch, 100%);
+  gap: 6px;
+}
+.sr-room .sr-msg-head {
+  gap: 6px;
+}
+.sr-room .sr-msg-name {
+  font-weight: var(--font-weight-medium);
+}
+.sr-room .sr-bubble {
+  font-size: var(--font-size-base);
+  line-height: 1.65;
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: var(--sr-softer);
+}
+.sr-room .sr-msg[data-kind="agent"] .sr-bubble {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.sr-room .sr-model-tag {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+  color: var(--text-weaker);
+  background: none;
+  padding: 0;
+}
+.sr-room .sr-model-tag::before {
+  content: "· ";
+}
+.sr-room .sr-msg .sr-time {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.sr-room .sr-msg:hover .sr-time {
+  opacity: 1;
+}
+.sr-room .sr-agent-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  color: hsl(var(--sr-hue, 160) 45% 36%);
+  background: hsl(var(--sr-hue, 160) 60% 90%);
+  box-shadow: none;
+}
+:root[data-color-scheme="dark"] .sr-room .sr-agent-mark {
+  color: hsl(var(--sr-hue, 160) 70% 78%);
+  background: hsl(var(--sr-hue, 160) 30% 20%);
+}
+.sr-room .sr-tool {
+  margin-left: 42px;
+  opacity: 0.8;
+}
+.sr-room .sr-event {
+  margin: 28px 0 4px;
+  background: none;
+}
+.sr-room .sr-compose-wrap {
+  border-top: 0;
+  padding-top: 4px;
+}
+.sr-room .sr-compose {
+  border-radius: 14px;
+  box-shadow: none;
+  padding: 8px 8px 8px 16px;
+}
+.sr-room .sr-compose:focus-within {
+  border-color: var(--text-weaker);
+  box-shadow: none;
+}
+.sr-room .sr-note {
+  background: none;
+  padding: 0 4px;
+}
+.sr-room .sr-sessions {
+  background: none;
+  gap: 6px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.sr-room .sr-agent-mark {
+  grid-template-columns: none;
+  line-height: 1;
+}
+/* The agents in the room, on one quiet line that wraps — not a block of rows. */
+.sr-room[data-layout="pane"] .sr-sessions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 22px;
+  row-gap: 8px;
+}
+.sr-room[data-layout="pane"] .sr-sessions .sr-add-agent {
+  align-self: center;
+  margin-top: 0;
+}
