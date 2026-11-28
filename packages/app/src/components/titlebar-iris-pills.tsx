@@ -197,12 +197,13 @@ const BADGE_CLASS: Record<BadgeTone, string> = {
   danger: "bg-v2-state-bg-danger text-v2-state-fg-danger hover:opacity-90 font-semibold",
 }
 
-// On a phone every titlebar button takes one block, the size of the titlebar's own icon buttons
-// (28px, icon-button-v2 large): "⬡ 4/6" was four letters wide and "📥 2" two (#194511). The count
-// rides on the icon as a corner badge instead of widening the button. Desktop keeps the pills.
-const PHONE_BLOCK = "max-md:relative max-md:size-7 max-md:shrink-0 max-md:justify-center max-md:gap-0 max-md:p-0"
+// On a phone every titlebar control is the same icon square as the titlebar's icon buttons (32px
+// there, titlebar.css), evenly spaced: "⬡ 4/6" was four letters wide and "📥 2" two (#194511).
+// A count floats above the icon's top right as a superscript — no pill, no ring. Desktop keeps
+// the labelled pills.
+const PHONE_BLOCK = "max-md:relative max-md:size-8 max-md:shrink-0 max-md:justify-center max-md:gap-0 max-md:p-0"
 const PHONE_BADGE =
-  "max-md:absolute max-md:-top-1 max-md:-right-1.5 max-md:min-w-3.5 max-md:rounded-full max-md:bg-v2-background-bg-base max-md:px-[3px] max-md:text-center max-md:text-[9px] max-md:leading-[13px] max-md:ring-1 max-md:ring-v2-border-border-base"
+  "max-md:absolute max-md:top-0 max-md:right-0 max-md:translate-x-1/3 max-md:text-[10px] max-md:font-semibold max-md:leading-none"
 
 export function TitlebarIrisPills() {
   const mount = useTitlebarRightMount()
@@ -358,7 +359,7 @@ export function TitlebarIrisPills() {
       <Portal mount={mount()!}>
         <div
           data-slot="iris-pills"
-          class="flex shrink-0 items-center gap-1 mr-3 max-md:mr-1 text-[12px] text-v2-text-text-weak"
+          class="flex shrink-0 items-center gap-1 mr-3 max-md:mr-0 text-[12px] text-v2-text-text-weak"
         >
           {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
               appear, cannot be styled, and is the reason these pills read as decoration: there
@@ -459,12 +460,12 @@ export function TitlebarIrisPills() {
                   type="button"
                   data-slot="iris-plan-pill"
                   data-level={level()}
-                  class="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-v2-state-fg-warning hover:bg-v2-overlay-simple-overlay-hover"
+                  class={`inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-v2-state-fg-warning hover:bg-v2-overlay-simple-overlay-hover ${PHONE_BLOCK}`}
                   aria-label={level() === "out" ? "Allowance used up — see plans" : "Allowance almost used — see plans"}
                   onClick={() => showPlans("pill")}
                 >
                   <span aria-hidden="true">⚡</span>
-                  <span>{level()}</span>
+                  <span class={PHONE_BADGE}>{level()}</span>
                 </button>
               </TooltipV2>
             )}
@@ -472,7 +473,7 @@ export function TitlebarIrisPills() {
 
           <Show when={notice()}>
             <TooltipV2 placement="bottom" value={<>{notice()!.hint}</>}>
-              <span data-slot="iris-auth-pill" class="text-v2-text-text-danger cursor-default">
+              <span data-slot="iris-auth-pill" class={`text-v2-text-text-danger cursor-default max-md:inline-flex max-md:items-center ${PHONE_BLOCK}`}>
                 {/* On a phone the words pushed the panel toggle off the screen (#194511): the sign stays. */}
                 ⚠ <span class="max-md:sr-only">{notice()!.text}</span>
               </span>
@@ -487,7 +488,7 @@ export function TitlebarIrisPills() {
                 <button
                   type="button"
                   data-slot="iris-shared-pill"
-                  class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                  class={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base ${PHONE_BLOCK}`}
                   classList={{ "text-v2-text-text-base": sum().active > 0 }}
                   aria-label={sum().hint}
                   onClick={() => openSharedRoom(null)}
@@ -501,7 +502,7 @@ export function TitlebarIrisPills() {
                   <Show when={sum().active > 0}>
                     <span class="inline-block size-1.5 rounded-full bg-v2-state-fg-success" aria-hidden="true" />
                   </Show>
-                  <span class="font-mono tabular-nums">{sum().label}</span>
+                  <span class={`font-mono tabular-nums ${PHONE_BADGE}`}>{sum().label}</span>
                 </button>
               </TooltipV2>
             )}

@@ -75,3 +75,12 @@
     animation-range: calc(100% - 1.1px) calc(100% - 1px);
   }
 }
+
+/* Phone (#194511): every titlebar control is the same 32px icon square, one 4px gap apart — the
+   pills in titlebar-iris-pills.tsx take the same size (PHONE_BLOCK). 28px was under a fingertip. */
+@media (max-width: 767px) {
+  [data-slot="titlebar-v2"] [data-component="icon-button-v2"][data-size="large"] {
+    width: 32px;
+    height: 32px;
+  }
+}

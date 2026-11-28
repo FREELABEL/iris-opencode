@@ -177,7 +177,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
       data-slot={useV2Titlebar() ? "titlebar-v2" : undefined}
       classList={{
         "shrink-0 relative flex flex-row": true,
-        "h-9 bg-v2-background-bg-deep overflow-visible": useV2Titlebar(),
+        "h-9 bg-v2-background-bg-deep max-md:bg-v2-background-bg-base overflow-visible": useV2Titlebar(),
         "h-10 bg-background-base overflow-hidden": !useV2Titlebar(),
         "order-last": bottom(),
       }}
@@ -668,11 +668,11 @@ type TitlebarV2RightState = {
 
 function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
   return (
-    <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 overflow-visible">
+    <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 max-md:gap-1 overflow-visible">
       <Show when={props.state.update.visible}>
         <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
-      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
+      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0 max-md:gap-1" />
     </div>
   )
 }
