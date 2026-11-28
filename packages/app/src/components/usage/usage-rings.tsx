@@ -18,7 +18,7 @@ export function UsageRings(props: {
   const outerW = () => (big() ? 7 : 2.2)
   const innerW = () => (big() ? 5 : 1.8)
   const outerR = () => (big() ? props.size / 2 - 4 : props.size / 2 - 1.2)
-  const innerR = () => (big() ? props.size / 2 - 14 : props.size / 2 - 4.6)
+  const innerR = () => (big() ? props.size / 2 - 13 : props.size / 2 - 4.6)
   const len = (r: number) => 2 * Math.PI * r
   const clamp = (v: number) => Math.max(0, Math.min(1, v))
   return (

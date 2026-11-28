@@ -136,7 +136,7 @@ export function UsagePopoverBody(props: {
   }
 
   return (
-    <div data-component="usage-popover" data-tone={ring()?.tone} data-ask={ask()} class="flex w-[400px] max-w-[calc(100vw-40px)] flex-col gap-4 p-4 text-[13px] text-v2-text-text-base">
+    <div data-component="usage-popover" data-tone={ring()?.tone} data-ask={ask()} class="flex w-full flex-col gap-4 p-4 text-[13px] text-v2-text-text-base">
       {/* Plan and reset */}
       <div class="flex items-center gap-3">
         <PlanBadgeMark plan={props.plan} offers={offers()} />
@@ -156,14 +156,14 @@ export function UsagePopoverBody(props: {
       <div class="flex items-center gap-4">
         <div class="relative shrink-0">
           <UsageRings
-            size={88}
+            size={108}
             week={ring()?.week ?? null}
             context={contextPct()}
             color={ring() ? RING_COLOR[ring()!.tone] : RING_COLOR.calm}
           />
           <Show when={ring()?.percent !== null && ring()?.percent !== undefined}>
             <div class="absolute inset-0 flex flex-col items-center justify-center leading-none">
-              <span data-slot="usage-percent" class="text-[18px] font-bold tabular-nums">
+              <span data-slot="usage-percent" class="text-[20px] font-bold tabular-nums">
                 {ring()!.percent}%
               </span>
               <span class="mt-0.5 text-[9px] text-v2-text-text-muted">of your week</span>
@@ -234,8 +234,9 @@ export function UsagePopoverBody(props: {
                 data-next={s.next ? "" : undefined}
                 class="flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-center"
                 classList={{
-                  "bg-v2-background-bg-layer-02 ring-1 ring-v2-icon-icon-accent": s.next,
-                  "text-v2-text-text-muted": !s.next && !s.current,
+                  // Asking: the next rung is marked. Paying: where you are — never a nudge upward (#189544).
+                  "bg-v2-background-bg-layer-02 ring-1 ring-v2-icon-icon-accent": ask() === "plan" ? s.current : s.next,
+                  "text-v2-text-text-muted": ask() === "plan" ? !s.current : !s.next && !s.current,
                 }}
               >
                 <span class="text-[12px] font-medium">{s.label}</span>

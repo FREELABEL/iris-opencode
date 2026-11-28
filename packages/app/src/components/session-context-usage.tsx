@@ -198,7 +198,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           trigger={ringTrigger()}
           placement={props.placement === "top" ? "top-start" : "bottom-start"}
           gutter={6}
-          class="rounded-xl border border-v2-border-border-base bg-v2-background-bg-layer-01 shadow-lg [&_[data-slot=popover-body]]:p-0"
+          class="w-[400px] !max-w-[calc(100vw-40px)] rounded-xl border border-v2-border-border-base !bg-v2-background-bg-layer-01 shadow-lg [&_[data-slot=popover-body]]:p-0"
         >
           <Show when={popoverOpen() && irisPlan()}>
             <UsagePopoverBody
